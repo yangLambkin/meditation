@@ -1,0 +1,359 @@
+/**timer.wxss**/
+
+.ml-104 {
+  margin-left: 208rpx;
+}
+.mt-17 {
+  margin-top: 34rpx;
+}
+.ml-13 {
+  margin-left: 26rpx;
+}
+.mt-7 {
+  margin-top: 14rpx;
+}
+.page {
+  background-color: #ffffff;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+}
+.section {
+  padding: 112rpx 32rpx 32rpx;
+  background-color: #ffffff;
+}
+.image {
+  width: 48rpx;
+  height: 48rpx;
+}
+.text {
+  color: #101727;
+  font-size: 36rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  line-height: 33.94rpx;
+}
+.text_2 {
+  color: #697282;
+  font-size: 32rpx;
+  font-family: Arimo;
+  line-height: 30.34rpx;
+}
+.section_2 {
+  padding: 248rpx 0 184rpx;
+  width: 560rpx;
+}
+.text_3 {
+  color: #101727;
+  font-size: 80rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  line-height: 56.64rpx;
+  letter-spacing: -2rpx;
+}
+.group {
+  padding: 0 64rpx;
+}
+.image-wrapper_2 {
+  padding: 36rpx 0 28rpx;
+  background-color: #ffffff;
+  border-radius: 100663200rpx;
+  filter: drop-shadow(0rpx 2rpx 2rpx #0000001a, 0rpx 2rpx 3rpx #0000001a);
+  width: 111.98rpx;
+  border-left: solid 3rpx #e5e7eb;
+  border-right: solid 3rpx #e5e7eb;
+  border-top: solid 3rpx #e5e7eb;
+  border-bottom: solid 3rpx #e5e7eb;
+}
+.pos {
+  position: absolute;
+  left: 63.06rpx;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.image_3 {
+  width: 40rpx;
+  height: 40rpx;
+}
+.image-wrapper {
+  padding: 48rpx 0;
+  background-color: #b29764;
+  border-radius: 100663200rpx;
+  filter: drop-shadow(0rpx 8rpx 6rpx #b296634d, 0rpx 20rpx 15rpx #b296634d);
+  width: 159.98rpx;
+}
+.image_2 {
+  width: 64rpx;
+  height: 64rpx;
+}
+.group_2 {
+  padding: 0 16rpx;
+}
+.section_3 {
+  padding: 0 32rpx 32rpx;
+  background-color: #f9fafb;
+  border-radius: 32rpx;
+}
+.group_3 {
+  padding: 32rpx 0;
+}
+.image_4 {
+  filter: drop-shadow(0rpx 2rpx 2rpx #0000001a, 0rpx 2rpx 3rpx #0000001a);
+  border-radius: 20rpx;
+  width: 67.96rpx;
+  height: 67.96rpx;
+}
+.image_5 {
+  border-radius: 100663200rpx;
+  width: 96rpx;
+  height: 55.96rpx;
+}
+.section_4 {
+  padding: 24rpx 36rpx 24rpx 44rpx;
+  background-color: #ffffff;
+  border-radius: 28rpx;
+  filter: drop-shadow(0rpx 2rpx 2rpx #0000001a, 0rpx 2rpx 3rpx #0000001a);
+  border-left: solid 3rpx #f2f4f6;
+  border-right: solid 3rpx #f2f4f6;
+  border-top: solid 3rpx #f2f4f6;
+  border-bottom: solid 3rpx #f2f4f6;
+}
+.font_2 {
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 18.34rpx;
+  color: #99a1ae;
+}
+.text_5 {
+  text-transform: uppercase;
+}
+.text_6 {
+  line-height: 18.18rpx;
+}
+.font {
+  font-size: 28rpx;
+  font-family: Arimo;
+  line-height: 25.82rpx;
+  color: #354152;
+}
+.text_4 {
+  color: #99a1ae;
+  line-height: 25.74rpx;
+}
+.text_7 {
+  line-height: 25.84rpx;
+}
+.image_6 {
+  width: 36rpx;
+  height: 36rpx;
+}
+.section_5 {
+  padding: 24rpx 40rpx;
+  background-color: #f9fafb;
+  border-radius: 32rpx;
+}
+.text_8 {
+  line-height: 18.44rpx;
+}
+.section_6 {
+  padding: 24rpx 120rpx;
+  background-color: #ffffff;
+  border-top: solid 3rpx #f2f4f6;
+}
+.text_9 {
+  line-height: 18.38rpx;
+}
+.text_10 {
+  color: #b29764;
+}
+.text-wrapper {
+  width: 42rpx;
+}
+.text_11 {
+  line-height: 18.3rpx;
+}
+
+/* ===== 计时器按钮布局样式 ===== */
+
+/* 计时器按钮容器 */
+.timer-button-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 80rpx;
+  padding: 0 60rpx;
+}
+
+/* 停止按钮包装器 - 确保布局对称 */
+.stop-btn-wrapper {
+  width: 100rpx;
+  height: 100rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 停止按钮占位元素 */
+.stop-btn-placeholder {
+  width: 100rpx;
+  height: 100rpx;
+}
+
+/* 基础圆形按钮样式 */
+.weui-btn-circle {
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  box-shadow: 0 4rpx 16rpx rgba(178, 151, 100, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 主按钮 - 开始和暂停按钮，大尺寸 */
+.weui-btn-circle.main-btn,
+.weui-btn-circle.pause-btn {
+  width: 160rpx;
+  height: 160rpx;
+}
+
+/* 停止按钮和重置按钮 - 小尺寸 */
+.weui-btn-circle.stop-btn,
+.weui-btn-circle.reset-btn {
+  width: 100rpx;
+  height: 100rpx;
+}
+
+/* 按钮交互效果 */
+.weui-btn-circle:active {
+  transform: scale(0.95);
+  box-shadow: 0 2rpx 8rpx rgba(178, 151, 100, 0.4);
+}
+
+/* 主按钮 - 主题色渐变 */
+.weui-btn-circle.primary {
+  background: linear-gradient(135deg, #B29764, #D4B982);
+  color: #FFFFFF;
+}
+
+.weui-btn-circle.primary:active {
+  background: linear-gradient(135deg, #9C8357, #C4A874);
+}
+
+/* 暂停按钮 - 主题色渐变 */
+.weui-btn-circle.secondary-btn {
+  background: linear-gradient(135deg, #B29764, #D4B982);
+  color: #FFFFFF;
+}
+
+.weui-btn-circle.secondary-btn:active {
+  background: linear-gradient(135deg, #9C8357, #C4A874);
+}
+
+
+
+
+/* 重置按钮 - 中性色 */
+.weui-btn-circle.reset-btn {
+  background: #F0F0F0;
+  color: #666666;
+  border: 2rpx solid #E5E5E5;
+}
+
+.weui-btn-circle.reset-btn:active {
+  background: #E8E8E8;
+}
+
+/* 按钮图标样式 */
+.btn-icon {
+  width: 40rpx;
+  height: 40rpx;
+  margin-bottom: 6rpx;
+}
+
+/* 主按钮大图标 - 开始和暂停按钮 */
+.main-btn-icon,
+.pause-btn-icon {
+  width: 60rpx;
+  height: 60rpx;
+  margin-bottom: 10rpx;
+}
+
+/* 停止按钮图标 */
+.stop-btn-icon {
+  width: 32rpx;
+  height: 32rpx;
+  margin-bottom: 4rpx;
+}
+
+/* 重置按钮小图标 */
+.reset-btn-icon {
+  width: 32rpx;
+  height: 32rpx;
+  margin-bottom: 4rpx;
+}
+
+/* 按钮文字样式 */
+.btn-text {
+  font-size: 20rpx;
+  font-family: Arimo;
+  font-weight: 500;
+  line-height: 18rpx;
+}
+
+/* 主按钮大文字 - 开始和暂停按钮 */
+.main-btn-text,
+.pause-btn-text {
+  font-size: 28rpx;
+  font-family: Arimo;
+  font-weight: 600;
+  line-height: 26rpx;
+}
+
+/* 停止按钮文字 */
+.stop-btn-text {
+  font-size: 20rpx;
+  font-family: Arimo;
+  font-weight: 500;
+  line-height: 18rpx;
+}
+
+/* 重置按钮小文字 */
+.reset-btn-text {
+  font-size: 18rpx;
+  font-family: Arimo;
+  font-weight: 500;
+  line-height: 16rpx;
+}
+
+/* 主按钮文字特殊样式 */
+.weui-btn-circle.primary .btn-text {
+  color: #FFFFFF;
+  font-weight: 600;
+}
+
+.weui-btn-circle.secondary-btn .btn-text {
+  color: #B29764;
+}
+
+.weui-btn-circle.warn-btn .btn-text {
+  color: #FFFFFF;
+  font-weight: 600;
+}
+
+.weui-btn-circle.reset-btn .btn-text {
+  color: #666666;
+}
+
+/* 按钮悬浮效果 */
+@media (hover: hover) {
+  .weui-btn-circle:hover {
+    transform: translateY(-2rpx);
+    box-shadow: 0 6rpx 20rpx rgba(178, 151, 100, 0.4);
+  }
+}
+

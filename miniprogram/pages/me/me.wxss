@@ -1,0 +1,127 @@
+/* pages/me/me.wxss */
+.ml-17 {
+  margin-left: 34rpx;
+}
+.page {
+  padding-bottom: 448rpx;
+  background-color: #f8fafc;
+  overflow: hidden;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+}
+.section {
+  padding: 36rpx 48rpx 48rpx;
+  background-color: #ffffff;
+}
+.group {
+  padding: 60rpx 0;
+}
+.text-wrapper {
+  padding: 48rpx 0;
+  background-image: linear-gradient(180deg, #b29764 0%, #8c7345 100%);
+  border-radius: 100663200rpx;
+  overflow: hidden;
+  width: 127.96rpx;
+  height: 127.96rpx;
+}
+.font {
+  font-size: 40rpx;
+  font-family: Arimo;
+  font-weight: 700;
+}
+.text_2 {
+  color: #ffffff;
+  line-height: 27.52rpx;
+}
+.text {
+  color: #101727;
+  line-height: 38.08rpx;
+}
+.image {
+  width: 40rpx;
+  height: 40rpx;
+}
+.image_2 {
+  margin-right: 16rpx;
+}
+.group_2 {
+  padding: 52rpx 0 4rpx;
+  border-top: solid 3rpx #f2f4f6;
+}
+.group_3 {
+  padding-top: 16rpx;
+  width: 218rpx;
+  height: 89.92rpx;
+  border-right: solid 3rpx #f2f4f6;
+}
+.font_3 {
+  font-size: 48rpx;
+  font-family: Arimo;
+  line-height: 33.52rpx;
+  font-weight: 700;
+  color: #b29764;
+}
+.text_4 {
+  line-height: 33.98rpx;
+}
+.group_4 {
+  margin-right: 84rpx;
+  margin-top: 16rpx;
+}
+.text_5 {
+  line-height: 33.5rpx;
+}
+.section_2 {
+  padding-bottom: 32rpx;
+  background-color: #ffffff;
+}
+.group_5 {
+  padding: 32rpx 48rpx;
+  border-bottom: solid 3rpx #f8fafb;
+}
+.image_3 {
+  width: 32rpx;
+  height: 32rpx;
+}
+.group_6 {
+  padding: 0 48rpx;
+}
+.section_3 {
+  background-color: #ffffff;
+}
+.font_2 {
+  font-size: 28rpx;
+  font-family: Arimo;
+  line-height: 25.96rpx;
+  color: #354152;
+}
+.text_7 {
+  line-height: 25.82rpx;
+}
+.text_3 {
+  color: #697282;
+}
+.text_8 {
+  line-height: 25.82rpx;
+}
+.group_7 {
+  padding: 32rpx 48rpx;
+}
+.text_9 {
+  line-height: 25.4rpx;
+}
+.font_4 {
+  font-size: 24rpx;
+  font-family: Arimo;
+  line-height: 22.18rpx;
+  color: #697282;
+}
+.text_6 {
+  line-height: 22.12rpx;
+}
+.text_10 {
+  color: #99a1ae;
+  line-height: 22.38rpx;
+}

@@ -1,0 +1,79 @@
+<!--pages/timer/timer.wxml-->
+<view class="flex-col page">
+  <view class="flex-col section">
+    <view class="flex-col self-stretch">
+      <text class="self-center text_2 mt-17">知道有念，知道无念，知道就好</text>
+    </view>
+    <view class="mt-34 flex-col items-center self-center section_2">
+      <text class="text_3">{{displayTime}}</text>
+      <text class="mt-24 font text_4">{{isCountdown ? '倒计时' : '正计时'}}</text>
+    </view>
+    <!-- 计时器控制按钮 -->
+    <view class="timer-button-container">
+      
+      <!-- 重置按钮 - 始终显示在左侧 -->
+      <view class="weui-btn-circle reset-btn" bindtap="resetTimer" wx:if="{{showResetButton}}">
+        <image class="reset-btn-icon" src="{{resetIcon}}" />
+        <text class="reset-btn-text">重置</text>
+      </view>
+      
+      <!-- 主控制按钮 - 开始和暂停按钮在同一位置切换 -->
+      <view class="weui-btn-circle main-btn primary" bindtap="startTimer" wx:if="{{showStartButton}}">
+        <image class="main-btn-icon" src="{{startIcon}}" />
+        <text class="main-btn-text">开始</text>
+      </view>
+      
+      <view class="weui-btn-circle pause-btn primary" bindtap="pauseTimer" wx:if="{{showPauseButton}}">
+        <image class="pause-btn-icon" src="{{pauseIcon}}" />
+        <text class="pause-btn-text">暂停</text>
+      </view>
+      
+      <!-- 停止按钮 - 使用占位方式确保布局对称 -->
+      <view class="stop-btn-wrapper">
+        <view class="weui-btn-circle stop-btn warn-btn" bindtap="stopTimer" wx:if="{{showStopButton}}">
+          <image class="stop-btn-icon" src="{{stopIcon}}" />
+          <text class="stop-btn-text">停止</text>
+        </view>
+        <!-- 隐藏时的占位元素 -->
+        <view class="stop-btn-placeholder" wx:if="{{!showStopButton}}"></view>
+      </view>
+      
+    </view>
+    <view class="mt-34 flex-col self-stretch group_2">
+      <view class="flex-col section_3">
+        <view class="flex-row justify-between items-center group_3">
+          <view class="flex-row items-center">
+            <image
+              class="shrink-0 image_4"
+              src="https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/b83eddffb728b6c458e2ecfe6b488e84.png"
+            />
+            <text class="font ml-13">{{isCountdown ? '倒计时' : '正计时'}}模式</text>
+          </view>
+          <switch checked="{{isCountdown}}" bindchange="toggleMode" />
+        </view>
+        <view class="flex-row justify-between items-center section_4">
+          <view class="flex-col items-start">
+            <text class="font_2 text_5 text_6">时长</text>
+            <text class="mt-8 font text_7">5 分钟</text>
+          </view>
+          <image
+            class="image_6"
+            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=5c5c537b9d82bae773523227df5301eb.png"
+          />
+        </view>
+      </view>
+      <view class="mt-12 flex-row justify-between items-center section_5">
+        <view class="flex-row items-center">
+          <image
+            class="image_4"
+            src="https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/e990152662dbbb2d55be7734e33ab353.png"
+          />
+          <view class="flex-col items-center ml-13">
+            <text class="font_2 text_5 text_8">背景音乐</text>
+            <text class="font mt-7">无音乐</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

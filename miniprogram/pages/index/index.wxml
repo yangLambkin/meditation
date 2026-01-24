@@ -1,0 +1,99 @@
+<!--pages/index/index.wxml-->
+<view class="flex-col page">
+  <view class="flex-col section">
+    <view class="flex-col group">
+      <view class="flex-col items-start relative section_2">
+        <text class="font text">欢迎回来，静修者</text>
+        <view class="shrink-0 relative section_5"></view>
+        <view class="flex-col justify-start items-end pos">
+          <view class="section_3"></view>
+          <view class="flex-row equal-division">
+            <view class="flex-col section_4 equal-division-item">
+              <text class="self-start font_3">本月打卡</text>
+              <view class="mt-14 flex-row items-end">
+                <text class="font_2">12</text>
+                <text class="font_4 ml-7">次</text>
+              </view>
+            </view>
+            <view class="ml-16 flex-col section_4 equal-division-item">
+              <text class="self-start font_3">好友排名</text>
+              <view class="mt-12 flex-row items-end">
+                <text class="font_2">No.45</text>
+                <text class="font_4 ml-9">名</text>
+              </view>
+            </view>
+          </view>
+          <text class="font_2 text_2 pos_2">保持正念，自在当下</text>
+        </view>
+      </view>
+      <view class="flex-col relative section_6">
+        <!-- 日历头部 -->
+        <view class="flex-row justify-between items-center">
+          <view class="calendar-nav-btn" bindtap="prevMonth">
+            <image class="image" src="/images/icons/left.png" />
+          </view>
+          <text class="font_5 text_3">{{currentYear}}年 {{currentMonth}}月</text>
+          <view class="calendar-nav-btn" bindtap="nextMonth">
+            <image class="image image_2" src="/images/icons/right.png" />
+          </view>
+        </view>
+        
+        <!-- 星期标题 -->
+        <view class="flex-row justify-between items-baseline self-stretch group_2 mt-21">
+          <text class="font_6 text_10">一</text>
+          <text class="font_6 text_4">二</text>
+          <text class="font_6 text_5">三</text>
+          <text class="font_6 text_6">四</text>
+          <text class="font_6 text_7">五</text>
+          <text class="font_6 text_8">六</text>
+          <text class="font_6 text_9">日</text>
+        </view>
+        
+        <!-- 日历日期网格 -->
+        <view class="calendar-grid">
+          <view class="calendar-row" wx:for="{{calendarDays}}" wx:for-item="week" wx:key="weekIndex">
+            <view 
+              class="calendar-day {{item.type}} {{item.isToday ? 'today' : ''}} {{item.isChecked ? 'checked' : ''}}"
+              wx:for="{{week}}" 
+              wx:for-item="item" 
+              wx:key="day"
+              bindtap="selectDate"
+              data-date="{{item.fullDate}}"
+            >
+              <text class="day-text">{{item.day}}</text>
+              <image 
+                class="check-icon" 
+                src="/images/icons/checked.png" 
+                wx:if="{{item.isChecked}}"
+              />
+            </view>
+          </view>
+        </view>
+        
+        <!-- 图例 -->
+        <view class="flex-row justify-center equal-division_2 group_8">
+          <view class="flex-row items-center">
+            <view class="shrink-0 section_8"></view>
+            <text class="font_6 text_26 ml-5">已打卡</text>
+          </view>
+          <view class="flex-row items-center ml-15">
+            <view class="shrink-0 section_9"></view>
+            <text class="font_6 text_27 ml-5">今日</text>
+          </view>
+        </view>
+      </view>
+    </view>
+    
+    <!-- 静坐打卡按钮 - 放置在日历外部，确保有合理间距 -->
+    <view class="meditation-btn-container">
+      <view class="weui-btn meditation-btn primary" bindtap="startMeditation">
+        <image class="meditation-btn-icon" src="/images/icons/start.png" />
+        <text class="meditation-btn-text">开始静坐</text>
+      </view>
+    </view>
+    <view class="mt-32 flex-col items-start section_11">
+      <text class="font_6 text_29">每日一言</text>
+      <text class="font text_30 mt-11">"静心即是修心，心安即是归处。"</text>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,600 @@
+/**index.wxss**/
+
+.ml-7 {
+  margin-left: 12.35rpx;
+}
+.ml-9 {
+  margin-left: 15.88rpx;
+}
+.mt-21 {
+  margin-top: 37.06rpx;
+}
+.mt-1 {
+  margin-top: 1.76rpx;
+}
+.ml-19 {
+  margin-left: 33.53rpx;
+}
+.ml-15 {
+  margin-left: 26.47rpx;
+}
+.ml-5 {
+  margin-left: 8.82rpx;
+}
+.ml-13 {
+  margin-left: 22.94rpx;
+}
+.mt-11 {
+  margin-top: 19.41rpx;
+}
+.page {
+  background-color: #ffffff;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+}
+.section {
+  overflow: hidden;
+  background-color: #f8fafc;
+  height: 1406.51rpx;
+}
+.group {
+  height: 1082.93rpx;
+}
+.section_2 {
+  padding-top: 88.24rpx;
+  background-color: #b29764;
+  overflow: hidden;
+  height: 534.55rpx;
+}
+.font {
+  font-size: 24.71rpx;
+  font-family: Arimo;
+  line-height: 17.49rpx;
+  color: #354152;
+}
+.text {
+  margin-left: 42.35rpx;
+  color: #fffefecc;
+  line-height: 23.45rpx;
+}
+.section_5 {
+  margin: 250.59rpx 0 -112.94rpx;
+  background-color: #ffffff1a;
+  border-radius: 0 88820470.59rpx 88820470.59rpx 0;
+  width: 169.99rpx;
+  height: 282.32rpx;
+}
+.pos {
+  position: absolute;
+  left: 42.35rpx;
+  right: 0;
+  top: 0;
+}
+.section_3 {
+  margin-left: 370.59rpx;
+  background-image: url('https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/54d69eddc2eda4f2c1670a8082ebb1b6.png');
+  background-size: 100% 100%;
+  width: 337.99rpx;
+  height: 337.99rpx;
+}
+.equal-division {
+  position: absolute;
+  left: 0;
+  right: 41.52rpx;
+  top: 190.46rpx;
+}
+.font_3 {
+  font-size: 21.18rpx;
+  font-family: Arimo;
+  line-height: 19.5rpx;
+  color: #fffefeb3;
+}
+.font_2 {
+  font-size: 42.35rpx;
+  font-family: Arimo;
+  line-height: 29.56rpx;
+  font-weight: 700;
+  color: #ffffff;
+}
+.font_4 {
+  font-size: 21.18rpx;
+  font-family: Arimo;
+  line-height: 19.45rpx;
+  color: #fffefeb3;
+}
+.section_4 {
+  flex: 1 1 318.97rpx;
+}
+.equal-division-item {
+  padding: 28.24rpx 21.18rpx;
+  background-color: #0000001a;
+  border-radius: 24.71rpx;
+  height: 139.34rpx;
+  border-left: solid 2.65rpx #fffefe1a;
+  border-right: solid 2.65rpx #fffefe1a;
+  border-top: solid 2.65rpx #fffefe1a;
+  border-bottom: solid 2.65rpx #fffefe1a;
+}
+.text_2 {
+  line-height: 41.89rpx;
+}
+.pos_2 {
+  position: absolute;
+  left: 0;
+  top: 133.29rpx;
+}
+.section_6 {
+  margin: -100rpx 28.24rpx 0;
+  padding: 25rpx 15rpx 25rpx 25rpx;
+  background-color: #ffffff;
+  border-radius: 20rpx;
+  filter: drop-shadow(0rpx 1.76rpx 1.76rpx #0000001a, 0rpx 1.76rpx 2.65rpx #0000001a);
+  border-left: solid 2.65rpx #f2f4f6;
+  border-right: solid 2.65rpx #f2f4f6;
+  border-top: solid 2.65rpx #f2f4f6;
+  border-bottom: solid 2.65rpx #f2f4f6;
+}
+.image {
+  border-radius: 88820470.59rpx;
+  width: 35rpx;
+  height: 35rpx;
+}
+.font_5 {
+  font-size: 26rpx;
+  font-family: Arimo;
+  line-height: 24rpx;
+  font-weight: 700;
+}
+.text_3 {
+  color: #1d2838;
+  line-height: 29.98rpx;
+}
+.image_2 {
+  margin-right: 5.29rpx;
+}
+.group_2 {
+  padding: 0 17.65rpx;
+}
+.font_6 {
+  font-size: 18rpx;
+  font-family: Arimo;
+  line-height: 15rpx;
+  color: #99a1ae;
+}
+.text_10 {
+  line-height: 1.73rpx;
+}
+.text_4 {
+  line-height: 14.33rpx;
+}
+.text_5 {
+  line-height: 15.88rpx;
+}
+.text_6 {
+  line-height: 16.92rpx;
+}
+.text_7 {
+  line-height: 16.27rpx;
+}
+.text_8 {
+  line-height: 19.18rpx;
+}
+.text_9 {
+  margin-right: 7.06rpx;
+  line-height: 17.81rpx;
+}
+.group_3 {
+  margin-top: 35.29rpx;
+}
+.text-wrapper {
+  flex: 1 1 56.45rpx;
+  padding: 21.18rpx 0;
+  border-radius: 88820470.59rpx;
+  height: 56.45rpx;
+}
+.font_7 {
+  font-size: 24.71rpx;
+  font-family: Arimo;
+  line-height: 17.49rpx;
+  color: #d0d5db;
+}
+.text_11 {
+  line-height: 16.99rpx;
+}
+.text_12 {
+  line-height: 17.26rpx;
+}
+.view {
+  margin-right: 5.29rpx;
+}
+.text_13 {
+  line-height: 16.99rpx;
+}
+.group_4 {
+  margin-top: 28.24rpx;
+}
+.text_14 {
+  line-height: 17.24rpx;
+}
+.text_15 {
+  line-height: 16.99rpx;
+}
+.view_2 {
+  margin-right: 5.29rpx;
+}
+.text_16 {
+  line-height: 16.99rpx;
+}
+.group_5 {
+  margin-top: 28.24rpx;
+}
+.text_17 {
+  line-height: 17.26rpx;
+}
+.text_18 {
+  line-height: 16.99rpx;
+}
+.text_19 {
+  line-height: 17.24rpx;
+}
+.text_20 {
+  line-height: 16.99rpx;
+}
+.view_3 {
+  margin-right: 5.29rpx;
+}
+.group_6 {
+  margin-top: 28.24rpx;
+}
+.section_7 {
+  flex: 1 1 56.45rpx;
+  padding-left: 14.12rpx;
+  padding-top: 21.18rpx;
+  background-color: #b29764;
+  border-radius: 88820470.59rpx;
+  filter: drop-shadow(0rpx 3.53rpx 3.53rpx #b296634d, 0rpx 7.06rpx 5.29rpx #b296634d);
+  height: 56.45rpx;
+}
+.font_8 {
+  font-size: 24.71rpx;
+  font-family: Arimo;
+  line-height: 17.49rpx;
+  color: #ffffff;
+}
+.text_21 {
+  line-height: 17.26rpx;
+}
+.image_3 {
+  margin-left: 24.71rpx;
+  border-radius: 88820470.59rpx;
+  width: 24.69rpx;
+  height: 24.69rpx;
+}
+.text-wrapper_2 {
+  padding: 21.18rpx 0;
+  flex: 1 1 56.45rpx;
+  background-color: #b297641a;
+  border-radius: 88820470.59rpx;
+  height: 56.45rpx;
+}
+.text_22 {
+  color: #b29764;
+  font-weight: 700;
+  line-height: 17.26rpx;
+}
+.text_23 {
+  line-height: 17.26rpx;
+}
+.view_4 {
+  margin-right: 5.29rpx;
+}
+.group_7 {
+  margin-top: 28.24rpx;
+}
+.text_24 {
+  line-height: 17.26rpx;
+}
+.view_5 {
+  margin-right: 5.29rpx;
+}
+.text_25 {
+  line-height: 16.99rpx;
+}
+.equal-division_2 {
+  align-self: center;
+  margin-top: 38.82rpx;
+}
+.group_8 {
+  width: 175.36rpx;
+}
+.section_8 {
+  background-color: #b29764;
+  border-radius: 88820470.59rpx;
+  width: 14.1rpx;
+  height: 14.1rpx;
+}
+.text_26 {
+  line-height: 19.48rpx;
+}
+.section_9 {
+  background-color: #b2976433;
+  border-radius: 88820470.59rpx;
+  width: 14.1rpx;
+  height: 14.1rpx;
+}
+.text_27 {
+  line-height: 19.62rpx;
+}
+.section_10 {
+  margin: 0 28.24rpx;
+  padding: 7.06rpx 0;
+  background-color: #b29764;
+  border-radius: 28.24rpx;
+  filter: drop-shadow(0rpx 14.12rpx 8.82rpx #0000001a, 0rpx 35.29rpx 22.06rpx #0000001a);
+}
+.group_9 {
+  margin: 0 7.06rpx;
+  padding: 21.18rpx 0;
+  border-radius: 24.71rpx;
+}
+.image_4 {
+  border-radius: 88820470.59rpx;
+  width: 74.08rpx;
+  height: 70.55rpx;
+}
+.text_28 {
+  color: #ffffff;
+  line-height: 30.02rpx;
+}
+.section_11 {
+  margin: 0 28.24rpx -56.47rpx;
+  padding: 35.29rpx 31.76rpx 21.18rpx;
+  background-color: #ffffff;
+  border-radius: 24.71rpx;
+  filter: drop-shadow(0rpx 1.76rpx 1.76rpx #0000001a, 0rpx 1.76rpx 2.65rpx #0000001a);
+  border-left: solid 2.65rpx #f2f4f6;
+  border-right: solid 2.65rpx #f2f4f6;
+  border-top: solid 2.65rpx #f2f4f6;
+  border-bottom: solid 2.65rpx #f2f4f6;
+}
+.text_29 {
+  font-weight: 700;
+  line-height: 20.03rpx;
+  text-transform: uppercase;
+}
+.text_30 {
+  color: #495565;
+  line-height: 35.29rpx;
+  font-style: italic;
+  width: 363.53rpx;
+}
+/* WeUI规范按钮样式 */
+.weui-btn {
+  position: relative;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 14px;
+  padding-right: 14px;
+  box-sizing: border-box;
+  font-size: 18px;
+  text-align: center;
+  text-decoration: none;
+  color: #FFFFFF;
+  line-height: 2.55555556;
+  border-radius: 5px;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  overflow: hidden;
+  background-color: #b29764;
+  border: none;
+  width: 100%;
+}
+
+.weui-btn_active {
+  background-color: #9c8357;
+  transition: background-color 0.3s;
+}
+
+.weui-btn:after {
+  content: " ";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 200%;
+  height: 200%;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  transform: scale(0.5);
+  transform-origin: 0 0;
+  box-sizing: border-box;
+  border-radius: 10px;
+}
+
+.section_12 {
+  padding: 21.18rpx 88.24rpx 0 130.59rpx;
+  background-color: #ffffff;
+  height: 112.91rpx;
+  border-top: solid 2.65rpx #f2f4f6;
+}
+.equal-division-item_2 {
+  width: 42.35rpx;
+  height: 42.35rpx;
+}
+.group_10 {
+  margin: 0 14.12rpx -14.12rpx;
+}
+.font_9 {
+  font-size: 17.65rpx;
+  font-family: Arimo;
+  line-height: 26.47rpx;
+}
+.text_31 {
+  color: #b29764;
+  text-align: center;
+  width: 15.88rpx;
+}
+.text_32 {
+  color: #99a1ae;
+  text-align: center;
+  width: 17.65rpx;
+}
+.text_33 {
+  margin-top: 3.53rpx;
+  color: #99a1ae;
+  font-size: 17.65rpx;
+  font-family: Arimo;
+  line-height: 16.15rpx;
+}
+
+/* ===== 交互式日历样式 ===== */
+
+/* 日历导航按钮 */
+.calendar-nav-btn {
+  padding: 8rpx;
+  border-radius: 50%;
+  background-color: #f8f9fa;
+  transition: background-color 0.3s ease;
+}
+
+.calendar-nav-btn:active {
+  background-color: #e9ecef;
+}
+
+/* 日历网格容器 */
+.calendar-grid {
+  margin-top: 20rpx;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 5rpx;
+}
+
+/* 日历行 */
+.calendar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+  width: 100%;
+  box-sizing: border-box;
+  height: 40rpx;
+  padding: 0 5rpx;
+}
+
+/* 日历日期单元格 */
+.calendar-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 40rpx;
+  height: 40rpx;
+  border-radius: 50%;
+  transition: all 0.3s ease;
+  position: relative;
+  box-sizing: border-box;
+  background-color: transparent;
+  flex-shrink: 0;
+  margin: 0 1rpx;
+}
+
+/* 当前月日期 */
+.calendar-day.current-month {
+  background-color: transparent;
+}
+
+.calendar-day.current-month:active {
+  background-color: #f8f9fa;
+}
+
+/* 非当前月日期 */
+.calendar-day.prev-month,
+.calendar-day.next-month {
+  color: #d0d5db;
+}
+
+/* 今日日期 */
+.calendar-day.today {
+  background-color: #b2976433;
+  color: #b29764;
+  font-weight: 700;
+  border-radius: 50%;
+}
+
+/* 已打卡日期 */
+.calendar-day.checked {
+  background-color: #b297641a;
+  color: #b29764;
+  font-weight: 700;
+}
+
+/* 日期文字 */
+.day-text {
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 15rpx;
+  color: inherit;
+}
+
+/* 打卡图标 - 右上角 */
+.check-icon {
+  position: absolute;
+  top: 2rpx;
+  right: 2rpx;
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background-color: #B29764;
+  box-shadow: 0rpx 1rpx 2rpx rgba(0, 0, 0, 0.2);
+}
+
+/* 静坐打卡按钮容器 */
+.meditation-btn-container {
+  position: relative;
+  z-index: 20;
+  margin: 15rpx 28.24rpx 20rpx;
+  padding: 10rpx 0;
+  background-color: transparent;
+}
+
+/* WeUI规范静坐打卡按钮 */
+.meditation-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  padding: 0 40rpx;
+  box-sizing: border-box;
+  font-size: 38rpx;
+  text-align: center;
+  text-decoration: none;
+  color: #FFFFFF;
+  line-height: 160rpx;
+  border-radius: 80rpx;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  overflow: hidden;
+  background: linear-gradient(135deg, #B29764, #D4B982);
+  border: none;
+  width: 100%;
+  box-shadow: 0rpx 6rpx 12rpx rgba(178, 151, 100, 0.25);
+  transition: all 0.3s ease;
+}
+
+.meditation-btn:active {
+  transform: scale(0.98);
+  box-shadow: 0rpx 2rpx 4rpx rgba(178, 151, 100, 0.3);
+}
+
+.meditation-btn-icon {
+  width: 52rpx;
+  height: 52rpx;
+  margin-right: 24rpx;
+}
+
+.meditation-btn-text {
+  font-size: 38rpx;
+  font-family: Arimo;
+  font-weight: 600;
+  line-height: 1;
+}
