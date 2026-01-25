@@ -20,7 +20,7 @@
   height: 100%;
 }
 .section {
-  padding: 112rpx 32rpx 32rpx;
+  padding: 60rpx 32rpx 32rpx;
   background-color: #ffffff;
 }
 .image {
@@ -41,8 +41,8 @@
   line-height: 30.34rpx;
 }
 .section_2 {
-  padding: 248rpx 0 184rpx;
-  width: 560rpx;
+  padding: 80rpx 0 100rpx;
+  width: 600rpx;
 }
 .text_3 {
   color: #101727;
@@ -181,7 +181,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 80rpx;
+  margin-top: 40rpx;
   padding: 0 60rpx;
 }
 
@@ -355,5 +355,395 @@
     transform: translateY(-2rpx);
     box-shadow: 0 6rpx 20rpx rgba(178, 151, 100, 0.4);
   }
+}
+
+/* ===== 进度圈样式 ===== */
+
+/* 进度圈容器 */
+.progress-circle-container {
+  position: relative;
+  width: 500rpx;
+  height: 500rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 20rpx auto;
+}
+
+/* 背景圆环 */
+.progress-circle-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 4rpx solid #f2f4f6;
+  box-sizing: border-box;
+}
+
+/* 进度填充圆环容器 */
+.progress-circle-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+/* 进度圈半圆通用样式 */
+.progress-circle-half {
+  position: absolute;
+  width: 50%;
+  height: 100%;
+  transform-origin: 100% 50%;
+  transition: transform 0.3s ease-in-out;
+}
+
+/* 左半圆 */
+.progress-circle-left {
+  left: 0;
+  background: linear-gradient(135deg, #B29764, #D4B982);
+  border-radius: 250rpx 0 0 250rpx;
+  border: 6rpx solid transparent;
+  border-right: none;
+  box-sizing: border-box;
+}
+
+/* 右半圆 */
+.progress-circle-right {
+  left: 50%;
+  background: linear-gradient(135deg, #F0D8A8, #FFE8B8);
+  border-radius: 0 250rpx 250rpx 0;
+  border: 6rpx solid transparent;
+  border-left: none;
+  box-sizing: border-box;
+}
+
+/* 时间显示区域 */
+.time-display {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 420rpx;
+  height: 420rpx;
+  border-radius: 50%;
+  background-color: #ffffff;
+}
+
+/* 时间显示文字样式调整 */
+.text_3 {
+  color: #101727;
+  font-size: 80rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  line-height: 60rpx;
+  letter-spacing: -1rpx;
+  text-align: center;
+}
+
+.text_4 {
+  color: #99a1ae;
+  font-size: 28rpx;
+  line-height: 24rpx;
+  text-align: center;
+  margin-top: 12rpx;
+}
+
+/* ===== 时长选择器样式 ===== */
+
+/* 选择器模态框 */
+.time-picker-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 遮罩层 */
+.time-picker-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* 选择器内容区域 */
+.time-picker-content {
+  position: relative;
+  background-color: #ffffff;
+  border-radius: 24rpx;
+  width: 600rpx;
+  max-height: 70%;
+  box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, 0.2);
+}
+
+/* 选择器头部 */
+.time-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 32rpx;
+  border-bottom: 2rpx solid #f2f4f6;
+}
+
+.time-picker-title {
+  font-size: 32rpx;
+  font-family: Arimo;
+  font-weight: 600;
+  color: #101727;
+}
+
+.time-picker-close {
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 28rpx;
+  color: #99a1ae;
+  border-radius: 50%;
+  background-color: #f9fafb;
+}
+
+/* 时长选项容器 */
+.time-picker-options {
+  padding: 32rpx;
+  max-height: 400rpx;
+  overflow-y: auto;
+}
+
+/* 单个时长选项 */
+.time-option {
+  padding: 24rpx 32rpx;
+  margin-bottom: 16rpx;
+  border-radius: 16rpx;
+  background-color: #f9fafb;
+  border: 2rpx solid #f2f4f6;
+  transition: all 0.3s ease;
+}
+
+.time-option:last-child {
+  margin-bottom: 0;
+}
+
+.time-option.selected {
+  background-color: #b29764;
+  border-color: #b29764;
+}
+
+.time-option-text {
+  font-size: 28rpx;
+  font-family: Arimo;
+  font-weight: 500;
+  color: #354152;
+}
+
+.time-option.selected .time-option-text {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 交互效果 */
+.time-option:active {
+  transform: scale(0.98);
+}
+
+.time-picker-close:active {
+  background-color: #e5e7eb;
+}
+
+/* ===== 自定义时长弹窗样式 ===== */
+
+/* 自定义时长模态框 */
+.custom-time-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 遮罩层 */
+.custom-time-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* 自定义时长内容区域 */
+.custom-time-content {
+  position: relative;
+  background-color: #ffffff;
+  border-radius: 24rpx;
+  width: 600rpx;
+  box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, 0.2);
+}
+
+/* 自定义时长头部 */
+.custom-time-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 32rpx;
+  border-bottom: 2rpx solid #f2f4f6;
+}
+
+.custom-time-title {
+  font-size: 32rpx;
+  font-family: Arimo;
+  font-weight: 600;
+  color: #101727;
+}
+
+.custom-time-close {
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 28rpx;
+  color: #99a1ae;
+  border-radius: 50%;
+  background-color: #f9fafb;
+}
+
+/* 自定义时长主体区域 */
+.custom-time-body {
+  padding: 32rpx;
+}
+
+/* 输入框容器 */
+.custom-time-input-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 32rpx;
+  background-color: #f9fafb;
+  border-radius: 16rpx;
+  border: 2rpx solid #f2f4f6;
+}
+
+/* 自定义时长输入框 */
+.custom-time-input {
+  flex: 1;
+  font-size: 32rpx;
+  font-family: Arimo;
+  color: #101727;
+  border: none;
+  background: transparent;
+  outline: none;
+  text-align: center;
+}
+
+.custom-time-input::placeholder {
+  color: #99a1ae;
+}
+
+/* 单位文本 */
+.custom-time-unit {
+  font-size: 28rpx;
+  font-family: Arimo;
+  color: #99a1ae;
+  margin-left: 16rpx;
+}
+
+/* 验证提示 */
+.custom-time-validation {
+  margin-top: 16rpx;
+  min-height: 40rpx;
+}
+
+.validation-error {
+  font-size: 24rpx;
+  font-family: Arimo;
+  color: #ff4d4f;
+  text-align: center;
+}
+
+/* 自定义时长底部操作区域 */
+.custom-time-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 24rpx 32rpx 32rpx;
+  border-top: 2rpx solid #f2f4f6;
+}
+
+/* 取消按钮 */
+.custom-time-cancel-btn {
+  flex: 1;
+  margin-right: 16rpx;
+  padding: 20rpx 0;
+  background-color: #f9fafb;
+  border: 2rpx solid #f2f4f6;
+  border-radius: 12rpx;
+  color: #354152;
+  font-size: 28rpx;
+  font-family: Arimo;
+  font-weight: 500;
+}
+
+/* 确认按钮 */
+.custom-time-confirm-btn {
+  flex: 1;
+  margin-left: 16rpx;
+  padding: 20rpx 0;
+  border: none;
+  border-radius: 12rpx;
+  color: #ffffff;
+  font-size: 28rpx;
+  font-family: Arimo;
+  font-weight: 600;
+}
+
+.custom-time-confirm-btn.active {
+  background-color: #b29764;
+}
+
+.custom-time-confirm-btn.disabled {
+  background-color: #e5e7eb;
+  color: #99a1ae;
+}
+
+/* 交互效果 */
+.custom-time-close:active {
+  background-color: #e5e7eb;
+}
+
+.custom-time-cancel-btn:active {
+  background-color: #e5e7eb;
+}
+
+.custom-time-confirm-btn.active:active {
+  background-color: #9C8357;
+}
+
+.custom-time-input-container:focus-within {
+  border-color: #b29764;
+}
+
+/* 按钮基础样式调整 */
+.custom-time-cancel-btn,
+.custom-time-confirm-btn {
+  transition: all 0.3s ease;
 }
 

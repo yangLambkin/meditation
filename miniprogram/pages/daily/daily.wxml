@@ -1,0 +1,75 @@
+<view class="flex-col section_3">
+  <view class="flex-row justify-between group">
+    <image
+      class="image"
+      src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=4ee4e5619f8b49772d396eb25d015af7.png"
+    />
+    <image
+      class="image"
+      src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=a862266959257b970386f0d7562295cb.png"
+    />
+  </view>
+  <view class="flex-row relative group_2">
+    <view class="shrink-0 section_4"></view>
+    <view class="flex-row flex-1 group_3">
+      <view class="flex-col justify-start items-start flex-1 text-wrapper">
+        <text class="text">本来无一物，何处惹尘埃</text>
+      </view>
+      <view class="flex-col justify-start items-start shrink-0 self-start text-wrapper_3">
+        <text class="font text_3">2026.1 星期五</text>
+      </view>
+    </view>
+    <view class="flex-col justify-start items-start shrink-0 text-wrapper_2 pos"><text class="text_2">23</text></view>
+    <text class="text_4 pos_2">农历腊月初五</text>
+  </view>
+  <view class="flex-col group_4">
+    <view class="flex-col justify-start items-start relative group_5">
+      <view class="flex-col group_6">
+        <view class="flex-col justify-start items-center self-start image-wrapper">
+          <image
+            class="shrink-0 image_2"
+            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=6201263cb971324887e75ddedc0f9f17.png"
+          />
+        </view>
+        <view class="flex-row equal-division group_7">
+          <view class="flex-col equal-division-item">
+            <text class="self-center font_3 text_8">43</text>
+            <view class="flex-row self-stretch mt-11">
+              <view class="flex-col justify-start items-center text-wrapper_6">
+                <text class="font_2 text_11">禅</text>
+              </view>
+              <text class="self-start font_4 text_9 ml-17">累计打卡</text>
+            </view>
+          </view>
+          <view class="horiz-divider section_5"></view>
+          <view class="flex-col items-start equal-division-item_2">
+            <text class="font_3 text_7">1小时0分钟</text>
+            <text class="font_4 text_9 text_10 mt-9">静坐时长</text>
+          </view>
+        </view>
+      </view>
+      <view class="flex-col justify-start text-wrapper_4 pos_3"><text class="text_5">静心者</text></view>
+      <view class="flex-col justify-start items-center text-wrapper_5 pos_4">
+        <text class="font_2 text_6">Lv.3 修行中</text>
+      </view>
+    </view>
+    <view class="flex-col justify-start section_6">
+      <view class="flex-row equal-division_2">
+        <view class="flex-row justify-center items-center equal-division-item_3 section_7">
+          <image
+            class="image_3"
+            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=a6ca19da01ffc792de91954c68644e81.png"
+          />
+          <text class="ml-8 font text_12">分享朋友圈</text>
+        </view>
+        <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8">
+          <image
+            class="image_3"
+            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=369498e8a8ff56b09c655a77f572d106.png"
+          />
+          <text class="ml-8 font text_13">保存图片</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

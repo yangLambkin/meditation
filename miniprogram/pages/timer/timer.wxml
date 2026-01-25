@@ -5,8 +5,21 @@
       <text class="self-center text_2 mt-17">知道有念，知道无念，知道就好</text>
     </view>
     <view class="mt-34 flex-col items-center self-center section_2">
-      <text class="text_3">{{displayTime}}</text>
-      <text class="mt-24 font text_4">{{isCountdown ? '倒计时' : '正计时'}}</text>
+      <!-- 进度圈容器 -->
+      <view class="progress-circle-container">
+        <!-- 背景圆环 -->
+        <view class="progress-circle-bg"></view>
+        <!-- 径向进度条 - 使用两个半圆实现 -->
+        <view class="progress-circle-fill">
+          <view class="progress-circle-half progress-circle-left" style="transform: rotate({{progressAngleLeft}}deg);"></view>
+          <view class="progress-circle-half progress-circle-right" style="transform: rotate({{progressAngleRight}}deg);"></view>
+        </view>
+        <!-- 时间显示 -->
+        <view class="time-display">
+          <text class="text_3">{{displayTime}}</text>
+          <text class="mt-8 font text_4">{{isCountdown ? '倒计时' : '正计时'}}</text>
+        </view>
+      </view>
     </view>
     <!-- 计时器控制按钮 -->
     <view class="timer-button-container">
@@ -51,10 +64,10 @@
           </view>
           <switch checked="{{isCountdown}}" bindchange="toggleMode" />
         </view>
-        <view class="flex-row justify-between items-center section_4">
+        <view class="flex-row justify-between items-center section_4" bindtap="showTimePicker">
           <view class="flex-col items-start">
             <text class="font_2 text_5 text_6">时长</text>
-            <text class="mt-8 font text_7">5 分钟</text>
+            <text class="mt-8 font text_7">{{durationText}}</text>
           </view>
           <image
             class="image_6"
@@ -73,6 +86,68 @@
             <text class="font mt-7">无音乐</text>
           </view>
         </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 时长选择器模态框 -->
+  <view wx:if="{{showTimePicker}}" class="time-picker-modal">
+    <view class="time-picker-overlay" bindtap="hideTimePicker"></view>
+    <view class="time-picker-content">
+      <view class="time-picker-header">
+        <text class="time-picker-title">选择时长</text>
+        <view class="time-picker-close" bindtap="hideTimePicker">✕</view>
+      </view>
+      <view class="time-picker-options">
+        <view 
+          wx:for="{{timeOptions}}" 
+          wx:key="value"
+          class="time-option {{item.value === duration ? 'selected' : ''}}"
+          bindtap="selectDuration"
+          data-value="{{item.value}}"
+        >
+          <text class="time-option-text">{{item.text}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 自定义时长弹窗 -->
+  <view wx:if="{{showCustomTimePicker}}" class="custom-time-modal">
+    <view class="custom-time-overlay" bindtap="hideCustomTimePicker"></view>
+    <view class="custom-time-content">
+      <view class="custom-time-header">
+        <text class="custom-time-title">自定义时长</text>
+        <view class="custom-time-close" bindtap="hideCustomTimePicker">✕</view>
+      </view>
+      <view class="custom-time-body">
+        <view class="custom-time-input-container">
+          <input 
+            class="custom-time-input" 
+            type="number" 
+            placeholder="请输入"
+            bindinput="onCustomTimeInput"
+            value="{{customTimeInput}}"
+            maxlength="3"
+          />
+          <text class="custom-time-unit">分钟</text>
+        </view>
+        <view class="custom-time-validation">
+          <text wx:if="{{customTimeInput && !isValidCustomTime}}" class="validation-error">
+            时长必须在1-180分钟之间
+          </text>
+        </view>
+      </view>
+      <view class="custom-time-footer">
+        <button 
+          class="custom-time-cancel-btn" 
+          bindtap="hideCustomTimePicker"
+        >取消</button>
+        <button 
+          class="custom-time-confirm-btn {{isValidCustomTime ? 'active' : 'disabled'}}" 
+          bindtap="confirmCustomTime"
+          disabled="{{!isValidCustomTime}}"
+        >确定</button>
       </view>
     </view>
   </view>

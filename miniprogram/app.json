@@ -3,6 +3,8 @@
     "pages/index/index",
     "pages/example/index",
     "pages/timer/timer",
+    "pages/recorder/recorder",
+    "pages/daily/daily",
     "pages/me/me"
   ],
   "window": {

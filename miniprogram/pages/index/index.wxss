@@ -555,6 +555,7 @@
   margin: 15rpx 28.24rpx 20rpx;
   padding: 10rpx 0;
   background-color: transparent;
+  min-height: 80rpx;
 }
 
 /* WeUI规范静坐打卡按钮 */

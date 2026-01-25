@@ -1,0 +1,76 @@
+<view class="flex-col page">
+  <!-- 主要内容区域 -->
+  <view class="flex-col section">
+    <view class="flex-col main-content">
+      <!-- 页面标题 -->
+      <view class="flex-row justify-center self-stretch relative">
+        <view class="flex-col items-center">
+          <text class="font text_2 mt-8">分享您的感受</text>
+        </view>
+      </view>
+      
+      <!-- 冥想时长显示 -->
+      <text class="self-center font_2 text_3 mt-20">本次冥想时长</text>
+      <text class="self-center text_4 mt-8">{{durationText || '0分钟'}}</text>
+      
+      <!-- 5星评分组件 -->
+      <view class="flex-row justify-between equal-division group mt-30">
+        <view 
+          wx:for="{{stars}}" 
+          wx:key="index"
+          class="star-item {{item.active ? 'active' : ''}} {{item.hover ? 'hover' : ''}}"
+          bindtap="selectRating"
+          data-index="{{index}}"
+          bindtouchstart="starTouchStart"
+          bindtouchend="starTouchEnd"
+          bindtouchcancel="starTouchEnd"
+          bindtouchmove="starTouchMove"
+          data-value="{{index + 1}}"
+        >
+          <image 
+            class="star-icon"
+            src="{{item.active ? '/images/icons/star-active.png' : '/images/icons/star.png'}}"
+            mode="aspectFit"
+          />
+        </view>
+      </view>
+      <text class="self-center font_2 text_5 mt-12">轻触评分</text>
+      
+      <!-- 记录区域 -->
+      <view class="flex-col self-stretch group_2 mt-30">
+        <view class="flex-col section_2">
+          <text class="self-start font text_6">记录您的感受和想法...</text>
+          <textarea 
+            class="textarea-input"
+            maxlength="500"
+            value="{{currentText}}"
+            bindinput="onTextInput"
+            bindfocus="onTextFocus"
+            bindblur="onTextBlur"
+          />
+          <text class="self-end font_3 mt-16">{{currentTextLength}} / 500</text>
+        </view>
+        <view class="flex-col justify-start items-center text-wrapper mt-16" bindtap="saveCurrentRecord">
+          <text class="font_4 text_8">保存当前记录</text>
+        </view>
+      </view>
+      
+      <!-- 已保存记录显示区域 -->
+      <view wx:if="{{savedRecords.length > 0}}" class="flex-col saved-records-section mt-30">
+        <view wx:for="{{savedRecords}}" wx:key="index" class="saved-record-item">
+          <view class="record-content">
+            <text class="record-text">{{item.text}}</text>
+            <text class="record-timestamp">{{item.timestamp}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+  
+      <!-- 打卡完成按钮 - 固定在页面底部 -->
+      <view class="bottom-button-container" bindtap="completeCheckIn">
+        <view class="complete-checkin-btn">
+          <text class="complete-checkin-text">打卡完成</text>
+        </view>
+      </view>
+</view>

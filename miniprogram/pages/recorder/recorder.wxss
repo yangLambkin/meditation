@@ -1,0 +1,372 @@
+.mt-21 {
+  margin-top: 42rpx;
+}
+.mt-227 {
+  margin-top: 454rpx;
+}
+.section {
+  padding: 104.12rpx 31.96rpx 64rpx;
+  background-image: linear-gradient(180deg, #b29764 0%, #9a7e4f 100%);
+}
+.image {
+  width: 48rpx;
+  height: 48rpx;
+}
+.pos {
+  position: absolute;
+  left: 0;
+  top: 7.86rpx;
+}
+.text {
+  color: #ffffff;
+  font-size: 40rpx;
+  font-family: Arimo;
+  line-height: 37.16rpx;
+}
+.font {
+  font-size: 28rpx;
+  font-family: Arimo;
+  line-height: 26.06rpx;
+}
+.text_2 {
+  color: #333333;
+}
+.font_2 {
+  font-size: 24rpx;
+  font-family: Arimo;
+  line-height: 22.22rpx;
+}
+.text_3 {
+  margin-top: 28.4rpx;
+  color: #666666;
+  line-height: 22.1rpx;
+}
+.text_4 {
+  margin-top: 24rpx;
+  color: #ffffff;
+  font-size: 56rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  line-height: 52rpx;
+  letter-spacing: -1.4rpx;
+}
+.equal-division {
+  align-self: center;
+  margin-top: 30rpx;
+}
+.group {
+  width: 551.62rpx;
+}
+.equal-division-item {
+  width: 72rpx;
+  height: 72rpx;
+}
+.text_5 {
+  margin-top: 16rpx;
+  color: #c2ae89;
+}
+.group_2 {
+  margin-top: 55.94rpx;
+  padding-left: 16.04rpx;
+  padding-right: 16.04rpx;
+}
+.section_2 {
+  padding: 40.32rpx 32.46rpx 21.8rpx 33.28rpx;
+  background-color: #f8f8f8;
+  border-radius: 32rpx;
+  overflow: hidden;
+  border: solid 2rpx #e8e8e8;
+}
+.text_6 {
+  color: #666666;
+  line-height: 25.98rpx;
+}
+.font_3 {
+  color: #999999;
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 14.68rpx;
+}
+.text-wrapper {
+  padding: 32.96rpx 0 33.38rpx;
+  background-color: #b29764;
+  border-radius: 28rpx;
+  border: solid 2rpx #b29764;
+}
+.font_4 {
+  font-size: 32rpx;
+  font-family: Arimo;
+  line-height: 29.66rpx;
+}
+.text_8 {
+  color: #ffffff;
+}
+.text-wrapper_2 {
+  margin-right: 16.04rpx;
+  margin-left: 16.04rpx;
+  padding: 37.48rpx 0 43.7rpx;
+  background-color: #ffffff;
+  border-radius: 32rpx;
+  filter: drop-shadow(0rpx 8rpx 6rpx #0000001a, 0rpx 20rpx 15rpx #0000001a);
+}
+.text_9 {
+  color: #b29764;
+  font-weight: 700;
+  line-height: 30.76rpx;
+}
+
+/* ===== 页面整体布局调整 ===== */
+
+/* 页面容器 */
+.page {
+  background-color: #ffffff;
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 主要内容区域 - 占据剩余空间 */
+.section {
+  padding: 40rpx 32rpx 32rpx;
+  background-color: #ffffff;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* 主要内容区域 */
+.main-content {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 减小元素间距 */
+.mt-20 {
+  margin-top: 40rpx;
+}
+
+.mt-30 {
+  margin-top: 30rpx;
+}
+
+.mt-60 {
+  margin-top: 120rpx;
+}
+
+/* 调整文本区域高度 */
+.section_2 {
+  padding: 24rpx 32rpx 16rpx;
+  min-height: 160rpx;
+}
+
+/* 调整保存记录按钮 */
+.text-wrapper {
+  padding: 24rpx 0;
+  min-height: 80rpx;
+}
+
+/* ===== 底部打卡完成按钮样式 ===== */
+
+/* 底部按钮容器 */
+.bottom-button-container {
+  position: fixed;
+  bottom: 32rpx;
+  left: 0;
+  right: 0;
+  padding-left: 16.04rpx;
+  padding-right: 16.04rpx;
+  z-index: 999;
+}
+
+/* 打卡完成按钮 */
+.complete-checkin-btn {
+  background-color: #ffffff;
+  border-radius: 28rpx;
+  padding: 32.96rpx 0 33.38rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border: solid 2rpx #b29764;
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+.complete-checkin-btn:active {
+  background-color: #f8f8f8;
+  transform: scale(0.98);
+}
+
+/* 按钮文字 */
+.complete-checkin-text {
+  color: #b29764;
+  font-size: 32rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  line-height: 29.66rpx;
+}
+
+/* ===== 5星评分组件样式 ===== */
+
+/* 星星容器 */
+.star-item {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 88rpx;
+  height: 88rpx;
+  transition: all 0.3s ease;
+}
+
+/* 星星图片 */
+.star-icon {
+  width: 64rpx;
+  height: 64rpx;
+  transition: all 0.3s ease;
+  filter: drop-shadow(0rpx 2rpx 8rpx rgba(0, 0, 0, 0.3));
+}
+
+/* 悬停状态 */
+.star-item.hover .star-icon {
+  opacity: 0.9;
+  transform: scale(1.2);
+}
+
+/* 选中状态 */
+.star-item.active .star-icon {
+  opacity: 1;
+  transform: scale(1.1);
+  filter: 
+    drop-shadow(0rpx 0rpx 16rpx rgba(255, 215, 0, 0.8))
+    drop-shadow(0rpx 0rpx 32rpx rgba(255, 215, 0, 0.4));
+}
+
+/* 悬停 + 选中状态 */
+.star-item.active.hover .star-icon {
+  transform: scale(1.3);
+  filter: 
+    drop-shadow(0rpx 0rpx 24rpx rgba(255, 229, 92, 0.9))
+    drop-shadow(0rpx 0rpx 48rpx rgba(255, 229, 92, 0.6));
+}
+
+/* 触摸效果 */
+.star-item:active {
+  transform: scale(0.95);
+}
+
+/* 响应式效果 */
+@media (min-width: 768px) {
+  .star-item:hover {
+    transform: scale(1.05);
+  }
+  
+  .star-item:hover .star-icon {
+    opacity: 0.8;
+    transform: scale(1.1);
+  }
+}
+
+/* ===== 文本输入区域样式 ===== */
+
+/* 文本输入框 */
+.textarea-input {
+  width: 100%;
+  min-height: 120rpx;
+  margin-top: 16rpx;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 40rpx;
+  color: #333333;
+  resize: none;
+}
+
+.textarea-input::placeholder {
+  color: #999999;
+}
+
+.textarea-input:focus {
+  background: transparent;
+}
+
+/* 保存记录按钮交互效果 */
+.text-wrapper {
+  transition: all 0.3s ease;
+}
+
+.text-wrapper:active {
+  opacity: 0.8;
+  transform: scale(0.98);
+}
+
+/* ===== 已保存记录区域样式 ===== */
+
+/* 已保存记录区域 */
+.saved-records-section {
+  background: transparent;
+  border-radius: 0;
+  padding-left: 16.04rpx;
+  padding-right: 16.04rpx;
+  border: none;
+}
+
+.mb-16 {
+  margin-bottom: 32rpx;
+}
+
+/* 单条记录项 */
+.saved-record-item {
+  padding: 24rpx 32rpx;
+  background-color: #ffffff1a;
+  border-radius: 32rpx;
+  overflow: hidden;
+  border-left: solid 3rpx #fffefe1a;
+  border-right: solid 3rpx #fffefe1a;
+  border-top: solid 3rpx #fffefe1a;
+  border-bottom: solid 3rpx #fffefe1a;
+  margin-bottom: 24rpx;
+}
+
+.saved-record-item:last-child {
+  margin-bottom: 0;
+}
+
+/* 记录内容 */
+.record-content {
+  padding: 0;
+}
+
+/* 记录文本 */
+.record-text {
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 26.06rpx;
+  color: #fffefe66;
+  display: block;
+  margin-bottom: 16rpx;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* 记录时间戳 */
+.record-timestamp {
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 18.34rpx;
+  color: #000000;
+  display: block;
+}
+
+/* 空状态提示 */
+.no-records-text {
+  color: #fffefe66;
+  font-size: 24rpx;
+  font-family: Arimo;
+  line-height: 32rpx;
+  text-align: center;
+  padding: 64rpx;
+}

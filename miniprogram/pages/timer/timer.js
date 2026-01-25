@@ -7,28 +7,35 @@ Page({
     isCountdown: true,      // true=倒计时, false=正计时
     
     // 时间设置
-    totalTime: 300,         // 总时长（秒）
+    totalTime: 420,         // 总时长（秒）7分钟=420秒
     elapsedTime: 0,         // 已过时间（秒）
-    remainingTime: 300,     // 剩余时间（秒）
+    remainingTime: 420,     // 剩余时间（秒）7分钟=420秒
     
     // 时长选择相关字段
-    duration: 5,            // 当前选择时长（分钟）
-    durationText: "5 分钟", // 显示文本
+    duration: 7,            // 当前选择时长（分钟）
+    durationText: "7 分钟", // 显示文本
     showTimePicker: false,  // 是否显示时间选择器
+    showCustomTimePicker: false, // 是否显示自定义时长弹窗
+    customTimeInput: "",    // 自定义时长输入
     timeOptions: [
       { value: 7, text: "7 分钟" },
       { value: 10, text: "10 分钟" },
       { value: 15, text: "15 分钟" },
       { value: 20, text: "20 分钟" },
-      { value: 30, text: "30 分钟" }
+      { value: 30, text: "30 分钟" },
+      { value: "custom", text: "自定义" }
     ],
+    
+    // 自定义时长相关字段
+    isValidCustomTime: false,  // 自定义时长是否有效
     
     // 计时器控制
     timerInterval: null,
     
     // 进度显示
     progress: 0,
-    displayTime: "05:00",
+    progressAngle: 0,        // 径向进度条角度（0-360度）
+    displayTime: "07:00",
     
     // 按钮状态管理
     showStartButton: true,     // 显示开始按钮
@@ -40,7 +47,14 @@ Page({
     startIcon: "/images/icons/start.png",
     pauseIcon: "/images/icons/pause.png",
     stopIcon: "/images/icons/stop.png",
-    resetIcon: "/images/icons/resetting.png"
+    resetIcon: "/images/icons/resetting.png",
+    
+    // 音频对象
+    audioPlayer: null,
+    
+    // 音频播放器
+    audioContext: null,
+    audioPlayer: null
   },
 
   /**
@@ -49,6 +63,9 @@ Page({
   onLoad(options) {
     this.updateDisplay();
     this.updateButtonStates();
+    
+    // 创建音频播放器
+    this.createAudioPlayer();
   },
 
   /**
@@ -113,6 +130,9 @@ Page({
    * 完全停止计时器
    */
   stopTimer() {
+    // 只有在计时器运行时停止才播放铃声
+    const wasRunning = this.data.isRunning;
+    
     this.setData({
       elapsedTime: 0,
       remainingTime: this.data.totalTime,
@@ -125,6 +145,11 @@ Page({
       this.setData({
         timerInterval: null
       });
+    }
+
+    // 如果计时器正在运行，停止时播放铃声
+    if (wasRunning) {
+      this.playBellSound();
     }
 
     this.updateDisplay();
@@ -145,11 +170,22 @@ Page({
       } else {
         // 倒计时结束
         this.stopTimer();
+        
+        // 播放提醒铃声
+        this.playBellSound();
+        
         wx.showToast({
           title: '计时结束',
           icon: 'success',
           duration: 2000
         });
+        
+        // 延迟2秒后自动跳转到记录页面
+        setTimeout(() => {
+          wx.navigateTo({
+            url: '/pages/recorder/recorder?duration=' + this.data.duration
+          });
+        }, 2000);
       }
     } else {
       // 正计时模式
@@ -157,6 +193,28 @@ Page({
         elapsedTime: this.data.elapsedTime + 1,
         remainingTime: Math.max(0, this.data.totalTime - this.data.elapsedTime - 1)
       });
+      
+      // 检查正计时是否完成
+      if (this.data.elapsedTime >= this.data.totalTime) {
+        // 正计时结束
+        this.stopTimer();
+        
+        // 播放提醒铃声
+        this.playBellSound();
+        
+        wx.showToast({
+          title: '计时完成',
+          icon: 'success',
+          duration: 2000
+        });
+        
+        // 延迟2秒后自动跳转到记录页面
+        setTimeout(() => {
+          wx.navigateTo({
+            url: '/pages/recorder/recorder?duration=' + this.data.duration
+          });
+        }, 2000);
+      }
     }
 
     this.updateDisplay();
@@ -186,9 +244,23 @@ Page({
       progress = (this.data.elapsedTime / this.data.totalTime) * 100;
     }
 
+    // 计算径向进度条角度
+    let progressAngle;
+    
+    if (this.data.isCountdown) {
+      // 倒计时模式：从完全填充到完全消失
+      // 进度从360°（完全填充）减少到0°（完全消失）
+      progressAngle = 360 - (progress * 3.6);
+    } else {
+      // 正计时模式：从未填充到完全填充
+      // 进度从0°（未填充）增加到360°（完全填充）
+      progressAngle = progress * 3.6;
+    }
+
     this.setData({
       displayTime: displayTime,
-      progress: Math.min(100, Math.max(0, progress))
+      progress: Math.min(100, Math.max(0, progress)),
+      progressAngle: Math.min(360, Math.max(0, progressAngle))
     });
   },
 
@@ -267,18 +339,57 @@ Page({
   },
 
   /**
-   * 选择时长
+   * 隐藏自定义时长弹窗
    */
-  selectDuration: function(e) {
-    const selectedDuration = e.currentTarget.dataset.value;
-    const totalSeconds = selectedDuration * 60;
+  hideCustomTimePicker: function() {
+    this.setData({
+      showCustomTimePicker: false
+    });
+  },
+
+  /**
+   * 自定义时长输入处理
+   */
+  onCustomTimeInput: function(e) {
+    const value = e.detail.value;
+    const isValid = this.validateCustomTime(value);
     
     this.setData({
-      duration: selectedDuration,
-      durationText: selectedDuration + " 分钟",
+      customTimeInput: value,
+      isValidCustomTime: isValid
+    });
+  },
+
+  /**
+   * 验证自定义时长
+   */
+  validateCustomTime: function(time) {
+    if (!time || time.trim() === '') {
+      return false;
+    }
+    
+    const minutes = parseInt(time);
+    return !isNaN(minutes) && minutes >= 1 && minutes <= 180;
+  },
+
+  /**
+   * 确认自定义时长
+   */
+  confirmCustomTime: function() {
+    if (!this.data.isValidCustomTime) {
+      return;
+    }
+    
+    const minutes = parseInt(this.data.customTimeInput);
+    const totalSeconds = minutes * 60;
+    
+    this.setData({
+      duration: minutes,
+      durationText: minutes + " 分钟",
       totalTime: totalSeconds,
       remainingTime: totalSeconds,
-      showTimePicker: false
+      showCustomTimePicker: false,
+      customTimeInput: ""
     });
     
     // 更新显示
@@ -287,6 +398,71 @@ Page({
     // 如果正在计时，需要重置
     if (this.data.isRunning) {
       this.stopTimer();
+    }
+  },
+
+  /**
+   * 选择时长
+   */
+  selectDuration: function(e) {
+    const selectedDuration = e.currentTarget.dataset.value;
+    
+    if (selectedDuration === "custom") {
+      // 显示自定义时长弹窗
+      this.setData({
+        showTimePicker: false,
+        showCustomTimePicker: true,
+        customTimeInput: ""
+      });
+    } else {
+      // 选择预设时长
+      const totalSeconds = selectedDuration * 60;
+      
+      this.setData({
+        duration: selectedDuration,
+        durationText: selectedDuration + " 分钟",
+        totalTime: totalSeconds,
+        remainingTime: totalSeconds,
+        showTimePicker: false
+      });
+      
+      // 更新显示
+      this.updateDisplay();
+      
+      // 如果正在计时，需要重置
+      if (this.data.isRunning) {
+        this.stopTimer();
+      }
+    }
+  },
+
+  /**
+   * 创建音频播放器
+   */
+  createAudioPlayer: function() {
+    this.audioPlayer = wx.createInnerAudioContext();
+    this.audioPlayer.src = '/audio/belling.mp3';
+    this.audioPlayer.loop = false; // 不循环播放
+    this.audioPlayer.obeyMuteSwitch = false; // 静音模式下也播放
+    
+    // 音频加载完成回调
+    this.audioPlayer.onCanplay(() => {
+      console.log('音频加载完成');
+    });
+    
+    // 音频播放错误回调
+    this.audioPlayer.onError((err) => {
+      console.error('音频播放错误:', err);
+    });
+  },
+
+  /**
+   * 播放提醒铃声
+   */
+  playBellSound: function() {
+    if (this.audioPlayer) {
+      this.audioPlayer.play();
+      console.log('播放提醒铃声');
     }
   }
 });
