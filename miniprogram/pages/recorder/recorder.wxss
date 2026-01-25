@@ -168,16 +168,6 @@
 
 /* ===== 底部打卡完成按钮样式 ===== */
 
-/* 底部按钮容器 */
-.bottom-button-container {
-  position: fixed;
-  bottom: 32rpx;
-  left: 0;
-  right: 0;
-  padding-left: 16.04rpx;
-  padding-right: 16.04rpx;
-  z-index: 999;
-}
 
 /* 打卡完成按钮 */
 .complete-checkin-btn {
@@ -190,6 +180,7 @@
   border: solid 2rpx #b29764;
   transition: all 0.3s ease;
   width: 100%;
+  margin-bottom: 0;
 }
 
 .complete-checkin-btn:active {
@@ -214,15 +205,15 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  width: 88rpx;
-  height: 88rpx;
+  width: 80rpx;
+  height: 80rpx;
   transition: all 0.3s ease;
 }
 
 /* 星星图片 */
 .star-icon {
-  width: 64rpx;
-  height: 64rpx;
+  width: 56rpx;
+  height: 56rpx;
   transition: all 0.3s ease;
   filter: drop-shadow(0rpx 2rpx 8rpx rgba(0, 0, 0, 0.3));
 }
@@ -314,6 +305,30 @@
   border: none;
 }
 
+/* 已保存记录标题区域 */
+.saved-records-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24rpx;
+  padding: 0 16rpx;
+}
+
+/* 已保存记录图标 */
+.saved-records-icon {
+  width: 28rpx;
+  height: 28rpx;
+  margin-right: 12rpx;
+}
+
+/* 已保存记录标题 */
+.saved-records-title {
+  font-size: 20rpx;
+  font-family: Arimo;
+  color: #c2ae89;
+  font-weight: 700;
+  line-height: 32rpx;
+}
+
 .mb-16 {
   margin-bottom: 32rpx;
 }
@@ -353,12 +368,41 @@
 }
 
 /* 记录时间戳 */
+/* 记录页脚 */
+.record-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16rpx;
+}
+
+/* 记录时间戳 */
 .record-timestamp {
   font-size: 20rpx;
   font-family: Arimo;
   line-height: 18.34rpx;
   color: #000000;
-  display: block;
+}
+
+/* 删除按钮 */
+.delete-btn {
+  display: flex;
+  align-items: center;
+  padding: 8rpx;
+  background-color: transparent;
+  border-radius: 8rpx;
+  transition: all 0.3s ease;
+}
+
+.delete-btn:active {
+  background-color: rgba(0, 0, 0, 0.1);
+  transform: scale(0.95);
+}
+
+/* 删除图标 */
+.delete-icon {
+  width: 24rpx;
+  height: 24rpx;
 }
 
 /* 空状态提示 */

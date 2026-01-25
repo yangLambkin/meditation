@@ -170,6 +170,39 @@ Page({
     }
   },
 
+  // 删除记录
+  deleteRecord: function(e) {
+    const index = e.currentTarget.dataset.index;
+    
+    wx.showModal({
+      title: '确认删除',
+      content: '确定要删除这条记录吗？',
+      confirmText: '删除',
+      confirmColor: '#ff4d4f',
+      cancelText: '取消',
+      success: (res) => {
+        if (res.confirm) {
+          // 删除记录
+          const records = [...this.data.savedRecords];
+          records.splice(index, 1);
+          
+          this.setData({
+            savedRecords: records
+          });
+          
+          // 保存到本地存储
+          this.saveRecordsToStorage(records);
+          
+          wx.showToast({
+            title: '删除成功',
+            icon: 'success',
+            duration: 2000
+          });
+        }
+      }
+    });
+  },
+
   // 打卡完成 - 跳转到daily页面
   completeCheckIn: function() {
     // 保存评分记录（如果有评分）
