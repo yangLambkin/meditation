@@ -39,9 +39,9 @@ Page({
       });
     }
     
-    // 立即跳转到记录页面（方便调试）
-    wx.navigateTo({
-      url: '/pages/recorder/recorder?duration=7'
+    // 跳转到计时页面
+    wx.switchTab({
+      url: '/pages/timer/timer'
     });
   },
 
