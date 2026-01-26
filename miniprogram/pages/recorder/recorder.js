@@ -303,6 +303,22 @@ Page({
     }, 1500);
   },
 
+  // 重写页面返回逻辑
+  onUnload() {
+    // 页面返回时跳转到首页
+    wx.switchTab({
+      url: '/pages/index/index'
+    });
+  },
+
+  // 自定义返回按钮点击事件
+  onBack() {
+    // 直接跳转到首页
+    wx.switchTab({
+      url: '/pages/index/index'
+    });
+  },
+
   onShareAppMessage() {
     return {};
   },

@@ -1,4 +1,4 @@
-<view class="flex-col section_3">
+<view class="flex-col section_3" style="background-image: url('{{backgroundImage}}'); background-size: cover; background-position: center; background-repeat: no-repeat; min-height: 100vh;">
   <view class="flex-row justify-between group">
   </view>
   <view class="flex-row relative group_2">

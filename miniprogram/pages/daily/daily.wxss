@@ -9,7 +9,6 @@
 }
 .section_3 {
   padding-top: 96rpx;
-  background-color: #00000033;
 }
 .group {
   padding: 0 48rpx;
