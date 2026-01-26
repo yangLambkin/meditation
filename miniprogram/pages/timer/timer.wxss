@@ -20,7 +20,7 @@
   height: 100%;
 }
 .section {
-  padding: 60rpx 32rpx 32rpx;
+  padding: 10rpx 32rpx 32rpx;
   background-color: #ffffff;
 }
 .image {
@@ -41,7 +41,7 @@
   line-height: 30.34rpx;
 }
 .section_2 {
-  padding: 80rpx 0 100rpx;
+  padding: 0rpx 0 50rpx;
   width: 600rpx;
 }
 .text_3 {
@@ -181,7 +181,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 40rpx;
+  margin-top: 0rpx;
   padding: 0 60rpx;
 }
 
