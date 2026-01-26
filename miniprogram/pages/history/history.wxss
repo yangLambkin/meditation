@@ -1,0 +1,185 @@
+/* pages/history/history.wxss */
+
+.page {
+  padding: 0 32rpx;
+  background-color: #f8f9fa;
+  min-height: 100vh;
+}
+
+.section {
+  padding: 48rpx 0 32rpx;
+  background-color: #ffffff;
+  border-radius: 16rpx;
+  margin-bottom: 24rpx;
+}
+
+.back-icon {
+  width: 48rpx;
+  height: 48rpx;
+  margin-right: 16rpx;
+}
+
+.page-title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #333333;
+}
+
+.stats-text {
+  font-size: 28rpx;
+  color: #666666;
+}
+
+.stats-cards {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 32rpx;
+  padding: 0 32rpx;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.stat-number {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: #b29764;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 24rpx;
+  color: #999999;
+  margin-top: 8rpx;
+}
+
+.history-list {
+  flex: 1;
+  max-height: 70vh;
+}
+
+.history-item {
+  background-color: #ffffff;
+  border-radius: 16rpx;
+  margin-bottom: 24rpx;
+  padding: 32rpx;
+}
+
+.date-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+
+.date-text {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #333333;
+}
+
+.count-badge {
+  background-color: #b29764;
+  color: #ffffff;
+  font-size: 24rpx;
+  padding: 8rpx 16rpx;
+  border-radius: 20rpx;
+}
+
+.record-item {
+  margin-bottom: 24rpx;
+}
+
+.record-content {
+  background-color: #f8f9fa;
+  border-radius: 12rpx;
+  padding: 24rpx;
+}
+
+.record-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.record-time {
+  font-size: 28rpx;
+  color: #666666;
+  font-weight: 500;
+}
+
+.record-meta {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.duration-text {
+  font-size: 24rpx;
+  color: #999999;
+  background-color: #e8e8e8;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+}
+
+.rating-stars {
+  display: flex;
+  gap: 4rpx;
+}
+
+.star-icon {
+  width: 24rpx;
+  height: 24rpx;
+}
+
+.record-details {
+  border-top: 1rpx solid #e8e8e8;
+  padding-top: 16rpx;
+}
+
+.text-count {
+  font-size: 24rpx;
+  color: #b29764;
+  margin-bottom: 8rpx;
+  display: block;
+}
+
+.text-preview {
+  font-size: 26rpx;
+  color: #666666;
+  line-height: 1.4;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 120rpx 0;
+  text-align: center;
+}
+
+.empty-icon {
+  width: 120rpx;
+  height: 120rpx;
+  margin-bottom: 32rpx;
+  opacity: 0.5;
+}
+
+.empty-text {
+  font-size: 32rpx;
+  color: #999999;
+  margin-bottom: 16rpx;
+}
+
+.empty-subtext {
+  font-size: 28rpx;
+  color: #cccccc;
+}

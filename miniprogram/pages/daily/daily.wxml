@@ -1,13 +1,5 @@
 <view class="flex-col section_3">
   <view class="flex-row justify-between group">
-    <image
-      class="image"
-      src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=4ee4e5619f8b49772d396eb25d015af7.png"
-    />
-    <image
-      class="image"
-      src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=a862266959257b970386f0d7562295cb.png"
-    />
   </view>
   <view class="flex-row relative group_2">
     <view class="shrink-0 section_4"></view>
