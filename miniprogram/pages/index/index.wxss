@@ -552,7 +552,7 @@
 .meditation-btn-container {
   position: relative;
   z-index: 20;
-  margin: 15rpx 28.24rpx 20rpx;
+  margin: 40rpx 28.24rpx 20rpx;
   padding: 10rpx 0;
   background-color: transparent;
   min-height: 80rpx;

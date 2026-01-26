@@ -11,7 +11,7 @@
             <view class="flex-col section_4 equal-division-item">
               <text class="self-start font_3">本月打卡</text>
               <view class="mt-14 flex-row items-end">
-                <text class="font_2">12</text>
+                <text class="font_2">{{monthlyCount}}</text>
                 <text class="font_4 ml-7">次</text>
               </view>
             </view>
@@ -91,9 +91,12 @@
         <text class="meditation-btn-text">开始静坐</text>
       </view>
     </view>
-    <view class="mt-32 flex-col items-start section_11">
+    
+    <!-- 每日一言 - 放置在静坐打卡按钮下方，间距40rpx -->
+    <view class="mt-40 flex-col items-start section_11">
       <text class="font_6 text_29">每日一言</text>
       <text class="font text_30 mt-11">"静心即是修心，心安即是归处。"</text>
     </view>
   </view>
+    
 </view>

@@ -12,7 +12,9 @@ Page({
     currentHoverIndex: -1,
     currentText: '',
     currentTextLength: 0,
-    savedRecords: []
+    savedRecords: [],
+    userOpenId: '',
+    duration: '7'
   },
 
   onLoad(options) {
@@ -20,9 +22,13 @@ Page({
     if (options.duration) {
       const durationText = options.duration + "分钟";
       this.setData({
-        durationText: durationText
+        durationText: durationText,
+        duration: options.duration
       });
     }
+    
+    // 获取用户openId
+    this.getUserOpenId();
     
     // 加载已保存的记录
     this.loadSavedRecords();
@@ -203,30 +209,98 @@ Page({
     });
   },
 
-  // 打卡完成 - 跳转到daily页面
+  // 获取用户openId
+  getUserOpenId: function() {
+    // 使用本地生成的唯一ID作为用户标识
+    const localUserId = wx.getStorageSync('localUserId');
+    if (!localUserId) {
+      const newLocalUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      wx.setStorageSync('localUserId', newLocalUserId);
+      this.setData({
+        userOpenId: newLocalUserId
+      });
+    } else {
+      this.setData({
+        userOpenId: localUserId
+      });
+    }
+  },
+
+  // 打卡完成 - 记录用户打卡次数和评分记录
   completeCheckIn: function() {
-    // 保存评分记录（如果有评分）
+    if (!this.data.userOpenId) {
+      // 如果没有用户ID，先获取
+      this.getUserOpenId();
+    }
+
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+    
+    // 获取所有用户的打卡记录
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    
+    // 获取当前用户的打卡记录
+    const userRecords = allUserRecords[this.data.userOpenId] || {
+      totalCount: 0,
+      dailyRecords: {}
+    };
+    
+    // 更新今日打卡次数
+    const todayRecord = userRecords.dailyRecords[dateStr] || {
+      count: 0,
+      lastTimestamp: 0,
+      durations: [],
+      ratings: []
+    };
+    
+    todayRecord.count += 1;
+    todayRecord.lastTimestamp = today.getTime();
+    todayRecord.durations.push(this.data.duration || '7');
+    
+    // 保存评分记录
     if (this.data.selectedRating > 0) {
-      const today = new Date();
-      const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
-      
-      // 获取本地存储的记录
+      todayRecord.ratings.push({
+        rating: this.data.selectedRating,
+        timestamp: today.getTime()
+      });
+    }
+    
+    // 保存文本记录数量
+    todayRecord.textRecords = this.data.savedRecords.length;
+    
+    // 更新用户记录
+    userRecords.dailyRecords[dateStr] = todayRecord;
+    userRecords.totalCount += 1;
+    
+    // 更新所有用户记录
+    allUserRecords[this.data.userOpenId] = userRecords;
+    wx.setStorageSync('meditationUserRecords', allUserRecords);
+    
+    // 保存评分记录到单独的存储（兼容原有逻辑）
+    if (this.data.selectedRating > 0) {
       const records = wx.getStorageSync('meditationRecords') || {};
       records[dateStr] = {
         rating: this.data.selectedRating,
         duration: this.data.durationText || '7分钟',
         timestamp: today.getTime(),
-        textRecords: this.data.savedRecords.length // 记录文本记录数量
+        textRecords: this.data.savedRecords.length,
+        userOpenId: this.data.userOpenId
       };
-      
-      // 保存到本地存储
       wx.setStorageSync('meditationRecords', records);
     }
     
-    // 跳转到daily页面
-    wx.navigateTo({
-      url: '/pages/daily/daily'
+    wx.showToast({
+      title: `打卡成功！今日第${todayRecord.count}次打卡`,
+      icon: 'success',
+      duration: 2000
     });
+    
+    // 延迟跳转到daily页面
+    setTimeout(() => {
+      wx.navigateTo({
+        url: '/pages/daily/daily'
+      });
+    }, 1500);
   },
 
   onShareAppMessage() {

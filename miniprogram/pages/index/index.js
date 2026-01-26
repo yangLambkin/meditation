@@ -5,39 +5,44 @@ Page({
     currentMonth: 1,
     calendarDays: [],
     checkedDates: [], // 存储已打卡的日期
-    todayDate: "" // 今天的日期
+    todayDate: "", // 今天的日期
+    userOpenId: '', // 当前用户标识
+    monthlyCount: 0 // 本月打卡总次数
+  },
+
+  /**
+   * 获取用户openId
+   */
+  getUserOpenId: function() {
+    // 使用本地生成的唯一ID作为用户标识
+    const localUserId = wx.getStorageSync('localUserId');
+    if (!localUserId) {
+      const newLocalUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      wx.setStorageSync('localUserId', newLocalUserId);
+      this.setData({
+        userOpenId: newLocalUserId
+      }, () => {
+        // 用户ID设置完成后更新数据
+        this.generateCalendar();
+        this.updateMonthlyCount();
+      });
+    } else {
+      this.setData({
+        userOpenId: localUserId
+      }, () => {
+        // 用户ID设置完成后更新数据
+        this.generateCalendar();
+        this.updateMonthlyCount();
+      });
+    }
   },
 
   /**
    * 开始静坐打卡
    */
   startMeditation: function() {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = today.getMonth() + 1;
-    const day = today.getDate();
-    const todayStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-    
-    // 添加打卡记录（无论是否已打卡都记录）
-    let checkedDates = this.data.checkedDates;
-    if (!checkedDates.includes(todayStr)) {
-      checkedDates.push(todayStr);
-      this.setData({
-        checkedDates: checkedDates
-      });
-      
-      // 更新本月打卡次数
-      this.updateMonthlyCount();
-      
-      // 重新渲染日历
-      this.generateCalendar();
-      
-      wx.showToast({
-        title: '打卡成功',
-        icon: 'success',
-        duration: 1000
-      });
-    }
+    // 获取用户标识
+    this.getUserOpenId();
     
     // 跳转到计时页面
     wx.switchTab({
@@ -51,15 +56,41 @@ Page({
   updateMonthlyCount: function() {
     const currentYear = this.data.currentYear;
     const currentMonth = this.data.currentMonth;
-    const checkedDates = this.data.checkedDates;
     
-    const monthlyCount = checkedDates.filter(date => {
-      const [year, month] = date.split('-').map(Number);
-      return year === currentYear && month === currentMonth;
-    }).length;
+    if (!this.data.userOpenId) {
+      this.setData({
+        monthlyCount: 0
+      });
+      return;
+    }
     
-    // 这里可以更新页面上的打卡次数显示
-    console.log(`本月打卡次数: ${monthlyCount}`);
+    // 获取当前用户的打卡记录
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const userRecords = allUserRecords[this.data.userOpenId];
+    
+    if (!userRecords || !userRecords.dailyRecords) {
+      this.setData({
+        monthlyCount: 0
+      });
+      return;
+    }
+    
+    // 计算本月累计打卡总次数
+    let monthlyCount = 0;
+    Object.keys(userRecords.dailyRecords).forEach(dateStr => {
+      const [year, month] = dateStr.split('-').map(Number);
+      if (year === currentYear && month === currentMonth) {
+        const dailyRecord = userRecords.dailyRecords[dateStr];
+        monthlyCount += dailyRecord.count || 0;
+      }
+    });
+    
+    // 更新页面上的打卡次数显示
+    this.setData({
+      monthlyCount: monthlyCount
+    });
+    
+    console.log(`本月累计打卡次数: ${monthlyCount}`);
   },
 
   /**
@@ -118,12 +149,33 @@ Page({
   },
 
   /**
+   * 检查某日期当前用户是否已打卡
+   */
+  isDateChecked: function(dateStr) {
+    if (!this.data.userOpenId) {
+      return false;
+    }
+    
+    // 获取所有用户的打卡记录
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const userRecords = allUserRecords[this.data.userOpenId];
+    
+    if (!userRecords || !userRecords.dailyRecords) {
+      return false;
+    }
+    
+    const dailyRecord = userRecords.dailyRecords[dateStr];
+    
+    // 只要当天有打卡记录（次数>=1），就显示为已打卡
+    return dailyRecord && dailyRecord.count > 0;
+  },
+
+  /**
    * 生成日历数据
    */
   generateCalendar: function() {
     const year = this.data.currentYear;
     const month = this.data.currentMonth;
-    const checkedDates = this.data.checkedDates;
     
     // 获取当月第一天和最后一天
     const firstDay = new Date(year, month - 1, 1);
@@ -155,7 +207,7 @@ Page({
         type: 'prev-month',
         fullDate: fullDate,
         isToday: false,
-        isChecked: checkedDates.includes(fullDate)
+        isChecked: this.isDateChecked(fullDate)
       });
     }
     
@@ -171,7 +223,7 @@ Page({
         type: 'current-month',
         fullDate: fullDate,
         isToday: fullDate === todayStr,
-        isChecked: checkedDates.includes(fullDate)
+        isChecked: this.isDateChecked(fullDate)
       });
       
       // 每7天一周
@@ -194,7 +246,7 @@ Page({
         type: 'next-month',
         fullDate: fullDate,
         isToday: false,
-        isChecked: checkedDates.includes(fullDate)
+        isChecked: this.isDateChecked(fullDate)
       });
       nextMonthDay++;
       
@@ -221,21 +273,8 @@ Page({
       currentMonth: today.getMonth() + 1
     });
     
-    this.generateCalendar();
-    
-    // 从本地存储加载已打卡的日期
-    const checkedDates = wx.getStorageSync('meditationCheckedDates') || [];
-    this.setData({
-      checkedDates: checkedDates
-    });
-  },
-
-  /**
-   * 生命周期函数--监听页面显示
-   */
-  onShow() {
-    // 重新生成日历，确保显示最新的打卡状态
-    this.generateCalendar();
+    // 获取用户标识，完成后会自动更新数据
+    this.getUserOpenId();
   },
 
   /**
@@ -249,7 +288,11 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
-
+    // 重新生成日历，确保显示最新的打卡状态
+    this.generateCalendar();
+    
+    // 更新本月打卡次数显示
+    this.updateMonthlyCount();
   },
 
   /**
