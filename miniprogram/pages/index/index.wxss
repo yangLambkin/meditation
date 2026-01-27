@@ -49,7 +49,7 @@
   height: 534.55rpx;
 }
 .font {
-  font-size: 24.71rpx;
+  font-size: 26rpx;
   font-family: Arimo;
   line-height: 17.49rpx;
   color: #354152;
@@ -86,7 +86,7 @@
   top: 190.46rpx;
 }
 .font_3 {
-  font-size: 21.18rpx;
+  font-size: 26rpx;
   font-family: Arimo;
   line-height: 19.5rpx;
   color: #fffefeb3;
@@ -158,7 +158,7 @@
   padding: 0 17.65rpx;
 }
 .font_6 {
-  font-size: 18rpx;
+  font-size: 20rpx;
   font-family: Arimo;
   line-height: 15rpx;
   color: #99a1ae;
@@ -530,7 +530,7 @@
 
 /* 日期文字 */
 .day-text {
-  font-size: 20rpx;
+  font-size: 24rpx;
   font-family: Arimo;
   line-height: 15rpx;
   color: inherit;

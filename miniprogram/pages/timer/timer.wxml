@@ -75,7 +75,7 @@
           />
         </view>
       </view>
-      <view class="mt-12 flex-row justify-between items-center section_5">
+        <view class="mt-12 flex-row justify-between items-center section_5" bindtap="showMusicPicker">
         <view class="flex-row items-center">
           <image
             class="image_4"
@@ -83,9 +83,13 @@
           />
           <view class="flex-col items-center ml-13">
             <text class="font_2 text_5 text_8">背景音乐</text>
-            <text class="font mt-7">无音乐</text>
+            <text class="font mt-7">{{musicText}}</text>
           </view>
         </view>
+        <image
+          class="image_6"
+          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=5c5c537b9d82bae773523227df5301eb.png"
+        />
       </view>
     </view>
   </view>
@@ -148,6 +152,28 @@
           bindtap="confirmCustomTime"
           disabled="{{!isValidCustomTime}}"
         >确定</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 背景音乐选择器模态框 -->
+  <view wx:if="{{showMusicPicker}}" class="music-picker-modal">
+    <view class="music-picker-overlay" bindtap="hideMusicPicker"></view>
+    <view class="music-picker-content">
+      <view class="music-picker-header">
+        <text class="music-picker-title">选择背景音乐</text>
+        <view class="music-picker-close" bindtap="hideMusicPicker">✕</view>
+      </view>
+      <view class="music-picker-options">
+        <view 
+          wx:for="{{musicOptions}}" 
+          wx:key="value"
+          class="music-option {{item.value === backgroundMusic ? 'selected' : ''}}"
+          bindtap="selectMusic"
+          data-value="{{item.value}}"
+        >
+          <text class="music-option-text">{{item.text}}</text>
+        </view>
       </view>
     </view>
   </view>

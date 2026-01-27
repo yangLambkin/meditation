@@ -15,47 +15,17 @@ Page({
    * 设置背景图片
    */
   setBackgroundImage: function() {
-    const backgroundImageUrl = 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/bg_image/bg1.jpeg';
+    // 使用本地images文件夹下的bg1.jpeg文件
+    const localImagePath = '/images/bg1.jpeg';
     
-    console.log('开始获取背景图片:', backgroundImageUrl);
+    console.log('设置背景图片:', localImagePath);
     
-    // 初始化云开发
-    wx.cloud.init({
-      env: 'cloud1-2g2rbxbu2c126d4a' // 请替换为您的环境ID
+    // 直接设置本地图片路径
+    this.setData({
+      backgroundImage: localImagePath
     });
     
-    // 获取临时文件URL
-    wx.cloud.getTempFileURL({
-      fileList: [{
-        fileID: backgroundImageUrl
-      }],
-      success: urlRes => {
-        console.log('获取临时URL响应:', urlRes);
-        if (urlRes.fileList && urlRes.fileList[0] && urlRes.fileList[0].tempFileURL) {
-          const tempUrl = urlRes.fileList[0].tempFileURL;
-          console.log('获取到临时URL:', tempUrl);
-          
-          this.setData({
-            backgroundImage: tempUrl
-          });
-          console.log('设置背景图片成功');
-        } else {
-          console.warn('获取临时文件URL失败，响应为空');
-          // 尝试直接使用云存储路径
-          this.setData({
-            backgroundImage: backgroundImageUrl
-          });
-        }
-      },
-      fail: err => {
-        console.error('获取背景图片失败:', err);
-        // 如果获取失败，尝试直接使用云存储路径
-        this.setData({
-          backgroundImage: backgroundImageUrl
-        });
-        console.log('尝试直接使用云存储路径');
-      }
-    });
+    console.log('背景图片设置成功');
   },
 
   /**

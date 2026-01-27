@@ -54,7 +54,19 @@ Page({
     
     // 音频播放器
     audioContext: null,
-    audioPlayer: null
+    audioPlayer: null,
+    
+    // 背景音乐相关
+    showMusicPicker: false,      // 是否显示背景音乐选择器
+    backgroundMusic: 'default',  // 当前选择的背景音乐，默认值设置为'default'
+    musicText: '默认',          // 当前选择的背景音乐文本显示
+    musicOptions: [
+      { value: 'default', text: '默认' },
+      { value: 'none', text: '无音乐' }
+    ],
+    backgroundMusicPlayer: null, // 背景音乐播放器
+    defaultMusicFileID: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/audio/30mins.MP3',
+    defaultMusicUrl: '',        // 存储获取到的临时音频链接
   },
 
   /**
@@ -66,6 +78,12 @@ Page({
     
     // 创建音频播放器
     this.createAudioPlayer();
+    
+    // 详细检查云存储文件状态
+    this.checkCloudFileExists();
+    
+    // 获取云存储音频临时链接
+    this.getBackgroundMusicUrl();
   },
 
   /**
@@ -100,6 +118,9 @@ Page({
       isPaused: false
     });
 
+    // 开始播放背景音乐（仅在选择"默认"时播放）
+    this.playBackgroundMusic();
+
     const timerInterval = setInterval(() => {
       this.updateTimer();
     }, 1000);
@@ -122,6 +143,10 @@ Page({
         isPaused: true,
         timerInterval: null
       });
+      
+      // 暂停时暂停背景音乐
+      this.pauseBackgroundMusic();
+      
       this.updateButtonStates();
     }
   },
@@ -147,9 +172,13 @@ Page({
       });
     }
 
-    // 如果计时器正在运行，停止时播放铃声
+    // 如果计时器正在运行，停止时播放铃声并停止背景音乐
     if (wasRunning) {
       this.playBellSound();
+      this.stopBackgroundMusic();
+    } else {
+      // 如果计时器不在运行，也停止背景音乐
+      this.stopBackgroundMusic();
     }
 
     this.updateDisplay();
@@ -307,10 +336,16 @@ Page({
    * 生命周期函数--监听页面卸载
    */
   onUnload() {
+    console.log('📱 计时器页面卸载，清理资源');
+    
     // 清理计时器
     if (this.data.timerInterval) {
       clearInterval(this.data.timerInterval);
+      console.log('✅ 计时器已清理');
     }
+    
+    // 停止背景音乐播放
+    this.stopBackgroundMusic();
   },
 
   /**
@@ -464,5 +499,314 @@ Page({
       this.audioPlayer.play();
       console.log('播放提醒铃声');
     }
+  },
+
+  /**
+   * 获取背景音乐临时链接
+   */
+  getBackgroundMusicUrl: function() {
+    // 初始化云开发
+    wx.cloud.init({
+      env: 'cloud1-2g2rbxbu2c126d4a'
+    });
+    
+    console.log('=== 开始获取背景音乐临时链接 ===');
+    console.log('文件路径:', this.data.defaultMusicFileID);
+    
+    // 获取临时文件URL
+    wx.cloud.getTempFileURL({
+      fileList: [{
+        fileID: this.data.defaultMusicFileID
+      }],
+      success: urlRes => {
+        console.log('✅ 获取背景音乐临时URL成功:', urlRes);
+        
+        if (urlRes.fileList && urlRes.fileList[0]) {
+          const fileInfo = urlRes.fileList[0];
+          console.log('文件信息:', {
+            fileID: fileInfo.fileID,
+            tempFileURL: fileInfo.tempFileURL,
+            maxAge: fileInfo.maxAge
+          });
+          
+          if (fileInfo.tempFileURL && fileInfo.tempFileURL.trim() !== '') {
+            const tempUrl = fileInfo.tempFileURL;
+            console.log('✅ 获取到临时URL:', tempUrl);
+            
+            // 测试这个URL是否可用
+            this.testAudioPlayability(tempUrl);
+            
+            this.setData({
+              defaultMusicUrl: tempUrl
+            });
+            console.log('✅ 设置背景音乐URL成功');
+          } else {
+            console.warn('❌ 临时URL为空，可能原因:');
+            console.warn('1. 云存储文件不存在');
+            console.warn('2. 文件权限设置为私有');
+            console.warn('3. 文件路径错误');
+            
+            // 使用备选方案
+            this.useFallbackAudio();
+          }
+        } else {
+          console.warn('❌ 文件列表为空');
+          // 使用备选方案
+          this.useFallbackAudio();
+        }
+      },
+      fail: err => {
+        console.error('❌ 获取背景音乐URL失败:', err);
+        console.error('错误详情:', {
+          errCode: err.errCode,
+          errMsg: err.errMsg
+        });
+      }
+    });
+  },
+
+  /**
+   * 测试音频URL是否可播放
+   */
+  testAudioPlayability: function(url) {
+    console.log('=== 开始测试音频URL可播放性 ===');
+    console.log('测试URL:', url);
+    
+    const testPlayer = wx.createInnerAudioContext();
+    testPlayer.src = url;
+    
+    testPlayer.onCanplay(() => {
+      console.log('✅ 音频可以播放 - onCanplay触发');
+    });
+    
+    testPlayer.onPlay(() => {
+      console.log('✅ 音频开始播放 - onPlay触发');
+    });
+    
+    testPlayer.onError((err) => {
+      console.error('❌ 音频播放错误:', err);
+      console.error('错误代码:', err.errCode);
+      console.error('错误信息:', err.errMsg);
+    });
+    
+    testPlayer.onWaiting(() => {
+      console.log('⏳ 音频等待缓冲');
+    });
+    
+    testPlayer.onSeeking(() => {
+      console.log('🔍 音频正在定位');
+    });
+    
+    testPlayer.onSeeked(() => {
+      console.log('✅ 音频定位完成');
+    });
+    
+    // 设置超时自动停止测试
+    setTimeout(() => {
+      if (testPlayer) {
+        testPlayer.stop();
+        testPlayer.destroy();
+        console.log('⏹️ 测试播放器已停止');
+      }
+    }, 5000);
+    
+    // 尝试播放
+    console.log('▶️ 开始测试播放...');
+    testPlayer.play();
+  },
+
+  /**
+   * 显示背景音乐选择器
+   */
+  showMusicPicker: function() {
+    this.setData({
+      showMusicPicker: true
+    });
+  },
+
+  /**
+   * 隐藏背景音乐选择器
+   */
+  hideMusicPicker: function() {
+    this.setData({
+      showMusicPicker: false
+    });
+  },
+
+  /**
+   * 选择背景音乐
+   */
+  selectMusic: function(e) {
+    const selectedMusic = e.currentTarget.dataset.value;
+    const musicOption = this.data.musicOptions.find(option => option.value === selectedMusic);
+    
+    if (musicOption) {
+      this.setData({
+        backgroundMusic: selectedMusic,
+        musicText: musicOption.text,
+        showMusicPicker: false
+      });
+      console.log('选择背景音乐:', selectedMusic, musicOption.text);
+    }
+  },
+
+  /**
+   * 播放背景音乐（开始计时时调用）
+   */
+  playBackgroundMusic: function() {
+    console.log('🔊 播放背景音乐检查:', {
+      backgroundMusic: this.data.backgroundMusic,
+      hasUrl: !!this.data.defaultMusicUrl,
+      musicText: this.data.musicText
+    });
+    
+    // 只有在选择"默认"选项且已经获取到音频链接时才播放
+    if (this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
+      console.log('✅ 满足播放条件，开始播放背景音乐');
+      
+      if (!this.backgroundMusicPlayer) {
+        console.log('🆕 创建新的背景音乐播放器');
+        // 创建背景音乐播放器
+        this.backgroundMusicPlayer = wx.createInnerAudioContext();
+        this.backgroundMusicPlayer.src = this.data.defaultMusicUrl;
+        this.backgroundMusicPlayer.loop = true; // 循环播放
+        this.backgroundMusicPlayer.obeyMuteSwitch = false; // 静音模式下也播放
+        
+        // 监听音频事件
+        this.backgroundMusicPlayer.onCanplay(() => {
+          console.log('✅ 背景音乐可以播放了');
+        });
+        
+        this.backgroundMusicPlayer.onPlay(() => {
+          console.log('🎵 背景音乐开始播放');
+        });
+        
+        this.backgroundMusicPlayer.onPause(() => {
+          console.log('⏸️ 背景音乐已暂停');
+        });
+        
+        this.backgroundMusicPlayer.onStop(() => {
+          console.log('⏹️ 背景音乐已停止');
+        });
+        
+        this.backgroundMusicPlayer.onEnded(() => {
+          console.log('🔚 背景音乐播放结束');
+        });
+        
+        this.backgroundMusicPlayer.onError((err) => {
+          console.error('❌ 背景音乐播放错误:', err);
+          console.error('错误代码:', err.errCode);
+          console.error('错误信息:', err.errMsg);
+        });
+      }
+      
+      // 播放音频
+      try {
+        this.backgroundMusicPlayer.play();
+        console.log('▶️ 已调用播放命令');
+      } catch (error) {
+        console.error('❌ 播放命令执行失败:', error);
+      }
+      
+    } else if (this.data.backgroundMusic === 'none') {
+      console.log('🔇 选择无音乐，不播放背景音乐');
+    } else {
+      console.log('❌ 不满足播放条件:', {
+        backgroundMusic: this.data.backgroundMusic,
+        hasUrl: !!this.data.defaultMusicUrl
+      });
+    }
+  },
+
+  /**
+   * 暂停背景音乐（暂停计时时调用）
+   */
+  pauseBackgroundMusic: function() {
+    console.log('⏸️ 暂停背景音乐');
+    if (this.backgroundMusicPlayer) {
+      try {
+        this.backgroundMusicPlayer.pause();
+        console.log('✅ 背景音乐已暂停');
+      } catch (error) {
+        console.error('❌ 暂停命令执行失败:', error);
+      }
+    } else {
+      console.log('⚠️ 背景音乐播放器不存在');
+    }
+  },
+
+  /**
+   * 停止播放背景音乐（停止计时时调用）
+   */
+  stopBackgroundMusic: function() {
+    console.log('⏹️ 停止背景音乐');
+    if (this.backgroundMusicPlayer) {
+      try {
+        this.backgroundMusicPlayer.stop();
+        console.log('✅ 背景音乐已停止');
+      } catch (error) {
+        console.error('❌ 停止命令执行失败:', error);
+      }
+    } else {
+      console.log('⚠️ 背景音乐播放器不存在');
+    }
+  },
+
+  /**
+   * 使用备选音频方案
+   */
+  useFallbackAudio: function() {
+    console.log('🔄 使用备选音频方案');
+    
+    // 方案1：尝试使用本地音频文件
+    const localAudioPath = '/audio/30mins.MP3';
+    console.log('尝试使用本地音频:', localAudioPath);
+    
+    this.setData({
+      defaultMusicUrl: localAudioPath
+    });
+    
+    // 测试备选音频是否可用
+    this.testAudioPlayability(localAudioPath);
+  },
+
+  /**
+   * 检查云存储文件是否存在
+   */
+  checkCloudFileExists: function() {
+    console.log('🔍 检查云存储文件是否存在');
+    
+    wx.cloud.init({
+      env: 'cloud1-2g2rbxbu2c126d4a'
+    });
+    
+    // 尝试获取文件列表
+    wx.cloud.getTempFileURL({
+      fileList: [{
+        fileID: this.data.defaultMusicFileID
+      }],
+      success: (res) => {
+        console.log('云存储文件检查结果:', res);
+        
+        if (res.fileList && res.fileList[0]) {
+          const file = res.fileList[0];
+          console.log('文件状态:', {
+            fileID: file.fileID,
+            hasTempURL: !!file.tempFileURL && file.tempFileURL.trim() !== '',
+            maxAge: file.maxAge
+          });
+          
+          if (!file.tempFileURL || file.tempFileURL.trim() === '') {
+            console.error('❌ 云存储文件无法访问，建议:');
+            console.error('1. 检查文件是否存在: audio/30mins.MP3');
+            console.error('2. 检查文件权限是否为"所有用户可读"');
+            console.error('3. 检查文件路径是否正确');
+          }
+        }
+      },
+      fail: (err) => {
+        console.error('❌ 云存储文件检查失败:', err);
+      }
+    });
   }
 });

@@ -208,37 +208,36 @@
   width: 80rpx;
   height: 80rpx;
   transition: all 0.3s ease;
+  
+  /* 确保容器背景透明 */
+  background-color: transparent !important;
 }
 
-/* 星星图片 */
+/* 星星图片 - 简化样式，去除阴影效果，保留基本悬停 */
 .star-icon {
   width: 56rpx;
   height: 56rpx;
   transition: all 0.3s ease;
-  filter: drop-shadow(0rpx 2rpx 8rpx rgba(0, 0, 0, 0.3));
+  /* 强制背景透明，移除所有阴影效果 */
+  background-color: transparent !important;
 }
 
-/* 悬停状态 */
+/* 悬停状态 - 简化效果 */
 .star-item.hover .star-icon {
   opacity: 0.9;
-  transform: scale(1.2);
+  transform: scale(1.1);
 }
 
-/* 选中状态 */
+/* 选中状态 - 无额外效果，仅改变图片 */
 .star-item.active .star-icon {
   opacity: 1;
-  transform: scale(1.1);
-  filter: 
-    drop-shadow(0rpx 0rpx 16rpx rgba(255, 215, 0, 0.8))
-    drop-shadow(0rpx 0rpx 32rpx rgba(255, 215, 0, 0.4));
+  /* 移除所有阴影和发光效果 */
 }
 
 /* 悬停 + 选中状态 */
 .star-item.active.hover .star-icon {
-  transform: scale(1.3);
-  filter: 
-    drop-shadow(0rpx 0rpx 24rpx rgba(255, 229, 92, 0.9))
-    drop-shadow(0rpx 0rpx 48rpx rgba(255, 229, 92, 0.6));
+  opacity: 0.95;
+  transform: scale(1.15);
 }
 
 /* 触摸效果 */
@@ -269,7 +268,7 @@
   background: transparent;
   border: none;
   outline: none;
-  font-size: 20rpx;
+  font-size: 24rpx;
   font-family: Arimo;
   line-height: 40rpx;
   color: #333333;

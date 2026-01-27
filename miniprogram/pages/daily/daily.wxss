@@ -9,6 +9,10 @@
 }
 .section_3 {
   padding-top: 96rpx;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  min-height: 100vh;
 }
 .group {
   padding: 0 48rpx;

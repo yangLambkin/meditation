@@ -28,7 +28,7 @@
           data-value="{{index + 1}}"
         >
           <image 
-            class="star-icon"
+            class="star-icon" 
             src="{{item.active ? '/images/icons/star-active.png' : '/images/icons/star.png'}}"
             mode="aspectFit"
           />
