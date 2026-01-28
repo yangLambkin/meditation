@@ -9,10 +9,24 @@
 }
 .section_3 {
   padding-top: 96rpx;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
   min-height: 100vh;
+  /* 确保布局正确 */
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 背景图片样式 */
+.background-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  object-fit: cover;
 }
 .group {
   padding: 0 48rpx;
@@ -39,6 +53,8 @@
   padding-bottom: 48rpx;
   filter: drop-shadow(0rpx 8rpx 8rpx #00000026);
   height: 199.96rpx;
+  background-color: transparent;
+  backdrop-filter: none;
 }
 .text {
   color: #fffefef2;
@@ -86,6 +102,9 @@
 }
 .group_4 {
   margin-top: 712rpx;
+  background-color: transparent;
+  position: relative;
+  z-index: 2;
 }
 .group_5 {
   padding: 32rpx 0 28rpx;
@@ -96,15 +115,16 @@
   height: 147.28rpx;
 }
 .image-wrapper {
-  background-color: #ffffff00;
-  border-radius: 100663200rpx;
+  background-color: #ffffff;
+  border-radius: 100rpx;
   filter: drop-shadow(0rpx 16rpx 10rpx #0000001a, 0rpx 40rpx 25rpx #0000001a);
   overflow: hidden;
   width: 127.96rpx;
-  border-left: solid 3rpx #fffefe66;
-  border-right: solid 3rpx #fffefe66;
-  border-top: solid 3rpx #fffefe66;
-  border-bottom: solid 3rpx #fffefe66;
+  border: solid 3rpx #fffefe66;
+  /* 确保头像正确显示 */
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 .image_2 {
   width: 122rpx;
@@ -215,7 +235,7 @@
 }
 .section_6 {
   padding: 48rpx 0 64rpx;
-  background-image: linear-gradient(0deg, #000000cc 0%, #00000066 50%, #00000000 100%);
+  background-color: transparent;
 }
 .equal-division_2 {
   margin: 0 48rpx;

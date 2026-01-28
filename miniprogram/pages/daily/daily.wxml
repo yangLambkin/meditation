@@ -1,4 +1,7 @@
-<view class="flex-col section_3" style="background-image: url('{{backgroundImage}}');">
+<view class="flex-col section_3">
+  <!-- 背景图片 -->
+  <image class="background-image" src="/images/bg1.jpeg" mode="aspectFill" />
+  
   <view class="flex-row justify-between group">
   </view>
   <view class="flex-row relative group_2">
@@ -20,7 +23,7 @@
         <view class="flex-col justify-start items-center self-start image-wrapper">
           <image
             class="shrink-0 image_2"
-            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=6201263cb971324887e75ddedc0f9f17.png"
+            src="/images/avatar.png"
           />
         </view>
         <view class="flex-row equal-division group_7">
@@ -50,14 +53,14 @@
         <view class="flex-row justify-center items-center equal-division-item_3 section_7">
           <image
             class="image_3"
-            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=a6ca19da01ffc792de91954c68644e81.png"
+            src="/images/icons/share.svg"
           />
           <text class="ml-8 font text_12">分享朋友圈</text>
         </view>
         <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8">
           <image
             class="image_3"
-            src="https://ide.code.fun/api/image?token=6974f4834bd4760011a7c9a4&name=369498e8a8ff56b09c655a77f572d106.png"
+            src="/images/icons/checked.png"
           />
           <text class="ml-8 font text_13">保存图片</text>
         </view>
