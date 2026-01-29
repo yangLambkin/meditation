@@ -3,7 +3,7 @@
   <view class="flex-col section">
     <view class="flex-col group">
       <view class="flex-col items-start relative section_2">
-        <text class="font text">欢迎回来，静修者</text>
+        <text class="font text">欢迎回来，{{userNickname}}</text>
         <view class="shrink-0 relative section_5"></view>
         <view class="flex-col justify-start items-end pos">
           <view class="section_3"></view>

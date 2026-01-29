@@ -7,7 +7,8 @@ Page({
     checkedDates: [], // 存储已打卡的日期
     todayDate: "", // 今天的日期
     userOpenId: '', // 当前用户标识
-    monthlyCount: 0 // 本月打卡总次数
+    monthlyCount: 0, // 本月打卡总次数
+    userNickname: '觉察者' // 用户昵称，默认为"觉察者"
   },
 
   /**
@@ -25,6 +26,8 @@ Page({
         // 用户ID设置完成后更新数据
         this.generateCalendar();
         this.updateMonthlyCount();
+        // 获取用户昵称
+        this.getUserNickname();
       });
     } else {
       this.setData({
@@ -33,8 +36,67 @@ Page({
         // 用户ID设置完成后更新数据
         this.generateCalendar();
         this.updateMonthlyCount();
+        // 获取用户昵称
+        this.getUserNickname();
       });
     }
+  },
+
+  /**
+   * 获取用户微信昵称
+   */
+  getUserNickname: function() {
+    // 尝试从缓存获取用户昵称
+    const cachedNickname = wx.getStorageSync('userNickname');
+    if (cachedNickname) {
+      this.setData({
+        userNickname: cachedNickname
+      });
+      return;
+    }
+    
+    // 检查用户是否已授权
+    wx.getSetting({
+      success: (res) => {
+        if (res.authSetting['scope.userInfo']) {
+          // 用户已授权，获取用户信息
+          wx.getUserInfo({
+            success: (userRes) => {
+              const nickname = userRes.userInfo.nickName;
+              console.log('获取到用户昵称:', nickname);
+              
+              // 保存到缓存
+              wx.setStorageSync('userNickname', nickname);
+              
+              // 更新页面显示
+              this.setData({
+                userNickname: nickname
+              });
+            },
+            fail: (err) => {
+              console.warn('获取用户信息失败:', err);
+              // 使用默认昵称
+              this.setData({
+                userNickname: '觉察者'
+              });
+            }
+          });
+        } else {
+          // 用户未授权，使用默认昵称
+          console.log('用户未授权，使用默认昵称');
+          this.setData({
+            userNickname: '觉察者'
+          });
+        }
+      },
+      fail: (err) => {
+        console.warn('检查授权设置失败:', err);
+        // 出错时使用默认昵称
+        this.setData({
+          userNickname: '觉察者'
+        });
+      }
+    });
   },
 
   /**

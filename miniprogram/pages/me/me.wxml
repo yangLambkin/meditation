@@ -6,8 +6,8 @@
         <view class="flex-row items-center">
           <view class="flex-col justify-start items-center text-wrapper"><text class="font text_2">ME</text></view>
           <view class="flex-col items-start ml-17">
-            <text class="font text">静修用户</text>
-            <text class="mt-8 font_2 text_3">坚持静坐第 12 天</text>
+            <text class="font text">{{userNickname}}</text>
+            <text class="mt-8 font_2 text_3">坚持静坐第 {{currentStreak}} 天</text>
           </view>
         </view>
         <image
@@ -18,12 +18,12 @@
       <view class="flex-row justify-between group_2">
         <view class="flex-row self-center">
           <view class="flex-col items-center group_3">
-            <text class="font_3 text_4">128</text>
-            <text class="mt-14 font_4">总分钟</text>
+            <text class="font_3 text_4">{{totalMinutes}}</text>
+            <text class="mt-14 font_4">当月总分钟</text>
           </view>
           <view class="flex-col items-center group_3">
-            <text class="font_3">12</text>
-            <text class="mt-14 font_4">连续天数</text>
+            <text class="font_3">{{consecutiveDays}}</text>
+            <text class="mt-14 font_4">最长连续天数</text>
           </view>
         </view>
         <view class="flex-col items-center self-start group_4">

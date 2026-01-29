@@ -158,7 +158,7 @@
   padding: 0 17.65rpx;
 }
 .font_6 {
-  font-size: 20rpx;
+  font-size: 25rpx;
   font-family: Arimo;
   line-height: 15rpx;
   color: #99a1ae;
@@ -365,9 +365,9 @@
   text-transform: uppercase;
 }
 .text_30 {
-  color: #495565;
-  line-height: 35.29rpx;
-  font-style: italic;
+  color: #99a1ae;
+  line-height: 20rpx;
+  font-style: Arimo;
   width: 363.53rpx;
 }
 /* WeUI规范按钮样式 */
