@@ -58,7 +58,7 @@
           <view class="flex-row items-center">
             <image
               class="shrink-0 image_4"
-              src="https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/b83eddffb728b6c458e2ecfe6b488e84.png"
+              src="/images/icons/timer.png"
             />
             <text class="font ml-13">{{isCountdown ? '倒计时' : '正计时'}}模式</text>
           </view>
@@ -71,7 +71,7 @@
           </view>
           <image
             class="image_6"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=5c5c537b9d82bae773523227df5301eb.png"
+            src="/images/icons/right.png"
           />
         </view>
       </view>
@@ -79,7 +79,7 @@
         <view class="flex-row items-center">
           <image
             class="image_4"
-            src="https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/e990152662dbbb2d55be7734e33ab353.png"
+            src="/images/icons/music.png"
           />
           <view class="flex-col items-center ml-13">
             <text class="font_2 text_5 text_8">背景音乐</text>

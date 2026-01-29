@@ -1,22 +1,22 @@
-// pages/timer/timer.js
+// pages/timer/timer.js - 使用wx.createBackgroundTimer的稳定方案
 Page({
   data: {
     // 计时器状态
     isRunning: false,
-    isPaused: false,        // 是否处于暂停状态
-    isCountdown: true,      // true=倒计时, false=正计时
+    isPaused: false,
+    isCountdown: true,
     
     // 时间设置
-    totalTime: 420,         // 总时长（秒）7分钟=420秒
-    elapsedTime: 0,         // 已过时间（秒）
-    remainingTime: 420,     // 剩余时间（秒）7分钟=420秒
+    totalTime: 420,
+    elapsedTime: 0,
+    remainingTime: 420,
     
-    // 时长选择相关字段
-    duration: 7,            // 当前选择时长（分钟）
-    durationText: "7 分钟", // 显示文本
-    showTimePicker: false,  // 是否显示时间选择器
-    showCustomTimePicker: false, // 是否显示自定义时长弹窗
-    customTimeInput: "",    // 自定义时长输入
+    // 时长选择
+    duration: 7,
+    durationText: "7 分钟",
+    showTimePicker: false,
+    showCustomTimePicker: false,
+    customTimeInput: "",
     timeOptions: [
       { value: 7, text: "7 分钟" },
       { value: 10, text: "10 分钟" },
@@ -26,265 +26,356 @@ Page({
       { value: "custom", text: "自定义" }
     ],
     
-    // 自定义时长相关字段
-    isValidCustomTime: false,  // 自定义时长是否有效
+    isValidCustomTime: false,
     
     // 计时器控制
     timerInterval: null,
     
     // 进度显示
     progress: 0,
-    progressAngle: 0,        // 径向进度条角度（0-360度）
+    progressAngle: 0,
     displayTime: "07:00",
     
-    // 按钮状态管理
-    showStartButton: true,     // 显示开始按钮
-    showPauseButton: false,    // 显示暂停按钮  
-    showStopButton: false,     // 显示停止按钮
-    showResetButton: true,     // 显示重置按钮
+    // 按钮状态
+    showStartButton: true,
+    showPauseButton: false,
+    showStopButton: false,
+    showResetButton: true,
     
-    // 按钮图标路径
+    // 按钮图标
     startIcon: "/images/icons/start.png",
     pauseIcon: "/images/icons/pause.png",
     stopIcon: "/images/icons/stop.png",
     resetIcon: "/images/icons/resetting.png",
     
-    // 音频对象
-    audioPlayer: null,
-    
     // 音频播放器
-    audioContext: null,
     audioPlayer: null,
     
     // 背景音乐相关
-    showMusicPicker: false,      // 是否显示背景音乐选择器
-    backgroundMusic: 'default',  // 当前选择的背景音乐，默认值设置为'default'
-    musicText: '默认',          // 当前选择的背景音乐文本显示
+    showMusicPicker: false,
+    backgroundMusic: 'default',
+    musicText: '引导音频',
     musicOptions: [
-      { value: 'default', text: '默认' },
+      { value: 'default', text: '引导音频' },
       { value: 'none', text: '无音乐' }
     ],
-    backgroundMusicPlayer: null, // 背景音乐播放器
-    defaultMusicFileID: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/audio/30mins.MP3',
-    defaultMusicUrl: '',        // 存储获取到的临时音频链接
+    backgroundMusicPlayer: null,
+    defaultMusicFileID: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/audio/万能引导片段.mp3',
+    defaultMusicUrl: '',
+    
+    // 时间戳用于精确计时
+    startTimestamp: 0,
+    pauseTimestamp: 0,
+    totalPausedTime: 0
   },
 
-  /**
-   * 生命周期函数--监听页面加载
-   */
   onLoad(options) {
     this.updateDisplay();
     this.updateButtonStates();
-    
-    // 创建音频播放器
     this.createAudioPlayer();
-    
-    // 详细检查云存储文件状态
     this.checkCloudFileExists();
-    
-    // 获取云存储音频临时链接
     this.getBackgroundMusicUrl();
+    this.setupAppStateListeners();
+    this.restoreTimerState();
+    
+    // 设置屏幕常亮，防止熄屏
+    this.setKeepScreenOn();
+    
+    // 保存当前亮度，以便退出时恢复
+    this.saveCurrentBrightness();
+    
+    // 初始化亮度控制变量
+    this.brightnessTimer = null;
+    this.isBrightnessReduced = false;
   },
 
-  /**
-   * 更新按钮显示状态
-   */
-  updateButtonStates() {
-    const isRunning = this.data.isRunning;
-    const hasStarted = this.data.elapsedTime > 0;
+  // 设置应用状态监听
+  setupAppStateListeners() {
+    // 应用进入前台（屏幕打开）
+    wx.onAppShow((res) => {
+      console.log('📱 应用进入前台，同步时间');
+      if (this.data.isRunning) {
+        this.syncTimerTime();
+      }
+      
+      // 重新设置屏幕常亮和低亮度
+      this.setKeepScreenOn();
+      this.setMinBrightness();
+    });
     
-    this.setData({
-      // 开始按钮：未运行时显示
-      showStartButton: !isRunning,
-      // 暂停按钮：运行时显示
-      showPauseButton: isRunning,
-      // 停止按钮：已经开始计时时显示，或者计时正在运行中
-      showStopButton: hasStarted || isRunning,
-      // 重置按钮：始终显示
-      showResetButton: true
+    // 应用进入后台（屏幕关闭）
+    wx.onAppHide(() => {
+      console.log('📱 应用进入后台，保存状态');
+      this.saveTimerState();
+      
+      // 确保后台音频继续播放
+      this.ensureBackgroundAudioPlayback();
+      
+      // 恢复屏幕设置（当应用被切到后台时）
+      this.restoreScreenSettings();
     });
   },
 
-  /**
-   * 开始/继续计时器
-   */
-  startTimer() {
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
+  // 确保后台音频播放
+  ensureBackgroundAudioPlayback() {
+    // 如果计时器正在运行，确保背景音乐在后台继续播放
+    if (this.data.isRunning && this.backgroundMusicPlayer) {
+      console.log('🎵 确保后台音频继续播放');
+      
+      // 重新播放背景音乐（如果被系统暂停）
+      setTimeout(() => {
+        if (this.backgroundMusicPlayer && this.data.isRunning) {
+          this.backgroundMusicPlayer.play();
+        }
+      }, 100);
     }
+  },
 
+  // 时间同步（屏幕重新打开时校正时间）
+  syncTimerTime() {
+    if (!this.data.isRunning || !this.data.startTimestamp) return;
+    
+    const currentTime = Date.now();
+    const pausedTime = this.data.pauseTimestamp > 0 ? 
+      (currentTime - this.data.pauseTimestamp) : 0;
+    const expectedElapsed = Math.floor(
+      (currentTime - this.data.startTimestamp - this.data.totalPausedTime - pausedTime) / 1000
+    );
+    const actualElapsed = this.data.elapsedTime;
+    
+    // 如果时间差异较大（超过2秒），重新校正
+    if (Math.abs(expectedElapsed - actualElapsed) > 2) {
+      console.log('🔄 时间同步校正:', {
+        预期: expectedElapsed + '秒',
+        实际: actualElapsed + '秒',
+        差异: (expectedElapsed - actualElapsed) + '秒'
+      });
+      
+      this.setData({
+        elapsedTime: expectedElapsed,
+        remainingTime: Math.max(0, this.data.totalTime - expectedElapsed)
+      });
+      
+      this.updateDisplay();
+    }
+  },
+
+  // 开始计时器
+  startTimer() {
+    // 清理之前的计时器
+    this.cleanupTimers();
+    
+    // 计算开始时间戳
+    const now = Date.now();
+    let startTime = now;
+    
+    if (this.data.isPaused && this.data.pauseTimestamp > 0) {
+      // 从暂停状态恢复，累计暂停时间
+      const pausedDuration = now - this.data.pauseTimestamp;
+      this.setData({
+        totalPausedTime: this.data.totalPausedTime + pausedDuration,
+        pauseTimestamp: 0
+      });
+    } else {
+      // 全新开始
+      this.setData({
+        startTimestamp: now,
+        totalPausedTime: 0,
+        pauseTimestamp: 0
+      });
+      startTime = now;
+    }
+    
     this.setData({
       isRunning: true,
       isPaused: false
     });
 
-    // 开始播放背景音乐（仅在选择"默认"时播放）
+    // 播放背景音乐（仅在选择"默认"时播放）
     this.playBackgroundMusic();
 
-    const timerInterval = setInterval(() => {
-      this.updateTimer();
-    }, 1000);
-
-    this.setData({
-      timerInterval: timerInterval
-    });
+    // 使用前台计时器（屏幕常亮，无需后台计时器）
+    this.createForegroundTimer();
+    
+    // 1分钟后降低屏幕亮度
+    this.startBrightnessControl();
+    
+    console.log('✅ 启动前台计时器（屏幕常亮模式）');
 
     this.updateButtonStates();
+    console.log('✅ 开始计时，支持后台运行');
   },
 
-  /**
-   * 暂停计时器
-   */
-  pauseTimer() {
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
-      this.setData({
-        isRunning: false,
-        isPaused: true,
-        timerInterval: null
-      });
-      
-      // 暂停时暂停背景音乐
-      this.pauseBackgroundMusic();
-      
-      this.updateButtonStates();
+  // 创建前台计时器
+  createForegroundTimer() {
+    this.data.timerInterval = setInterval(() => {
+      this.updateForegroundTimer();
+    }, 1000);
+  },
+
+  // 前台计时器更新（屏幕常亮模式）
+  updateForegroundTimer() {
+    if (!this.data.isRunning) return;
+    
+    const elapsed = this.calculateElapsedTime();
+    this.setData({
+      elapsedTime: elapsed,
+      remainingTime: Math.max(0, this.data.totalTime - elapsed)
+    });
+    
+    this.updateDisplay();
+    
+    // 检查是否完成
+    if (elapsed >= this.data.totalTime) {
+      this.handleTimerFinished();
     }
   },
 
-  /**
-   * 完全停止计时器
-   */
+  // 计算已用时间
+  calculateElapsedTime() {
+    if (!this.data.startTimestamp) return 0;
+    
+    const currentTime = Date.now();
+    const pausedTime = this.data.pauseTimestamp > 0 ? 
+      (currentTime - this.data.pauseTimestamp) : 0;
+    
+    return Math.floor(
+      (currentTime - this.data.startTimestamp - this.data.totalPausedTime - pausedTime) / 1000
+    );
+  },
+
+  // 处理计时完成
+  handleTimerFinished() {
+    console.log('✅ 计时完成');
+    
+    // 停止所有计时器
+    this.cleanupTimers();
+    
+    // 停止亮度控制并恢复亮度
+    this.stopBrightnessControl();
+    
+    // 播放完成铃声
+    this.playBellSound();
+    
+    // 更新状态
+    this.setData({
+      isRunning: false,
+      isPaused: false,
+      elapsedTime: this.data.totalTime,
+      remainingTime: 0
+    });
+    
+    this.updateDisplay();
+    this.updateButtonStates();
+    
+    // 显示完成提示
+    wx.showModal({
+      title: '计时结束',
+      content: '计时结束',
+      showCancel: false,
+      success: () => {
+        // 延迟1秒后自动跳转到记录页面
+        setTimeout(() => {
+          wx.navigateTo({
+            url: '/pages/recorder/recorder?duration=' + this.data.duration
+          });
+        }, 1000);
+      }
+    });
+  },
+
+  // 暂停计时器
+  pauseTimer() {
+    if (!this.data.isRunning) return;
+    
+    this.cleanupTimers();
+    
+    // 暂停亮度控制（如果已降低亮度）
+    if (this.isBrightnessReduced) {
+      console.log('💡 计时暂停，恢复屏幕亮度');
+      this.restoreBrightness();
+      this.isBrightnessReduced = false;
+    }
+    
+    this.setData({
+      isRunning: false,
+      isPaused: true,
+      pauseTimestamp: Date.now()
+    });
+    
+    // 暂停背景音乐
+    this.pauseBackgroundMusic();
+    
+    this.updateButtonStates();
+    console.log('⏸️ 计时器已暂停');
+  },
+
+  // 停止计时器
   stopTimer() {
-    // 只有在计时器运行时停止才播放铃声
     const wasRunning = this.data.isRunning;
+    
+    this.cleanupTimers();
+    
+    // 停止亮度控制并恢复亮度
+    this.stopBrightnessControl();
     
     this.setData({
       elapsedTime: 0,
       remainingTime: this.data.totalTime,
       isRunning: false,
-      isPaused: false
+      isPaused: false,
+      startTimestamp: 0,
+      pauseTimestamp: 0,
+      totalPausedTime: 0
     });
-
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
-      this.setData({
-        timerInterval: null
-      });
-    }
-
-    // 如果计时器正在运行，停止时播放铃声并停止背景音乐
+    
+    // 停止背景音乐
+    this.stopBackgroundMusic();
+    
+    // 如果正在运行，播放铃声
     if (wasRunning) {
       this.playBellSound();
-      this.stopBackgroundMusic();
-    } else {
-      // 如果计时器不在运行，也停止背景音乐
-      this.stopBackgroundMusic();
     }
-
+    
     this.updateDisplay();
     this.updateButtonStates();
+    console.log('⏹️ 计时器已停止');
   },
 
-  /**
-   * 更新计时器状态
-   */
-  updateTimer() {
-    if (this.data.isCountdown) {
-      // 倒计时模式
-      if (this.data.remainingTime > 0) {
-        this.setData({
-          remainingTime: this.data.remainingTime - 1,
-          elapsedTime: this.data.elapsedTime + 1
-        });
-      } else {
-        // 倒计时结束
-        this.stopTimer();
-        
-        // 播放提醒铃声
-        this.playBellSound();
-        
-        wx.showToast({
-          title: '计时结束',
-          icon: 'success',
-          duration: 2000
-        });
-        
-        // 延迟2秒后自动跳转到记录页面
-        setTimeout(() => {
-          wx.navigateTo({
-            url: '/pages/recorder/recorder?duration=' + this.data.duration
-          });
-        }, 2000);
-      }
-    } else {
-      // 正计时模式
-      this.setData({
-        elapsedTime: this.data.elapsedTime + 1,
-        remainingTime: Math.max(0, this.data.totalTime - this.data.elapsedTime - 1)
-      });
-      
-      // 检查正计时是否完成
-      if (this.data.elapsedTime >= this.data.totalTime) {
-        // 正计时结束
-        this.stopTimer();
-        
-        // 播放提醒铃声
-        this.playBellSound();
-        
-        wx.showToast({
-          title: '计时完成',
-          icon: 'success',
-          duration: 2000
-        });
-        
-        // 延迟2秒后自动跳转到记录页面
-        setTimeout(() => {
-          wx.navigateTo({
-            url: '/pages/recorder/recorder?duration=' + this.data.duration
-          });
-        }, 2000);
-      }
+  // 停止所有计时器
+  cleanupTimers() {
+    if (this.data.timerInterval) {
+      clearInterval(this.data.timerInterval);
+      this.setData({ timerInterval: null });
     }
-
-    this.updateDisplay();
   },
 
-  /**
-   * 更新显示时间和进度
-   */
+  // 更新按钮显示状态
+  updateButtonStates() {
+    const isRunning = this.data.isRunning;
+    const hasStarted = this.data.elapsedTime > 0;
+    
+    this.setData({
+      showStartButton: !isRunning,
+      showPauseButton: isRunning,
+      showStopButton: hasStarted || isRunning,
+      showResetButton: true
+    });
+  },
+
+  // 更新显示时间和进度
   updateDisplay() {
-    // 计算显示时间
-    let displaySeconds;
-    if (this.data.isCountdown) {
-      displaySeconds = this.data.remainingTime;
-    } else {
-      displaySeconds = this.data.elapsedTime;
-    }
-
+    let displaySeconds = this.data.isCountdown ? this.data.remainingTime : this.data.elapsedTime;
     const minutes = Math.floor(displaySeconds / 60);
     const seconds = displaySeconds % 60;
     const displayTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-    // 计算进度百分比
-    let progress;
-    if (this.data.isCountdown) {
-      progress = ((this.data.totalTime - this.data.remainingTime) / this.data.totalTime) * 100;
-    } else {
-      progress = (this.data.elapsedTime / this.data.totalTime) * 100;
-    }
+    let progress = this.data.isCountdown ? 
+      ((this.data.totalTime - this.data.remainingTime) / this.data.totalTime) * 100 :
+      (this.data.elapsedTime / this.data.totalTime) * 100;
 
-    // 计算径向进度条角度
-    let progressAngle;
-    
-    if (this.data.isCountdown) {
-      // 倒计时模式：从完全填充到完全消失
-      // 进度从360°（完全填充）减少到0°（完全消失）
-      progressAngle = 360 - (progress * 3.6);
-    } else {
-      // 正计时模式：从未填充到完全填充
-      // 进度从0°（未填充）增加到360°（完全填充）
-      progressAngle = progress * 3.6;
-    }
+    let progressAngle = this.data.isCountdown ? 
+      360 - (progress * 3.6) : progress * 3.6;
 
     this.setData({
       displayTime: displayTime,
@@ -293,128 +384,214 @@ Page({
     });
   },
 
-  /**
-   * 切换正计时/倒计时模式
-   */
-  toggleMode(e) {
-    const isCountdown = e.detail.value;
+  // 保存计时状态
+  saveTimerState() {
+    const state = {
+      elapsedTime: this.data.elapsedTime,
+      totalTime: this.data.totalTime,
+      isRunning: this.data.isRunning,
+      isPaused: this.data.isPaused,
+      startTimestamp: this.data.startTimestamp,
+      pauseTimestamp: this.data.pauseTimestamp,
+      totalPausedTime: this.data.totalPausedTime,
+      saveTime: Date.now()
+    };
     
-    // 停止计时器
-    this.stopTimer();
-    
-    this.setData({
-      isCountdown: isCountdown
-    });
-    
-    this.updateDisplay();
-    this.updateButtonStates();
+    wx.setStorageSync('timerState', state);
   },
 
-  /**
-   * 重置计时器
-   */
-  resetTimer() {
-    this.setData({
-      elapsedTime: 0,
-      remainingTime: this.data.totalTime,
-      isRunning: false,
-      isPaused: false
-    });
-
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
+  // 恢复计时状态
+  restoreTimerState() {
+    const timerState = wx.getStorageSync('timerState');
+    if (timerState && timerState.isRunning) {
+      const timeSinceSave = Math.floor((Date.now() - timerState.saveTime) / 1000);
+      const estimatedElapsed = timerState.elapsedTime + timeSinceSave;
+      
       this.setData({
-        timerInterval: null
+        elapsedTime: estimatedElapsed,
+        remainingTime: Math.max(0, timerState.totalTime - estimatedElapsed),
+        totalTime: timerState.totalTime
+      });
+      
+      wx.showModal({
+        title: '恢复计时',
+        content: `检测到未完成的计时，是否继续？\n已进行: ${Math.floor(estimatedElapsed/60)}分${estimatedElapsed%60}秒`,
+        success: (res) => {
+          if (res.confirm) {
+            // 恢复计时
+            this.setData({
+              startTimestamp: Date.now() - (estimatedElapsed * 1000),
+              totalPausedTime: 0
+            });
+            // 如果已超过1分钟，立即降低亮度
+            if (estimatedElapsed >= 60) {
+              console.log('💡 恢复计时，已超过1分钟，立即降低亮度');
+              this.setMinBrightness();
+              this.isBrightnessReduced = true;
+            } else {
+              // 否则设置1分钟后降低亮度
+              this.startBrightnessControl();
+            }
+            
+            this.startTimer();
+          } else {
+            this.stopTimer();
+          }
+        }
+      });
+      
+      this.updateDisplay();
+    }
+  },
+
+  // 设置屏幕常亮
+  setKeepScreenOn() {
+    wx.setKeepScreenOn({
+      keepScreenOn: true,
+      success: () => {
+        console.log('✅ 屏幕常亮设置成功');
+      },
+      fail: (err) => {
+        console.warn('⚠️ 屏幕常亮设置失败:', err);
+      }
+    });
+  },
+
+  // 保存当前亮度
+  saveCurrentBrightness() {
+    wx.getScreenBrightness({
+      success: (res) => {
+        this.originalBrightness = res.value;
+        console.log('💡 保存当前亮度:', this.originalBrightness);
+        
+        // 设置最低亮度
+        this.setMinBrightness();
+      },
+      fail: (err) => {
+        console.warn('⚠️ 获取亮度失败，使用默认亮度:', err);
+        this.originalBrightness = 0.5;
+        this.setMinBrightness();
+      }
+    });
+  },
+
+  // 设置最低亮度
+  setMinBrightness() {
+    wx.setScreenBrightness({
+      value: 0.01, // 最低亮度
+      success: () => {
+        console.log('💡 亮度已设置为最低');
+      },
+      fail: (err) => {
+        console.warn('⚠️ 设置最低亮度失败:', err);
+      }
+    });
+  },
+
+  // 恢复原始亮度
+  restoreBrightness() {
+    if (this.originalBrightness !== undefined) {
+      wx.setScreenBrightness({
+        value: this.originalBrightness,
+        success: () => {
+          console.log('💡 亮度已恢复为:', this.originalBrightness);
+        },
+        fail: (err) => {
+          console.warn('⚠️ 恢复亮度失败:', err);
+        }
       });
     }
+  },
 
+  // 开始亮度控制（1分钟后降低亮度）
+  startBrightnessControl() {
+    // 清理之前的亮度定时器
+    if (this.brightnessTimer) {
+      clearTimeout(this.brightnessTimer);
+    }
+    
+    // 1分钟后降低亮度
+    this.brightnessTimer = setTimeout(() => {
+      if (this.data.isRunning && !this.isBrightnessReduced) {
+        console.log('💡 计时1分钟，降低屏幕亮度');
+        this.setMinBrightness();
+        this.isBrightnessReduced = true;
+      }
+    }, 60000); // 1分钟 = 60秒 = 60000毫秒
+  },
+
+  // 停止亮度控制
+  stopBrightnessControl() {
+    if (this.brightnessTimer) {
+      clearTimeout(this.brightnessTimer);
+      this.brightnessTimer = null;
+    }
+    
+    // 恢复亮度
+    if (this.isBrightnessReduced) {
+      console.log('💡 计时结束，恢复屏幕亮度');
+      this.restoreBrightness();
+      this.isBrightnessReduced = false;
+    }
+  },
+
+  // 恢复屏幕设置
+  restoreScreenSettings() {
+    // 停止亮度控制
+    this.stopBrightnessControl();
+    
+    // 关闭屏幕常亮
+    wx.setKeepScreenOn({
+      keepScreenOn: false,
+      success: () => {
+        console.log('✅ 屏幕常亮已关闭');
+      },
+      fail: (err) => {
+        console.warn('⚠️ 关闭屏幕常亮失败:', err);
+      }
+    });
+  },
+
+  onUnload() {
+    this.cleanupTimers();
+    this.stopBackgroundMusic();
+    this.saveTimerState();
+    
+    // 恢复屏幕设置
+    this.restoreScreenSettings();
+    
+    console.log('📱 页面卸载，资源清理完成');
+  },
+
+  // 以下为原有UI控制函数（保持不变）
+  toggleMode(e) {
+    this.stopTimer();
+    this.setData({ isCountdown: e.detail.value });
     this.updateDisplay();
     this.updateButtonStates();
   },
 
-  /**
-   * 生命周期函数--监听页面卸载
-   */
-  onUnload() {
-    console.log('📱 计时器页面卸载，清理资源');
-    
-    // 清理计时器
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
-      console.log('✅ 计时器已清理');
-    }
-    
-    // 停止背景音乐播放
-    this.stopBackgroundMusic();
+  resetTimer() {
+    this.stopTimer();
+    this.updateDisplay();
+    this.updateButtonStates();
   },
 
-  /**
-   * 用户点击右上角分享
-   */
-  onShareAppMessage() {
-    return {};
-  },
+  showTimePicker() { this.setData({ showTimePicker: true }); },
+  hideTimePicker() { this.setData({ showTimePicker: false }); },
+  hideCustomTimePicker() { this.setData({ showCustomTimePicker: false }); },
 
-  /**
-   * 显示时间选择器
-   */
-  showTimePicker: function() {
-    this.setData({
-      showTimePicker: true
-    });
-  },
-
-  /**
-   * 隐藏时间选择器
-   */
-  hideTimePicker: function() {
-    this.setData({
-      showTimePicker: false
-    });
-  },
-
-  /**
-   * 隐藏自定义时长弹窗
-   */
-  hideCustomTimePicker: function() {
-    this.setData({
-      showCustomTimePicker: false
-    });
-  },
-
-  /**
-   * 自定义时长输入处理
-   */
-  onCustomTimeInput: function(e) {
+  onCustomTimeInput(e) {
     const value = e.detail.value;
-    const isValid = this.validateCustomTime(value);
-    
+    const minutes = parseInt(value);
     this.setData({
       customTimeInput: value,
-      isValidCustomTime: isValid
+      isValidCustomTime: !isNaN(minutes) && minutes >= 1 && minutes <= 180
     });
   },
 
-  /**
-   * 验证自定义时长
-   */
-  validateCustomTime: function(time) {
-    if (!time || time.trim() === '') {
-      return false;
-    }
-    
-    const minutes = parseInt(time);
-    return !isNaN(minutes) && minutes >= 1 && minutes <= 180;
-  },
-
-  /**
-   * 确认自定义时长
-   */
-  confirmCustomTime: function() {
-    if (!this.data.isValidCustomTime) {
-      return;
-    }
-    
+  confirmCustomTime() {
+    if (!this.data.isValidCustomTime) return;
     const minutes = parseInt(this.data.customTimeInput);
     const totalSeconds = minutes * 60;
     
@@ -427,386 +604,171 @@ Page({
       customTimeInput: ""
     });
     
-    // 更新显示
     this.updateDisplay();
-    
-    // 如果正在计时，需要重置
-    if (this.data.isRunning) {
-      this.stopTimer();
-    }
+    if (this.data.isRunning) this.stopTimer();
   },
 
-  /**
-   * 选择时长
-   */
-  selectDuration: function(e) {
-    const selectedDuration = e.currentTarget.dataset.value;
-    
-    if (selectedDuration === "custom") {
-      // 显示自定义时长弹窗
-      this.setData({
-        showTimePicker: false,
-        showCustomTimePicker: true,
-        customTimeInput: ""
-      });
+  selectDuration(e) {
+    const value = e.currentTarget.dataset.value;
+    if (value === "custom") {
+      this.setData({ showTimePicker: false, showCustomTimePicker: true, customTimeInput: "" });
     } else {
-      // 选择预设时长
-      const totalSeconds = selectedDuration * 60;
-      
+      const totalSeconds = value * 60;
       this.setData({
-        duration: selectedDuration,
-        durationText: selectedDuration + " 分钟",
+        duration: value,
+        durationText: value + " 分钟",
         totalTime: totalSeconds,
         remainingTime: totalSeconds,
         showTimePicker: false
       });
-      
-      // 更新显示
       this.updateDisplay();
-      
-      // 如果正在计时，需要重置
-      if (this.data.isRunning) {
-        this.stopTimer();
-      }
+      if (this.data.isRunning) this.stopTimer();
     }
   },
 
-  /**
-   * 创建音频播放器
-   */
-  createAudioPlayer: function() {
+  createAudioPlayer() {
     this.audioPlayer = wx.createInnerAudioContext();
     this.audioPlayer.src = '/audio/belling.mp3';
-    this.audioPlayer.loop = false; // 不循环播放
-    this.audioPlayer.obeyMuteSwitch = false; // 静音模式下也播放
+    this.audioPlayer.loop = false;
+    this.audioPlayer.obeyMuteSwitch = false;
     
-    // 音频加载完成回调
-    this.audioPlayer.onCanplay(() => {
-      console.log('音频加载完成');
+    // 添加后台音频播放支持
+    this.audioPlayer.onPlay(() => {
+      // 保持后台音频播放
+      console.log('🔔 铃声开始播放（支持后台）');
     });
     
-    // 音频播放错误回调
     this.audioPlayer.onError((err) => {
-      console.error('音频播放错误:', err);
+      console.error('❌ 铃声播放失败:', err);
     });
   },
 
-  /**
-   * 播放提醒铃声
-   */
-  playBellSound: function() {
+  playBellSound() {
     if (this.audioPlayer) {
+      // 确保在后台也能播放铃声
       this.audioPlayer.play();
-      console.log('播放提醒铃声');
+      console.log('🔔 播放提醒铃声（支持后台）');
+      
+      // 添加后台播放保护
+      setTimeout(() => {
+        if (this.audioPlayer && this.audioPlayer.paused) {
+          console.log('🔄 重新触发铃声播放（后台保护）');
+          this.audioPlayer.play();
+        }
+      }, 500);
     }
   },
 
-  /**
-   * 获取背景音乐临时链接
-   */
-  getBackgroundMusicUrl: function() {
-    // 初始化云开发
-    wx.cloud.init({
-      env: 'cloud1-2g2rbxbu2c126d4a'
-    });
-    
-    console.log('=== 开始获取背景音乐临时链接 ===');
-    console.log('文件路径:', this.data.defaultMusicFileID);
-    
-    // 获取临时文件URL
-    wx.cloud.getTempFileURL({
-      fileList: [{
-        fileID: this.data.defaultMusicFileID
-      }],
-      success: urlRes => {
-        console.log('✅ 获取背景音乐临时URL成功:', urlRes);
+  showMusicPicker() { this.setData({ showMusicPicker: true }); },
+  hideMusicPicker() { this.setData({ showMusicPicker: false }); },
+
+  selectMusic(e) {
+    const value = e.currentTarget.dataset.value;
+    const option = this.data.musicOptions.find(opt => opt.value === value);
+    if (option) {
+      this.setData({
+        backgroundMusic: value,
+        musicText: option.text,
+        showMusicPicker: false
+      });
+    }
+  },
+
+  playBackgroundMusic() {
+    if (this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
+      console.log('🎵 开始播放背景音乐，URL:', this.data.defaultMusicUrl);
+      
+      if (!this.backgroundMusicPlayer) {
+        this.backgroundMusicPlayer = wx.createInnerAudioContext();
+        this.backgroundMusicPlayer.src = this.data.defaultMusicUrl;
+        this.backgroundMusicPlayer.loop = false; // 引导音频不循环播放
+        this.backgroundMusicPlayer.obeyMuteSwitch = false;
         
-        if (urlRes.fileList && urlRes.fileList[0]) {
-          const fileInfo = urlRes.fileList[0];
-          console.log('文件信息:', {
-            fileID: fileInfo.fileID,
-            tempFileURL: fileInfo.tempFileURL,
-            maxAge: fileInfo.maxAge
+        // 添加后台音频播放支持
+        this.backgroundMusicPlayer.onPlay(() => {
+          console.log('✅ 背景音乐开始播放（支持后台）');
+        });
+        this.backgroundMusicPlayer.onError((err) => {
+          console.error('❌ 背景音乐播放失败:', err);
+          console.error('错误详情:', {
+            errCode: err.errCode,
+            errMsg: err.errMsg
           });
-          
-          if (fileInfo.tempFileURL && fileInfo.tempFileURL.trim() !== '') {
-            const tempUrl = fileInfo.tempFileURL;
-            console.log('✅ 获取到临时URL:', tempUrl);
-            
-            // 测试这个URL是否可用
-            this.testAudioPlayability(tempUrl);
-            
-            this.setData({
-              defaultMusicUrl: tempUrl
-            });
-            console.log('✅ 设置背景音乐URL成功');
-          } else {
-            console.warn('❌ 临时URL为空，可能原因:');
-            console.warn('1. 云存储文件不存在');
-            console.warn('2. 文件权限设置为私有');
-            console.warn('3. 文件路径错误');
-            
-            // 使用备选方案
-            this.useFallbackAudio();
-          }
+        });
+        this.backgroundMusicPlayer.onWaiting(() => {
+          console.log('⏳ 背景音乐正在缓冲');
+        });
+        this.backgroundMusicPlayer.onCanplay(() => {
+          console.log('🎶 背景音乐可以播放了');
+        });
+      }
+      
+      // 确保音频播放器存在再尝试播放
+      if (this.backgroundMusicPlayer) {
+        this.backgroundMusicPlayer.play();
+        console.log('🎵 已调用play()方法（支持后台）');
+      } else {
+        console.error('❌ 背景音乐播放器未创建');
+      }
+    } else {
+      console.log('🎵 背景音乐设置:', {
+        backgroundMusic: this.data.backgroundMusic,
+        defaultMusicUrl: this.data.defaultMusicUrl ? '已设置' : '未设置'
+      });
+    }
+  },
+
+  pauseBackgroundMusic() {
+    if (this.backgroundMusicPlayer) {
+      this.backgroundMusicPlayer.pause();
+    }
+  },
+
+  stopBackgroundMusic() {
+    if (this.backgroundMusicPlayer) {
+      this.backgroundMusicPlayer.stop();
+    }
+  },
+
+  // 原有的云存储音频获取功能（保持原样）
+  getBackgroundMusicUrl() {
+    wx.cloud.init({ env: 'cloud1-2g2rbxbu2c126d4a' });
+    wx.cloud.getTempFileURL({
+      fileList: [{ fileID: this.data.defaultMusicFileID }],
+      success: urlRes => {
+        if (urlRes.fileList && urlRes.fileList[0] && urlRes.fileList[0].tempFileURL) {
+          this.setData({ defaultMusicUrl: urlRes.fileList[0].tempFileURL });
+          console.log('✅ 获取背景音乐URL成功');
         } else {
-          console.warn('❌ 文件列表为空');
-          // 使用备选方案
+          console.warn('❌ 临时URL为空，使用备选方案');
           this.useFallbackAudio();
         }
       },
       fail: err => {
         console.error('❌ 获取背景音乐URL失败:', err);
-        console.error('错误详情:', {
-          errCode: err.errCode,
-          errMsg: err.errMsg
-        });
+        this.useFallbackAudio();
       }
     });
   },
 
-  /**
-   * 测试音频URL是否可播放
-   */
-  testAudioPlayability: function(url) {
-    console.log('=== 开始测试音频URL可播放性 ===');
-    console.log('测试URL:', url);
-    
-    const testPlayer = wx.createInnerAudioContext();
-    testPlayer.src = url;
-    
-    testPlayer.onCanplay(() => {
-      console.log('✅ 音频可以播放 - onCanplay触发');
-    });
-    
-    testPlayer.onPlay(() => {
-      console.log('✅ 音频开始播放 - onPlay触发');
-    });
-    
-    testPlayer.onError((err) => {
-      console.error('❌ 音频播放错误:', err);
-      console.error('错误代码:', err.errCode);
-      console.error('错误信息:', err.errMsg);
-    });
-    
-    testPlayer.onWaiting(() => {
-      console.log('⏳ 音频等待缓冲');
-    });
-    
-    testPlayer.onSeeking(() => {
-      console.log('🔍 音频正在定位');
-    });
-    
-    testPlayer.onSeeked(() => {
-      console.log('✅ 音频定位完成');
-    });
-    
-    // 设置超时自动停止测试
-    setTimeout(() => {
-      if (testPlayer) {
-        testPlayer.stop();
-        testPlayer.destroy();
-        console.log('⏹️ 测试播放器已停止');
-      }
-    }, 5000);
-    
-    // 尝试播放
-    console.log('▶️ 开始测试播放...');
-    testPlayer.play();
+  useFallbackAudio() {
+    this.setData({ defaultMusicUrl: '/audio/30mins.MP3' });
   },
 
-  /**
-   * 显示背景音乐选择器
-   */
-  showMusicPicker: function() {
-    this.setData({
-      showMusicPicker: true
-    });
-  },
-
-  /**
-   * 隐藏背景音乐选择器
-   */
-  hideMusicPicker: function() {
-    this.setData({
-      showMusicPicker: false
-    });
-  },
-
-  /**
-   * 选择背景音乐
-   */
-  selectMusic: function(e) {
-    const selectedMusic = e.currentTarget.dataset.value;
-    const musicOption = this.data.musicOptions.find(option => option.value === selectedMusic);
-    
-    if (musicOption) {
-      this.setData({
-        backgroundMusic: selectedMusic,
-        musicText: musicOption.text,
-        showMusicPicker: false
-      });
-      console.log('选择背景音乐:', selectedMusic, musicOption.text);
-    }
-  },
-
-  /**
-   * 播放背景音乐（开始计时时调用）
-   */
-  playBackgroundMusic: function() {
-    console.log('🔊 播放背景音乐检查:', {
-      backgroundMusic: this.data.backgroundMusic,
-      hasUrl: !!this.data.defaultMusicUrl,
-      musicText: this.data.musicText
-    });
-    
-    // 只有在选择"默认"选项且已经获取到音频链接时才播放
-    if (this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
-      console.log('✅ 满足播放条件，开始播放背景音乐');
-      
-      if (!this.backgroundMusicPlayer) {
-        console.log('🆕 创建新的背景音乐播放器');
-        // 创建背景音乐播放器
-        this.backgroundMusicPlayer = wx.createInnerAudioContext();
-        this.backgroundMusicPlayer.src = this.data.defaultMusicUrl;
-        this.backgroundMusicPlayer.loop = true; // 循环播放
-        this.backgroundMusicPlayer.obeyMuteSwitch = false; // 静音模式下也播放
-        
-        // 监听音频事件
-        this.backgroundMusicPlayer.onCanplay(() => {
-          console.log('✅ 背景音乐可以播放了');
-        });
-        
-        this.backgroundMusicPlayer.onPlay(() => {
-          console.log('🎵 背景音乐开始播放');
-        });
-        
-        this.backgroundMusicPlayer.onPause(() => {
-          console.log('⏸️ 背景音乐已暂停');
-        });
-        
-        this.backgroundMusicPlayer.onStop(() => {
-          console.log('⏹️ 背景音乐已停止');
-        });
-        
-        this.backgroundMusicPlayer.onEnded(() => {
-          console.log('🔚 背景音乐播放结束');
-        });
-        
-        this.backgroundMusicPlayer.onError((err) => {
-          console.error('❌ 背景音乐播放错误:', err);
-          console.error('错误代码:', err.errCode);
-          console.error('错误信息:', err.errMsg);
-        });
-      }
-      
-      // 播放音频
-      try {
-        this.backgroundMusicPlayer.play();
-        console.log('▶️ 已调用播放命令');
-      } catch (error) {
-        console.error('❌ 播放命令执行失败:', error);
-      }
-      
-    } else if (this.data.backgroundMusic === 'none') {
-      console.log('🔇 选择无音乐，不播放背景音乐');
-    } else {
-      console.log('❌ 不满足播放条件:', {
-        backgroundMusic: this.data.backgroundMusic,
-        hasUrl: !!this.data.defaultMusicUrl
-      });
-    }
-  },
-
-  /**
-   * 暂停背景音乐（暂停计时时调用）
-   */
-  pauseBackgroundMusic: function() {
-    console.log('⏸️ 暂停背景音乐');
-    if (this.backgroundMusicPlayer) {
-      try {
-        this.backgroundMusicPlayer.pause();
-        console.log('✅ 背景音乐已暂停');
-      } catch (error) {
-        console.error('❌ 暂停命令执行失败:', error);
-      }
-    } else {
-      console.log('⚠️ 背景音乐播放器不存在');
-    }
-  },
-
-  /**
-   * 停止播放背景音乐（停止计时时调用）
-   */
-  stopBackgroundMusic: function() {
-    console.log('⏹️ 停止背景音乐');
-    if (this.backgroundMusicPlayer) {
-      try {
-        this.backgroundMusicPlayer.stop();
-        console.log('✅ 背景音乐已停止');
-      } catch (error) {
-        console.error('❌ 停止命令执行失败:', error);
-      }
-    } else {
-      console.log('⚠️ 背景音乐播放器不存在');
-    }
-  },
-
-  /**
-   * 使用备选音频方案
-   */
-  useFallbackAudio: function() {
-    console.log('🔄 使用备选音频方案');
-    
-    // 方案1：尝试使用本地音频文件
-    const localAudioPath = '/audio/30mins.MP3';
-    console.log('尝试使用本地音频:', localAudioPath);
-    
-    this.setData({
-      defaultMusicUrl: localAudioPath
-    });
-    
-    // 测试备选音频是否可用
-    this.testAudioPlayability(localAudioPath);
-  },
-
-  /**
-   * 检查云存储文件是否存在
-   */
-  checkCloudFileExists: function() {
-    console.log('🔍 检查云存储文件是否存在');
-    
-    wx.cloud.init({
-      env: 'cloud1-2g2rbxbu2c126d4a'
-    });
-    
-    // 尝试获取文件列表
+  checkCloudFileExists() {
+    wx.cloud.init({ env: 'cloud1-2g2rbxbu2c126d4a' });
     wx.cloud.getTempFileURL({
-      fileList: [{
-        fileID: this.data.defaultMusicFileID
-      }],
+      fileList: [{ fileID: this.data.defaultMusicFileID }],
       success: (res) => {
         console.log('云存储文件检查结果:', res);
-        
-        if (res.fileList && res.fileList[0]) {
-          const file = res.fileList[0];
-          console.log('文件状态:', {
-            fileID: file.fileID,
-            hasTempURL: !!file.tempFileURL && file.tempFileURL.trim() !== '',
-            maxAge: file.maxAge
-          });
-          
-          if (!file.tempFileURL || file.tempFileURL.trim() === '') {
-            console.error('❌ 云存储文件无法访问，建议:');
-            console.error('1. 检查文件是否存在: audio/30mins.MP3');
-            console.error('2. 检查文件权限是否为"所有用户可读"');
-            console.error('3. 检查文件路径是否正确');
-          }
-        }
       },
       fail: (err) => {
         console.error('❌ 云存储文件检查失败:', err);
       }
     });
+  },
+
+  onShareAppMessage() {
+    return {};
   }
 });

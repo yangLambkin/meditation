@@ -22,6 +22,7 @@
     "useMultiFrameRuntime": true,
     "useApiHook": true,
     "useApiHostProcess": true,
+    "workers": true,
     "babelSetting": {
       "ignore": [],
       "disablePlugins": [],
