@@ -4,16 +4,16 @@
     <view class="flex-col section">
       <view class="flex-row justify-between items-center group">
         <view class="flex-row items-center">
-          <view class="flex-col justify-start items-center text-wrapper"><text class="font text_2">ME</text></view>
+          <image
+            class="shrink-0 avatar-circle"
+            src="{{userAvatar}}"
+            mode="aspectFill"
+          />
           <view class="flex-col items-start ml-17">
             <text class="font text">{{userNickname}}</text>
             <text class="mt-8 font_2 text_3">坚持静坐第 {{currentStreak}} 天</text>
           </view>
         </view>
-        <image
-          class="image image_2"
-          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=9c4a12b15e50ffee7ebda865ca47eb58.png"
-        />
       </view>
       <view class="flex-row justify-between group_2">
         <view class="flex-row self-center">

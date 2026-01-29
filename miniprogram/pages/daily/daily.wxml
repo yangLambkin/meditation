@@ -11,11 +11,11 @@
         <text class="text">本来无一物，何处惹尘埃</text>
       </view>
       <view class="flex-col justify-start items-start shrink-0 self-start text-wrapper_3">
-        <text class="font text_3">2026.1 星期五</text>
+        <text class="font text_3">{{year}}.{{month}} {{weekDay}}</text>
       </view>
     </view>
-    <view class="flex-col justify-start items-start shrink-0 text-wrapper_2 pos"><text class="text_2">23</text></view>
-    <text class="text_4 pos_2">农历腊月初五</text>
+    <view class="flex-col justify-start items-start shrink-0 text-wrapper_2 pos"><text class="text_2">{{day}}</text></view>
+    <text class="text_4 pos_2">{{lunarDate}}</text>
   </view>
   <view class="flex-col group_4">
     <view class="flex-col justify-start items-start relative group_5">
@@ -23,29 +23,24 @@
         <view class="flex-col justify-start items-center self-start image-wrapper">
           <image
             class="shrink-0 image_2"
-            src="/images/avatar.png"
+            src="{{userAvatar}}"
           />
         </view>
-        <view class="flex-row equal-division group_7">
-          <view class="flex-col equal-division-item">
-            <text class="self-center font_3 text_8">43</text>
-            <view class="flex-row self-stretch mt-11">
-              <view class="flex-col justify-start items-center text-wrapper_6">
-                <text class="font_2 text_11">禅</text>
-              </view>
-              <text class="self-start font_4 text_9 ml-17">累计打卡</text>
-            </view>
-          </view>
-          <view class="horiz-divider section_5"></view>
-          <view class="flex-col items-start equal-division-item_2">
-            <text class="font_3 text_7">1小时0分钟</text>
-            <text class="font_4 text_9 text_10 mt-9">静坐时长</text>
-          </view>
+        <view class="flex-col justify-start items-center text-wrapper_5">
+          <text class="font_2 text_6">{{userLevel}}</text>
         </view>
       </view>
-      <view class="flex-col justify-start text-wrapper_4 pos_3"><text class="text_5">静心者</text></view>
-      <view class="flex-col justify-start items-center text-wrapper_5 pos_4">
-        <text class="font_2 text_6">Lv.3 修行中</text>
+      <view class="flex-col justify-start text-wrapper_4 pos_3"><text class="text_5">{{userName}}</text></view>
+      <view class="mt-100 flex-row equal-division group_7">
+        <view class="flex-col items-start equal-division-item">
+          <text class="font_3 text_8">{{totalCount}}</text>
+          <text class="font_4 text_9 mt-11">累计打卡</text>
+        </view>
+        <view class="horiz-divider section_5"></view>
+        <view class="flex-col items-start equal-division-item_2">
+          <text class="font_3 text_7">{{formatTime(totalMinutes)}}</text>
+          <text class="font_4 text_9 mt-11">静坐时长</text>
+        </view>
       </view>
     </view>
     <view class="flex-col justify-start section_6">
@@ -53,14 +48,14 @@
         <view class="flex-row justify-center items-center equal-division-item_3 section_7">
           <image
             class="image_3"
-            src="/images/icons/share.svg"
+            src="/images/icons/share_pyq.png"
           />
           <text class="ml-8 font text_12">分享朋友圈</text>
         </view>
         <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8">
           <image
             class="image_3"
-            src="/images/icons/checked.png"
+            src="/images/icons/download.png"
           />
           <text class="ml-8 font text_13">保存图片</text>
         </view>

@@ -2,6 +2,7 @@
 Page({
   data: {
     userNickname: '觉察者', // 用户昵称
+    userAvatar: '/images/avatar.png', // 用户头像，默认使用项目头像
     totalMinutes: 0, // 总分钟数
     consecutiveDays: 0, // 连续天数
     currentStreak: 0, // 当前连续天数
@@ -22,8 +23,9 @@ Page({
    * 获取用户数据
    */
   getUserData() {
-    // 获取用户昵称
+    // 获取用户昵称和头像
     this.getUserNickname();
+    this.getUserAvatar();
     
     // 获取用户统计信息
     this.calculateUserStatistics();
@@ -38,6 +40,53 @@ Page({
     if (cachedNickname) {
       this.setData({
         userNickname: cachedNickname
+      });
+    }
+  },
+
+  /**
+   * 获取用户微信头像
+   */
+  getUserAvatar() {
+    // 尝试从缓存获取用户信息
+    const cachedUserInfo = wx.getStorageSync('userInfo');
+    
+    if (cachedUserInfo && cachedUserInfo.avatarUrl) {
+      // 使用缓存的用户头像
+      this.setData({
+        userAvatar: cachedUserInfo.avatarUrl
+      });
+    } else {
+      // 检查用户是否已授权
+      wx.getSetting({
+        success: (res) => {
+          if (res.authSetting['scope.userInfo']) {
+            // 用户已授权，获取用户信息
+            wx.getUserInfo({
+              success: (userRes) => {
+                const userInfo = userRes.userInfo;
+                
+                // 缓存用户信息
+                wx.setStorageSync('userInfo', userInfo);
+                
+                // 更新页面显示
+                this.setData({
+                  userAvatar: userInfo.avatarUrl
+                });
+                
+                console.log('获取到用户头像:', userInfo.avatarUrl);
+              },
+              fail: (err) => {
+                console.warn('获取用户信息失败:', err);
+              }
+            });
+          } else {
+            console.log('用户未授权，使用默认头像');
+          }
+        },
+        fail: (err) => {
+          console.warn('检查授权设置失败:', err);
+        }
       });
     }
   },

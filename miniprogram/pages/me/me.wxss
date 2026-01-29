@@ -35,6 +35,14 @@
   color: #ffffff;
   line-height: 27.52rpx;
 }
+
+.avatar-circle {
+  width: 127.96rpx;
+  height: 127.96rpx;
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: #f0f0f0; /* 备用背景色 */
+}
 .text {
   color: #101727;
   line-height: 38.08rpx;
