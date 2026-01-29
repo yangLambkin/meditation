@@ -254,6 +254,9 @@ Page({
     // 停止亮度控制并恢复亮度
     this.stopBrightnessControl();
     
+    // 停止背景音乐（引导音频）
+    this.stopBackgroundMusic();
+    
     // 播放完成铃声
     this.playBellSound();
     
@@ -464,13 +467,13 @@ Page({
         this.originalBrightness = res.value;
         console.log('💡 保存当前亮度:', this.originalBrightness);
         
-        // 设置最低亮度
-        this.setMinBrightness();
+        // 注意：不在这里设置最低亮度，等待计时开始后1分钟再设置
       },
       fail: (err) => {
         console.warn('⚠️ 获取亮度失败，使用默认亮度:', err);
         this.originalBrightness = 0.5;
-        this.setMinBrightness();
+        
+        // 注意：不在这里设置最低亮度，等待计时开始后1分钟再设置
       }
     });
   },
