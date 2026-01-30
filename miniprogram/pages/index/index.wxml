@@ -16,9 +16,9 @@
               </view>
             </view>
             <view class="ml-16 flex-col section_4 equal-division-item">
-              <text class="self-start font_3">好友排名</text>
+              <text class="self-start font_3">用户排名</text>
               <view class="mt-12 flex-row items-end">
-                <text class="font_2">No.45</text>
+                <text class="font_2">{{currentUserRank}}</text>
                 <text class="font_4 ml-9">名</text>
               </view>
             </view>
@@ -73,11 +73,11 @@
         <!-- 图例 -->
         <view class="flex-row justify-center equal-division_2 group_8">
           <view class="flex-row items-center">
-            <view class="shrink-0 section_8"></view>
+            <view class="check-indicator"></view>
             <text class="font_6 text_26 ml-5">已打卡</text>
           </view>
           <view class="flex-row items-center ml-15">
-            <view class="shrink-0 section_9"></view>
+            <view class="today-indicator"></view>
             <text class="font_6 text_27 ml-5">今日</text>
           </view>
         </view>

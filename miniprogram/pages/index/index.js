@@ -9,7 +9,8 @@ Page({
     userOpenId: '', // 当前用户标识
     monthlyCount: 0, // 本月打卡总次数
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
-    wisdomQuote: '"静心即是修心，心安即是归处。"' // 每日一言金句
+    wisdomQuote: '"静心即是修心，心安即是归处。"', // 每日一言金句
+    currentUserRank: 1 // 当前用户排名，默认为1
   },
 
   /**
@@ -29,6 +30,8 @@ Page({
         this.updateMonthlyCount();
         // 获取用户昵称
         this.getUserNickname();
+        // 计算用户排名
+        this.calculateUserRank();
       });
     } else {
       this.setData({
@@ -39,6 +42,8 @@ Page({
         this.updateMonthlyCount();
         // 获取用户昵称
         this.getUserNickname();
+        // 计算用户排名
+        this.calculateUserRank();
       });
     }
   },
@@ -111,6 +116,67 @@ Page({
     wx.switchTab({
       url: '/pages/timer/timer'
     });
+  },
+
+  /**
+   * 计算用户排名
+   */
+  calculateUserRank: function() {
+    // 获取所有用户数据
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const currentUserId = this.data.userOpenId;
+    const today = new Date().toISOString().split('T')[0];
+    
+    // 如果没有用户数据或当前用户ID为空，设置默认排名为1
+    if (Object.keys(allUserRecords).length === 0 || !currentUserId) {
+      this.setData({
+        currentUserRank: 1
+      });
+      return;
+    }
+    
+    // 计算每个用户当天的累计时长
+    const userDurations = [];
+    
+    Object.keys(allUserRecords).forEach(userId => {
+      const userRecords = allUserRecords[userId];
+      const todayRecord = userRecords.dailyRecords[today];
+      
+      let totalDuration = 0;
+      if (todayRecord && todayRecord.durations) {
+        totalDuration = todayRecord.durations.reduce((sum, duration) => {
+          return sum + parseInt(duration) || 0;
+        }, 0);
+      }
+      
+      userDurations.push({
+        userId: userId,
+        duration: totalDuration
+      });
+    });
+    
+    // 按时长降序排序
+    userDurations.sort((a, b) => b.duration - a.duration);
+    
+    // 计算当前用户排名
+    let currentUserRank = 0;
+    for (let i = 0; i < userDurations.length; i++) {
+      if (userDurations[i].userId === currentUserId) {
+        currentUserRank = i + 1;
+        break;
+      }
+    }
+    
+    // 如果没有找到当前用户（新用户），排名为用户总数+1
+    if (currentUserRank === 0) {
+      currentUserRank = userDurations.length + 1;
+    }
+    
+    this.setData({
+      currentUserRank: currentUserRank
+    });
+    
+    console.log(`用户排名计算完成：第${currentUserRank}名，总用户数：${userDurations.length}`);
   },
 
   /**
@@ -382,6 +448,9 @@ Page({
     
     // 更新本月打卡次数显示
     this.updateMonthlyCount();
+    
+    // 更新用户排名显示
+    this.calculateUserRank();
   },
 
   /**

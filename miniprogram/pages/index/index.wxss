@@ -589,3 +589,20 @@
   font-weight: 600;
   line-height: 1;
 }
+
+/* 图例图标样式 */
+.check-indicator {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background-color: #B29764;
+  display: block;
+}
+
+.today-indicator {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background-color: #F0EAE0;
+  display: block;
+}

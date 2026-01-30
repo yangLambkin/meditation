@@ -49,14 +49,14 @@
     </view>
     <view class="flex-col justify-start section_6">
       <view class="flex-row equal-division_2">
-        <view class="flex-row justify-center items-center equal-division-item_3 section_7">
+        <view class="flex-row justify-center items-center equal-division-item_3 section_7" bindtap="shareToWechat">
           <image
             class="image_3"
             src="/images/icons/share_pyq.png"
           />
           <text class="ml-8 font text_12">分享朋友圈</text>
         </view>
-        <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8">
+        <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8" bindtap="saveImage">
           <image
             class="image_3"
             src="/images/icons/download.png"
@@ -66,4 +66,11 @@
       </view>
     </view>
   </view>
+  
+  <!-- 隐藏的画布，用于生成打卡图片 -->
+  <canvas 
+    style="position: absolute; top: -9999rpx; left: -9999rpx; width: 750rpx; height: 1334rpx;" 
+    canvas-id="dailyCanvas"
+    id="dailyCanvas"
+  ></canvas>
 </view>

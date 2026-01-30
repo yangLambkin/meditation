@@ -52,7 +52,7 @@
 .text-wrapper {
   padding-bottom: 48rpx;
   filter: drop-shadow(0rpx 8rpx 8rpx #00000026);
-  height: 199.96rpx;
+  min-height: 199.96rpx; /* 改为最小高度，允许内容撑开 */
   background-color: transparent;
   backdrop-filter: none;
 }

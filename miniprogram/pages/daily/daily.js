@@ -11,7 +11,7 @@ Page({
     userLevel: 'Lv.3 修行中', // 用户等级
     totalMinutes: 0, // 本次打卡静坐分钟数
     totalCount: 43, // 累计打卡次数
-    wisdomQuote: '本来无一物，何处惹尘埃' // 金句内容，默认值
+    wisdomQuote: '' // 金句内容，初始为空
   },
 
   onLoad(options) {
@@ -289,7 +289,216 @@ Page({
     });
   },
 
+  /**
+   * 分享到微信朋友圈
+   */
+  shareToWechat: function() {
+    console.log('点击分享朋友圈');
+    
+    // 显示分享菜单
+    wx.showShareMenu({
+      withShareTicket: true,
+      menus: ['shareAppMessage', 'shareTimeline']
+    });
+    
+    // 对于朋友圈分享，显示提示信息
+    wx.showModal({
+      title: '分享朋友圈',
+      content: '请点击右上角菜单，选择"分享到朋友圈"',
+      showCancel: false,
+      confirmText: '知道了'
+    });
+  },
+
+  /**
+   * 保存图片到相册
+   */
+  saveImage: function() {
+    console.log('点击保存图片');
+    
+    // 首先获取用户授权
+    wx.authorize({
+      scope: 'scope.writePhotosAlbum',
+      success: () => {
+        // 授权成功，开始保存图片
+        this.saveDailyImage();
+      },
+      fail: (err) => {
+        console.log('用户未授权保存图片权限:', err);
+        // 引导用户授权
+        wx.showModal({
+          title: '保存图片需要授权',
+          content: '请授权访问相册以保存图片',
+          success: (res) => {
+            if (res.confirm) {
+              // 用户确认，重新请求授权
+              wx.authorize({
+                scope: 'scope.writePhotosAlbum',
+                success: () => {
+                  this.saveDailyImage();
+                },
+                fail: () => {
+                  wx.showToast({
+                    title: '授权失败',
+                    icon: 'none'
+                  });
+                }
+              });
+            }
+          }
+        });
+      }
+    });
+  },
+
+  /**
+   * 保存打卡图片 - 简化版Canvas绘制
+   */
+  saveDailyImage: function() {
+    const that = this;
+    
+    // 创建Canvas上下文
+    const ctx = wx.createCanvasContext('dailyCanvas');
+    
+    // 设置Canvas尺寸（使用简单尺寸）
+    const width = 750;
+    const height = 1334;
+    
+    // 1. 绘制背景图片（全屏）
+    ctx.drawImage('/images/bg1.jpeg', 0, 0, width, height);
+    
+    // 2. 绘制简单布局（避免复杂的布局计算）
+    this.drawSimpleLayout(ctx, width, height);
+    
+    // 绘制完成，生成图片
+    ctx.draw(false, () => {
+      setTimeout(() => {
+        wx.canvasToTempFilePath({
+          canvasId: 'dailyCanvas',
+          success: (res) => {
+            // 保存图片到相册
+            wx.saveImageToPhotosAlbum({
+              filePath: res.tempFilePath,
+              success: () => {
+                wx.showToast({
+                  title: '打卡图片保存成功',
+                  icon: 'success'
+                });
+              },
+              fail: (err) => {
+                console.error('保存图片失败:', err);
+                wx.showToast({
+                  title: '保存失败',
+                  icon: 'none'
+                });
+              }
+            });
+          },
+          fail: (err) => {
+            console.error('生成图片失败:', err);
+            that.saveDefaultImage();
+          }
+        });
+      }, 500);
+    });
+  },
+
+  /**
+   * 绘制简单布局 - 使用更接近实际页面的比例
+   */
+  drawSimpleLayout: function(ctx, width, height) {
+    // 使用更接近实际页面比例的尺寸（基于rpx到px的转换，通常1rpx=0.5px）
+    
+    // 1. 绘制顶部金句（左上角）
+    ctx.setFillStyle('#ffffff');
+    ctx.setFontSize(60); // 相当于30rpx -> 60px
+    ctx.setTextAlign('left');
+    ctx.fillText(this.data.wisdomQuote, 100, 240); // 相当于50rpx -> 100px, 120rpx -> 240px
+    
+    // 2. 绘制日期信息（右上角）
+    ctx.setTextAlign('right');
+    ctx.setFontSize(50); // 相当于25rpx -> 50px
+    ctx.fillText(`${this.data.year}.${this.data.month} ${this.data.weekDay}`, width - 100, 160);
+    ctx.fillText(this.data.lunarDate, width - 100, 240);
+    
+    // 3. 绘制用户信息区域（中间）
+    const userY = 600; // 相当于300rpx -> 600px
+    
+    // 绘制头像（使用更大的尺寸）
+    ctx.drawImage(this.data.userAvatar, 200, userY, 200, 200); // 相当于100rpx -> 200px
+    
+    // 绘制用户等级
+    ctx.setFontSize(50); // 相当于25rpx -> 50px
+    ctx.setTextAlign('center');
+    ctx.fillText(this.data.userLevel, 300, userY + 280);
+    
+    // 绘制用户名
+    ctx.setTextAlign('left');
+    ctx.setFontSize(80); // 相当于40rpx -> 80px
+    ctx.fillText(this.data.userName, 440, userY + 100);
+    
+    // 4. 绘制打卡数据（中间下方）
+    const statsY = 900; // 相当于450rpx -> 900px
+    const centerX = width / 2;
+    
+    ctx.setFontSize(70); // 相当于35rpx -> 70px
+    ctx.setTextAlign('center');
+    ctx.fillText(`${this.data.totalCount} 次`, centerX - 200, statsY);
+    
+    ctx.setFontSize(50); // 相当于25rpx -> 50px
+    ctx.fillText('累计打卡', centerX - 200, statsY + 80);
+    
+    // 绘制分割线
+    ctx.setStrokeStyle('#b29764');
+    ctx.setLineWidth(6); // 相当于3rpx -> 6px
+    ctx.beginPath();
+    ctx.moveTo(centerX, statsY - 40);
+    ctx.lineTo(centerX, statsY + 40);
+    ctx.stroke();
+    
+    // 绘制静坐时长
+    ctx.setFontSize(70); // 相当于35rpx -> 70px
+    ctx.fillText(`${this.data.totalMinutes}分钟`, centerX + 200, statsY);
+    
+    ctx.setFontSize(50); // 相当于25rpx -> 50px
+    ctx.fillText('静坐时长', centerX + 200, statsY + 80);
+    
+    // 5. 绘制底部信息
+    const bottomY = height - 160; // 相当于80rpx -> 160px
+    ctx.setFontSize(40); // 相当于20rpx -> 40px
+    ctx.fillText('静坐觉察 · 每日打卡', centerX, bottomY);
+  },
+
+  /**
+   * 保存默认图片
+   */
+  saveDefaultImage: function() {
+    // 使用项目中的默认图片
+    const imagePath = '/images/bg1.jpeg';
+    
+    wx.saveImageToPhotosAlbum({
+      filePath: imagePath,
+      success: () => {
+        wx.showToast({
+          title: '图片保存成功',
+          icon: 'success'
+        });
+      },
+      fail: (err) => {
+        console.error('保存默认图片失败:', err);
+        wx.showToast({
+          title: '保存失败',
+          icon: 'none'
+        });
+      }
+    });
+  },
+
   onShareAppMessage() {
-    return {};
+    return {
+      title: '静坐觉察 - 每日打卡',
+      path: '/pages/index/index',
+      imageUrl: '/images/logo.png'
+    };
   },
 });
