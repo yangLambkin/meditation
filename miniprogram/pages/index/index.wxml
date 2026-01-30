@@ -95,7 +95,7 @@
     <!-- 每日一言 - 放置在静坐打卡按钮下方，间距40rpx -->
     <view class="mt-40 flex-col items-start section_11">
       <text class="font_6 text_29">每日一言</text>
-      <text class="font text_30 mt-11">"静心即是修心，心安即是归处。"</text>
+      <text class="font text_30 mt-11">{{wisdomQuote}}</text>
     </view>
   </view>
     

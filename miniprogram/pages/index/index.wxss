@@ -366,9 +366,9 @@
 }
 .text_30 {
   color: #99a1ae;
-  line-height: 20rpx;
+  line-height: 1.5;
   font-style: Arimo;
-  width: 363.53rpx;
+  width: 100%;
 }
 /* WeUI规范按钮样式 */
 .weui-btn {

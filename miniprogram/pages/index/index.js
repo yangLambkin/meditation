@@ -8,7 +8,8 @@ Page({
     todayDate: "", // 今天的日期
     userOpenId: '', // 当前用户标识
     monthlyCount: 0, // 本月打卡总次数
-    userNickname: '觉察者' // 用户昵称，默认为"觉察者"
+    userNickname: '觉察者', // 用户昵称，默认为"觉察者"
+    wisdomQuote: '"静心即是修心，心安即是归处。"' // 每日一言金句
   },
 
   /**
@@ -326,6 +327,29 @@ Page({
   },
 
   /**
+   * 获取随机金句
+   */
+  getRandomWisdom: function() {
+    wx.cloud.callFunction({
+      name: 'getRandomWisdom',
+      success: res => {
+        if (res.result.success && res.result.data) {
+          this.setData({
+            wisdomQuote: '"' + res.result.data.content + '"'
+          });
+          console.log('index页面获取金句成功:', res.result.data.content);
+        } else {
+          console.warn('index页面获取金句失败，使用默认金句');
+        }
+      },
+      fail: err => {
+        console.error('index页面调用云函数失败:', err);
+        // 使用默认金句
+      }
+    });
+  },
+
+  /**
    * 生命周期函数--监听页面加载
    */
   onLoad(options) {
@@ -337,6 +361,9 @@ Page({
     
     // 获取用户标识，完成后会自动更新数据
     this.getUserOpenId();
+    
+    // 获取随机金句
+    this.getRandomWisdom();
   },
 
   /**

@@ -8,7 +8,7 @@
     <view class="shrink-0 section_4"></view>
     <view class="flex-row flex-1 group_3">
       <view class="flex-col justify-start items-start flex-1 text-wrapper">
-        <text class="text">本来无一物，何处惹尘埃</text>
+        <text class="text">{{wisdomQuote}}</text>
       </view>
       <view class="flex-col justify-start items-start shrink-0 self-start text-wrapper_3">
         <text class="font text_3">{{year}}.{{month}} {{weekDay}}</text>
@@ -20,25 +20,29 @@
   <view class="flex-col group_4">
     <view class="flex-col justify-start items-start relative group_5">
       <view class="flex-col group_6">
-        <view class="flex-col justify-start items-center self-start image-wrapper">
-          <image
-            class="shrink-0 image_2"
-            src="{{userAvatar}}"
-          />
-        </view>
-        <view class="flex-col justify-start items-center text-wrapper_5">
-          <text class="font_2 text_6">{{userLevel}}</text>
+        <view class="flex-row items-start">
+          <view class="flex-col items-center">
+            <view class="flex-col justify-start items-center self-start image-wrapper">
+              <image
+                class="shrink-0 image_2"
+                src="{{userAvatar}}"
+              />
+            </view>
+            <view class="flex-col justify-start items-center text-wrapper_5">
+              <text class="font_2 text_6">{{userLevel}}</text>
+            </view>
+          </view>
+          <view class="flex-col justify-start text-wrapper_4 ml-20"><text class="text_5">{{userName}}</text></view>
         </view>
       </view>
-      <view class="flex-col justify-start text-wrapper_4 pos_3"><text class="text_5">{{userName}}</text></view>
       <view class="mt-100 flex-row equal-division group_7">
-        <view class="flex-col items-start equal-division-item">
-          <text class="font_3 text_8">{{totalCount}}</text>
+        <view class="flex-col items-center equal-division-item">
+          <text class="font_3 text_8">{{totalCount}} 次</text>
           <text class="font_4 text_9 mt-11">累计打卡</text>
         </view>
         <view class="horiz-divider section_5"></view>
-        <view class="flex-col items-start equal-division-item_2">
-          <text class="font_3 text_7">{{formatTime(totalMinutes)}}</text>
+        <view class="flex-col items-center equal-division-item">
+          <text class="minutes-display">{{totalMinutes}}分钟</text>
           <text class="font_4 text_9 mt-11">静坐时长</text>
         </view>
       </view>

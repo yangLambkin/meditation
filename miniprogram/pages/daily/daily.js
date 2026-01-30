@@ -10,7 +10,8 @@ Page({
     userAvatar: '/images/avatar.png', // 用户头像，默认使用项目头像
     userLevel: 'Lv.3 修行中', // 用户等级
     totalMinutes: 0, // 本次打卡静坐分钟数
-    totalCount: 43 // 累计打卡次数
+    totalCount: 43, // 累计打卡次数
+    wisdomQuote: '本来无一物，何处惹尘埃' // 金句内容，默认值
   },
 
   onLoad(options) {
@@ -19,6 +20,9 @@ Page({
     
     // 设置当前日期信息
     this.setCurrentDateInfo();
+    
+    // 获取随机金句
+    this.getRandomWisdom();
     
     // 调试：检查数据是否正确绑定
     console.log('页面加载，totalMinutes:', this.data.totalMinutes);
@@ -80,6 +84,29 @@ Page({
   },
 
   /**
+   * 获取随机金句
+   */
+  getRandomWisdom: function() {
+    wx.cloud.callFunction({
+      name: 'getRandomWisdom',
+      success: res => {
+        if (res.result.success && res.result.data) {
+          this.setData({
+            wisdomQuote: res.result.data.content
+          });
+          console.log('获取金句成功:', res.result.data.content);
+        } else {
+          console.warn('获取金句失败，使用默认金句');
+        }
+      },
+      fail: err => {
+        console.error('调用云函数失败:', err);
+        // 使用默认金句
+      }
+    });
+  },
+
+  /**
    * 获取用户数据
    */
   getUserData: function() {
@@ -136,13 +163,30 @@ Page({
    */
   calculateUserStats: function() {
     const userOpenId = wx.getStorageSync('localUserId');
-    if (!userOpenId) return;
+    console.log('用户ID:', userOpenId);
+    if (!userOpenId) {
+      console.log('未找到用户ID，显示默认时长15分钟');
+      // 显示默认的本次打卡时长
+      this.setData({
+        totalMinutes: 15
+      });
+      return;
+    }
 
     // 获取用户的所有打卡记录
     const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    console.log('所有用户记录:', Object.keys(allUserRecords));
     const userRecords = allUserRecords[userOpenId];
+    console.log('当前用户记录:', userRecords);
 
-    if (!userRecords || !userRecords.dailyRecords) return;
+    if (!userRecords || !userRecords.dailyRecords) {
+      console.log('未找到用户记录或记录结构不正确，显示默认时长15分钟');
+      // 显示默认的本次打卡时长
+      this.setData({
+        totalMinutes: 15
+      });
+      return;
+    }
 
     // 计算总打卡次数
     const totalCount = Object.keys(userRecords.dailyRecords).length;
@@ -171,13 +215,20 @@ Page({
     
     const userLevel = this.calculateUserLevel(totalMinutes);
 
+    // 如果当天没有打卡记录，显示一个默认的本次打卡时长（测试用）
+    const displayMinutes = currentMinutes > 0 ? currentMinutes : 15;
+    
     this.setData({
-      totalMinutes: currentMinutes, // 显示本次打卡时长
+      totalMinutes: displayMinutes, // 显示本次打卡时长
       totalCount: totalCount,
       userLevel: userLevel
+    }, () => {
+      // 数据设置完成后的回调，验证数据绑定
+      console.log('本次打卡时长:', currentMinutes + '分钟');
+      console.log('实际设置的totalMinutes:', displayMinutes);
+      console.log('formatTime函数返回值:', this.formatTime(displayMinutes));
+      console.log('页面数据totalMinutes:', this.data.totalMinutes);
     });
-    
-    console.log('本次打卡时长:', currentMinutes + '分钟');
   },
 
   /**

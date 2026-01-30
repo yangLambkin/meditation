@@ -58,7 +58,7 @@
 }
 .text {
   color: #fffefef2;
-  font-size: 48rpx;
+  font-size: 33rpx;
   font-family: Arimo;
   line-height: 78rpx;
   width: 390rpx;
@@ -112,7 +112,7 @@
 .group_6 {
   margin-left: 56rpx;
   width: 572.78rpx;
-  height: 147.28rpx;
+  /* 移除固定高度，让内容自然撑开 */
 }
 .image-wrapper {
   background-color: #ffffff;
@@ -139,17 +139,23 @@
   width: 509.48rpx;
 }
 .equal-division-item {
-  padding: 12rpx 32rpx;
-  width: 254.74rpx;
+  padding: 8rpx 16rpx;
+  width: 160rpx;  /* 减小宽度 */
 }
 .font_3 {
   font-size: 36rpx;
   font-family: Arimo;
   font-weight: 700;
   color: #ffffff;
+  line-height: 1.2;  /* 统一行高 */
 }
-.text_8 {
-  line-height: 25.54rpx;
+/* 静坐时长分钟数样式 - 完全重新生成 */
+.minutes-display {
+  font-size: 36rpx;
+  font-family: Arimo;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.2;
 }
 .text-wrapper_6 {
   padding: 12rpx 0 4rpx;
@@ -182,12 +188,13 @@
   text-transform: uppercase;
 }
 .horiz-divider {
-  margin: 24rpx 0 40rpx;
+  margin: 0rpx 4rpx;  /* 进一步减少左右间距到当前一半 */
+  align-self: center;
 }
 .section_5 {
-  background-color: #ffffff33;
-  width: 1.96rpx;
-  height: 48rpx;
+  background-color: #b29764;  /* 调整为金色 */
+  width: 3rpx;               /* 进一步加粗分割线 */
+  height: 45rpx;             /* 调整高度为46rpx */
 }
 .equal-division-item_2 {
   padding: 8rpx 32rpx 32rpx;
@@ -216,6 +223,7 @@
 }
 .text-wrapper_5 {
   padding: 8rpx 0;
+  margin-top: 20rpx;  /* 增加与头像控件的间距 */
   background-color: #ffffff33;
   border-radius: 8rpx;
   width: 130.74rpx;
