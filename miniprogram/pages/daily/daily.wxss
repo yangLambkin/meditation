@@ -101,7 +101,7 @@
   bottom: 0;
 }
 .group_4 {
-  margin-top: 712rpx;
+  margin-top: 600rpx;  /* 减少上边距，为底部按钮留出空间 */
   background-color: transparent;
   position: relative;
   z-index: 2;
