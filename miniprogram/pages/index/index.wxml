@@ -23,7 +23,7 @@
               </view>
             </view>
           </view>
-          <text class="font_2 text_2 pos_2">保持正念，自在当下</text>
+          <text class="font_2 text_2 pos_2">保持觉察，自在当下</text>
         </view>
       </view>
       <view class="flex-col relative section_6">
@@ -88,7 +88,7 @@
     <view class="meditation-btn-container">
       <view class="weui-btn meditation-btn primary" bindtap="startMeditation">
         <image class="meditation-btn-icon" src="/images/icons/start.png" />
-        <text class="meditation-btn-text">开始静坐</text>
+        <text class="meditation-btn-text">开始觉察</text>
       </view>
     </view>
     

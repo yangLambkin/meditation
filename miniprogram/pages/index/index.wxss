@@ -404,7 +404,7 @@
   left: 0;
   width: 200%;
   height: 200%;
-  border: 1px solid rgba(0, 0, 0, 0.2);
+  border: none;
   transform: scale(0.5);
   transform-origin: 0 0;
   box-sizing: border-box;
@@ -566,7 +566,6 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  border: solid 2rpx #b29764;
   transition: all 0.3s ease;
   width: 100%;
   margin-bottom: 0;
