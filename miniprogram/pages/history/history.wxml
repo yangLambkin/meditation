@@ -1,70 +1,55 @@
-<!--pages/history/history.wxml-->
 <view class="flex-col page">
-  <!-- 页面头部 -->
   <view class="flex-col section">
-    <view class="flex-row justify-between items-center">
-      <view class="flex-row items-center">
-        <image class="back-icon" src="/images/icons/left.png" bindtap="goBack" />
-        <text class="page-title">打卡历史</text>
+    <view class="flex-row justify-between items-start self-stretch group">
+      <view class="flex-col justify-start relative group_2">
+        <view class="flex-col justify-start section_5">
+          <view class="flex-col relative section_4">
+            <view class="flex-row self-stretch group_3">
+              <view class="group_4">
+                <text class="text">{{year}}</text>
+                <text class="text_2">年</text>
+              </view>
+              <text class="text_3 ml-21">{{month}}</text>
+            </view>
+            <view class="flex-col justify-start items-center self-center text-wrapper">
+              <text class="text_5">{{day}}</text>
+            </view>
+            <view class="flex-col justify-start items-center self-center text-wrapper">
+              <text class="text_4">{{lunarDate}}</text>
+            </view>           
+          </view>
+        </view>
+        <view class="section_3 pos_3"></view>
+        <view class="section_3 pos"></view>
+        <view class="section_3 pos_2"></view>
       </view>
-      <text class="stats-text">共{{totalDays}}天 {{totalCount}}次</text>
+      <view class="section_2"></view>
     </view>
-    
-    <!-- 统计卡片 -->
-    <view class="stats-cards">
-      <view class="stat-card">
-        <text class="stat-number">{{currentStreak}}</text>
-        <text class="stat-label">当前连续</text>
-      </view>
-      <view class="stat-card">
-        <text class="stat-number">{{longestStreak}}</text>
-        <text class="stat-label">最长连续</text>
-      </view>
-      <view class="stat-card">
-        <text class="stat-number">{{monthlyCount}}</text>
-        <text class="stat-label">本月次数</text>
+    <view class="shrink-0 self-start section_6"></view>
+  </view>
+  <view class="flex-row justify-between relative section_7">
+    <view class="flex-col self-center group_5">
+      <text class="self-center font">静坐次数</text>
+      <text class="mt-12 self-start font_2 text_7">1</text>
+    </view>
+    <view class="flex-col self-start group_6">
+      <text class="self-start font text_6">合计时长</text>
+      <view class="mt-12 flex-row self-stretch">
+        <text class="self-center font_2 text_8">30</text>
+        <text class="ml-4 self-start font text_9">min</text>
       </view>
     </view>
   </view>
-  
-  <!-- 历史记录列表 -->
-  <scroll-view class="history-list" scroll-y>
-    <view class="history-item" wx:for="{{historyList}}" wx:key="date">
-      <view class="date-header">
-        <text class="date-text">{{item.date}}</text>
-        <text class="count-badge">{{item.count}}次打卡</text>
+  <view class="flex-col group_8">
+    <view class="flex-row justify-between items-center self-start group_7">
+      <view class="flex-row items-center">
+        <view class="shrink-0 section_8"></view>
+        <text class="ml-18 font_3 text_10">30 分钟</text>
       </view>
-      
-      <view class="record-item" wx:for="{{item.records}}" wx:for-item="record" wx:key="timestamp">
-        <view class="record-content">
-          <view class="record-header">
-            <text class="record-time">{{record.time}}</text>
-            <view class="record-meta">
-              <text class="duration-text">{{record.duration}}</text>
-              <view class="rating-stars">
-                <image 
-                  class="star-icon {{star.active ? 'active' : ''}}"
-                  src="/images/icons/{{star.active ? 'star-active' : 'star'}}.png"
-                  wx:for="{{record.stars}}"
-                  wx:for-item="star"
-                  wx:key="index"
-                />
-              </view>
-            </view>
-          </view>
-          
-          <view class="record-details" wx:if="{{record.textCount > 0}}">
-            <text class="text-count">记录{{record.textCount}}条</text>
-            <text class="text-preview" wx:if="{{record.textPreview}}">{{record.textPreview}}</text>
-          </view>
-        </view>
-      </view>
+      <text class="text_11">2026:01:27 17:51:14</text>
     </view>
-    
-    <view class="empty-state" wx:if="{{historyList.length === 0}}">
-      <image class="empty-icon" src="/images/icons/recorded.png" />
-      <text class="empty-text">暂无打卡记录</text>
-      <text class="empty-subtext">开始静坐打卡，记录你的修行历程</text>
+    <view class="flex-col justify-start items-start self-end text-wrapper_2">
+      <text class="font_3 text_12">深度冥想，感觉时间过得很快。</text>
     </view>
-  </scroll-view>
+  </view>
 </view>

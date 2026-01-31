@@ -1,94 +1,157 @@
 // pages/history/history.js
 const checkinManager = require('../../utils/checkin.js');
+const lunarUtil = require('../../utils/lunar.js');
 
 Page({
   data: {
-    historyList: [], // 历史记录列表
-    totalDays: 0,    // 总打卡天数
-    totalCount: 0,   // 总打卡次数
-    currentStreak: 0, // 当前连续天数
-    longestStreak: 0, // 最长连续天数
-    monthlyCount: 0  // 本月打卡次数
+    selectedDate: '', // 选择的日期
+    recordList: [],   // 打卡记录列表
+    recordCount: 0,   // 打卡次数
+    year: '',         // 年
+    month: '',        // 月
+    day: '',          // 日
+    lunarDate: ''     // 农历日期
   },
 
-  // 页面加载
+  /**
+   * 生命周期函数--监听页面加载
+   */
   onLoad(options) {
-    this.loadHistoryData();
-  },
-
-  // 页面显示
-  onShow() {
-    this.loadHistoryData();
-  },
-
-  // 加载历史数据
-  loadHistoryData() {
-    // 获取用户统计信息
-    const userStats = checkinManager.getUserStats();
+    // 从URL参数获取日期
+    const date = options.date || '';
     
-    // 获取所有已打卡的日期
-    const checkedDates = checkinManager.getAllCheckedDates();
-    
-    // 组织历史记录数据
-    const historyList = [];
-    
-    checkedDates.sort((a, b) => b.localeCompare(a)).forEach(dateStr => {
-      const records = checkinManager.getDailyCheckinRecords(dateStr);
+    if (date) {
+      // 解析日期参数，分别设置年、月、日
+      const [year, month, day] = date.split('-');
+      const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
       
-      if (records.length > 0) {
-        const formattedRecords = records.map(record => {
-          // 格式化时间
-          const time = new Date(record.timestamp);
-          const timeStr = `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
-          
-          // 创建星星数据
-          const stars = Array.from({ length: 5 }, (_, i) => ({
-            active: i < (record.rating || 0)
-          }));
-          
-          return {
-            time: timeStr,
-            duration: record.duration,
-            rating: record.rating || 0,
-            stars: stars,
-            textCount: record.textCount || 0,
-            textPreview: record.textPreview || ''
-          };
-        });
-        
-        historyList.push({
-          date: dateStr,
-          count: records.length,
-          records: formattedRecords
-        });
-      }
-    });
-
-    // 计算本月打卡次数
-    const today = new Date();
-    const monthStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}`;
-    const monthlyCount = checkinManager.getMonthlyCheckinCount(monthStr);
-
-    this.setData({
-      historyList: historyList,
-      totalDays: userStats.totalDays,
-      totalCount: userStats.totalCount,
-      currentStreak: userStats.currentStreak,
-      longestStreak: userStats.longestStreak,
-      monthlyCount: monthlyCount
-    });
+      // 计算农历日期
+      const solarDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      const lunarDate = lunarUtil.getLunarDate(solarDate);
+      
+      // 格式化日期显示：YYYY-MM-DD → YYYY年MM月DD日
+      const formattedDate = this.formatDateForDisplay(date);
+      this.setData({
+        selectedDate: formattedDate,
+        year: year,
+        month: monthNames[parseInt(month) - 1],
+        day: day,
+        lunarDate: lunarDate
+      });
+      
+      // 加载该日期的打卡记录
+      this.loadHistoryRecords(date);
+    } else {
+      // 如果没有日期参数，默认显示今天
+      const today = new Date().toISOString().split('T')[0];
+      const [year, month, day] = today.split('-');
+      const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+      const solarDate = new Date();
+      const lunarDate = lunarUtil.getLunarDate(solarDate);
+      const formattedToday = this.formatDateForDisplay(today);
+      this.setData({
+        selectedDate: formattedToday,
+        year: year,
+        month: monthNames[parseInt(month) - 1],
+        day: day,
+        lunarDate: lunarDate
+      });
+      this.loadHistoryRecords(today);
+    }
   },
 
-  // 返回上一页
+  /**
+   * 加载历史记录数据
+   */
+  loadHistoryRecords(dateStr) {
+    try {
+      // 使用checkinManager获取该日期的打卡记录
+      const dailyRecords = checkinManager.getDailyCheckinRecords(dateStr);
+      
+      if (!dailyRecords || dailyRecords.length === 0) {
+        console.warn('该日期暂无打卡记录');
+        this.setData({
+          recordList: [],
+          recordCount: 0
+        });
+        return;
+      }
+
+      // 格式化记录数据
+      const formattedRecords = dailyRecords.map((record, index) => {
+        // 格式化时间
+        const time = new Date(record.timestamp);
+        const timeStr = `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+        
+        // 创建星星数据
+        const stars = Array.from({ length: 5 }, (_, i) => ({
+          active: i < (record.rating || 0)
+        }));
+        
+        // 获取文本记录
+        let textRecords = [];
+        if (record.textRecords && Array.isArray(record.textRecords)) {
+          textRecords = record.textRecords.map(text => text.content || text);
+        }
+        
+        return {
+          time: timeStr,
+          duration: record.duration || 0,
+          rating: record.rating || 0,
+          stars: stars,
+          textCount: textRecords.length,
+          textRecords: textRecords
+        };
+      });
+
+      this.setData({
+        recordList: formattedRecords,
+        recordCount: formattedRecords.length
+      });
+
+      console.log(`加载 ${dateStr} 的打卡记录成功，共 ${formattedRecords.length} 条记录`);
+      
+    } catch (error) {
+      console.error('加载历史记录失败:', error);
+      this.setData({
+        recordList: [],
+        recordCount: 0
+      });
+    }
+  },
+
+  /**
+   * 格式化日期显示
+   */
+  formatDateForDisplay(dateStr) {
+    const [year, month, day] = dateStr.split('-');
+    return `${year}年${month}月${day}日`;
+  },
+
+  /**
+   * 返回上一页
+   */
   goBack() {
     wx.navigateBack();
   },
 
-  // 用户点击右上角分享
+  /**
+   * 生命周期函数--监听页面显示
+   */
+  onShow() {
+    // 页面显示时重新加载数据，确保数据最新
+    if (this.data.selectedDate) {
+      this.loadHistoryRecords(this.data.selectedDate);
+    }
+  },
+
+  /**
+   * 用户点击右上角分享
+   */
   onShareAppMessage() {
     return {
-      title: '我的静坐打卡记录',
-      path: '/pages/history/history'
+      title: `${this.data.selectedDate} 的静坐打卡记录`,
+      path: `/pages/history/history?date=${this.data.selectedDate}`
     };
   }
 });

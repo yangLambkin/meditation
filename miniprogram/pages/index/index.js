@@ -228,8 +228,22 @@ Page({
   selectDate: function(e) {
     const date = e.currentTarget.dataset.date;
     if (date) {
-      // 这里可以添加点击日期的处理逻辑
       console.log('选择日期:', date);
+      
+      // 检查日期是否已打卡
+      if (this.isDateChecked(date)) {
+        // 已打卡日期，跳转到历史记录页面
+        wx.navigateTo({
+          url: `/pages/history/history?date=${date}`
+        });
+      } else {
+        // 未打卡日期，显示提示
+        wx.showToast({
+          title: '该日期尚未打卡',
+          icon: 'none',
+          duration: 1500
+        });
+      }
     }
   },
 
