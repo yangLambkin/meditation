@@ -7,6 +7,7 @@ Page({
     selectedDate: '', // 选择的日期
     recordList: [],   // 打卡记录列表
     recordCount: 0,   // 打卡次数
+    totalDuration: 0, // 合计时长（分钟）
     year: '',         // 年
     month: '',        // 月
     day: '',          // 日
@@ -65,57 +66,76 @@ Page({
    */
   loadHistoryRecords(dateStr) {
     try {
-      // 使用checkinManager获取该日期的打卡记录
+      // 获取该日期的打卡次数
+      const checkinCount = checkinManager.getDailyCheckinCount(dateStr);
+      
+      // 获取该日期的详细打卡记录
       const dailyRecords = checkinManager.getDailyCheckinRecords(dateStr);
       
-      if (!dailyRecords || dailyRecords.length === 0) {
+      if (checkinCount === 0) {
         console.warn('该日期暂无打卡记录');
         this.setData({
           recordList: [],
-          recordCount: 0
+          recordCount: 0,
+          totalDuration: 0
         });
         return;
       }
 
       // 格式化记录数据
-      const formattedRecords = dailyRecords.map((record, index) => {
-        // 格式化时间
-        const time = new Date(record.timestamp);
-        const timeStr = `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+      let formattedRecords = [];
+      let totalDuration = 0;
+      
+      if (dailyRecords && dailyRecords.length > 0) {
+        formattedRecords = dailyRecords.map((record, index) => {
+          // 格式化时间
+          const time = new Date(record.timestamp);
+          const timeStr = `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+          
+          // 创建星星数据
+          const stars = Array.from({ length: 5 }, (_, i) => ({
+            active: i < (record.rating || 0)
+          }));
+          
+          // 获取文本记录
+          let textRecords = [];
+          if (record.textRecords && Array.isArray(record.textRecords)) {
+            textRecords = record.textRecords.map(text => text.content || text);
+          }
+          
+          return {
+            time: timeStr,
+            duration: record.duration || 0,
+            rating: record.rating || 0,
+            stars: stars,
+            textCount: textRecords.length,
+            textRecords: textRecords
+          };
+        });
         
-        // 创建星星数据
-        const stars = Array.from({ length: 5 }, (_, i) => ({
-          active: i < (record.rating || 0)
-        }));
-        
-        // 获取文本记录
-        let textRecords = [];
-        if (record.textRecords && Array.isArray(record.textRecords)) {
-          textRecords = record.textRecords.map(text => text.content || text);
-        }
-        
-        return {
-          time: timeStr,
-          duration: record.duration || 0,
-          rating: record.rating || 0,
-          stars: stars,
-          textCount: textRecords.length,
-          textRecords: textRecords
-        };
-      });
+        // 计算合计时长
+        totalDuration = formattedRecords.reduce((total, record) => {
+          return total + (record.duration || 0);
+        }, 0);
+      } else {
+        // 如果有打卡次数但没有详细记录，设置默认值
+        totalDuration = 0; // 如果没有详细记录，时长设为0
+      }
 
       this.setData({
         recordList: formattedRecords,
-        recordCount: formattedRecords.length
+        recordCount: checkinCount, // 使用打卡次数作为记录数
+        totalDuration: totalDuration
       });
 
-      console.log(`加载 ${dateStr} 的打卡记录成功，共 ${formattedRecords.length} 条记录`);
+      console.log(`加载 ${dateStr} 的打卡记录成功，打卡次数: ${checkinCount}, 合计时长: ${totalDuration}分钟`);
       
     } catch (error) {
       console.error('加载历史记录失败:', error);
       this.setData({
         recordList: [],
-        recordCount: 0
+        recordCount: 0,
+        totalDuration: 0
       });
     }
   },
