@@ -1,5 +1,5 @@
 {
-  "name": "getBgImages",
+  "name": "getBackgroundImages",
   "version": "1.0.0",
   "description": "获取背景图片列表",
   "main": "index.js",

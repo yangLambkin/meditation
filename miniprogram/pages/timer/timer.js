@@ -225,6 +225,13 @@ Page({
     
     this.updateDisplay();
     
+    // 检查是否需要在结束前10秒恢复亮度
+    if (elapsed >= (this.data.totalTime - 10) && this.isBrightnessReduced) {
+      console.log('💡 计时即将结束（还剩10秒），自动恢复亮度');
+      this.restoreBrightness();
+      this.isBrightnessReduced = false;
+    }
+    
     // 检查是否完成
     if (elapsed >= this.data.totalTime) {
       this.handleTimerFinished();

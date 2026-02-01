@@ -1,5 +1,6 @@
 const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
+const simpleBackgroundManager = require('../../utils/simpleBackgroundManager.js');
 
 Page({
   data: {
@@ -32,20 +33,33 @@ Page({
   },
 
   /**
-   * 设置背景图片
+   * 设置背景图片（使用随机云端图片）
    */
-  setBackgroundImage: function() {
-    // 使用本地images文件夹下的bg1.jpeg文件
-    const localImagePath = '/images/bg1.jpeg';
-    
-    console.log('设置背景图片:', localImagePath);
-    
-    // 直接设置本地图片路径
-    this.setData({
-      backgroundImage: localImagePath
-    });
-    
-    console.log('背景图片设置成功');
+  setBackgroundImage: async function() {
+    try {
+      console.log('🔄 开始设置背景图片...');
+      
+      // 使用简化版背景图片管理器获取随机图片
+      const backgroundImage = await simpleBackgroundManager.getRandomBackground();
+      
+      console.log('✅ 背景图片获取成功:', backgroundImage);
+      
+      // 设置背景图片
+      this.setData({
+        backgroundImage: backgroundImage
+      });
+      
+      console.log('🎉 背景图片设置成功');
+      
+    } catch (error) {
+      console.error('❌ 设置背景图片失败:', error);
+      
+      // 降级处理：使用默认图片
+      this.setData({
+        backgroundImage: '/images/bg1.jpeg'
+      });
+      console.log('🔄 使用默认背景图片作为降级处理');
+    }
   },
 
   /**
@@ -321,8 +335,14 @@ Page({
     const width = 750;
     const height = 1334;
     
-    // 1. 绘制背景图片（全屏）
-    ctx.drawImage('/images/bg1.jpeg', 0, 0, width, height);
+    // 1. 绘制背景图片（全屏）- 使用当前页面的背景图片
+    // 如果当前背景图片是云端图片，绘制时需要处理跨域问题
+    // 这里使用默认图片作为降级处理
+    const bgImage = this.data.backgroundImage.startsWith('cloud://') 
+      ? '/images/bg1.jpeg' 
+      : this.data.backgroundImage;
+    
+    ctx.drawImage(bgImage, 0, 0, width, height);
     
     // 2. 绘制简单布局（避免复杂的布局计算）
     this.drawSimpleLayout(ctx, width, height);

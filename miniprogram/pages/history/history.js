@@ -103,16 +103,30 @@ Page({
         if (experienceIds.length > 0) {
           // 去重
           const uniqueIds = [...new Set(experienceIds)];
+          console.log(`开始查询体验记录，共 ${uniqueIds.length} 个唯一ID:`, uniqueIds);
           
-          // 批量查询体验记录
-          const db = wx.cloud.database();
-          const { data: experienceRecords } = await db.collection('experience_records')
-            .where({
-              _id: db.command.in(uniqueIds)
-            })
-            .get();
+          // 改进：直接使用逐个查询，确保每个ID都能正确处理
+          const experienceRecords = [];
           
-          console.log(`体验记录查询结果: ${JSON.stringify(experienceRecords)}`);
+          for (const expId of uniqueIds) {
+            try {
+              const db = wx.cloud.database();
+              const { data: singleRecord } = await db.collection('experience_records')
+                .doc(expId)
+                .get();
+              
+              if (singleRecord) {
+                experienceRecords.push(singleRecord);
+                console.log(`✅ 体验记录查询成功: ${expId}`);
+              } else {
+                console.warn(`⚠️ 体验记录不存在: ${expId}`);
+              }
+            } catch (singleError) {
+              console.warn(`❌ 体验记录查询失败: ${expId}`, singleError);
+            }
+          }
+          
+          console.log(`体验记录查询完成，共 ${experienceRecords.length} 条有效记录`);
           
           // 构建体验记录映射
           experienceRecords.forEach(exp => {

@@ -330,18 +330,41 @@ Page({
       const result = await checkinManager.deleteExperienceRecord(recordId, dateStr);
       
       if (result.success) {
-        // 删除成功后，更新本地存储的完整记录
+        // 删除成功后，完整清理所有相关的本地存储数据
+        
+        // 1. 清理体验记录文本
         const allRecords = wx.getStorageSync('meditationTextRecords') || [];
         const updatedAllRecords = allRecords.filter(r => {
-          // 使用uniqueId或时间戳匹配记录
           const rId = r.uniqueId || new Date(r.timestamp).getTime().toString();
           return rId !== recordId;
         });
-        
-        // 保存更新后的完整记录
         this.saveRecordsToStorage(updatedAllRecords);
         
-        console.log('✅ 同步删除成功');
+        // 2. 清理体验记录ID映射
+        const experienceRecordIds = wx.getStorageSync('experienceRecordIds') || {};
+        if (experienceRecordIds[record.uniqueId]) {
+          delete experienceRecordIds[record.uniqueId];
+          wx.setStorageSync('experienceRecordIds', experienceRecordIds);
+          console.log(`🗑️ 清理体验记录ID映射: ${record.uniqueId}`);
+        }
+        
+        // 3. 清理用户记录中的关联信息
+        const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+        if (allUserRecords[this.data.userOpenId]) {
+          const userRecords = allUserRecords[this.data.userOpenId];
+          if (userRecords.dailyRecords && userRecords.dailyRecords[dateStr]) {
+            // 更新文本记录数量
+            const todayRecord = userRecords.dailyRecords[dateStr];
+            if (todayRecord.textRecords && todayRecord.textRecords > 0) {
+              todayRecord.textRecords = Math.max(0, todayRecord.textRecords - 1);
+              allUserRecords[this.data.userOpenId] = userRecords;
+              wx.setStorageSync('meditationUserRecords', allUserRecords);
+              console.log(`📊 更新用户记录文本数量: ${todayRecord.textRecords}`);
+            }
+          }
+        }
+        
+        console.log('✅ 同步删除成功，所有本地存储数据已清理');
         return {
           success: true,
           message: '删除成功'

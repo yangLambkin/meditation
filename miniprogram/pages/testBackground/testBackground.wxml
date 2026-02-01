@@ -1,0 +1,41 @@
+<view class="container">
+  <view class="header">
+    <text class="title">背景图片功能测试</text>
+  </view>
+
+  <view class="section">
+    <view class="section-title">当前图片</view>
+    <view class="image-preview">
+      <image src="{{currentImage}}" mode="aspectFit" class="preview-image" />
+      <text class="image-url">{{currentImage}}</text>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">缓存状态</view>
+    <view class="cache-info">
+      <text>是否有缓存: {{cacheStatus.hasCache ? '是' : '否'}}</text>
+      <text>缓存时间: {{cacheStatus.timestamp}}</text>
+      <text>缓存图片: {{cacheStatus.imageUrl}}</text>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">操作面板</view>
+    <view class="actions">
+      <button type="primary" bindtap="getNewRandomImage" disabled="{{loading}}" class="action-btn">
+        {{loading ? '加载中...' : '获取新随机图片'}}
+      </button>
+      <button bindtap="refreshCache" class="action-btn">手动刷新缓存</button>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">测试日志</view>
+    <scroll-view scroll-y class="log-container">
+      <view class="log-item" wx:for="{{testResults}}" wx:key="index">
+        <text class="log-text">{{item}}</text>
+      </view>
+    </scroll-view>
+  </view>
+</view>
