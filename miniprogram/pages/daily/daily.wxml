@@ -38,12 +38,12 @@
       <view class="mt-100 flex-row equal-division group_7">
         <view class="flex-col items-center equal-division-item">
           <text class="font_3 text_8">{{totalCount}} 次</text>
-          <text class="font_4 text_9 mt-11">累计打卡</text>
+          <text class="font_4 text_9 mt-11">今日累计打卡</text>
         </view>
         <view class="horiz-divider section_5"></view>
         <view class="flex-col items-center equal-division-item">
           <text class="minutes-display">{{totalMinutes}}分钟</text>
-          <text class="font_4 text_9 mt-11">静坐时长</text>
+          <text class="font_4 text_9 mt-11">本次觉察时长</text>
         </view>
       </view>
     </view>

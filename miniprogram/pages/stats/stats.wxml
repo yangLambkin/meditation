@@ -1,0 +1,137 @@
+<view class="stats-container">
+  <!-- 顶部统计卡片 -->
+  <view class="stats-header">
+    <view class="stats-card">
+      <view class="stats-title">个人统计</view>
+      <view class="stats-grid">
+        <view class="stat-item">
+          <view class="stat-value">{{userStats.totalCount || 0}}</view>
+          <view class="stat-label">打卡次数</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-value">{{userStats.totalDays || 0}}</view>
+          <view class="stat-label">打卡天数</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-value">{{userStats.totalDuration || 0}}分钟</view>
+          <view class="stat-label">总时长</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-value">{{userStats.currentStreak || 0}}天</view>
+          <view class="stat-label">连续打卡</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 排行榜选项卡 -->
+  <view class="tabs">
+    <view 
+      class="tab {{currentTab === 'daily' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="daily"
+    >
+      日榜
+    </view>
+    <view 
+      class="tab {{currentTab === 'monthly' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="monthly"
+    >
+      月榜
+    </view>
+    <view 
+      class="tab {{currentTab === 'total' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="total"
+    >
+      总榜
+    </view>
+  </view>
+
+  <!-- 排行榜内容 -->
+  <view class="ranking-content">
+    <view class="ranking-list" wx:if="{{currentTab === 'daily' && dailyRankings.length > 0}}">
+      <view class="ranking-header">
+        <text>今日排行榜</text>
+        <text>{{currentDate}}</text>
+      </view>
+      <view class="ranking-items">
+        <view class="ranking-item" wx:for="{{dailyRankings}}" wx:key="index">
+          <view class="rank-number">{{item.rank}}</view>
+          <view class="user-avatar">
+            <image src="{{item.avatar || '/images/avatar.png'}}" mode="aspectFill"></image>
+          </view>
+          <view class="user-info">
+            <view class="user-name">{{item.userInfo?.nickname || '匿名用户'}}</view>
+            <view class="user-stats">
+              <text>{{item.duration}}分钟</text>
+              <text>·</text>
+              <text>{{item.count}}次打卡</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="ranking-list" wx:if="{{currentTab === 'monthly' && monthlyRankings.length > 0}}">
+      <view class="ranking-header">
+        <text>本月排行榜</text>
+        <text>{{currentMonth}}</text>
+      </view>
+      <view class="ranking-items">
+        <view class="ranking-item" wx:for="{{monthlyRankings}}" wx:key="index">
+          <view class="rank-number">{{item.rank}}</view>
+          <view class="user-avatar">
+            <image src="{{item.avatar || '/images/avatar.png'}}" mode="aspectFill"></image>
+          </view>
+          <view class="user-info">
+            <view class="user-name">{{item.userInfo?.nickname || '匿名用户'}}</view>
+            <view class="user-stats">
+              <text>{{item.duration}}分钟</text>
+              <text>·</text>
+              <text>{{item.count}}次打卡</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="ranking-list" wx:if="{{currentTab === 'total' && totalRankings.length > 0}}">
+      <view class="ranking-header">
+        <text>总排行榜</text>
+        <text>累计统计</text>
+      </view>
+      <view class="ranking-items">
+        <view class="ranking-item" wx:for="{{totalRankings}}" wx:key="index">
+          <view class="rank-number">{{item.rank}}</view>
+          <view class="user-avatar">
+            <image src="{{item.avatar || '/images/avatar.png'}}" mode="aspectFill"></image>
+          </view>
+          <view class="user-info">
+            <view class="user-name">{{item.userInfo?.nickname || '匿名用户'}}</view>
+            <view class="user-stats">
+              <text>{{item.duration}}分钟</text>
+              <text>·</text>
+              <text>{{item.count}}次打卡</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 空状态 -->
+    <view class="empty-state" wx:if="{{(currentTab === 'daily' && dailyRankings.length === 0) ||
+                                     (currentTab === 'monthly' && monthlyRankings.length === 0) ||
+                                     (currentTab === 'total' && totalRankings.length === 0)}}">
+      <image src="/images/empty.png" class="empty-image"></image>
+      <text class="empty-text">暂无排行榜数据</text>
+      <text class="empty-desc">快来打卡参与排名吧！</text>
+    </view>
+  </view>
+
+  <!-- 加载状态 -->
+  <view class="loading" wx:if="{{loading}}">
+    <text>加载中...</text>
+  </view>
+</view>

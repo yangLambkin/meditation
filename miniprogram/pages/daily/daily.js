@@ -1,4 +1,5 @@
 const lunarUtil = require('../../utils/lunar.js');
+const checkinManager = require('../../utils/checkin.js');
 
 Page({
   data: {
@@ -161,76 +162,52 @@ Page({
   },
 
   /**
-   * 计算用户统计数据
+   * 计算用户统计数据（使用云存储）
    */
-  calculateUserStats: function() {
-    const userOpenId = wx.getStorageSync('localUserId');
-    console.log('用户ID:', userOpenId);
-    if (!userOpenId) {
-      console.log('未找到用户ID，显示默认时长15分钟');
-      // 显示默认的本次打卡时长
-      this.setData({
-        totalMinutes: 15
-      });
-      return;
-    }
-
-    // 获取用户的所有打卡记录
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    console.log('所有用户记录:', Object.keys(allUserRecords));
-    const userRecords = allUserRecords[userOpenId];
-    console.log('当前用户记录:', userRecords);
-
-    if (!userRecords || !userRecords.dailyRecords) {
-      console.log('未找到用户记录或记录结构不正确，显示默认时长15分钟');
-      // 显示默认的本次打卡时长
-      this.setData({
-        totalMinutes: 15
-      });
-      return;
-    }
-
-    // 计算总打卡次数
-    const totalCount = Object.keys(userRecords.dailyRecords).length;
-    
-    // 计算本次打卡的静坐时长（当天最后一次打卡的时长）
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
-    let currentMinutes = 0;
-    const todayRecord = userRecords.dailyRecords[todayStr];
-    
-    if (todayRecord && todayRecord.durations && todayRecord.durations.length > 0) {
-      // 取当天最后一次打卡的时长
-      currentMinutes = parseInt(todayRecord.durations[todayRecord.durations.length - 1]) || 0;
-    }
-    
-    // 计算用户等级（基于累计总分钟数）
-    let totalMinutes = 0;
-    Object.values(userRecords.dailyRecords).forEach(record => {
-      if (record.durations) {
-        record.durations.forEach(duration => {
-          totalMinutes += parseInt(duration) || 0;
-        });
+  calculateUserStats: async function() {
+    try {
+      // 使用云存储获取用户统计信息
+      const stats = await checkinManager.getUserStats();
+      
+      // 获取今天的打卡记录
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const todayRecords = await checkinManager.getDailyCheckinRecords(todayStr);
+      
+      // 计算本次打卡的静坐时长（当天最后一次打卡的时长）
+      let currentMinutes = 0;
+      if (todayRecords && todayRecords.length > 0) {
+        // 取当天最后一次打卡的时长
+        currentMinutes = todayRecords[todayRecords.length - 1].duration || 0;
       }
-    });
-    
-    const userLevel = this.calculateUserLevel(totalMinutes);
+      
+      // 计算用户等级（基于累计总分钟数）
+      const userLevel = this.calculateUserLevel(stats.totalDuration || 0);
 
-    // 如果当天没有打卡记录，显示一个默认的本次打卡时长（测试用）
-    const displayMinutes = currentMinutes > 0 ? currentMinutes : 15;
-    
-    this.setData({
-      totalMinutes: displayMinutes, // 显示本次打卡时长
-      totalCount: totalCount,
-      userLevel: userLevel
-    }, () => {
-      // 数据设置完成后的回调，验证数据绑定
-      console.log('本次打卡时长:', currentMinutes + '分钟');
-      console.log('实际设置的totalMinutes:', displayMinutes);
-      console.log('formatTime函数返回值:', this.formatTime(displayMinutes));
-      console.log('页面数据totalMinutes:', this.data.totalMinutes);
-    });
+      // 如果当天没有打卡记录，显示一个默认的本次打卡时长（测试用）
+      const displayMinutes = currentMinutes > 0 ? currentMinutes : 15;
+      
+      this.setData({
+        totalMinutes: displayMinutes, // 显示本次打卡时长
+        totalCount: stats.totalCount || 0,
+        userLevel: userLevel
+      }, () => {
+        // 数据设置完成后的回调，验证数据绑定
+        console.log('用户统计信息:', stats);
+        console.log('本次打卡时长:', currentMinutes + '分钟');
+        console.log('实际设置的totalMinutes:', displayMinutes);
+        console.log('页面数据totalMinutes:', this.data.totalMinutes);
+      });
+      
+    } catch (error) {
+      console.error('获取用户统计数据失败:', error);
+      // 降级处理：显示默认值
+      this.setData({
+        totalMinutes: 15,
+        totalCount: 0,
+        userLevel: 'Lv.1 新手上路'
+      });
+    }
   },
 
   /**

@@ -1,3 +1,7 @@
+// 引入云存储API
+const checkinManager = require('../../utils/checkin.js');
+const cloudApi = require('../../utils/cloudApi.js');
+
 Page({
   data: {
     stars: [
@@ -14,7 +18,8 @@ Page({
     currentTextLength: 0,
     savedRecords: [],
     userOpenId: '',
-    duration: '7'
+    duration: '7',
+    sessionId: '' // 本次会话的唯一标识
   },
 
   onLoad(options) {
@@ -29,9 +34,17 @@ Page({
     
     // 获取用户openId
     this.getUserOpenId();
-    
-    // 加载已保存的记录
-    this.loadSavedRecords();
+  },
+  
+  onShow() {
+    // 页面显示时，初始化记录显示，清空之前会话的记录
+    console.log('📱 recorder页面显示，初始化记录显示...');
+    const sessionId = Date.now().toString();
+    this.setData({
+      savedRecords: [],
+      sessionId: sessionId
+    });
+    console.log('🎯 本次会话ID:', sessionId);
   },
 
   // 选择评分
@@ -109,56 +122,126 @@ Page({
   },
 
   // 保存当前记录
-  saveCurrentRecord: function() {
-    if (this.data.currentText.trim() === '') {
-      wx.showToast({
-        title: '请输入内容',
-        icon: 'none',
-        duration: 2000
-      });
-      return;
-    }
+  async saveCurrentRecord() {
+    // 允许用户不填写体验内容也能保存打卡记录，无需二次确认
+    const experienceText = this.data.currentText.trim();
 
-    // 生成时间戳 YYYY-MM-DD HH:MM:SS
+    // 生成时间戳（使用兼容格式：YYYY-MM-DDTHH:MM:SS）
     const now = new Date();
-    const timestamp = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    const timestamp = now.toISOString().replace('T', ' ').substring(0, 19); // YYYY-MM-DD HH:MM:SS
 
-    // 创建新记录
+    // 创建新记录（包含唯一时间戳和会话标识）
+    const nowTime = now.getTime();
     const newRecord = {
-      text: this.data.currentText.trim(),
+      text: experienceText,
       timestamp: timestamp,
       rating: this.data.selectedRating,
-      duration: this.data.durationText || '7分钟'
+      duration: this.data.durationText || '7分钟',
+      // 添加唯一标识用于后续删除
+      uniqueId: nowTime.toString(),
+      // 标记本次会话，确保打卡时只关联本次会话的记录
+      sessionId: this.data.sessionId
     };
 
-    // 添加到记录列表（新记录显示在最前面）
-    const updatedRecords = [newRecord, ...this.data.savedRecords];
+    // 只添加当前记录到显示列表（不加载历史记录）
+    const updatedSavedRecords = [newRecord, ...this.data.savedRecords];
+    
+    console.log('🔄 更新页面显示:', {
+      currentRecordsCount: updatedSavedRecords.length,
+      records: updatedSavedRecords.map(r => ({ text: r.text, timestamp: r.timestamp }))
+    });
     
     this.setData({
-      savedRecords: updatedRecords,
+      savedRecords: updatedSavedRecords,
       currentText: '',
       currentTextLength: 0
     });
 
-    // 保存到本地存储
-    this.saveRecordsToStorage(updatedRecords);
-
-    wx.showToast({
-      title: '保存成功',
-      icon: 'success',
-      duration: 2000
+    // 保存记录到云端和本地关联ID存储（用于打卡时关联）
+    const allRecords = wx.getStorageSync('meditationTextRecords') || [];
+    const updatedAllRecords = [newRecord, ...allRecords];
+    this.saveRecordsToStorage(updatedAllRecords);
+    
+    // 调试：验证保存后是否能正确加载
+    console.log('💾 保存记录后验证:', {
+      savedCount: updatedAllRecords.length,
+      newRecord: newRecord,
+      currentRecordsCount: updatedSavedRecords.length
     });
+
+    try {
+      // 只保存体验记录到本地和云端（不关联打卡记录）
+      const saveResult = await this.saveExperienceRecord(newRecord);
+      
+      if (saveResult.success) {
+        console.log('✅ 体验记录保存成功:', saveResult);
+        
+        // 保存体验记录的云端ID到本地，用于后续打卡时关联
+        if (saveResult.data && saveResult.data.recordId) {
+          const localRecords = wx.getStorageSync('experienceRecordIds') || {};
+          localRecords[newRecord.uniqueId] = saveResult.data.recordId;
+          wx.setStorageSync('experienceRecordIds', localRecords);
+          console.log('💾 保存体验记录关联ID:', newRecord.uniqueId, '->', saveResult.data.recordId);
+        }
+        
+        wx.showToast({
+          title: '保存成功',
+          icon: 'success',
+          duration: 2000
+        });
+      } else {
+        console.warn('⚠️ 体验记录保存失败:', saveResult.error);
+        wx.showToast({
+          title: '保存失败',
+          icon: 'error',
+          duration: 2000
+        });
+      }
+    } catch (error) {
+      console.error('❌ 保存过程出错:', error);
+      wx.showToast({
+        title: '保存异常',
+        icon: 'error',
+        duration: 2000
+      });
+    }
   },
 
-  // 加载已保存的记录
+  // 加载已保存的记录（仅显示当天记录）
   loadSavedRecords: function() {
     try {
-      const records = wx.getStorageSync('meditationTextRecords') || [];
-      this.setData({
-        savedRecords: records
+      const allRecords = wx.getStorageSync('meditationTextRecords') || [];
+      
+      // 获取当天日期（YYYY-MM-DD格式）
+      const today = new Date();
+      const todayDate = today.toISOString().split('T')[0];
+      
+      console.log('🔍 加载记录调试:', {
+        totalRecords: allRecords.length,
+        todayDate: todayDate,
+        allRecords: allRecords.map(r => ({ 
+          timestamp: r.timestamp, 
+          date: r.timestamp.split(' ')[0] 
+        }))
       });
+      
+      // 过滤出当天的记录
+      const todayRecords = allRecords.filter(record => {
+        // 从时间戳中提取日期部分
+        const recordDate = record.timestamp.split(' ')[0];
+        const isToday = recordDate === todayDate;
+        console.log(`记录过滤: ${record.timestamp} -> ${recordDate} === ${todayDate} ? ${isToday}`);
+        return isToday;
+      });
+      
+      this.setData({
+        savedRecords: todayRecords
+      });
+      
+      console.log(`✅ 加载当天(${todayDate})记录: ${todayRecords.length}条`);
+      
     } catch (error) {
-      console.error('加载记录失败:', error);
+      console.error('❌ 加载记录失败:', error);
     }
   },
 
@@ -166,8 +249,9 @@ Page({
   saveRecordsToStorage: function(records) {
     try {
       wx.setStorageSync('meditationTextRecords', records);
+      console.log('💾 本地存储保存成功，记录数:', records.length);
     } catch (error) {
-      console.error('保存记录失败:', error);
+      console.error('❌ 保存记录失败:', error);
       wx.showToast({
         title: '保存失败',
         icon: 'error',
@@ -176,42 +260,144 @@ Page({
     }
   },
 
-  // 删除记录
-  deleteRecord: function(e) {
+  // 删除记录（同步云存储和本地存储，无需确认）
+  async deleteRecord(e) {
     const index = e.currentTarget.dataset.index;
+    const record = this.data.savedRecords[index];
     
-    wx.showModal({
-      title: '确认删除',
-      content: '确定要删除这条记录吗？',
-      confirmText: '删除',
-      confirmColor: '#ff4d4f',
-      cancelText: '取消',
-      success: (res) => {
-        if (res.confirm) {
-          // 删除记录
-          const records = [...this.data.savedRecords];
-          records.splice(index, 1);
-          
-          this.setData({
-            savedRecords: records
-          });
-          
-          // 保存到本地存储
-          this.saveRecordsToStorage(records);
-          
-          wx.showToast({
-            title: '删除成功',
-            icon: 'success',
-            duration: 2000
-          });
-        }
+    try {
+      // 删除本地显示记录
+      const records = [...this.data.savedRecords];
+      const deletedRecord = records.splice(index, 1)[0];
+      
+      this.setData({
+        savedRecords: records
+      });
+      
+      // 同步删除云存储和本地存储的记录
+      const deleteResult = await this.syncDeleteRecord(deletedRecord);
+      
+      if (deleteResult.success) {
+        wx.showToast({
+          title: '删除成功',
+          icon: 'success',
+          duration: 2000
+        });
+      } else {
+        wx.showToast({
+          title: '删除失败',
+          icon: 'error',
+          duration: 2000
+        });
       }
-    });
+    } catch (error) {
+      console.error('删除记录过程中出错:', error);
+      wx.showToast({
+        title: '删除异常',
+        icon: 'error',
+        duration: 2000
+      });
+    }
+  },
+
+  // 同步删除云存储和本地存储的记录
+  async syncDeleteRecord(record) {
+    console.log('开始同步删除记录:', record);
+    
+    // 获取日期
+    const dateStr = record.timestamp.split(' ')[0];
+    
+    // 使用uniqueId或时间戳作为唯一标识
+    const recordId = record.uniqueId || new Date(record.timestamp).getTime().toString();
+    
+    try {
+      // 调用checkinManager的体验记录删除功能
+      const result = await checkinManager.deleteExperienceRecord(recordId, dateStr);
+      
+      if (result.success) {
+        // 删除成功后，更新本地存储的完整记录
+        const allRecords = wx.getStorageSync('meditationTextRecords') || [];
+        const updatedAllRecords = allRecords.filter(r => {
+          // 使用uniqueId或时间戳匹配记录
+          const rId = r.uniqueId || new Date(r.timestamp).getTime().toString();
+          return rId !== recordId;
+        });
+        
+        // 保存更新后的完整记录
+        this.saveRecordsToStorage(updatedAllRecords);
+        
+        console.log('✅ 同步删除成功');
+        return {
+          success: true,
+          message: '删除成功'
+        };
+      } else {
+        console.error('❌ 删除失败:', result.error);
+        return {
+          success: false,
+          error: result.error
+        };
+      }
+    } catch (error) {
+      console.error('❌ 删除过程中出错:', error);
+      return {
+        success: false,
+        error: '删除过程异常'
+      };
+    }
+  },
+
+  // 保存体验记录到云端（不记录打卡）
+  async saveExperienceRecord(record) {
+    console.log('开始保存体验记录到云端:', record);
+    
+    try {
+      // 调用云函数保存体验记录
+      const result = await cloudApi.saveExperienceRecord(record);
+      
+      if (result.success) {
+        console.log('✅ 体验记录云端保存成功:', result);
+        return {
+          success: true,
+          message: '体验记录保存成功',
+          data: result.data
+        };
+      } else {
+        console.warn('⚠️ 体验记录云端保存失败，仅保存到本地:', result.error);
+        // 云存储失败，仍然返回成功，因为本地已保存
+        return {
+          success: true,
+          message: '体验记录本地保存成功'
+        };
+      }
+      
+    } catch (error) {
+      console.error('保存体验记录失败:', error);
+      // 异常情况下，仍然返回成功，因为本地已保存
+      return {
+        success: true,
+        message: '体验记录本地保存成功'
+      };
+    }
   },
 
   // 获取用户openId
   getUserOpenId: function() {
-    // 使用本地生成的唯一ID作为用户标识
+    // 先尝试获取微信openid，如果失败则使用本地ID
+    try {
+      // 检查用户是否已登录
+      const userInfo = wx.getStorageSync('userInfo');
+      if (userInfo && userInfo.openid) {
+        this.setData({
+          userOpenId: userInfo.openid
+        });
+        return;
+      }
+    } catch (error) {
+      console.log('获取用户信息失败:', error);
+    }
+    
+    // 降级到本地生成的唯一ID作为用户标识
     const localUserId = wx.getStorageSync('localUserId');
     if (!localUserId) {
       const newLocalUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -227,7 +413,7 @@ Page({
   },
 
   // 打卡完成 - 记录用户打卡次数和评分记录
-  completeCheckIn: function() {
+  async completeCheckIn() {
     if (!this.data.userOpenId) {
       // 如果没有用户ID，先获取
       this.getUserOpenId();
@@ -236,6 +422,52 @@ Page({
     const today = new Date();
     const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
     
+    try {
+      // 1. 记录云存储打卡（仅在用户点击打卡按钮时调用）
+      const duration = parseInt(this.data.duration) || 7;
+      const rating = this.data.selectedRating || 0;
+      
+      // 获取已保存的体验记录ID（如果有的话）
+      let experienceRecordIds = [];
+      if (this.data.savedRecords.length > 0) {
+        const localRecords = wx.getStorageSync('experienceRecordIds') || {};
+        this.data.savedRecords.forEach(record => {
+          const experienceId = localRecords[record.uniqueId];
+          if (experienceId) {
+            experienceRecordIds.push(experienceId);
+          }
+        });
+        console.log('📝 关联体验记录ID列表:', experienceRecordIds);
+      }
+      
+      console.log('📡 开始云存储打卡:', { duration, rating, experienceRecordIds });
+      
+      // experience字段现在存储体验记录ID数组，而不是单个ID
+      const cloudResult = await cloudApi.recordMeditation(duration, rating, experienceRecordIds);
+      
+      console.log('📡 云存储返回结果:', cloudResult);
+      
+      if (cloudResult.success) {
+        console.log('✅ 云存储打卡记录成功，记录ID:', cloudResult.data.recordId);
+      } else {
+        console.error('❌ 云存储打卡失败:', cloudResult.error);
+        // 如果云存储失败，显示错误提示但继续本地存储
+        wx.showToast({
+          title: '云存储失败，已保存到本地',
+          icon: 'none',
+          duration: 2000
+        });
+      }
+    } catch (error) {
+      console.error('❌ 打卡过程出错:', error);
+      wx.showToast({
+        title: '打卡异常',
+        icon: 'error',
+        duration: 2000
+      });
+    }
+    
+    // 2. 本地存储记录（兼容原有逻辑）
     // 获取所有用户的打卡记录
     const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
     

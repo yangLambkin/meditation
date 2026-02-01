@@ -29,27 +29,27 @@
   </view>
   <view class="flex-row justify-between relative section_7">
     <view class="flex-col self-center group_5">
-      <text class="self-center font">静坐次数</text>
+      <text class="self-center font">当日打卡次数</text>
       <text class="mt-12 self-start font_2 text_7">{{recordCount}}</text>
     </view>
     <view class="flex-col self-start group_6">
-      <text class="self-start font text_6">合计时长</text>
+      <text class="self-start font text_6">当日累计时长</text>
       <view class="mt-12 flex-row self-stretch">
         <text class="self-center font_2 text_8">{{totalDuration}}</text>
         <text class="ml-4 self-start font text_9">min</text>
       </view>
     </view>
   </view>
-  <view class="flex-col group_8">
+  <view class="flex-col group_8" wx:for="{{recordList}}" wx:key="timestamp">
     <view class="flex-row justify-between items-center self-start group_7">
       <view class="flex-row items-center">
         <view class="shrink-0 section_8"></view>
-        <text class="ml-18 font_3 text_10">30 分钟</text>
+        <text class="ml-18 font_3 text_10">{{item.duration}} 分钟</text>
       </view>
-      <text class="text_11">2026:01:27 17:51:14</text>
+      <text class="text_11">{{item.time}}</text>
     </view>
-    <view class="flex-col justify-start items-start self-end text-wrapper_2">
-      <text class="font_3 text_12">深度冥想，感觉时间过得很快。</text>
+    <view class="flex-col justify-start items-start self-end text-wrapper_2" wx:for="{{item.experienceTexts}}" wx:key="index">
+      <text class="font_3 text_12">{{item}}</text>
     </view>
   </view>
 </view>

@@ -62,15 +62,15 @@ Page({
   },
 
   /**
-   * 加载历史记录数据
+   * 加载历史记录数据（支持云存储）
    */
-  loadHistoryRecords(dateStr) {
+  async loadHistoryRecords(dateStr) {
     try {
-      // 获取该日期的打卡次数
-      const checkinCount = checkinManager.getDailyCheckinCount(dateStr);
+      // 获取该日期的打卡次数（异步）
+      const checkinCount = await checkinManager.getDailyCheckinCount(dateStr);
       
-      // 获取该日期的详细打卡记录
-      const dailyRecords = checkinManager.getDailyCheckinRecords(dateStr);
+      // 获取该日期的详细打卡记录（异步）
+      const dailyRecords = await checkinManager.getDailyCheckinRecords(dateStr);
       
       if (checkinCount === 0) {
         console.warn('该日期暂无打卡记录');
@@ -87,20 +87,82 @@ Page({
       let totalDuration = 0;
       
       if (dailyRecords && dailyRecords.length > 0) {
+        // 获取所有关联的体验记录
+        const experienceIds = [];
+        dailyRecords.forEach(record => {
+          if (record.experience && Array.isArray(record.experience)) {
+            experienceIds.push(...record.experience.filter(id => id && id.length > 0));
+          } else if (record.experience && typeof record.experience === 'string') {
+            // 兼容旧数据：单个ID的情况
+            experienceIds.push(record.experience);
+          }
+        });
+        
+        let experienceRecordsMap = new Map();
+        
+        if (experienceIds.length > 0) {
+          // 去重
+          const uniqueIds = [...new Set(experienceIds)];
+          
+          // 批量查询体验记录
+          const db = wx.cloud.database();
+          const { data: experienceRecords } = await db.collection('experience_records')
+            .where({
+              _id: db.command.in(uniqueIds)
+            })
+            .get();
+          
+          console.log(`体验记录查询结果: ${JSON.stringify(experienceRecords)}`);
+          
+          // 构建体验记录映射
+          experienceRecords.forEach(exp => {
+            experienceRecordsMap.set(exp._id, exp);
+          });
+          
+          console.log(`体验记录映射构建完成，共 ${experienceRecordsMap.size} 条记录`);
+        }
+        
         formattedRecords = dailyRecords.map((record, index) => {
-          // 格式化时间
+          // 格式化完整时间: YYYY-MM-DD HH:MM:SS
           const time = new Date(record.timestamp);
-          const timeStr = `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
+          const timeStr = `${time.getFullYear()}-${(time.getMonth() + 1).toString().padStart(2, '0')}-${time.getDate().toString().padStart(2, '0')} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}:${time.getSeconds().toString().padStart(2, '0')}`;
           
           // 创建星星数据
           const stars = Array.from({ length: 5 }, (_, i) => ({
             active: i < (record.rating || 0)
           }));
           
-          // 获取文本记录
-          let textRecords = [];
-          if (record.textRecords && Array.isArray(record.textRecords)) {
-            textRecords = record.textRecords.map(text => text.content || text);
+          // 处理体验记录 - 根据ID数组获取实际内容
+          let experienceTexts = [];
+          let hasExperience = false;
+          
+          if (record.experience && ((Array.isArray(record.experience) && record.experience.length > 0) || (typeof record.experience === 'string' && record.experience.length > 0))) {
+            // 处理数组类型（新的数据结构）
+            if (Array.isArray(record.experience)) {
+              record.experience.forEach(expId => {
+                if (expId && experienceRecordsMap.has(expId)) {
+                  const expRecord = experienceRecordsMap.get(expId);
+                  if (expRecord.text) {
+                    experienceTexts.push(expRecord.text);
+                    hasExperience = true;
+                  }
+                }
+              });
+            } else if (typeof record.experience === 'string') {
+              // 兼容旧数据：单个ID的情况
+              if (experienceRecordsMap.has(record.experience)) {
+                const expRecord = experienceRecordsMap.get(record.experience);
+                if (expRecord.text) {
+                  experienceTexts.push(expRecord.text);
+                  hasExperience = true;
+                }
+              }
+            }
+          }
+          
+          // 如果没有体验记录，添加默认提示
+          if (experienceTexts.length === 0) {
+            experienceTexts = ["未记录体验"];
           }
           
           return {
@@ -108,8 +170,8 @@ Page({
             duration: record.duration || 0,
             rating: record.rating || 0,
             stars: stars,
-            textCount: textRecords.length,
-            textRecords: textRecords
+            experienceTexts: experienceTexts,
+            hasExperience: hasExperience
           };
         });
         
@@ -160,9 +222,22 @@ Page({
    */
   onShow() {
     // 页面显示时重新加载数据，确保数据最新
-    if (this.data.selectedDate) {
-      this.loadHistoryRecords(this.data.selectedDate);
+    if (this.data.year && this.data.day) {
+      // 重新构建数据库需要的日期格式：YYYY-MM-DD
+      const monthNum = this.getMonthNumber(this.data.month);
+      const dateStr = `${this.data.year}-${monthNum.toString().padStart(2, '0')}-${this.data.day.padStart(2, '0')}`;
+      console.log('onShow重新加载数据，日期:', dateStr);
+      this.loadHistoryRecords(dateStr);
     }
+  },
+
+  /**
+   * 根据月份名称获取月份数字
+   */
+  getMonthNumber(monthName) {
+    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+    const index = monthNames.indexOf(monthName);
+    return index !== -1 ? index + 1 : new Date().getMonth() + 1;
   },
 
   /**

@@ -190,25 +190,50 @@
   color: #b29764b3;
   line-height: 17.4rpx;
 }
+/* 圆点之间的精确连接线方案 */
 .group_8 {
-  margin: 48rpx 48rpx 0;
-  padding-bottom: 64rpx;
-  border-left: solid 2.22rpx #b2976433;
+  margin: 0 48rpx;
+  padding: 48rpx 0 0;
+  position: relative;
+}
+
+/* 圆点之间的连接线 - 精确计算位置，加粗效果 */
+.group_8:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 0; /* 从group_8的最左边开始 */
+  top: calc(48rpx + 15.99rpx); /* 48rpx margin-top + section_8高度的一半 */
+  bottom: -48rpx; /* 延伸到下一个group_8的顶部 */
+  width: 4rpx; /* 加粗连接线，看起来更自然 */
+  background-color: #b29764;
+  z-index: 1;
+  border-radius: 2rpx; /* 添加圆角，让线条更柔和 */
+}
+
+/* 调整section_8的位置，确保圆点居中于加粗后的连接线 */
+.section_8 {
+  background-color: #ffffff;
+  border-radius: 50%;
+  width: 31.98rpx;
+  height: 31.98rpx;
+  border: solid 6.6rpx #b29764;
+  position: relative;
+  z-index: 2; /* 确保圆点在竖线之上 */
+  margin-left: -2rpx; /* 向左偏移加粗后连接线宽度的一半，确保居中 */
 }
 .group_7 {
   margin-left: -16rpx;
-  padding-bottom: 24rpx;
+  padding-bottom: 12rpx;
   width: 639.48rpx;
 }
 .section_8 {
   background-color: #ffffff;
-  border-radius: 74565400rpx;
+  border-radius: 50%;
   width: 31.98rpx;
   height: 31.98rpx;
-  border-left: solid 6.6rpx #b29764;
-  border-right: solid 6.6rpx #b29764;
-  border-top: solid 6.6rpx #b29764;
-  border-bottom: solid 6.6rpx #b29764;
+  border: solid 6.6rpx #b29764;
+  position: relative;
+  z-index: 2; /* 确保圆点在竖线之上 */
 }
 .font_3 {
   font-size: 30rpx;
@@ -226,9 +251,9 @@
   line-height: 16.28rpx;
 }
 .text-wrapper_2 {
-  padding: 40rpx 0;
+  padding: 20rpx 0; /* 缩小上下内间距，从40rpx减少到20rpx */
   background-color: #ffffff;
-  border-radius: 32rpx;
+  border-radius: 16rpx; /* 减小边框圆角弧度，从32rpx减少到16rpx */
   filter: drop-shadow(0rpx 2rpx 2rpx #0000001a, 0rpx 2rpx 3rpx #0000001a);
   width: 603.88rpx;
   border-left: solid 2.2rpx #f2f4f6;
@@ -239,6 +264,6 @@
 .text_12 {
   margin-left: 36rpx;
   color: #495565;
-  font-size: 28rpx;
+  font-size: 22rpx;
   line-height: 26.68rpx;
 }
