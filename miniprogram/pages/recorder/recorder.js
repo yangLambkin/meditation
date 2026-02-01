@@ -175,6 +175,12 @@ Page({
       
       if (saveResult.success) {
         console.log('✅ 体验记录保存成功:', saveResult);
+        console.log('🔍 检查saveResult数据结构:', {
+          hasData: !!saveResult.data,
+          dataKeys: saveResult.data ? Object.keys(saveResult.data) : '无data',
+          hasRecordId: saveResult.data ? !!saveResult.data.recordId : false,
+          recordId: saveResult.data ? saveResult.data.recordId : '无'
+        });
         
         // 保存体验记录的云端ID到本地，用于后续打卡时关联
         if (saveResult.data && saveResult.data.recordId) {
@@ -182,6 +188,8 @@ Page({
           localRecords[newRecord.uniqueId] = saveResult.data.recordId;
           wx.setStorageSync('experienceRecordIds', localRecords);
           console.log('💾 保存体验记录关联ID:', newRecord.uniqueId, '->', saveResult.data.recordId);
+        } else {
+          console.warn('⚠️ 体验记录保存成功，但缺少recordId，无法建立关联');
         }
         
         wx.showToast({
@@ -197,6 +205,13 @@ Page({
           duration: 2000
         });
       }
+      
+      // 无论成功或失败，都检查当前本地存储的状态
+      const currentLocalRecords = wx.getStorageSync('experienceRecordIds') || {};
+      console.log('📊 当前本地存储的体验记录ID映射状态:', {
+        totalMappings: Object.keys(currentLocalRecords).length,
+        mappings: currentLocalRecords
+      });
     } catch (error) {
       console.error('❌ 保存过程出错:', error);
       wx.showToast({
@@ -431,10 +446,17 @@ Page({
       let experienceRecordIds = [];
       if (this.data.savedRecords.length > 0) {
         const localRecords = wx.getStorageSync('experienceRecordIds') || {};
+        console.log('🔍 检查本地存储的体验记录ID映射:', localRecords);
+        console.log('🔍 当前保存的体验记录:', this.data.savedRecords.map(r => ({ uniqueId: r.uniqueId, text: r.text })));
+        
         this.data.savedRecords.forEach(record => {
           const experienceId = localRecords[record.uniqueId];
           if (experienceId) {
             experienceRecordIds.push(experienceId);
+            console.log(`✅ 找到体验记录关联: ${record.uniqueId} -> ${experienceId}`);
+          } else {
+            console.log(`❌ 未找到体验记录ID映射: ${record.uniqueId}`);
+            console.log(`   本地存储中是否存在该映射: ${localRecords.hasOwnProperty(record.uniqueId)}`);
           }
         });
         console.log('📝 关联体验记录ID列表:', experienceRecordIds);
