@@ -225,13 +225,6 @@ Page({
     
     this.updateDisplay();
     
-    // 检查是否需要在结束前10秒恢复亮度
-    if (elapsed >= (this.data.totalTime - 10) && this.isBrightnessReduced) {
-      console.log('💡 计时即将结束（还剩10秒），自动恢复亮度');
-      this.restoreBrightness();
-      this.isBrightnessReduced = false;
-    }
-    
     // 检查是否完成
     if (elapsed >= this.data.totalTime) {
       this.handleTimerFinished();
@@ -537,12 +530,10 @@ Page({
       this.brightnessTimer = null;
     }
     
-    // 恢复亮度
-    if (this.isBrightnessReduced) {
-      console.log('💡 计时结束，恢复屏幕亮度');
-      this.restoreBrightness();
-      this.isBrightnessReduced = false;
-    }
+    // 无论是否降低过亮度，计时结束时都恢复亮度
+    console.log('💡 计时结束，恢复屏幕亮度');
+    this.restoreBrightness();
+    this.isBrightnessReduced = false;
   },
 
   // 恢复屏幕设置

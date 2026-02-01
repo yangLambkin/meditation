@@ -56,13 +56,14 @@
           />
           <text class="ml-8 font text_12">分享朋友圈</text>
         </view>
-        <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8" bindtap="saveImage">
+        <!-- 保存图片按钮暂时隐藏，待功能修复 -->
+        <!-- <view class="ml-16 flex-row justify-center items-center equal-division-item_3 section_8" bindtap="saveImage">
           <image
             class="image_3"
             src="/images/icons/download.png"
           />
           <text class="ml-8 font text_13">保存图片</text>
-        </view>
+        </view> -->
       </view>
     </view>
   </view>
