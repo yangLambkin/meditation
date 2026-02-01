@@ -174,6 +174,9 @@ Page({
       const todayStr = today.toISOString().split('T')[0];
       const todayRecords = await checkinManager.getDailyCheckinRecords(todayStr);
       
+      // 计算今日累计打卡次数
+      const todayCount = todayRecords ? todayRecords.length : 0;
+      
       // 计算本次打卡的静坐时长（当天最后一次打卡的时长）
       let currentMinutes = 0;
       if (todayRecords && todayRecords.length > 0) {
@@ -189,7 +192,7 @@ Page({
       
       this.setData({
         totalMinutes: displayMinutes, // 显示本次打卡时长
-        totalCount: stats.totalCount || 0,
+        totalCount: todayCount, // 显示今日累计打卡次数
         userLevel: userLevel
       }, () => {
         // 数据设置完成后的回调，验证数据绑定
