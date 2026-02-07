@@ -22,10 +22,10 @@
 .section_2 {
   background-color: #b29764;
   overflow: hidden;
-  height: 616rpx;
+  height: 400rpx;
 }
 .group {
-  padding: 100rpx 48rpx 236rpx;
+  padding: 60rpx 48rpx 236rpx;
 }
 .image {
   width: 56rpx;
@@ -49,7 +49,7 @@
   position: absolute;
   left: 48rpx;
   right: 0;
-  top: 0;
+  top: -20rpx;
 }
 .section_3 {
   background-image: linear-gradient(135deg, #b29764 0%, #c9a870 100%);
@@ -62,7 +62,7 @@
   position: absolute;
   left: 0;
   right: 48rpx;
-  top: 232rpx;
+  top: 200rpx;
 }
 .text_4 {
   line-height: 33.5rpx;
@@ -74,7 +74,7 @@
   padding: 32rpx 24rpx 32rpx 32rpx;
   background-color: #0000001a;
   border-radius: 28rpx;
-  height: 160rpx;
+  height: 140rpx;
   border-left: solid 4rpx #ffffff1a;
   border-right: solid 4rpx #ffffff1a;
   border-top: solid 4rpx #ffffff1a;
@@ -107,7 +107,7 @@
 .pos_2 {
   position: absolute;
   left: 0;
-  top: 50%;
+  top: 40%;
   transform: translateY(-50%);
 }
 .group_3 {
@@ -120,7 +120,7 @@
   height: 320rpx;
 }
 .section_6 {
-  padding: 36rpx 0;
+  padding: 25rpx 0;
   background-image: linear-gradient(180deg, #b29764 0%, #c9a870 100%);
   border-radius: 32rpx;
   filter: drop-shadow(0rpx 16rpx 10rpx #0000001a, 0rpx 40rpx 25rpx #0000001a);
@@ -129,7 +129,7 @@
   position: absolute;
   left: 32rpx;
   right: 32rpx;
-  top: 64rpx;
+  top: 32rpx;
 }
 .image_2 {
   width: 40rpx;
@@ -184,9 +184,11 @@
   overflow: hidden;
   width: 180rpx;
   height: 54rpx;
+  text-align: left;
+  justify-content: flex-start;
 }
 .font_5 {
-  font-size: 36rpx;
+  font-size: 28rpx;
   font-family: Arimo;
   line-height: 32rpx;
   font-weight: 700;
@@ -202,6 +204,8 @@
 .text-wrapper_3 {
   overflow: hidden;
   height: 64rpx;
+  text-align: left;
+  justify-content: flex-start;
 }
 .font_7 {
   font-size: 24rpx;

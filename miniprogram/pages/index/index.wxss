@@ -127,7 +127,7 @@
 }
 .section_6 {
   margin: -100rpx 28.24rpx 0;
-  padding: 25rpx 15rpx 25rpx 25rpx;
+  padding: 25rpx 15rpx 15rpx 15rpx;
   background-color: #ffffff;
   border-radius: 20rpx;
   filter: drop-shadow(0rpx 1.76rpx 1.76rpx #0000001a, 0rpx 1.76rpx 2.65rpx #0000001a);
@@ -179,7 +179,7 @@
   line-height: 16.27rpx;
 }
 .text_8 {
-  line-height: 19.18rpx;
+  line-height: 15rpx;
 }
 .text_9 {
   margin-right: 7.06rpx;
