@@ -1,6 +1,6 @@
 <view class="flex-col section_3">
   <!-- 背景图片 -->
-  <image class="background-image" src="/images/bg1.jpeg" mode="aspectFill" />
+  <image class="background-image" src="{{backgroundImage}}" mode="aspectFill" />
   
   <view class="flex-row justify-between group">
   </view>

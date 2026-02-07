@@ -98,9 +98,8 @@ Page({
         this.syncTimerTime();
       }
       
-      // 重新设置屏幕常亮和低亮度
+      // 重新设置屏幕常亮（亮度设置由系统自动保持）
       this.setKeepScreenOn();
-      this.setMinBrightness();
     });
     
     // 应用进入后台（屏幕关闭）

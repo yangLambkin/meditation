@@ -88,7 +88,7 @@
         </view>
         <image
           class="image_6"
-          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=5c5c537b9d82bae773523227df5301eb.png"
+          src="/images/icons/right.png"
         />
       </view>
     </view>

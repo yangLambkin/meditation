@@ -7,10 +7,11 @@ class SimpleBackgroundManager {
   constructor() {
     this.localCacheKey = 'backgroundCache';
     this.cacheExpiry = 12 * 60 * 60 * 1000; // 12小时缓存
-    this.backgroundImages = [
-      'cloud://cloud1-5gct1c7e403a6c31.636c-cloud1-5gct1c7e403a6c31-1325724070/bg_image/bg1.jpeg',
-      'cloud://cloud1-5gct1c7e403a6c31.636c-cloud1-5gct1c7e403a6c31-1325724070/bg_image/bg2.jpeg',
-      'cloud://cloud1-5gct1c7e403a6c31.636c-cloud1-5gct1c7e403a6c31-1325724070/bg_image/bg3.jpeg'
+    this.backgroundFolder = 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/bg_image/';
+    this.backupImages = [
+      '/images/bg1.jpeg',
+      '/images/bg2.jpeg', 
+      '/images/bg3.jpeg'
     ];
   }
 
@@ -26,23 +27,61 @@ class SimpleBackgroundManager {
         return cached;
       }
 
-      // 随机选择一张图片
-      const randomIndex = Math.floor(Math.random() * this.backgroundImages.length);
-      const selectedImage = this.backgroundImages[randomIndex];
-
-      // 将云存储文件ID转换为临时URL
-      const tempUrl = await this.getTempFileURL(selectedImage);
-
-      // 缓存结果
-      this.saveToCache(tempUrl);
-
-      console.log('🎯 使用随机背景图片:', tempUrl);
-      return tempUrl;
+      // 调用云函数获取随机背景图片
+      const randomImage = await this.getRandomBackgroundFromCloud();
+      
+      if (randomImage) {
+        // 缓存结果
+        this.saveToCache(randomImage);
+        console.log('🎯 使用云存储随机背景图片:', randomImage);
+        return randomImage;
+      } else {
+        // 云存储中没有可用图片，使用本地图片
+        console.log('🔄 云存储无可用图片，使用本地图片');
+        return this.getLocalBackground();
+      }
 
     } catch (error) {
-      console.error('❌ 获取背景图片失败:', error);
-      return '/images/bg1.jpeg'; // 默认图片
+      console.error('❌ 获取云存储背景图片失败，使用本地图片:', error);
+      // 云存储失败时，使用本地图片作为降级方案
+      return this.getLocalBackground();
     }
+  }
+
+  /**
+   * 从云函数获取随机背景图片
+   */
+  async getRandomBackgroundFromCloud() {
+    return new Promise((resolve) => {
+      // 调用云函数获取随机背景图片
+      wx.cloud.callFunction({
+        name: 'getBackgroundImages',
+        success: (res) => {
+          console.log('🔍 云函数返回结果:', res);
+          
+          if (res.result && res.result.success && res.result.data && res.result.data.fileURL) {
+            console.log(`✅ 获取到随机背景图片: ${res.result.data.fileURL}`);
+            resolve(res.result.data.fileURL);
+          } else {
+            console.log('❌ 云函数返回无可用背景图片');
+            resolve(null);
+          }
+        },
+        fail: (err) => {
+          console.error('❌ 调用云函数失败:', err);
+          // 即使云函数失败也返回null，让降级机制生效
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  /**
+   * 获取本地背景图片（降级方案）
+   */
+  getLocalBackground() {
+    const randomIndex = Math.floor(Math.random() * this.backupImages.length);
+    return this.backupImages[randomIndex];
   }
 
   /**

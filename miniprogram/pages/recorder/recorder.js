@@ -126,9 +126,16 @@ Page({
     // 允许用户不填写体验内容也能保存打卡记录，无需二次确认
     const experienceText = this.data.currentText.trim();
 
-    // 生成时间戳（使用兼容格式：YYYY-MM-DDTHH:MM:SS）
+    // 生成时间戳（使用本地时间格式：YYYY-MM-DD HH:MM:SS）
     const now = new Date();
-    const timestamp = now.toISOString().replace('T', ' ').substring(0, 19); // YYYY-MM-DD HH:MM:SS
+    // 获取本地时间字符串，格式化为YYYY-MM-DD HH:MM:SS
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const timestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 
     // 创建新记录（包含唯一时间戳和会话标识）
     const nowTime = now.getTime();
