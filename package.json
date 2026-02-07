@@ -4,7 +4,10 @@
   "description": "这是云开发的快速启动指引，其中演示了如何上手使用云开发的三大基础能力：",
   "main": "create_collections_consistent.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "cleanup:stats": "node scripts/runCleanup.js stats",
+    "cleanup:safe": "node scripts/runCleanup.js safe",
+    "cleanup:full": "node scripts/runCleanup.js full"
   },
   "repository": {
     "type": "git",
@@ -17,8 +20,5 @@
   "bugs": {
     "url": "https://github.com/yangLambkin/meditation/issues"
   },
-  "homepage": "https://github.com/yangLambkin/meditation#readme",
-  "dependencies": {
-    "lunar": "^2.0.0"
-  }
+  "homepage": "https://github.com/yangLambkin/meditation#readme"
 }
