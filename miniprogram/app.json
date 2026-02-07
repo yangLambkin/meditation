@@ -6,7 +6,8 @@
     "pages/recorder/recorder",
     "pages/daily/daily",
     "pages/me/me",
-    "pages/history/history"
+    "pages/history/history",
+    "pages/team/team"
   ],
   "window": {
     "backgroundColor": "#F6F6F6",
@@ -32,6 +33,12 @@
         "text": "计时",
         "iconPath": "/images/icons/timer.png",
         "selectedIconPath": "/images/icons/timer-active.png"
+      },
+      {
+        "pagePath": "pages/team/team",
+        "text": "团队",
+        "iconPath": "/images/icons/team.png",
+        "selectedIconPath": "/images/icons/team-active.png"
       },
       {
         "pagePath": "pages/me/me",
