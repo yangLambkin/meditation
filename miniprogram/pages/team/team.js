@@ -9,6 +9,15 @@ Page({
   },
 
   /**
+   * 创建新团队按钮点击事件
+   */
+  createNewTeam: function() {
+    wx.navigateTo({
+      url: '/subpackages/team/pages/createTeam/createTeam'
+    })
+  },
+
+  /**
    * 生命周期函数--监听页面加载
    */
   onLoad(options) {

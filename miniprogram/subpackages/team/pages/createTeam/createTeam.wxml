@@ -1,0 +1,89 @@
+<!--pages/createTeam/createTeam.wxml-->
+<view class="flex-col page">
+  <view class="flex-col items-start relative section">
+    <text class="text">创建团队</text>
+    <text class="font text_2">打造你的专属觉察圈</text>
+  </view>
+  <view class="flex-col group">
+    <view class="flex-col group_2">
+      <view class="flex-row items-center group_2">
+        <image
+          class="image_2"
+          src="/subpackages/team/images/icons/text.png"
+        />
+        <text class="font text_3 ml-5">选择团队图标</text>
+      </view>
+      <view class="mt-12 flex-col group_2">
+        <!-- 团队icon选择区域 - 生产版本 -->
+        <view class="team-icons-container">
+          <!-- 第一行：前6个图标 -->
+          <view class="team-icons-row">
+            <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index" 
+              wx:if="{{index < 6}}"
+              class="team-icon-item {{icon.selected ? 'selected' : ''}}" 
+              bindtap="selectTeamIcon"
+              data-id="{{icon.id}}"
+            >
+              <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
+            </view>
+          </view>
+          
+          <!-- 第二行：后6个图标 -->
+          <view class="team-icons-row">
+            <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index" 
+              wx:if="{{index >= 6}}"
+              class="team-icon-item {{icon.selected ? 'selected' : ''}}" 
+              bindtap="selectTeamIcon"
+              data-id="{{icon.id}}"
+            >
+              <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+    <view class="flex-col group_2 mt-25">
+      <view class="flex-row items-center self-stretch group_3">
+        <image
+          class="image_2"
+          src="/subpackages/team/images/icons/text.png"
+        />
+        <text class="font text_4 ml-5">团队名称</text>
+      </view>
+      <view class="flex-col justify-start items-start self-stretch text-wrapper_3">
+        <input 
+          class="font_3 text_5 input-field" 
+          value="{{teamName}}"
+          bindinput="onTeamNameInput"
+          maxlength="20"
+        />
+      </view>
+      <text class="self-start font_4 text_6">{{nameCharCount}}/20</text>
+    </view>
+    <view class="flex-col group_2 mt-25">
+      <view class="flex-row items-center self-stretch group_3">
+        <image
+          class="image_2"
+          src="/subpackages/team/images/icons/text.png"
+        />
+        <text class="font ml-5">团队介绍</text>
+      </view>
+      <view class="flex-col justify-start items-start self-stretch text-wrapper_4">
+        <textarea 
+          class="font_3 text_7 textarea-field" 
+          placeholder="介绍一下你的团队吧" 
+          value="{{teamDescription}}"
+          bindinput="onTeamDescriptionInput"
+          maxlength="100"
+          auto-height
+        />
+      </view>
+      <text class="self-start font_4 text_8">{{descCharCount}}/100</text>
+    </view>
+  </view>
+  <view class="flex-col justify-start group_4">
+    <view class="flex-col justify-start items-center text-wrapper_5" bindtap="createTeam">
+      <text class="font_3 text_9">创建团队</text>
+    </view>
+  </view>
+</view>
