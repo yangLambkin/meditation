@@ -43,21 +43,21 @@
   height: 950.93rpx;
 }
 .section_2 {
-  padding-top: 88.24rpx;
+  padding-top: 60rpx;
   background-color: #b29764;
   overflow: hidden;
   height: 534.55rpx;
 }
 .font {
-  font-size: 26rpx;
+  font-size: 32rpx;
   font-family: Arimo;
-  line-height: 17.49rpx;
+  line-height: 25rpx;
   color: #354152;
 }
 .text {
   margin-left: 42.35rpx;
   color: #fffefecc;
-  line-height: 23.45rpx;
+  line-height: 28rpx;
 }
 .section_5 {
   margin: 250.59rpx 0 -112.94rpx;
@@ -83,7 +83,7 @@
   position: absolute;
   left: 0;
   right: 41.52rpx;
-  top: 190.46rpx;
+  top: 220rpx;
 }
 .font_3 {
   font-size: 26rpx;
@@ -604,4 +604,56 @@
   border-radius: 50%;
   background-color: #F0EAE0;
   display: block;
+}
+
+/* 授权按钮样式 */
+.auth-button {
+  background-color: #b29764 !important;
+  color: white !important;
+  border-radius: 20rpx !important;
+  font-size: 24rpx !important;
+  padding: 8rpx 16rpx !important;
+  border: none !important;
+  line-height: 1.2 !important;
+  height: auto !important;
+  min-width: 100rpx !important;
+}
+
+.auth-button::after {
+  border: none !important;
+}
+
+.auth-button:active {
+  background-color: #9a8254 !important;
+  transform: scale(0.95);
+}
+
+/* 点击登录文本按钮样式 */
+.login-text {
+  color: #fffefecc !important;
+  font-size: 26rpx !important;
+  font-family: Arimo !important;
+  line-height: 23.45rpx !important;
+  background-color: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  border-radius: 20rpx !important;
+  padding: 8rpx 16rpx !important;
+  margin-left: 15rpx !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  transition: all 0.3s ease !important;
+  display: inline-block !important;
+  min-width: 120rpx !important;
+  text-align: center !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+.login-text:active {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  transform: scale(0.95) !important;
+}
+
+.login-text::after {
+  border: none !important;
 }

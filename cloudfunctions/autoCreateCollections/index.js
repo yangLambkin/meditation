@@ -7,6 +7,25 @@ const db = cloud.database();
 
 // 根据新的1对多关系设计数据库表结构
 const COLLECTION_SCHEMAS = {
+  // users 表结构（用户信息表）
+  users: {
+    description: '用户信息表',
+    sampleData: {
+      _openid: 'user_openid_123',           // 用户唯一标识
+      nickName: '微信用户',                   // 微信昵称
+      avatarUrl: 'https://thirdwx.qlogo.cn/mmopen/vi_32/xxx', // 微信头像URL
+      gender: 1,                            // 性别（0：未知，1：男，2：女）
+      country: '中国',                       // 国家
+      province: '北京市',                    // 省份
+      city: '北京市',                        // 城市
+      language: 'zh_CN',                    // 语言
+      createTime: new Date(),               // 创建时间
+      lastLoginTime: new Date(),            // 最后登录时间
+      loginCount: 1,                        // 登录次数
+      updatedAt: new Date()                 // 更新时间
+    }
+  },
+  
   // meditation_records 表结构（打卡记录表，1对多关系中的1）
   meditation_records: {
     description: '冥想打卡记录表',

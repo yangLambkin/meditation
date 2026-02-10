@@ -6,7 +6,8 @@ Page({
     totalMinutes: 0, // 总分钟数
     consecutiveDays: 0, // 连续天数
     currentStreak: 0, // 当前连续天数
-    medals: 0 // 勋章数量
+    medals: 0, // 勋章数量
+    hasUserInfo: false // 是否已获取用户信息
   },
 
   onLoad(options) {
@@ -39,7 +40,8 @@ Page({
     const cachedNickname = wx.getStorageSync('userNickname');
     if (cachedNickname) {
       this.setData({
-        userNickname: cachedNickname
+        userNickname: cachedNickname,
+        hasUserInfo: true
       });
     }
   },
@@ -48,45 +50,22 @@ Page({
    * 获取用户微信头像
    */
   getUserAvatar() {
-    // 尝试从缓存获取用户信息
+    // 只从缓存获取用户信息，不进行静默获取
     const cachedUserInfo = wx.getStorageSync('userInfo');
     
     if (cachedUserInfo && cachedUserInfo.avatarUrl) {
       // 使用缓存的用户头像
       this.setData({
-        userAvatar: cachedUserInfo.avatarUrl
+        userAvatar: cachedUserInfo.avatarUrl,
+        hasUserInfo: true
       });
+      console.log('从缓存获取用户头像:', cachedUserInfo.avatarUrl);
     } else {
-      // 检查用户是否已授权
-      wx.getSetting({
-        success: (res) => {
-          if (res.authSetting['scope.userInfo']) {
-            // 用户已授权，获取用户信息
-            wx.getUserInfo({
-              success: (userRes) => {
-                const userInfo = userRes.userInfo;
-                
-                // 缓存用户信息
-                wx.setStorageSync('userInfo', userInfo);
-                
-                // 更新页面显示
-                this.setData({
-                  userAvatar: userInfo.avatarUrl
-                });
-                
-                console.log('获取到用户头像:', userInfo.avatarUrl);
-              },
-              fail: (err) => {
-                console.warn('获取用户信息失败:', err);
-              }
-            });
-          } else {
-            console.log('用户未授权，使用默认头像');
-          }
-        },
-        fail: (err) => {
-          console.warn('检查授权设置失败:', err);
-        }
+      // 缓存中没有用户头像，使用默认头像
+      console.log('缓存中无用户头像，使用默认头像');
+      this.setData({
+        userAvatar: '/images/avatar.png',
+        hasUserInfo: false
       });
     }
   },
@@ -231,6 +210,59 @@ Page({
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  },
+
+  /**
+   * 用户授权回调
+   */
+  onGetUserInfo: function(e) {
+    console.log('me页面用户授权信息:', e);
+    
+    if (e.detail.userInfo) {
+      // 用户同意授权
+      const userInfo = e.detail.userInfo;
+      const nickname = userInfo.nickName;
+      const avatarUrl = userInfo.avatarUrl;
+      
+      console.log('me页面用户同意授权，昵称:', nickname, '头像:', avatarUrl);
+      
+      // 保存到缓存
+      wx.setStorageSync('userInfo', userInfo);
+      wx.setStorageSync('userNickname', nickname);
+      
+      // 更新页面显示
+      this.setData({
+        userNickname: nickname,
+        userAvatar: avatarUrl,
+        hasUserInfo: true
+      });
+      
+      wx.showToast({
+        title: '授权成功',
+        icon: 'success',
+        duration: 1500
+      });
+    } else {
+      // 用户拒绝授权
+      console.log('me页面用户拒绝授权');
+      
+      // 显示模态对话框，告知用户必须授权
+      wx.showModal({
+        title: '授权提示',
+        content: '使用本小程序需要授权获取您的昵称和头像信息，请点击授权按钮并选择"允许"以继续使用。',
+        showCancel: false,
+        confirmText: '重新授权',
+        success: (res) => {
+          if (res.confirm) {
+            // 用户点击确认，继续显示授权按钮
+            this.setData({
+              userNickname: '觉察者',
+              userAvatar: '/images/avatar.png'
+            });
+          }
+        }
+      });
+    }
   },
 
   onReady() {

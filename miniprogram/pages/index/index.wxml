@@ -3,7 +3,13 @@
   <view class="flex-col section">
     <view class="flex-col group">
       <view class="flex-col items-start relative section_2">
-        <text class="font text">欢迎回来，{{userNickname}}</text>
+        <view class="flex-row items-center">
+          <text class="font text">欢迎回来，</text>
+          <!-- 未登录时显示点击登录按钮 -->
+          <text wx:if="{{!hasUserInfo}}" class="font text login-text" bindtap="showLoginModal" data-debug="login-button-click">点击登录</text>
+          <!-- 已登录时显示用户昵称 -->
+          <text wx:else class="font text">{{userNickname}}</text>
+        </view>
         <view class="shrink-0 relative section_5"></view>
         <view class="flex-col justify-start items-end pos">
           <view class="section_3"></view>

@@ -10,7 +10,8 @@ Page({
     monthlyCount: 0, // 本月打卡总次数
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
     wisdomQuote: '"静心即是修心，心安即是归处。"', // 每日一言金句
-    currentUserRank: 1 // 当前用户排名，默认为1
+    currentUserRank: 1, // 当前用户排名，默认为1
+    hasUserInfo: false // 是否已获取用户信息
   },
 
   /**
@@ -49,6 +50,32 @@ Page({
   },
 
   /**
+   * 检查用户信息缓存
+   */
+  checkUserInfoCache: function() {
+    // 检查缓存中是否有完整的用户信息
+    const cachedUserInfo = wx.getStorageSync('userInfo');
+    if (cachedUserInfo && cachedUserInfo.nickName) {
+      // 有完整的用户信息，直接使用
+      this.setData({
+        userNickname: cachedUserInfo.nickName,
+        hasUserInfo: true
+      });
+      console.log('从缓存获取用户昵称:', cachedUserInfo.nickName);
+    } else {
+      // 缓存中没有用户信息，显示授权必需提示
+      console.log('缓存中没有用户信息，显示授权提示');
+      this.showAuthRequiredModal();
+      
+      // 设置默认昵称并显示授权按钮
+      this.setData({
+        userNickname: '觉察者',
+        hasUserInfo: false
+      });
+    }
+  },
+
+  /**
    * 获取用户微信昵称
    */
   getUserNickname: function() {
@@ -61,46 +88,590 @@ Page({
       return;
     }
     
-    // 检查用户是否已授权
-    wx.getSetting({
-      success: (res) => {
-        if (res.authSetting['scope.userInfo']) {
-          // 用户已授权，获取用户信息
-          wx.getUserInfo({
-            success: (userRes) => {
-              const nickname = userRes.userInfo.nickName;
-              console.log('获取到用户昵称:', nickname);
-              
-              // 保存到缓存
-              wx.setStorageSync('userNickname', nickname);
-              
-              // 更新页面显示
-              this.setData({
-                userNickname: nickname
-              });
-            },
-            fail: (err) => {
-              console.warn('获取用户信息失败:', err);
-              // 使用默认昵称
-              this.setData({
-                userNickname: '觉察者'
-              });
-            }
-          });
+    // 如果没有用户昵称，设置默认昵称"微信用户"
+    // 授权检查由onLoad中的checkUserInfo统一处理
+    this.setData({
+      userNickname: '微信用户'
+    });
+  },
+
+  /**
+   * 显示登录模态框（包含隐私协议）
+   */
+  showLoginModal: function() {
+    console.log('=== showLoginModal函数被调用 ===');
+    console.log('当前页面上下文:', this);
+    console.log('当前页面数据:', this.data);
+    console.log('函数调用栈:', new Error().stack);
+    
+    // 保存this引用，避免回调函数中的上下文问题
+    const that = this;
+    
+    wx.showModal({
+      title: '用户登录',
+      content: '欢迎使用觉察计时小程序！我们将获取您的微信昵称和头像信息，并严格遵守《用户隐私保护协议》。',
+      confirmText: '同意',
+      cancelText: '不同意',
+      success: function(res) {
+        console.log('登录模态框用户选择结果:', res);
+        if (res.confirm) {
+          console.log('用户同意隐私协议，直接获取用户信息');
+          that.getUserInfoDirectly();
         } else {
-          // 用户未授权，使用默认昵称
-          console.log('用户未授权，使用默认昵称');
-          this.setData({
-            userNickname: '觉察者'
+          console.log('用户不同意隐私协议');
+          // 用户可以继续使用小程序，但部分功能受限
+          wx.showToast({
+            title: '您可以继续使用小程序',
+            icon: 'none',
+            duration: 1500
+          });
+        }
+      },
+      fail: function(err) {
+        console.error('显示登录模态框失败:', err);
+      }
+    });
+    
+    console.log('=== showLoginModal函数执行完成 ===');
+  },
+
+  /**
+   * 开始微信登录流程
+   */
+  startWechatLogin: function() {
+    console.log('开始微信登录流程');
+    
+    // 显示加载提示
+    wx.showLoading({
+      title: '登录中...',
+      mask: true
+    });
+    
+    // 第一步：获取微信登录code
+    wx.login({
+      success: (loginRes) => {
+        if (loginRes.code) {
+          console.log('获取登录code成功:', loginRes.code);
+          
+          // 第二步：调用wx.getUserProfile()获取用户信息
+          this.getUserProfile(loginRes.code);
+        } else {
+          console.log('获取登录code失败:', loginRes.errMsg);
+          wx.hideLoading();
+          wx.showToast({
+            title: '登录失败，请重试',
+            icon: 'none'
           });
         }
       },
       fail: (err) => {
-        console.warn('检查授权设置失败:', err);
-        // 出错时使用默认昵称
-        this.setData({
-          userNickname: '觉察者'
+        console.error('登录失败:', err);
+        wx.hideLoading();
+        wx.showToast({
+          title: '登录失败，请重试',
+          icon: 'none'
         });
+      }
+    });
+  },
+
+  /**
+   * 获取微信用户身份标识（openid）
+   */
+  getWechatOpenId: function() {
+    console.log('=== 获取微信用户openid ===');
+    
+    return new Promise((resolve, reject) => {
+      wx.login({
+        success: (loginRes) => {
+          if (loginRes.code) {
+            console.log('获取登录code成功:', loginRes.code);
+            
+            // 在实际应用中，这里应该调用云函数或后端API
+            // 使用loginRes.code换取真正的微信openid
+            // 这里暂时使用本地生成的标识
+            
+            const localOpenId = wx.getStorageSync('wechatOpenId');
+            if (!localOpenId) {
+              const newOpenId = 'openid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+              wx.setStorageSync('wechatOpenId', newOpenId);
+              resolve(newOpenId);
+            } else {
+              resolve(localOpenId);
+            }
+          } else {
+            console.log('获取登录code失败:', loginRes.errMsg);
+            reject(new Error('获取登录code失败'));
+          }
+        },
+        fail: (err) => {
+          console.error('登录失败:', err);
+          reject(err);
+        }
+      });
+    });
+  },
+
+  /**
+   * 直接获取用户信息（昵称和头像）- 在最外层调用
+   */
+  getUserInfoDirectly: function() {
+    console.log('=== 直接获取用户信息（昵称和头像） ===');
+    
+    // 显示加载提示
+    wx.showLoading({
+      title: '登录中...',
+      mask: true
+    });
+    
+    // 第一步：直接在最外层调用wx.getUserProfile获取用户信息
+    wx.getUserProfile({
+      desc: '用于完善会员资料和个性化服务',
+      success: (res) => {
+        console.log('获取用户信息成功:', res.userInfo);
+        
+        // 第二步：获取微信用户身份标识（openid）
+        wx.login({
+          success: (loginRes) => {
+            wx.hideLoading();
+            
+            if (loginRes.code) {
+              console.log('获取登录code成功:', loginRes.code);
+              
+              // 获取用户openid
+              const openid = wx.getStorageSync('wechatOpenId') || 'openid_' + Date.now();
+              
+              // 用户同意授权，有完整的用户信息
+              const userInfo = res.userInfo;
+              const nickname = userInfo.nickName;
+              
+              console.log('登录成功 - 昵称:', nickname, '头像:', userInfo.avatarUrl, 'openid:', openid);
+              
+              // 保存用户信息
+              this.saveUserInfo(userInfo, openid);
+              
+              // 更新页面显示
+              this.setData({
+                userNickname: nickname,
+                hasUserInfo: true
+              });
+              
+              // 显示登录成功提示
+              wx.showToast({
+                title: `欢迎回来，${nickname}`,
+                icon: 'success',
+                duration: 2000
+              });
+            } else {
+              console.log('获取登录code失败:', loginRes.errMsg);
+              wx.hideLoading();
+              wx.showToast({
+                title: '登录失败，请重试',
+                icon: 'none'
+              });
+            }
+          },
+          fail: (err) => {
+            wx.hideLoading();
+            console.error('登录失败:', err);
+            wx.showToast({
+              title: '登录失败，请重试',
+              icon: 'none'
+            });
+          }
+        });
+      },
+      fail: (err) => {
+        wx.hideLoading();
+        console.error('用户拒绝授权或获取失败:', err);
+        
+        // 用户拒绝授权，使用基础登录流程
+        this.basicLoginProcess();
+      }
+    });
+  },
+
+  /**
+   * 基础登录流程（没有用户详细信息）
+   */
+  basicLoginProcess: function() {
+    console.log('=== 开始基础登录流程 ===');
+    
+    // 获取用户openid
+    const openid = wx.getStorageSync('wechatOpenId') || 'openid_' + Date.now();
+    const nickname = '微信用户';
+    
+    // 保存基础用户信息（只有openid）
+    this.saveBasicUserInfo(openid);
+    
+    // 更新页面显示
+    this.setData({
+      userNickname: nickname,
+      hasUserInfo: false
+    });
+    
+    // 显示基础登录成功提示
+    wx.showToast({
+      title: `欢迎使用小程序`,
+      icon: 'success',
+      duration: 2000
+    });
+  },
+
+  /**
+   * 获取用户信息（使用wx.getUserProfile）
+   */
+  getUserProfile: function(loginCode) {
+    console.log('调用wx.getUserProfile获取用户信息');
+    
+    wx.getUserProfile({
+      desc: '用于完善会员资料和个性化服务',
+      success: (res) => {
+        console.log('获取用户信息成功:', res.userInfo);
+        wx.hideLoading();
+        
+        // 用户同意授权
+        const userInfo = res.userInfo;
+        const nickname = userInfo.nickName;
+        const avatarUrl = userInfo.avatarUrl;
+        
+        console.log('登录成功 - 昵称:', nickname, '头像:', avatarUrl, '登录code:', loginCode);
+        
+        // 保存用户信息并与openid关联
+        this.saveUserInfo(userInfo, loginCode);
+        
+        // 更新页面显示
+        this.setData({
+          userNickname: nickname,
+          hasUserInfo: true
+        });
+        
+        // 显示登录成功提示
+        wx.showToast({
+          title: `欢迎回来，${nickname}`,
+          icon: 'success',
+          duration: 2000
+        });
+        
+      },
+      fail: (err) => {
+        console.error('用户拒绝授权或获取失败:', err);
+        wx.hideLoading();
+        
+        if (err.errMsg.includes('auth deny') || err.errMsg.includes('cancel')) {
+          // 用户拒绝授权
+          wx.showToast({
+            title: '授权取消，部分功能受限',
+            icon: 'none',
+            duration: 2000
+          });
+        } else {
+          // 其他错误
+          wx.showToast({
+            title: '获取信息失败，请重试',
+            icon: 'none'
+          });
+        }
+      }
+    });
+  },
+
+  /**
+   * 保存基础用户信息（只有openid，没有用户详细信息）
+   */
+  saveBasicUserInfo: function(openid) {
+    console.log('保存基础用户信息，openid:', openid);
+    
+    // 保存到本地缓存
+    wx.setStorageSync('userOpenId', openid);
+    wx.setStorageSync('userNickname', '微信用户');
+    
+    // 保存到云数据库（只有openid）
+    this.saveBasicUserToCloud(openid);
+  },
+
+  /**
+   * 保存完整用户信息（包含昵称、头像等）
+   */
+  saveUserInfo: function(userInfo, openid) {
+    console.log('保存完整用户信息，openid:', openid);
+    
+    // 保存用户信息到本地缓存
+    wx.setStorageSync('userInfo', userInfo);
+    wx.setStorageSync('userNickname', userInfo.nickName);
+    wx.setStorageSync('userOpenId', openid);
+    
+    // 保存用户数据到本地
+    const userData = {
+      openid: openid,
+      userInfo: userInfo,
+      loginTime: new Date().toISOString()
+    };
+    
+    wx.setStorageSync('userLoginData', userData);
+    
+    // 保存用户信息到云数据库
+    this.saveUserToCloud(userInfo, openid);
+    
+    console.log('用户信息保存完成:', userData);
+  },
+
+  /**
+   * 保存基础用户信息到云数据库（只有openid）
+   */
+  saveBasicUserToCloud: function(openid) {
+    console.log('保存基础用户信息到云数据库，openid:', openid);
+    
+    const db = wx.cloud.database();
+    const usersCollection = db.collection('users');
+    
+    // 检查用户是否已存在（使用_openid作为标识）
+    usersCollection.where({
+      _openid: openid
+    }).get({
+      success: (res) => {
+        if (res.data.length > 0) {
+          // 用户已存在，更新最后登录时间
+          console.log('用户已存在，更新最后登录时间');
+          usersCollection.doc(res.data[0]._id).update({
+            data: {
+              lastLoginTime: new Date(),
+              loginCount: wx.cloud.database().command.inc(1)
+            }
+          }).then(res => {
+            console.log('用户信息更新成功:', res);
+          }).catch(err => {
+            console.error('用户信息更新失败:', err);
+          });
+        } else {
+          // 用户不存在，创建新用户
+          console.log('用户不存在，创建新用户');
+          usersCollection.add({
+            data: {
+              openid: openid,
+              nickName: '微信用户',
+              createTime: new Date(),
+              lastLoginTime: new Date(),
+              loginCount: 1
+            }
+          }).then(res => {
+            console.log('基础用户信息保存到云数据库成功:', res);
+          }).catch(err => {
+            console.error('基础用户信息保存到云数据库失败:', err);
+          });
+        }
+      },
+      fail: (err) => {
+        console.error('查询用户信息失败:', err);
+      }
+    });
+  },
+
+  /**
+   * 保存用户信息到云数据库
+   */
+  saveUserToCloud: function(userInfo, userOpenId) {
+    console.log('开始保存用户信息到云数据库');
+    
+    const db = wx.cloud.database();
+    const usersCollection = db.collection('users');
+    
+    // 检查用户是否已存在（使用_openid作为标识）
+    usersCollection.where({
+      _openid: userOpenId
+    }).get({
+      success: (res) => {
+        if (res.data.length > 0) {
+          // 用户已存在，更新用户信息
+          console.log('用户已存在，更新用户信息，头像URL:', userInfo.avatarUrl);
+          usersCollection.doc(res.data[0]._id).update({
+            data: {
+              nickName: userInfo.nickName,
+              avatarUrl: userInfo.avatarUrl,
+              gender: userInfo.gender,
+              country: userInfo.country,
+              province: userInfo.province,
+              city: userInfo.city,
+              lastLoginTime: new Date(),
+              loginCount: wx.cloud.database().command.inc(1)
+            }
+          }).then(res => {
+            console.log('用户信息更新成功:', res);
+          }).catch(err => {
+            console.error('用户信息更新失败:', err);
+          });
+        } else {
+          // 用户不存在，创建新用户
+          console.log('用户不存在，创建新用户，头像URL:', userInfo.avatarUrl);
+          usersCollection.add({
+            data: {
+              nickName: userInfo.nickName,
+              avatarUrl: userInfo.avatarUrl,
+              gender: userInfo.gender,
+              country: userInfo.country,
+              province: userInfo.province,
+              city: userInfo.city,
+              createTime: new Date(),
+              lastLoginTime: new Date(),
+              loginCount: 1
+            }
+          }).then(res => {
+            console.log('用户信息保存到云数据库成功:', res);
+          }).catch(err => {
+            console.error('用户信息保存到云数据库失败:', err);
+          });
+        }
+      },
+      fail: (err) => {
+        console.error('查询用户信息失败:', err);
+        // 如果查询失败，尝试直接创建用户
+        usersCollection.add({
+          data: {
+            _openid: userOpenId,
+            nickName: userInfo.nickName,
+            avatarUrl: userInfo.avatarUrl,
+            gender: userInfo.gender,
+            country: userInfo.country,
+            province: userInfo.province,
+            city: userInfo.city,
+            createTime: new Date(),
+            lastLoginTime: new Date(),
+            loginCount: 1
+          }
+        }).then(res => {
+          console.log('用户信息保存到云数据库成功（直接创建）:', res);
+        }).catch(err => {
+          console.error('用户信息保存到云数据库失败（直接创建）:', err);
+        });
+      }
+    });
+  },
+
+  /**
+   * 触发用户授权
+   */
+  triggerUserAuth: function() {
+    console.log('触发用户授权');
+    
+    // 显示用户授权按钮（通过设置hasUserInfo为false来触发）
+    this.setData({
+      hasUserInfo: false
+    });
+    
+    // 授权按钮会通过open-type="getUserInfo"自动触发授权
+  },
+
+  /**
+   * 用户授权回调
+   */
+  onGetUserInfo: function(e) {
+    console.log('用户授权信息:', e);
+    
+    if (e.detail.userInfo) {
+      // 用户同意授权
+      const userInfo = e.detail.userInfo;
+      const nickname = userInfo.nickName;
+      
+      console.log('用户同意授权，昵称:', nickname);
+      
+      // 保存到缓存
+      wx.setStorageSync('userInfo', userInfo);
+      wx.setStorageSync('userNickname', nickname);
+      
+      console.log('保存到缓存完成，开始更新页面数据');
+      console.log('更新前 userNickname:', this.data.userNickname);
+      
+      // 更新页面显示
+      this.setData({
+        userNickname: nickname,
+        hasUserInfo: true
+      }, () => {
+        console.log('页面数据更新完成，更新后 userNickname:', this.data.userNickname);
+        console.log('页面数据更新完成，hasUserInfo:', this.data.hasUserInfo);
+      });
+      
+      wx.showToast({
+        title: '授权成功',
+        icon: 'success',
+        duration: 1500
+      });
+    } else {
+      // 用户拒绝授权 - 阻止使用小程序
+      console.log('用户拒绝授权，阻止使用小程序');
+      
+      // 显示模态对话框，告知用户必须授权
+      wx.showModal({
+        title: '授权提示',
+        content: '使用本小程序需要授权获取您的昵称信息，请点击授权按钮并选择"允许"以继续使用。',
+        showCancel: false,
+        confirmText: '重新授权',
+        success: (res) => {
+          if (res.confirm) {
+            // 用户点击确认，继续显示授权按钮
+            this.setData({
+              userNickname: '觉察者',
+              hasUserInfo: false
+            });
+          }
+        }
+      });
+    }
+  },
+
+  /**
+   * 检查用户信息，当无法获取userNickname时显示授权信息
+   */
+  checkUserInfo: function() {
+    console.log('=== checkUserInfo函数开始执行 ===');
+    console.log('当前页面数据 userNickname:', this.data.userNickname);
+    console.log('当前页面数据 hasUserInfo:', this.data.hasUserInfo);
+    
+    // 获取缓存的用户信息
+    const cachedUserInfo = wx.getStorageSync('userInfo');
+    console.log('缓存中 userInfo:', cachedUserInfo);
+    
+    const cachedNickname = wx.getStorageSync('userNickname');
+    console.log('缓存中 userNickname:', cachedNickname);
+    
+    if (cachedUserInfo && cachedUserInfo.nickName) {
+      // 有用户信息，显示欢迎信息
+      console.log('用户已授权，显示欢迎信息');
+      // 确保页面数据正确更新
+      this.setData({
+        userNickname: cachedUserInfo.nickName,
+        hasUserInfo: true
+      }, () => {
+        console.log('页面数据更新完成，userNickname:', this.data.userNickname);
+      });
+      
+      wx.showToast({
+        title: `欢迎回来，${cachedUserInfo.nickName}`,
+        icon: 'none',
+        duration: 2000
+      });
+    } else {
+      // 无法获取用户信息，显示授权窗口
+      console.log('无法获取用户信息，显示授权窗口');
+      this.showAuthRequiredModal();
+    }
+    
+    console.log('=== checkUserInfo函数执行完成 ===');
+  },
+
+  /**
+   * 显示授权必需提示
+   */
+  showAuthRequiredModal: function() {
+    wx.showModal({
+      title: '授权提示',
+      content: '欢迎使用觉察计时小程序！使用本小程序需要授权获取您的昵称信息。',
+      showCancel: false,
+      confirmText: '立即授权',
+      success: (res) => {
+        if (res.confirm) {
+          // 用户确认，继续显示授权按钮
+          console.log('用户点击立即授权');
+        }
       }
     });
   },
@@ -430,20 +1001,48 @@ Page({
   },
 
   /**
+   * 测试函数 - 用于验证showLoginModal能否被调用
+   */
+  testShowLoginModal: function() {
+    console.log('=== testShowLoginModal函数被调用 ===');
+    console.log('测试函数开始，将调用showLoginModal');
+    
+    // 直接调用showLoginModal函数
+    if (typeof this.showLoginModal === 'function') {
+      console.log('showLoginModal函数存在，准备调用');
+      this.showLoginModal();
+    } else {
+      console.error('showLoginModal函数不存在或未定义');
+    }
+    
+    console.log('=== testShowLoginModal函数执行完成 ===');
+  },
+
+  /**
    * 生命周期函数--监听页面加载
    */
   onLoad(options) {
+    console.log('=== index页面onLoad函数开始 ===');
+    console.log('页面参数:', options);
+    
     const today = new Date();
     this.setData({
       currentYear: today.getFullYear(),
       currentMonth: today.getMonth() + 1
     });
     
+    console.log('初始化页面数据完成');
+    
     // 获取用户标识，完成后会自动更新数据
     this.getUserOpenId();
     
     // 获取随机金句
     this.getRandomWisdom();
+    
+    // 页面加载时不自动检查用户信息，只有在用户点击"点击登录"时才触发
+    console.log('index页面加载完成，等待用户点击登录按钮');
+    
+    console.log('=== index页面onLoad函数结束 ===');
   },
 
   /**
@@ -457,6 +1056,8 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    console.log('=== index页面onShow函数开始 ===');
+    
     // 重新生成日历，确保显示最新的打卡状态
     this.generateCalendar();
     
@@ -465,6 +1066,13 @@ Page({
     
     // 更新用户排名显示
     this.calculateUserRank();
+    
+    console.log('页面显示完成，当前用户状态:', {
+      hasUserInfo: this.data.hasUserInfo,
+      userNickname: this.data.userNickname,
+      userOpenId: this.data.userOpenId
+    });
+    console.log('=== index页面onShow函数结束 ===');
   },
 
   /**

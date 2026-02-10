@@ -39,8 +39,8 @@
       <!-- 记录区域 -->
       <view class="flex-col self-stretch group_2 mt-30">
         <view class="flex-col section_2">
-          <text class="self-start font text_6">记录您的感受和想法...</text>
-          <textarea 
+          <textarea
+            placeholder="记录您的感受和想法..." 
             class="textarea-input"
             maxlength="500"
             value="{{currentText}}"

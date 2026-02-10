@@ -133,3 +133,20 @@
   color: #99a1ae;
   line-height: 22.38rpx;
 }
+
+/* 登录按钮样式 */
+.login-button {
+  background-color: #b29764;
+  color: #ffffff;
+  border: none;
+  border-radius: 8rpx;
+  padding: 12rpx 24rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  line-height: 1;
+  margin: 0;
+}
+
+.login-button:active {
+  background-color: #8c7345;
+}
