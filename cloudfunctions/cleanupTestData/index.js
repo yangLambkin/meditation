@@ -88,7 +88,7 @@ async function safeCleanupTestData() {
     // 定义测试期间
     const testPeriod = {
       startDate: '2026-01-01',  // 测试开始日期
-      endDate: '2026-02-07'     // 测试结束日期（今天）
+      endDate: '2026-02-11'     // 测试结束日期（今天）
     };
     
     let totalDeleted = 0;

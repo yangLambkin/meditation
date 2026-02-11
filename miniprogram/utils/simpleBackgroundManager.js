@@ -20,19 +20,13 @@ class SimpleBackgroundManager {
    */
   async getRandomBackground() {
     try {
-      // 检查缓存
-      const cached = this.getFromCache();
-      if (cached) {
-        console.log('💾 使用缓存的背景图片');
-        return cached;
-      }
+      // 不再使用缓存，每次都要随机选择
+      console.log('🔄 重新获取随机背景图片...');
 
       // 调用云函数获取随机背景图片
       const randomImage = await this.getRandomBackgroundFromCloud();
       
       if (randomImage) {
-        // 缓存结果
-        this.saveToCache(randomImage);
         console.log('🎯 使用云存储随机背景图片:', randomImage);
         return randomImage;
       } else {
@@ -80,8 +74,12 @@ class SimpleBackgroundManager {
    * 获取本地背景图片（降级方案）
    */
   getLocalBackground() {
-    const randomIndex = Math.floor(Math.random() * this.backupImages.length);
-    return this.backupImages[randomIndex];
+    // 使用更随机的种子，避免每次相同的随机序列
+    const timestamp = Date.now();
+    const randomIndex = Math.floor((Math.random() * timestamp) % this.backupImages.length);
+    const selectedImage = this.backupImages[randomIndex];
+    console.log(`🎲 随机选择本地图片: ${selectedImage} (索引: ${randomIndex}, 时间戳: ${timestamp})`);
+    return selectedImage;
   }
 
   /**

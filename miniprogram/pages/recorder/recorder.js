@@ -428,14 +428,17 @@ Page({
 
   // 获取用户openId
   getUserOpenId: function() {
-    // 先尝试获取微信openid，如果失败则使用本地ID
+    // 先尝试获取微信openid
     try {
-      // 检查用户是否已登录
       const userInfo = wx.getStorageSync('userInfo');
       if (userInfo && userInfo.openid) {
+        const openid = userInfo.openid;
         this.setData({
-          userOpenId: userInfo.openid
+          userOpenId: openid
         });
+        
+        // 如果是已登录用户，检查本地是否有未迁移的数据
+        this.checkLocalDataMigration(openid);
         return;
       }
     } catch (error) {
@@ -454,6 +457,28 @@ Page({
       this.setData({
         userOpenId: localUserId
       });
+    }
+  },
+  
+  /**
+   * 检查本地数据迁移
+   */
+  checkLocalDataMigration: function(openid) {
+    const localUserId = wx.getStorageSync('localUserId');
+    
+    if (!localUserId) {
+      return;
+    }
+    
+    // 检查本地是否有未迁移的数据
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const localRecords = allUserRecords[localUserId];
+    
+    if (localRecords && localRecords.dailyRecords && !localRecords.migrated) {
+      console.log(`检测到未迁移的本地数据: ${Object.keys(localRecords.dailyRecords).length}天`);
+      
+      // 可以在适当时候提示用户进行数据迁移
+      // 例如在用户完成打卡后或特定时机
     }
   },
 
@@ -536,6 +561,10 @@ Page({
       durations: [],
       ratings: []
     };
+    
+    // 确保数组存在，避免undefined错误
+    if (!todayRecord.durations) todayRecord.durations = [];
+    if (!todayRecord.ratings) todayRecord.ratings = [];
     
     todayRecord.count += 1;
     todayRecord.lastTimestamp = today.getTime();

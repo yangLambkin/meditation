@@ -12,7 +12,7 @@ exports.main = async (event, context) => {
   
   switch (event.type) {
     case "recordMeditation":
-      return await recordMeditation(openid, event.data);
+      return await recordMeditation(openid, event.data, event.localUserId);
     case "getUserRecords":
       return await getUserRecords(openid, event.date);
     case "getUserStats":
@@ -26,21 +26,25 @@ exports.main = async (event, context) => {
     case "updateMeditationRecord":
       return await updateMeditationRecord(openid, event.recordId, event.experience);
     case "saveExperienceRecord":
-      return await saveExperienceRecord(openid, event.record);
+      return await saveExperienceRecord(openid, event.record, event.localUserId);
     case "deleteExperienceRecord":
       return await deleteExperienceRecord(openid, event.recordId);
+    case "migrateLocalData":
+      return await migrateLocalData(openid, event.localUserId);
+    case "getUserMapping":
+      return await getUserMapping(openid);
     default:
       return { success: false, error: "未知的操作类型" };
   }
 };
 
-// 记录冥想打卡（根据新的1对多关系）
-async function recordMeditation(openid, data) {
+// 记录冥想打卡（支持本地用户标识）
+async function recordMeditation(openid, data, localUserId = null) {
   try {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     
-    // 创建打卡记录 - experience字段存储体验记录ID数组
+    // 创建打卡记录 - 支持本地用户标识映射
     const record = {
       _openid: openid,
       date: dateStr,
@@ -51,6 +55,11 @@ async function recordMeditation(openid, data) {
       createdAt: now,
       updatedAt: now
     };
+    
+    // 如果提供了本地用户ID，创建用户映射
+    if (localUserId) {
+      await createUserMapping(openid, localUserId);
+    }
     
     // 插入记录
     const result = await db.collection("meditation_records").add({
@@ -452,8 +461,8 @@ async function getAllRecords(openid) {
   }
 }
 
-// 保存体验记录（与打卡记录建立1对多关系）
-async function saveExperienceRecord(openid, record) {
+// 保存体验记录（支持本地用户标识）
+async function saveExperienceRecord(openid, record, localUserId = null) {
   try {
     console.log(`开始保存体验记录: openid=${openid}, record=`, record);
     
@@ -525,6 +534,84 @@ async function deleteExperienceRecord(openid, recordId) {
     
   } catch (error) {
     console.error("删除体验记录失败:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 创建用户标识映射
+async function createUserMapping(openid, localUserId) {
+  try {
+    const now = new Date();
+    
+    // 检查是否已存在映射
+    const existingMapping = await db.collection("user_mappings")
+      .where({
+        _openid: openid,
+        local_user_id: localUserId
+      })
+      .get();
+    
+    if (existingMapping.data.length === 0) {
+      // 创建新映射
+      await db.collection("user_mappings").add({
+        data: {
+          _openid: openid,
+          local_user_id: localUserId,
+          created_at: now,
+          updated_at: now
+        }
+      });
+      console.log(`✅ 创建用户映射: openid=${openid}, localUserId=${localUserId}`);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("创建用户映射失败:", error);
+    return false;
+  }
+}
+
+// 获取用户映射信息
+async function getUserMapping(openid) {
+  try {
+    const result = await db.collection("user_mappings")
+      .where({
+        _openid: openid
+      })
+      .get();
+    
+    return {
+      success: true,
+      data: result.data
+    };
+  } catch (error) {
+    console.error("获取用户映射失败:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 迁移本地数据到微信账号
+async function migrateLocalData(openid, localUserId) {
+  try {
+    console.log(`开始迁移本地数据: openid=${openid}, localUserId=${localUserId}`);
+    
+    // 1. 创建用户映射
+    await createUserMapping(openid, localUserId);
+    
+    // 2. 获取本地记录（这里需要前端配合，因为本地数据在前端）
+    // 实际迁移逻辑需要前端调用，这里只返回迁移指令
+    
+    return {
+      success: true,
+      data: {
+        openid: openid,
+        localUserId: localUserId,
+        migrationStatus: "ready",
+        message: "请在前端调用数据迁移功能"
+      }
+    };
+  } catch (error) {
+    console.error("迁移本地数据失败:", error);
     return { success: false, error: error.message };
   }
 }

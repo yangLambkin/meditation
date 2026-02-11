@@ -100,37 +100,51 @@ Page({
    */
   showLoginModal: function() {
     console.log('=== showLoginModal函数被调用 ===');
-    console.log('当前页面上下文:', this);
-    console.log('当前页面数据:', this.data);
-    console.log('函数调用栈:', new Error().stack);
     
-    // 保存this引用，避免回调函数中的上下文问题
-    const that = this;
-    
-    wx.showModal({
-      title: '用户登录',
-      content: '欢迎使用觉察计时小程序！我们将获取您的微信昵称和头像信息，并严格遵守《用户隐私保护协议》。',
-      confirmText: '同意',
-      cancelText: '不同意',
-      success: function(res) {
-        console.log('登录模态框用户选择结果:', res);
-        if (res.confirm) {
-          console.log('用户同意隐私协议，直接获取用户信息');
-          that.getUserInfoDirectly();
-        } else {
-          console.log('用户不同意隐私协议');
-          // 用户可以继续使用小程序，但部分功能受限
-          wx.showToast({
-            title: '您可以继续使用小程序',
-            icon: 'none',
-            duration: 1500
-          });
-        }
-      },
-      fail: function(err) {
-        console.error('显示登录模态框失败:', err);
-      }
-    });
+    try {
+      // 使用更稳定的方式保存this上下文
+      const self = this;
+      
+      // 添加延迟，避免与小程序事件循环冲突
+      setTimeout(() => {
+        wx.showModal({
+          title: '用户登录',
+          content: '欢迎使用觉察计时小程序！我们将获取您的微信昵称和头像信息，并严格遵守《用户隐私保护协议》。',
+          confirmText: '同意',
+          cancelText: '不同意',
+          success: function(res) {
+            console.log('登录模态框用户选择结果:', res);
+            try {
+              if (res.confirm) {
+                console.log('用户同意隐私协议，直接获取用户信息');
+                // 使用更安全的调用方式
+                if (self && typeof self.getUserInfoDirectly === 'function') {
+                  self.getUserInfoDirectly();
+                } else {
+                  console.error('getUserInfoDirectly函数不存在或上下文丢失');
+                }
+              } else {
+                console.log('用户不同意隐私协议');
+                // 用户可以继续使用小程序，但部分功能受限
+                wx.showToast({
+                  title: '您可以继续使用小程序',
+                  icon: 'none',
+                  duration: 1500
+                });
+              }
+            } catch (callbackError) {
+              console.error('登录回调函数执行错误:', callbackError);
+            }
+          },
+          fail: function(err) {
+            console.error('显示登录模态框失败:', err);
+          }
+        });
+      }, 100); // 添加100ms延迟避免冲突
+      
+    } catch (error) {
+      console.error('showLoginModal函数执行错误:', error);
+    }
     
     console.log('=== showLoginModal函数执行完成 ===');
   },
@@ -393,7 +407,7 @@ Page({
   /**
    * 保存完整用户信息（包含昵称、头像等）
    */
-  saveUserInfo: function(userInfo, openid) {
+  saveUserInfo: async function(userInfo, openid) {
     console.log('保存完整用户信息，openid:', openid);
     
     // 保存用户信息到本地缓存
@@ -413,7 +427,149 @@ Page({
     // 保存用户信息到云数据库
     this.saveUserToCloud(userInfo, openid);
     
+    // 检查并处理数据迁移
+    await this.handleDataMigration(openid);
+    
     console.log('用户信息保存完成:', userData);
+  },
+  
+  /**
+   * 处理用户数据迁移
+   */
+  handleDataMigration: async function(openid) {
+    try {
+      // 获取本地用户ID
+      const localUserId = wx.getStorageSync('localUserId');
+      
+      if (!localUserId) {
+        console.log('没有本地用户ID，无需数据迁移');
+        return;
+      }
+      
+      console.log(`开始检查数据迁移: openid=${openid}, localUserId=${localUserId}`);
+      
+      // 检查本地是否有未同步的数据
+      const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+      const localRecords = allUserRecords[localUserId];
+      
+      if (!localRecords || !localRecords.dailyRecords || Object.keys(localRecords.dailyRecords).length === 0) {
+        console.log('本地没有打卡记录，无需迁移');
+        return;
+      }
+      
+      // 静默执行数据迁移
+      console.log(`检测到${Object.keys(localRecords.dailyRecords).length}天的本地打卡记录，开始静默迁移...`);
+      await this.silentDataMigration(openid, localUserId, localRecords);
+      
+    } catch (error) {
+      console.error('处理数据迁移失败:', error);
+    }
+  },
+  
+  /**
+   * 静默执行数据迁移（无用户提示）
+   */
+  silentDataMigration: async function(openid, localUserId, localRecords) {
+    try {
+      console.log('开始静默数据迁移...');
+      
+      // 调用云函数创建用户映射
+      const migrationResult = await wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'migrateLocalData',
+          openid: openid,
+          localUserId: localUserId
+        }
+      });
+      
+      if (migrationResult.result.success) {
+        console.log('静默数据迁移成功');
+        
+        // 标记本地记录为已迁移
+        this.markRecordsAsMigrated(openid, localUserId);
+        
+        // 静默更新日历显示（无提示）
+        this.generateCalendar();
+        
+      } else {
+        console.warn('静默数据迁移失败:', migrationResult.result.error);
+      }
+      
+    } catch (error) {
+      console.error('静默数据迁移执行失败:', error);
+      // 静默失败，不提示用户
+    }
+  },
+
+  /**
+   * 执行数据迁移（保留原有函数，但不再使用）
+   */
+  performDataMigration: async function(openid, localUserId, localRecords) {
+    try {
+      wx.showLoading({
+        title: '数据迁移中...',
+        mask: true
+      });
+      
+      console.log('开始执行数据迁移...');
+      
+      // 调用云函数创建用户映射
+      const migrationResult = await wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'migrateLocalData',
+          openid: openid,
+          localUserId: localUserId
+        }
+      });
+      
+      if (migrationResult.result.success) {
+        console.log('用户映射创建成功');
+        
+        // 标记本地记录为已迁移
+        this.markRecordsAsMigrated(openid, localUserId);
+        
+        wx.hideLoading();
+        wx.showToast({
+          title: '数据迁移成功',
+          icon: 'success',
+          duration: 2000
+        });
+        
+        // 更新日历显示
+        this.generateCalendar();
+        
+      } else {
+        throw new Error(migrationResult.result.error);
+      }
+      
+    } catch (error) {
+      wx.hideLoading();
+      console.error('数据迁移执行失败:', error);
+      wx.showToast({
+        title: '迁移失败，请重试',
+        icon: 'none',
+        duration: 2000
+      });
+    }
+  },
+  
+  /**
+   * 标记记录为已迁移
+   */
+  markRecordsAsMigrated: function(openid, localUserId) {
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    
+    if (allUserRecords[localUserId]) {
+      // 添加迁移标记
+      allUserRecords[localUserId].migrated = true;
+      allUserRecords[localUserId].migratedTo = openid;
+      allUserRecords[localUserId].migrationTime = new Date().toISOString();
+      
+      wx.setStorageSync('meditationUserRecords', allUserRecords);
+      console.log('标记本地记录为已迁移');
+    }
   },
 
   /**
@@ -863,25 +1019,117 @@ Page({
   },
 
   /**
-   * 检查某日期当前用户是否已打卡
+   * 检查某日期当前用户是否已打卡（支持迁移数据）
    */
   isDateChecked: function(dateStr) {
     if (!this.data.userOpenId) {
       return false;
     }
     
-    // 获取所有用户的打卡记录
+    // 1. 检查当前用户ID的记录
     const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
     const userRecords = allUserRecords[this.data.userOpenId];
     
-    if (!userRecords || !userRecords.dailyRecords) {
-      return false;
+    if (userRecords && userRecords.dailyRecords) {
+      const dailyRecord = userRecords.dailyRecords[dateStr];
+      if (dailyRecord && dailyRecord.count > 0) {
+        return true;
+      }
     }
     
-    const dailyRecord = userRecords.dailyRecords[dateStr];
+    // 2. 检查是否有迁移数据关联
+    const migratedRecords = this.checkMigratedRecords(dateStr);
+    if (migratedRecords) {
+      return true;
+    }
     
-    // 只要当天有打卡记录（次数>=1），就显示为已打卡
-    return dailyRecord && dailyRecord.count > 0;
+    // 3. 如果没有缓存数据，延迟异步加载并同步到本地
+    this.syncUserCheckinData();
+    
+    return false;
+  },
+  
+  /**
+   * 检查迁移数据
+   */
+  checkMigratedRecords: function(dateStr) {
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    
+    // 查找所有已迁移到当前用户的数据
+    for (const [userId, userRecord] of Object.entries(allUserRecords)) {
+      if (userRecord.migrated && userRecord.migratedTo === this.data.userOpenId) {
+        if (userRecord.dailyRecords && userRecord.dailyRecords[dateStr]) {
+          const dailyRecord = userRecord.dailyRecords[dateStr];
+          if (dailyRecord && dailyRecord.count > 0) {
+            console.log(`✅ 找到迁移记录: ${dateStr} (来源: ${userId})`);
+            return true;
+          }
+        }
+      }
+    }
+    
+    return false;
+  },
+  
+  /**
+   * 异步同步用户打卡数据到本地存储
+   */
+  syncUserCheckinData: function() {
+    // 避免频繁同步，每10分钟同步一次
+    const lastSyncTime = wx.getStorageSync('lastSyncTime') || 0;
+    const now = Date.now();
+    const syncInterval = 10 * 60 * 1000; // 10分钟
+    
+    if (now - lastSyncTime < syncInterval) {
+      return;
+    }
+    
+    wx.setStorageSync('lastSyncTime', now);
+    
+    // 异步同步数据
+    setTimeout(() => {
+      const checkinManager = require('../../utils/checkin.js');
+      
+      // 获取最近30天的打卡记录（避免数据量过大）
+      const today = new Date();
+      const syncPromises = [];
+      
+      for (let i = 0; i < 30; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        
+        syncPromises.push(
+          checkinManager.getDailyCheckinCount(dateStr)
+            .then(count => ({ dateStr, count }))
+            .catch(() => ({ dateStr, count: 0 }))
+        );
+      }
+      
+      Promise.all(syncPromises).then(results => {
+        const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+        const userRecords = allUserRecords[this.data.userOpenId] || {
+          dailyRecords: {},
+          totalCount: 0
+        };
+        
+        results.forEach(({ dateStr, count }) => {
+          if (count > 0) {
+            if (!userRecords.dailyRecords[dateStr]) {
+              userRecords.dailyRecords[dateStr] = { count: 0 };
+            }
+            userRecords.dailyRecords[dateStr].count = count;
+          }
+        });
+        
+        allUserRecords[this.data.userOpenId] = userRecords;
+        wx.setStorageSync('meditationUserRecords', allUserRecords);
+        
+        console.log('✅ 用户打卡数据同步完成');
+      }).catch(error => {
+        console.warn('❌ 数据同步失败:', error);
+      });
+    }, 1000); // 延迟1秒执行，避免阻塞页面渲染
   },
 
   /**

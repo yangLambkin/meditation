@@ -19,47 +19,56 @@ Page({
   },
 
   onLoad(options) {
-    // 页面加载时设置背景图片
-    this.setBackgroundImage();
+    // 优化：分阶段加载，立即显示页面框架
     
-    // 设置当前日期信息
+    // 1. 立即设置基本数据（同步操作）
     this.setCurrentDateInfo();
     
-    // 获取随机金句
-    this.getRandomWisdom();
+    // 2. 立即开始加载网络数据，但不阻塞页面渲染
+    setTimeout(() => {
+      // 后台加载背景图
+      this.setBackgroundImage().catch(err => {
+        console.error('背景图加载失败:', err);
+      });
+      
+      // 后台加载金句
+      this.getRandomWisdom();
+    }, 100); // 微小延迟，确保页面先渲染
     
-    // 调试：检查数据是否正确绑定
-    console.log('页面加载，totalMinutes:', this.data.totalMinutes);
+    console.log('页面基础框架已加载，开始异步数据加载');
   },
 
   /**
    * 设置背景图片（使用随机云端图片）
    */
-  setBackgroundImage: async function() {
-    try {
+  setBackgroundImage: function() {
+    return new Promise((resolve) => {
       console.log('🔄 开始设置背景图片...');
       
-      // 使用简化版背景图片管理器获取随机图片
-      const backgroundImage = await simpleBackgroundManager.getRandomBackground();
-      
-      console.log('✅ 背景图片获取成功:', backgroundImage);
-      
-      // 设置背景图片
-      this.setData({
-        backgroundImage: backgroundImage
-      });
-      
-      console.log('🎉 背景图片设置成功');
-      
-    } catch (error) {
-      console.error('❌ 设置背景图片失败:', error);
-      
-      // 降级处理：使用默认图片
-      this.setData({
-        backgroundImage: '/images/bg1.jpeg'
-      });
-      console.log('🔄 使用默认背景图片作为降级处理');
-    }
+      // 使用回调方式，不阻塞页面渲染
+      simpleBackgroundManager.getRandomBackground()
+        .then(backgroundImage => {
+          console.log('✅ 背景图片获取成功:', backgroundImage);
+          
+          // 设置背景图片
+          this.setData({
+            backgroundImage: backgroundImage
+          });
+          
+          console.log('🎉 背景图片设置成功');
+          resolve(backgroundImage);
+        })
+        .catch(error => {
+          console.error('❌ 设置背景图片失败:', error);
+          
+          // 降级处理：使用默认图片
+          this.setData({
+            backgroundImage: '/images/bg1.jpeg'
+          });
+          console.log('🔄 使用默认背景图片作为降级处理');
+          resolve(null);
+        });
+    });
   },
 
   /**

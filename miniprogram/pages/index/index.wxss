@@ -369,6 +369,7 @@
   line-height: 1.5;
   font-style: Arimo;
   width: 100%;
+  font-size: 28rpx;
 }
 /* WeUI规范按钮样式 */
 .weui-btn {
