@@ -26,10 +26,10 @@
       <text class="self-start text_5">
         {{wisdomQuote || '静坐觉察，每日修行。保持内心的平静与专注。'}}
       </text>
-      <!-- 保持原图或使用本地图片 -->
+      <!-- 随机展示云存储中的图片 -->
       <image
         class="flex-1 image ml-37"
-        src="/images/p1.png"
+        src="{{displayImage}}"
       />
     </view>
     

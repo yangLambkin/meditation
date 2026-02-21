@@ -71,6 +71,22 @@ const COLLECTION_SCHEMAS = {
       updated_at: 'date'           // 更新时间
     },
     required: ['_openid', 'text', 'timestamp']
+  },
+  
+  // images 表结构（日签扑克图片表）
+  images: {
+    description: '日签扑克图片表',
+    fields: {
+      _openid: 'string',           // 用户唯一标识
+      fileID: 'string',            // 云存储文件ID
+      filename: 'string',          // 文件名
+      category: 'string',          // 图片分类
+      description: 'string',       // 图片描述
+      uploadTime: 'date',          // 上传时间
+      size: 'number',              // 文件大小（字节）
+      status: 'string'             // 状态（active/inactive）
+    },
+    required: ['fileID', 'filename', 'category', 'uploadTime']
   }
 };
 

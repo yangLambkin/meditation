@@ -1,5 +1,6 @@
 const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
+const imageConfig = require('../../config/images.js');
 
 Page({
   data: {
@@ -13,7 +14,8 @@ Page({
     userLevel: 'Lv.3 修行中', // 用户等级
     totalMinutes: 0, // 本次打卡静坐分钟数
     totalCount: 43, // 累计打卡次数
-    wisdomQuote: '' // 金句内容，初始为空
+    wisdomQuote: '', // 金句内容，初始为空
+    displayImage: '/images/p1.png' // 展示图片，初始使用默认图片
   },
 
   onLoad(options) {
@@ -26,6 +28,8 @@ Page({
     setTimeout(() => {
       // 后台加载金句
       this.getRandomWisdom();
+      // 后台加载随机图片
+      this.getRandomImage();
     }, 100); // 微小延迟，确保页面先渲染
     
     console.log('页面基础框架已加载，开始异步数据加载');
@@ -96,6 +100,77 @@ Page({
         // 使用默认金句
       }
     });
+  },
+
+  /**
+   * 高性能随机图片获取 - 配置文件方案（最佳实践）
+   * 使用单独的配置文件管理图片列表
+   */
+  getRandomImage: async function() {
+    try {
+      console.log('🎯 开始获取随机图片（配置文件方案）...');
+      
+      // 从配置文件获取随机图片信息
+      const randomImageInfo = imageConfig.getRandomDailyPokerImage();
+      
+      console.log('📋 随机图片信息:', randomImageInfo);
+      
+      if (randomImageInfo.isDefault) {
+        console.warn('⚠️ 没有可用的图片，使用默认图片');
+        this.fallbackToDefaultImage();
+        return;
+      }
+      
+      console.log('🎲 随机选择的图片:', randomImageInfo.filename);
+      console.log('📁 文件ID:', randomImageInfo.fileID);
+      
+      // 初始化云开发环境
+      wx.cloud.init({
+        env: 'cloud1-2g2rbxbu2c126d4a'
+      });
+      
+      // 转换为可访问的URL
+      console.log('🔄 转换图片URL...');
+      const urlResult = await wx.cloud.getTempFileURL({
+        fileList: [randomImageInfo.fileID]
+      });
+      
+      if (urlResult.fileList && urlResult.fileList.length > 0 && urlResult.fileList[0].tempFileURL) {
+        const imageUrl = urlResult.fileList[0].tempFileURL;
+        
+        // 更新页面图片
+        this.setData({
+          displayImage: imageUrl
+        });
+        
+        console.log('✅ 随机图片设置成功，URL长度:', imageUrl.length);
+        console.log('📝 图片描述:', randomImageInfo.description);
+      } else {
+        console.warn('⚠️ 图片URL转换失败，使用默认图片');
+        this.fallbackToDefaultImage();
+      }
+      
+    } catch (error) {
+      console.error('❌ 获取随机图片失败:', error);
+      console.log('📋 错误详情:', {
+        message: error.message,
+        errCode: error.errCode,
+        errMsg: error.errMsg
+      });
+      
+      // 降级处理
+      this.fallbackToDefaultImage();
+    }
+  },
+
+  /**
+   * 降级到默认图片
+   */
+  fallbackToDefaultImage: function() {
+    this.setData({
+      displayImage: '/images/p1.png'
+    });
+    console.log('使用默认图片:', '/images/p1.png');
   },
 
   /**

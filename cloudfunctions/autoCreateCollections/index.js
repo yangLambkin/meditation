@@ -87,7 +87,9 @@ const COLLECTION_SCHEMAS = {
       count: 1,                             // 打卡次数
       updatedAt: new Date()                 // 更新时间
     }
-  }
+  },
+  
+  
 };
 
 // 创建集合的通用函数
