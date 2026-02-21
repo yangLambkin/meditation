@@ -5,19 +5,26 @@
       <!-- 用户信息显示区域 -->
       <view class="flex-row justify-between items-center group">
         <view class="flex-row items-center">
-          <image
-            class="shrink-0 avatar-circle"
-            src="{{userAvatar}}"
-            mode="aspectFill"
-          />
-          <view class="flex-col items-start ml-17">
-            <!-- 未授权时显示登录文字，点击触发授权 -->
-            <view wx:if="{{!hasUserInfo}}" bindtap="onGetUserInfo">
-              <text class="font text">点击登录</text>
+          <!-- 头像区域，点击可修改 -->
+          <view class="avatar-container" bindtap="changeAvatar">
+            <image
+              class="shrink-0 avatar-circle"
+              src="{{userAvatar}}"
+              mode="aspectFill"
+            />
+            <view class="avatar-edit-hint">
+              <text class="edit-text">修改</text>
             </view>
-            <!-- 已授权时显示用户昵称 -->
-            <view wx:else>
+          </view>
+          <view class="flex-col items-start ml-17">
+            <!-- 未设置个人信息时显示 -->
+            <view wx:if="{{!hasUserInfo}}" bindtap="goToProfilePage">
+              <text class="font text">点击设置个人信息</text>
+            </view>
+            <!-- 已设置个人信息时显示昵称，点击可修改 -->
+            <view wx:else bindtap="goToProfilePage">
               <text class="font text">{{userNickname}}</text>
+              <text class="edit-hint">点击修改</text>
             </view>
             <text class="mt-8 font_2 text_3">坚持静坐第 {{currentStreak}} 天</text>
           </view>

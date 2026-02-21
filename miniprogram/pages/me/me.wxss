@@ -150,3 +150,41 @@
 .login-button:active {
   background-color: #8c7345;
 }
+
+/* 头像修改功能样式 */
+.avatar-container {
+  position: relative;
+  width: 127.96rpx;
+  height: 127.96rpx;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.avatar-edit-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 8rpx;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.avatar-container:active .avatar-edit-hint {
+  opacity: 1;
+}
+
+.edit-text {
+  color: white;
+  font-size: 20rpx;
+  font-weight: 500;
+}
+
+.edit-hint {
+  font-size: 20rpx;
+  color: #b29764;
+  margin-top: 4rpx;
+  display: block;
+}

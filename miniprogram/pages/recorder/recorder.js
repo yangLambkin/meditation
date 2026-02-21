@@ -608,10 +608,10 @@ Page({
       duration: 2000
     });
     
-    // 延迟跳转到daily页面
+    // 延迟跳转到daily1页面
     setTimeout(() => {
       wx.navigateTo({
-        url: '/pages/daily/daily'
+        url: '/pages/daily/daily1'
       });
     }, 1500);
   },

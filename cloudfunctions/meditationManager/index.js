@@ -33,6 +33,12 @@ exports.main = async (event, context) => {
       return await migrateLocalData(openid, event.localUserId);
     case "getUserMapping":
       return await getUserMapping(openid);
+    case "updateUserProfile":
+      return await updateUserProfile(openid, event.userInfo, event.userType);
+    case "getUserProfile":
+      return await getUserProfile(openid);
+    case "migrateUserProfile":
+      return await migrateUserProfile(openid, event.oldUserInfo);
     default:
       return { success: false, error: "未知的操作类型" };
   }
@@ -675,6 +681,166 @@ async function updateMeditationRecord(openid, recordId, experience = "") {
     
   } catch (error) {
     console.error("更新记录体验失败:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 更新用户档案信息
+async function updateUserProfile(openid, userInfo, userType = 'new') {
+  try {
+    console.log(`开始更新用户档案: openid=${openid}, userType=${userType}`);
+    
+    const usersCollection = db.collection('users');
+    const now = new Date();
+    
+    // 准备更新数据
+    const updateData = {
+      nickName: userInfo.nickName || '静心者',
+      avatarUrl: userInfo.avatarUrl || '/images/avatar.png',
+      lastLoginTime: now,
+      loginCount: db.command.inc(1),
+      lastUpdateTime: now
+    };
+    
+    // 添加新格式的字段
+    if (userInfo.isCustomAvatar !== undefined) {
+      updateData.isCustomAvatar = userInfo.isCustomAvatar;
+      updateData.profileComplete = userInfo.profileComplete !== false;
+      updateData.dataSource = userInfo.dataSource || 'custom';
+      updateData.migrationStatus = userInfo.migrationStatus || 'new';
+    }
+    
+    // 添加传统字段（如果存在）
+    if (userInfo.gender !== undefined) updateData.gender = userInfo.gender;
+    if (userInfo.country !== undefined) updateData.country = userInfo.country;
+    if (userInfo.province !== undefined) updateData.province = userInfo.province;
+    if (userInfo.city !== undefined) updateData.city = userInfo.city;
+    
+    // 检查用户是否已存在
+    const userQuery = await usersCollection.where({ _openid: openid }).get();
+    
+    if (userQuery.data.length > 0) {
+      // 用户已存在，更新信息
+      await usersCollection.doc(userQuery.data[0]._id).update({
+        data: updateData
+      });
+      console.log(`✅ 用户档案更新成功: openid=${openid}`);
+    } else {
+      // 用户不存在，创建新用户
+      const createData = {
+        ...updateData,
+        _openid: openid,
+        createTime: now
+      };
+      
+      await usersCollection.add({
+        data: createData
+      });
+      console.log(`✅ 新用户档案创建成功: openid=${openid}`);
+    }
+    
+    return {
+      success: true,
+      data: {
+        openid: openid,
+        updateTime: now,
+        userType: userType
+      }
+    };
+    
+  } catch (error) {
+    console.error("更新用户档案失败:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 获取用户档案信息
+async function getUserProfile(openid) {
+  try {
+    console.log(`获取用户档案: openid=${openid}`);
+    
+    const usersCollection = db.collection('users');
+    const userQuery = await usersCollection.where({ _openid: openid }).get();
+    
+    if (userQuery.data.length === 0) {
+      console.log(`未找到用户档案: openid=${openid}`);
+      return {
+        success: true,
+        data: null,
+        message: '用户档案不存在'
+      };
+    }
+    
+    const userProfile = userQuery.data[0];
+    console.log(`✅ 获取用户档案成功: openid=${openid}`);
+    
+    return {
+      success: true,
+      data: userProfile
+    };
+    
+  } catch (error) {
+    console.error("获取用户档案失败:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 迁移用户档案（从旧格式到新格式）
+async function migrateUserProfile(openid, oldUserInfo) {
+  try {
+    console.log(`开始迁移用户档案: openid=${openid}`);
+    
+    const usersCollection = db.collection('users');
+    const now = new Date();
+    
+    // 构建新的用户档案
+    const newUserInfo = {
+      nickName: oldUserInfo.nickName,
+      avatarUrl: oldUserInfo.avatarUrl,
+      gender: oldUserInfo.gender,
+      country: oldUserInfo.country,
+      province: oldUserInfo.province,
+      city: oldUserInfo.city,
+      isCustomAvatar: false, // 标记为微信获取
+      profileComplete: true,
+      dataSource: 'wechat',
+      migrationStatus: 'migrated',
+      originalInfo: oldUserInfo, // 保留原始信息
+      createTime: oldUserInfo.createTime ? new Date(oldUserInfo.createTime) : now,
+      lastUpdateTime: now,
+      lastLoginTime: now,
+      loginCount: 1
+    };
+    
+    // 检查用户是否已存在
+    const userQuery = await usersCollection.where({ _openid: openid }).get();
+    
+    if (userQuery.data.length > 0) {
+      // 用户已存在，更新信息
+      await usersCollection.doc(userQuery.data[0]._id).update({
+        data: newUserInfo
+      });
+      console.log(`✅ 用户档案迁移成功（更新）: openid=${openid}`);
+    } else {
+      // 用户不存在，创建新用户
+      newUserInfo._openid = openid;
+      await usersCollection.add({
+        data: newUserInfo
+      });
+      console.log(`✅ 用户档案迁移成功（创建）: openid=${openid}`);
+    }
+    
+    return {
+      success: true,
+      data: {
+        openid: openid,
+        migrationTime: now,
+        migratedFrom: 'wechat'
+      }
+    };
+    
+  } catch (error) {
+    console.error("迁移用户档案失败:", error);
     return { success: false, error: error.message };
   }
 }

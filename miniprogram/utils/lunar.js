@@ -2,7 +2,7 @@
 // 农历日期计算工具 - 使用本地简化算法
 
 /**
- * 获取完整的农历日期（基于2026年2月4日=乙巳年腊月十七的基准）
+ * 获取完整的农历日期（基于2026年2月19日=丙午年正月初三的基准）
  * @param {Date} solarDate - 公历日期对象
  * @returns {string} 农历日期字符串
  */
@@ -12,16 +12,16 @@ function getLunarDate(solarDate) {
     const month = solarDate.getMonth() + 1;
     const day = solarDate.getDate();
     
-    // 基准日期：2026年2月4日 = 乙巳年腊月十七
-    const baseDate = new Date('2026-02-04');
+    // 基准日期：2026年2月19日 = 丙午年正月初三
+    const baseDate = new Date('2026-02-19');
     const currentDate = new Date(year, month - 1, day);
     
     const daysDiff = Math.floor((currentDate - baseDate) / (1000 * 60 * 60 * 24));
     
     // 简化计算农历日期
-    let lunarYear = 2025; // 乙巳年对应的农历年
-    let lunarMonth = 12;  // 腊月
-    let lunarDay = 18;    // 十八（校正后的基准，使2026-02-04显示为腊月十七）
+    let lunarYear = 2026; // 丙午年对应的农历年
+    let lunarMonth = 1;   // 正月
+    let lunarDay = 2;     // 初三（基准日期-1，因为计算逻辑会从基准日开始加天数）
     
     // 根据天数差调整
     let tempDays = daysDiff;
@@ -56,7 +56,7 @@ function getLunarDate(solarDate) {
   } catch (error) {
     console.error('农历计算错误:', error);
     // 降级方案：返回默认农历日期
-    return '乙巳年腊月十七';
+    return '丙午年正月初三';
   }
 }
 

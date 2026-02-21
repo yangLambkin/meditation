@@ -1,10 +1,8 @@
 const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
-const simpleBackgroundManager = require('../../utils/simpleBackgroundManager.js');
 
 Page({
   data: {
-    backgroundImage: '', // 背景图片URL
     year: 2026, // 年份
     month: 1, // 月份
     day: 23, // 日期
@@ -26,11 +24,6 @@ Page({
     
     // 2. 立即开始加载网络数据，但不阻塞页面渲染
     setTimeout(() => {
-      // 后台加载背景图
-      this.setBackgroundImage().catch(err => {
-        console.error('背景图加载失败:', err);
-      });
-      
       // 后台加载金句
       this.getRandomWisdom();
     }, 100); // 微小延迟，确保页面先渲染
@@ -38,38 +31,6 @@ Page({
     console.log('页面基础框架已加载，开始异步数据加载');
   },
 
-  /**
-   * 设置背景图片（使用随机云端图片）
-   */
-  setBackgroundImage: function() {
-    return new Promise((resolve) => {
-      console.log('🔄 开始设置背景图片...');
-      
-      // 使用回调方式，不阻塞页面渲染
-      simpleBackgroundManager.getRandomBackground()
-        .then(backgroundImage => {
-          console.log('✅ 背景图片获取成功:', backgroundImage);
-          
-          // 设置背景图片
-          this.setData({
-            backgroundImage: backgroundImage
-          });
-          
-          console.log('🎉 背景图片设置成功');
-          resolve(backgroundImage);
-        })
-        .catch(error => {
-          console.error('❌ 设置背景图片失败:', error);
-          
-          // 降级处理：使用默认图片
-          this.setData({
-            backgroundImage: '/images/bg1.jpeg'
-          });
-          console.log('🔄 使用默认背景图片作为降级处理');
-          resolve(null);
-        });
-    });
-  },
 
   /**
    * 设置当前日期信息
@@ -79,6 +40,11 @@ Page({
     const year = today.getFullYear();
     const month = today.getMonth() + 1;
     const day = today.getDate();
+    
+    // 获取英文月份名称
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                       'July', 'August', 'September', 'October', 'November', 'December'];
+    const englishMonth = monthNames[today.getMonth()];
     
     // 获取星期几
     const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
@@ -93,13 +59,13 @@ Page({
     // 更新页面显示
     this.setData({
       year: year,
-      month: month,
+      month: englishMonth,
       day: day,
       weekDay: weekDay,
       lunarDate: lunarDate
     });
     
-    console.log(`打卡日期: ${year}.${month} ${weekDay} ${lunarDate}`);
+    console.log(`打卡日期: ${year}.${englishMonth} ${weekDay} ${lunarDate}`);
   },
 
   /**
@@ -355,14 +321,9 @@ Page({
     const width = 750;
     const height = 1334;
     
-    // 1. 绘制背景图片（全屏）- 使用当前页面的背景图片
-    // 如果当前背景图片是云端图片，绘制时需要处理跨域问题
-    // 这里使用默认图片作为降级处理
-    const bgImage = this.data.backgroundImage.startsWith('cloud://') 
-      ? '/images/bg1.jpeg' 
-      : this.data.backgroundImage;
-    
-    ctx.drawImage(bgImage, 0, 0, width, height);
+    // 1. 绘制白色背景（全屏）
+    ctx.setFillStyle('#ffffff');
+    ctx.fillRect(0, 0, width, height);
     
     // 2. 绘制简单布局（避免复杂的布局计算）
     this.drawSimpleLayout(ctx, width, height);

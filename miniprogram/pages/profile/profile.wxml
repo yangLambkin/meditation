@@ -1,0 +1,50 @@
+<view class="profile-container">
+  <!-- 页面头部 -->
+  <view class="header">
+    <text class="title">完善个人信息</text>
+    <text class="subtitle">让我们更好地为您服务</text>
+  </view>
+
+  <!-- 头像选择区域 -->
+  <view class="avatar-section">
+    <button class="avatar-btn" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
+      <image class="avatar" src="{{avatarUrl}}" mode="aspectFill"></image>
+    </button>
+    <text class="avatar-hint">{{isAvatarSelected ? '头像已选择' : '请点击头像选择'}}</text>
+  </view>
+
+  <!-- 昵称输入区域 -->
+  <view class="nickname-section">
+    <text class="section-title">昵称</text>
+    <form bindsubmit="onFormSubmit">
+      <input 
+        class="nickname-input" 
+        name="nickname"
+        type="nickname" 
+        placeholder="请输入昵称（1-15个字符）"
+        value="{{nickname}}"
+        maxlength="15"
+        bindinput="onNicknameInput"
+      />
+      <text class="char-count">{{nickname.length}}/15</text>
+      
+      <!-- 隐藏的提交按钮，通过表单确保安全检测 -->
+      <button class="hidden-submit" form-type="submit"></button>
+    </form>
+  </view>
+
+  <!-- 操作按钮区域 -->
+  <view class="action-section">
+    <button class="save-btn {{isProfileValid ? 'active' : ''}}" bindtap="saveProfile" disabled="{{!isProfileValid}}">
+      <text class="save-text">保存</text>
+    </button>
+  </view>
+
+  <!-- 加载提示 -->
+  <view class="loading-overlay" wx:if="{{isLoading}}">
+    <view class="loading-content">
+      <view class="loading-spinner"></view>
+      <text class="loading-text">保存中...</text>
+    </view>
+  </view>
+</view>

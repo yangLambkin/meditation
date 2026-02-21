@@ -158,7 +158,7 @@
   padding: 0 17.65rpx;
 }
 .font_6 {
-  font-size: 25rpx;
+  font-size: 28rpx;
   font-family: Arimo;
   line-height: 15rpx;
   color: #99a1ae;

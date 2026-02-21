@@ -47,13 +47,18 @@ Page({
   },
 
   /**
-   * 获取用户微信头像
+   * 获取用户头像（支持新旧格式）
    */
   getUserAvatar() {
     // 只从缓存获取用户信息，不进行静默获取
     const cachedUserInfo = wx.getStorageSync('userInfo');
     
-    if (cachedUserInfo && cachedUserInfo.avatarUrl) {
+    // 支持新旧格式的用户头像
+    const hasValidAvatar = cachedUserInfo && 
+                          (cachedUserInfo.avatarUrl || 
+                           cachedUserInfo.isCustomAvatar !== undefined);
+    
+    if (hasValidAvatar && cachedUserInfo.avatarUrl) {
       // 使用缓存的用户头像
       this.setData({
         userAvatar: cachedUserInfo.avatarUrl,
@@ -213,56 +218,114 @@ Page({
   },
 
   /**
-   * 用户授权回调
+   * 跳转到个人信息修改页面
    */
-  onGetUserInfo: function(e) {
-    console.log('me页面用户授权信息:', e);
+  goToProfilePage: function() {
+    console.log('跳转到个人信息修改页面');
     
-    if (e.detail.userInfo) {
-      // 用户同意授权
-      const userInfo = e.detail.userInfo;
-      const nickname = userInfo.nickName;
-      const avatarUrl = userInfo.avatarUrl;
-      
-      console.log('me页面用户同意授权，昵称:', nickname, '头像:', avatarUrl);
-      
-      // 保存到缓存
-      wx.setStorageSync('userInfo', userInfo);
-      wx.setStorageSync('userNickname', nickname);
-      
-      // 更新页面显示
-      this.setData({
-        userNickname: nickname,
-        userAvatar: avatarUrl,
-        hasUserInfo: true
-      });
-      
-      wx.showToast({
-        title: '授权成功',
-        icon: 'success',
-        duration: 1500
-      });
-    } else {
-      // 用户拒绝授权
-      console.log('me页面用户拒绝授权');
-      
-      // 显示模态对话框，告知用户必须授权
-      wx.showModal({
-        title: '授权提示',
-        content: '使用本小程序需要授权获取您的昵称和头像信息，请点击授权按钮并选择"允许"以继续使用。',
-        showCancel: false,
-        confirmText: '重新授权',
-        success: (res) => {
-          if (res.confirm) {
-            // 用户点击确认，继续显示授权按钮
+    // 获取当前用户信息
+    const currentUserInfo = wx.getStorageSync('userInfo');
+    const userType = currentUserInfo && currentUserInfo.isCustomAvatar !== undefined ? 'custom' : 'edit';
+    
+    wx.navigateTo({
+      url: `/pages/profile/profile?type=${userType}&from=me`
+    });
+  },
+
+  /**
+   * 修改头像
+   */
+  changeAvatar: function() {
+    console.log('修改头像');
+    
+    wx.showActionSheet({
+      itemList: ['拍照', '从相册选择'],
+      success: (res) => {
+        const sourceType = res.tapIndex === 0 ? ['camera'] : ['album'];
+        
+        wx.chooseMedia({
+          count: 1,
+          mediaType: ['image'],
+          sourceType: sourceType,
+          success: (res) => {
+            const tempFilePath = res.tempFiles[0].tempFilePath;
+            
+            // 更新头像显示
             this.setData({
-              userNickname: '觉察者',
-              userAvatar: '/images/avatar.png'
+              userAvatar: tempFilePath
+            });
+            
+            // 保存到本地存储
+            this.saveAvatarToStorage(tempFilePath);
+            
+            wx.showToast({
+              title: '头像修改成功',
+              icon: 'success',
+              duration: 1500
+            });
+          },
+          fail: (err) => {
+            console.error('选择图片失败:', err);
+            wx.showToast({
+              title: '选择图片失败',
+              icon: 'none'
             });
           }
-        }
-      });
+        });
+      },
+      fail: (err) => {
+        console.error('显示操作菜单失败:', err);
+      }
+    });
+  },
+
+  /**
+   * 保存头像到本地存储
+   */
+  saveAvatarToStorage: function(avatarUrl) {
+    const currentUserInfo = wx.getStorageSync('userInfo') || {};
+    
+    // 更新用户信息
+    const updatedUserInfo = {
+      ...currentUserInfo,
+      avatarUrl: avatarUrl,
+      isCustomAvatar: true,
+      profileComplete: true,
+      dataSource: 'custom',
+      lastUpdateTime: new Date().toISOString()
+    };
+    
+    wx.setStorageSync('userInfo', updatedUserInfo);
+    
+    // 同步到云端
+    this.syncUserInfoToCloud(updatedUserInfo);
+  },
+
+  /**
+   * 同步用户信息到云端
+   */
+  syncUserInfoToCloud: function(userInfo) {
+    const openid = wx.getStorageSync('userOpenId');
+    
+    if (!openid) {
+      console.warn('无法同步用户信息：缺少openid');
+      return;
     }
+    
+    wx.cloud.callFunction({
+      name: 'meditationManager',
+      data: {
+        type: 'updateUserProfile',
+        openid: openid,
+        userInfo: userInfo
+      },
+      success: (res) => {
+        console.log('用户信息同步到云端成功:', res);
+      },
+      fail: (err) => {
+        console.error('用户信息同步到云端失败:', err);
+      }
+    });
   },
 
   onReady() {

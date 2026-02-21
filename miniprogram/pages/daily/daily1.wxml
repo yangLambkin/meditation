@@ -1,0 +1,86 @@
+<view class="flex-col page">
+  <!-- 主要内容区域 - 白色底板 -->
+  <view class="content-overlay">
+    
+    <!-- 日期信息区域 -->
+    <view class="flex-col">
+      <view class="flex-row justify-between items-center">
+        <!-- 月份显示（英文） -->
+        <text class="self-start text">{{month}}</text>
+        <!-- 农历年份 -->
+        <text class="self-end year-text">{{year}}年</text>
+      </view>
+      <view class="flex-row justify-between group mt-7">
+        <!-- 日期 -->
+        <text class="text_3">{{day}}</text>
+        <!-- 农历日期和星期 -->
+        <view class="flex-col items-end">
+          <text class="self-end font text_4">{{lunarDate}}</text>
+          <text class="self-end font text_4 mt-2">{{weekDay}}</text>
+        </view>
+      </view>
+    </view>
+    
+    <!-- 金句区域 -->
+    <view class="flex-row group_4 mt-19">
+      <text class="self-start text_5">
+        {{wisdomQuote || '静坐觉察，每日修行。保持内心的平静与专注。'}}
+      </text>
+      <!-- 保持原图或使用本地图片 -->
+      <image
+        class="flex-1 image ml-37"
+        src="/images/p1.png"
+      />
+    </view>
+    
+    <!-- 用户信息和统计区域 -->
+    <view class="flex-col group_3">
+      <view class="flex-row justify-end items-center group_4">
+        <view class="flex-col group_5">
+          <!-- 用户信息和等级 -->
+          <view class="flex-row items-center group_6">
+            <text class="font_2 text_6">{{userName || '静心者'}}</text>
+            <view class="flex-col justify-start items-center text-wrapper ml-5">
+              <text class="font_3 text_7">{{userLevel || 'Lv.1 新手上路'}}</text>
+            </view>
+          </view>
+          
+          <!-- 打卡统计 -->
+          <view class="mt-6 flex-row group_6">
+            <view class="flex-col items-start equal-division-item">
+              <text class="font_4">{{totalCount || 0}}</text>
+              <text class="mt-8 font_3">今日打卡</text>
+            </view>
+            <view class="flex-col items-start equal-division-item ml-102">
+              <text class="font_4">{{totalMinutes || 0}}m</text>
+              <text class="mt-8 font_3">静坐时长</text>
+            </view>
+          </view>
+        </view>
+        
+        <!-- 用户头像 -->
+        <view class="flex-col justify-start items-center relative group_7">
+          <image
+            class="image_2"
+            src="{{userAvatar || '/images/avatar.png'}}"
+          />
+          <view class="flex-col justify-start items-center text-wrapper_2 pos">
+            <text class="font_3 text_8">✦</text>
+          </view>
+        </view>
+      </view>
+      
+        <!-- 分享按钮 -->
+        <view class="mt-12 flex-row justify-center items-center section" bindtap="shareToWechat">
+          <image
+            class="image_3"
+            src="/images/icons/share.png"
+          />
+          <text class="font_2 text_9 ml-9">立即分享</text>
+        </view>
+    </view>
+  </view>
+  
+  <!-- 隐藏的Canvas用于图片生成 -->
+  <canvas canvas-id="dailyCanvas" style="position: fixed; left: -1000px; top: -1000px; width: 750px; height: 1334px;"></canvas>
+</view>
