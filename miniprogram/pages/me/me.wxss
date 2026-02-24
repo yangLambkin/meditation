@@ -27,7 +27,7 @@
   height: 127.96rpx;
 }
 .font {
-  font-size: 40rpx;
+  font-size: 30rpx;
   font-family: Arimo;
   font-weight: 700;
 }
@@ -44,7 +44,7 @@
   background-color: #f0f0f0; /* 备用背景色 */
 }
 .text {
-  color: #101727;
+  color: #b29764;
   line-height: 38.08rpx;
 }
 .image {
@@ -65,7 +65,7 @@
   border-right: solid 3rpx #f2f4f6;
 }
 .font_3 {
-  font-size: 48rpx;
+  font-size: 40rpx;
   font-family: Arimo;
   line-height: 33.52rpx;
   font-weight: 700;
@@ -100,7 +100,7 @@
   background-color: #ffffff;
 }
 .font_2 {
-  font-size: 28rpx;
+  font-size: 26rpx;
   font-family: Arimo;
   line-height: 25.96rpx;
   color: #354152;

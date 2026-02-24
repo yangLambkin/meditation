@@ -10,7 +10,9 @@ Page({
     monthlyCount: 0, // 本月打卡总次数
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
     wisdomQuote: '"静心即是修心，心安即是归处。"', // 每日一言金句
-    currentUserRank: 1, // 当前用户排名，默认为1
+    currentUserRank: "加载中...", // 当前用户排名，默认为加载中
+    totalUsers: 0, // 总用户数
+    showRankUnit: false, // 是否显示排名单位
     hasUserInfo: false // 是否已获取用户信息
   },
 
@@ -31,8 +33,8 @@ Page({
         this.updateMonthlyCount();
         // 获取用户昵称
         this.getUserNickname();
-        // 计算用户排名
-        this.calculateUserRank();
+        // 加载云端排名
+        this.loadRanking();
       });
     } else {
       this.setData({
@@ -43,8 +45,8 @@ Page({
         this.updateMonthlyCount();
         // 获取用户昵称
         this.getUserNickname();
-        // 计算用户排名
-        this.calculateUserRank();
+        // 加载云端排名
+        this.loadRanking();
       });
     }
   },
@@ -69,8 +71,12 @@ Page({
       this.setData({
         userNickname: nickname,
         hasUserInfo: true
+      }, () => {
+        console.log('从缓存获取用户昵称:', nickname);
+        
+        // 用户登录后立即同步云端数据并刷新日历
+        this.syncUserCheckinData();
       });
-      console.log('从缓存获取用户昵称:', nickname);
     } else {
       // 缓存中没有用户信息，显示授权必需提示
       console.log('缓存中没有用户信息，显示授权提示');
@@ -183,34 +189,228 @@ Page({
     console.log('缓存中的用户信息:', existingUserInfo);
     console.log('缓存中的用户昵称:', userNickname);
     
-    // 如果有用户信息，直接显示（无论是什么类型）
-    if (existingUserInfo && existingUserInfo.nickName) {
-      console.log('找到用户信息，直接登录');
-      this.setData({
-        userNickname: existingUserInfo.nickName,
-        hasUserInfo: true
+    // 判断用户是否完成了完整的登录流程
+    const hasCompletedLogin = this.hasUserCompletedLogin(existingUserInfo);
+    console.log('用户是否已完成登录流程:', hasCompletedLogin);
+    
+    if (hasCompletedLogin) {
+      // 已登录状态：显示真实用户昵称
+      console.log('用户已完成登录，显示真实昵称');
+      
+      // 检查当前页面状态是否已经正确，避免不必要的状态重置
+      const currentUserOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+      const currentHasUserInfo = this.data.hasUserInfo;
+      const currentUserNickname = this.data.userNickname;
+      
+      // 如果页面状态已经正确，直接更新数据，避免重新设置userOpenId
+      if (currentHasUserInfo && currentUserNickname && currentUserOpenId && currentUserOpenId.startsWith('oz')) {
+        console.log('页面状态已正确，无需重新设置用户状态，直接更新数据');
+        
+        // 只需更新日历和排名数据
+        this.generateCalendar();
+        this.updateMonthlyCount();
+        this.loadRanking();
+        
+        // 如果需要强制同步数据（非登录操作时）
+        if (!shouldNavigate) {
+          this.syncUserCheckinData();
+        }
+        return;
+      }
+      
+      // 如果页面状态不正确，重新获取微信openid并设置状态
+      // 统一使用微信真实openid：获取微信openid
+      wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'getUserProfile'
+        },
+        success: (res) => {
+          if (res.result && res.result.success) {
+            // 使用微信真实openid
+            const realOpenId = res.result.data ? res.result.data._openid : null;
+            const userOpenId = realOpenId || this.data.userOpenId;
+            
+            this.setData({
+              userNickname: existingUserInfo.nickName,
+              hasUserInfo: true,
+              userOpenId: userOpenId
+            }, () => {
+              console.log('用户登录状态已更新（使用微信openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+              
+              // 保存真实的微信openid到本地存储，确保me页面能正确检测登录状态
+              wx.setStorageSync('userOpenId', userOpenId);
+              
+              // 立即建立映射关系（无论是否需要迁移）
+              const localUserId = wx.getStorageSync('localUserId');
+              const checkinManager = require('../../utils/checkin.js');
+              if (localUserId) {
+                console.log('立即建立用户映射关系:', { localUserId, userOpenId });
+                checkinManager.createUserMapping(localUserId, userOpenId);
+              }
+              
+              // 检查是否需要数据迁移（历史用户首次登录）
+              if (checkinManager.checkNeedDataMigration()) {
+                console.log('检测到历史用户数据，开始迁移...');
+                this.migrateLocalDataOnLogin();
+              } else {
+                console.log('无需数据迁移，直接同步云端数据');
+              }
+              
+              // 用户登录后立即同步云端数据并刷新日历和排名
+              this.syncUserCheckinData();
+              this.loadRanking();
+            });
+          } else {
+            // 如果获取微信openid失败，使用现有逻辑
+            const cachedUserOpenId = wx.getStorageSync('userOpenId');
+            this.setData({
+              userNickname: existingUserInfo.nickName,
+              hasUserInfo: true,
+              userOpenId: cachedUserOpenId || this.data.userOpenId
+            }, () => {
+              console.log('用户登录状态已更新（使用缓存openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+              
+              // 保存openid到本地存储，确保me页面能正确检测登录状态
+              wx.setStorageSync('userOpenId', cachedUserOpenId || this.data.userOpenId);
+              
+              // 立即建立映射关系（无论是否需要迁移）
+              const localUserId = wx.getStorageSync('localUserId');
+              const checkinManager = require('../../utils/checkin.js');
+              if (localUserId) {
+                console.log('立即建立用户映射关系:', { localUserId, userOpenId: cachedUserOpenId || this.data.userOpenId });
+                checkinManager.createUserMapping(localUserId, cachedUserOpenId || this.data.userOpenId);
+              }
+              
+              // 检查是否需要数据迁移（历史用户首次登录）
+              if (checkinManager.checkNeedDataMigration()) {
+                console.log('检测到历史用户数据，开始迁移...');
+                this.migrateLocalDataOnLogin();
+              } else {
+                console.log('无需数据迁移，直接同步云端数据');
+              }
+              
+              // 用户登录后立即同步云端数据并刷新日历和排名
+              this.syncUserCheckinData();
+              this.loadRanking();
+            });
+          }
+        },
+        fail: (err) => {
+          console.error('获取微信openid失败:', err);
+          // 失败时使用现有逻辑
+          const cachedUserOpenId = wx.getStorageSync('userOpenId');
+          this.setData({
+            userNickname: existingUserInfo.nickName,
+            hasUserInfo: true,
+            userOpenId: cachedUserOpenId || this.data.userOpenId
+          }, () => {
+            console.log('用户登录状态已更新（使用备用openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+            
+            // 保存openid到本地存储，确保me页面能正确检测登录状态
+            wx.setStorageSync('userOpenId', cachedUserOpenId || this.data.userOpenId);
+            
+            // 立即建立映射关系（无论是否需要迁移）
+            const localUserId = wx.getStorageSync('localUserId');
+            const checkinManager = require('../../utils/checkin.js');
+            if (localUserId) {
+              console.log('立即建立用户映射关系:', { localUserId, userOpenId: cachedUserOpenId || this.data.userOpenId });
+              checkinManager.createUserMapping(localUserId, cachedUserOpenId || this.data.userOpenId);
+            }
+            
+            // 检查是否需要数据迁移（历史用户首次登录）
+            if (checkinManager.checkNeedDataMigration()) {
+              console.log('检测到历史用户数据，开始迁移...');
+              this.migrateLocalDataOnLogin();
+            } else {
+              console.log('无需数据迁移，直接同步云端数据');
+            }
+            
+            // 用户登录后立即同步云端数据并刷新日历和排名
+            this.syncUserCheckinData();
+            this.loadRanking();
+          });
+        }
       });
-      console.log('用户登录状态已更新:', this.data.hasUserInfo, this.data.userNickname);
       return;
+    } else {
+      // 未登录状态：显示"点击登录"
+      console.log('用户未完成登录，显示"点击登录"');
+      this.setData({
+        userNickname: '点击登录',
+        hasUserInfo: false
+      });
     }
     
     // 如果有独立的昵称缓存，也认为是已登录
     if (userNickname) {
       console.log('找到独立昵称缓存，直接登录');
-      this.setData({
-        userNickname: userNickname,
-        hasUserInfo: true
+      
+      // 统一使用微信真实openid：获取微信openid
+      wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'getUserProfile'
+        },
+        success: (res) => {
+          if (res.result && res.result.success) {
+            // 使用微信真实openid
+            const realOpenId = res.result.data ? res.result.data._openid : null;
+            const userOpenId = realOpenId || this.data.userOpenId;
+            
+            this.setData({
+              userNickname: userNickname,
+              hasUserInfo: true,
+              userOpenId: userOpenId
+            }, () => {
+              console.log('用户登录状态已更新（使用微信openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+              
+              // 用户登录后立即同步云端数据并刷新日历和排名
+              this.syncUserCheckinData();
+              this.loadRanking();
+            });
+          } else {
+            // 如果获取微信openid失败，使用现有逻辑
+            const cachedUserOpenId = wx.getStorageSync('userOpenId');
+            this.setData({
+              userNickname: userNickname,
+              hasUserInfo: true,
+              userOpenId: cachedUserOpenId || this.data.userOpenId
+            }, () => {
+              console.log('用户登录状态已更新（使用缓存openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+              
+              // 用户登录后立即同步云端数据并刷新日历和排名
+              this.syncUserCheckinData();
+              this.loadRanking();
+            });
+          }
+        },
+        fail: (err) => {
+          console.error('获取微信openid失败:', err);
+          // 失败时使用现有逻辑
+          const cachedUserOpenId = wx.getStorageSync('userOpenId');
+          this.setData({
+            userNickname: userNickname,
+            hasUserInfo: true,
+            userOpenId: cachedUserOpenId || this.data.userOpenId
+          }, () => {
+            console.log('用户登录状态已更新（使用备用openid）:', this.data.hasUserInfo, this.data.userNickname, 'openid:', this.data.userOpenId);
+            
+            // 用户登录后立即同步云端数据并刷新日历和排名
+            this.syncUserCheckinData();
+            this.loadRanking();
+          });
+        }
       });
-      console.log('用户登录状态已更新:', this.data.hasUserInfo, this.data.userNickname);
       return;
     }
     
-    // 如果没有用户信息，检查用户类型并决定处理方式
+    // 检查用户类型并决定处理方式
     const userType = this.detectUserTypeAndMigration(existingUserInfo);
     
     console.log('用户类型检测结果:', userType);
     
-    // 如果没有用户信息，设置未登录状态
+    // 对于未完成登录的用户（包括历史用户），始终显示"点击登录"
     this.setData({
       userNickname: '点击登录',
       hasUserInfo: false
@@ -225,12 +425,16 @@ Page({
           break;
           
         case 'custom':
-          // 已使用新格式的用户：直接使用
-          console.log('用户已使用新格式，直接登录');
+          // 已使用新格式的用户：已完成登录，显示真实昵称
+          console.log('用户已使用新格式，已完成登录');
           if (existingUserInfo && existingUserInfo.nickName) {
             this.setData({
               userNickname: existingUserInfo.nickName,
               hasUserInfo: true
+            }, () => {
+              // 用户登录后立即同步云端数据并刷新日历和排名
+              this.syncUserCheckinData();
+              this.loadRanking();
             });
           }
           break;
@@ -252,6 +456,33 @@ Page({
           break;
       }
     }
+  },
+
+  /**
+   * 判断用户是否完成了完整的登录流程
+   */
+  hasUserCompletedLogin: function(userInfo) {
+    if (!userInfo) {
+      return false;
+    }
+    
+    console.log('检查用户是否完成登录，用户信息:', JSON.stringify(userInfo, null, 2));
+    
+    // 如果是基础登录生成的信息（nickName为"微信用户"），视为未完成登录
+    if (userInfo.nickName === '微信用户') {
+      console.log('检测到基础登录用户信息，未完成登录');
+      return false;
+    }
+    
+    // 已完成登录的条件：有用户信息且包含新格式的字段
+    // 新格式的用户信息包含 isCustomAvatar, profileComplete 等字段
+    if (userInfo.isCustomAvatar !== undefined && userInfo.profileComplete !== undefined) {
+      console.log('检测到新格式用户信息，已完成登录');
+      return true;
+    }
+    
+    console.log('用户信息不符合已完成登录的条件');
+    return false;
   },
 
   /**
@@ -297,6 +528,9 @@ Page({
       this.setData({
         userNickname: oldUserInfo.nickName,
         hasUserInfo: true
+      }, () => {
+        // 用户登录后立即同步云端数据并刷新日历
+        this.syncUserCheckinData();
       });
       
       wx.showToast({
@@ -494,6 +728,101 @@ Page({
     } catch (error) {
       console.error('静默数据迁移执行失败:', error);
       // 静默失败，不提示用户
+    }
+  },
+  
+  /**
+   * 登录后自动迁移本地数据到云端
+   */
+  migrateLocalDataOnLogin: async function() {
+    try {
+      console.log('开始登录后数据迁移...');
+      
+      const checkinManager = require('../../utils/checkin.js');
+      
+      // 显示迁移提示
+      wx.showLoading({
+        title: '正在迁移历史数据...',
+        mask: true
+      });
+      
+      // 获取本地用户ID和本地数据
+      const localUserId = wx.getStorageSync('localUserId');
+      const localData = checkinManager.getUserCheckinData();
+      
+      console.log('准备迁移数据，本地用户ID:', localUserId, '微信openid:', this.data.userOpenId);
+      
+      // 1. 首先建立本地映射关系
+      const mappingCreated = checkinManager.createUserMapping(localUserId, this.data.userOpenId);
+      if (!mappingCreated) {
+        console.warn('建立映射关系失败，继续执行迁移...');
+      }
+      
+      // 2. 合并本地数据到当前用户
+      const dataMerged = checkinManager.mergeUserData(this.data.userOpenId, localUserId);
+      if (!dataMerged) {
+        console.warn('合并本地数据失败，继续执行云端迁移...');
+      }
+      
+      // 3. 调用云函数的migrateLocalData接口（上传到云端）
+      const migrationResult = await wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'migrateLocalData',
+          openid: this.data.userOpenId,
+          localUserId: localUserId,
+          localData: localData
+        }
+      });
+      
+      wx.hideLoading();
+      
+      if (migrationResult.result && migrationResult.result.success) {
+        console.log('✅ 数据迁移成功:', migrationResult.result.message);
+        
+        if (migrationResult.result.migratedCount > 0) {
+          wx.showToast({
+            title: `成功迁移${migrationResult.result.migratedCount}条记录`,
+            icon: 'success',
+            duration: 2000
+          });
+        } else {
+          console.log('数据迁移完成');
+        }
+        
+        // 迁移完成后重新同步数据
+        setTimeout(() => {
+          this.syncUserCheckinData();
+          this.generateCalendar();
+          this.updateMonthlyCount();
+          if (typeof this.loadRanking === 'function') {
+            this.loadRanking();
+          }
+        }, 500);
+        
+      } else {
+        console.warn('⚠️ 云端数据迁移失败:', migrationResult.result ? migrationResult.result.error : migrationResult);
+        wx.showToast({
+          title: '云端数据迁移失败，本地数据已合并',
+          icon: 'none',
+          duration: 2000
+        });
+        
+        // 即使云端迁移失败，本地数据已经合并，重新生成日历
+        setTimeout(() => {
+          this.generateCalendar();
+          this.updateMonthlyCount();
+        }, 500);
+      }
+      
+    } catch (error) {
+      wx.hideLoading();
+      console.error('❌ 数据迁移过程异常:', error);
+      wx.showToast({
+        title: '数据迁移异常',
+        icon: 'none',
+        duration: 2000
+      });
     }
   },
 
@@ -738,6 +1067,9 @@ Page({
         hasUserInfo: true
       }, () => {
         console.log('页面数据更新完成');
+        
+        // 注意：数据迁移逻辑已移动到获取微信openid成功后的回调中
+        console.log('等待获取微信openid后再执行数据迁移...');
       });
       
       wx.showToast({
@@ -781,6 +1113,9 @@ Page({
         hasUserInfo: true
       }, () => {
         console.log('页面数据更新完成，userNickname:', this.data.userNickname);
+        
+        // 用户登录后立即同步云端数据并刷新日历
+        this.syncUserCheckinData();
       });
       
       wx.showToast({
@@ -828,66 +1163,6 @@ Page({
     });
   },
 
-  /**
-   * 计算用户排名
-   */
-  calculateUserRank: function() {
-    // 获取所有用户数据
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    const currentUserId = this.data.userOpenId;
-    const today = new Date().toISOString().split('T')[0];
-    
-    // 如果没有用户数据或当前用户ID为空，设置默认排名为1
-    if (Object.keys(allUserRecords).length === 0 || !currentUserId) {
-      this.setData({
-        currentUserRank: 1
-      });
-      return;
-    }
-    
-    // 计算每个用户当天的累计时长
-    const userDurations = [];
-    
-    Object.keys(allUserRecords).forEach(userId => {
-      const userRecords = allUserRecords[userId];
-      const todayRecord = userRecords.dailyRecords[today];
-      
-      let totalDuration = 0;
-      if (todayRecord && todayRecord.durations) {
-        totalDuration = todayRecord.durations.reduce((sum, duration) => {
-          return sum + parseInt(duration) || 0;
-        }, 0);
-      }
-      
-      userDurations.push({
-        userId: userId,
-        duration: totalDuration
-      });
-    });
-    
-    // 按时长降序排序
-    userDurations.sort((a, b) => b.duration - a.duration);
-    
-    // 计算当前用户排名
-    let currentUserRank = 0;
-    for (let i = 0; i < userDurations.length; i++) {
-      if (userDurations[i].userId === currentUserId) {
-        currentUserRank = i + 1;
-        break;
-      }
-    }
-    
-    // 如果没有找到当前用户（新用户），排名为用户总数+1
-    if (currentUserRank === 0) {
-      currentUserRank = userDurations.length + 1;
-    }
-    
-    this.setData({
-      currentUserRank: currentUserRank
-    });
-    
-    console.log(`用户排名计算完成：第${currentUserRank}名，总用户数：${userDurations.length}`);
-  },
 
   /**
    * 更新本月打卡次数
@@ -896,40 +1171,68 @@ Page({
     const currentYear = this.data.currentYear;
     const currentMonth = this.data.currentMonth;
     
-    if (!this.data.userOpenId) {
-      this.setData({
-        monthlyCount: 0
-      });
-      return;
-    }
-    
-    // 获取当前用户的打卡记录
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    const userRecords = allUserRecords[this.data.userOpenId];
-    
-    if (!userRecords || !userRecords.dailyRecords) {
-      this.setData({
-        monthlyCount: 0
-      });
-      return;
-    }
-    
-    // 计算本月累计打卡总次数
     let monthlyCount = 0;
-    Object.keys(userRecords.dailyRecords).forEach(dateStr => {
-      const [year, month] = dateStr.split('-').map(Number);
-      if (year === currentYear && month === currentMonth) {
-        const dailyRecord = userRecords.dailyRecords[dateStr];
-        monthlyCount += dailyRecord.count || 0;
+    
+    // 获取当前用户ID（已登录或未登录）
+    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    
+    if (userOpenId) {
+      // 从用户记录中计算（无论是否登录）
+      const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+      
+      // 优先使用openid查找数据
+      let userRecords = allUserRecords[userOpenId];
+      
+      // 如果没有数据，检查是否有本地数据需要合并
+      if (!userRecords || Object.keys(userRecords.dailyRecords || {}).length === 0) {
+        const localUserId = wx.getStorageSync('localUserId');
+        const localRecords = allUserRecords[localUserId];
+        
+        // 如果有本地数据但尚未合并，执行合并
+        if (localRecords && !localRecords.migrated) {
+          console.log('检测到未合并的本地数据，立即执行合并');
+          const checkinManager = require('../../utils/checkin.js');
+          checkinManager.mergeUserData(userOpenId, localUserId);
+          
+          // 重新获取合并后的数据
+          userRecords = allUserRecords[userOpenId];
+        }
       }
-    });
+      
+      if (userRecords && userRecords.dailyRecords) {
+        Object.keys(userRecords.dailyRecords).forEach(dateStr => {
+          const [year, month] = dateStr.split('-').map(Number);
+          if (year === currentYear && month === currentMonth) {
+            const dailyRecord = userRecords.dailyRecords[dateStr];
+            monthlyCount += dailyRecord.count || 0;
+          }
+        });
+      }
+      
+      console.log(`${this.isUserLoggedIn() ? '已登录' : '未登录'}用户计算本月打卡:`, {
+        userOpenId: userOpenId,
+        isLoggedIn: this.isUserLoggedIn(),
+        dailyRecords: userRecords ? Object.keys(userRecords.dailyRecords || {}) : '无记录',
+        monthlyCount: monthlyCount
+      });
+    } else {
+      console.log('未找到用户ID，本月打卡次数为0');
+    }
     
     // 更新页面上的打卡次数显示
     this.setData({
       monthlyCount: monthlyCount
     });
     
-    console.log(`本月累计打卡次数: ${monthlyCount}`);
+    console.log(`本月累计打卡次数: ${monthlyCount}（用户状态: ${this.isUserLoggedIn() ? '已登录' : '未登录'}）`);
+  },
+
+  /**
+   * 判断用户是否已登录（微信openid以'oz'开头）
+   */
+  isUserLoggedIn() {
+    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    return userOpenId && userOpenId.startsWith('oz');
   },
 
   /**
@@ -1002,33 +1305,68 @@ Page({
   },
 
   /**
-   * 检查某日期当前用户是否已打卡（支持迁移数据）
+   * 检查某日期当前用户是否已打卡（支持迁移数据和本地存储）
    */
   isDateChecked: function(dateStr) {
-    if (!this.data.userOpenId) {
+    // 优先使用本地存储的数据检查
+    const checkinManager = require('../../utils/checkin.js');
+    
+    // 获取当前用户ID（已登录或未登录）
+    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    
+    if (!userOpenId) {
       return false;
     }
     
-    // 1. 检查当前用户ID的记录
+    console.log(`检查日期 ${dateStr} 的打卡状态，用户ID: ${userOpenId}`);
+    
+    // 1. 优先检查本地存储数据（使用checkinManager的本地存储）
+    try {
+      // 使用checkinManager获取指定日期的打卡次数（同步版本）
+      const localCount = checkinManager.getDailyCheckinCountSync(dateStr);
+      if (typeof localCount === 'number' && localCount > 0) {
+        console.log(`✅ 本地存储: 日期 ${dateStr} 已打卡，次数: ${localCount}`);
+        return true;
+      }
+    } catch (error) {
+      console.warn('检查本地存储数据失败:', error);
+    }
+    
+    // 2. 检查旧格式的用户记录（meditationUserRecords）
     const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    const userRecords = allUserRecords[this.data.userOpenId];
+    const userRecords = allUserRecords[userOpenId];
     
     if (userRecords && userRecords.dailyRecords) {
       const dailyRecord = userRecords.dailyRecords[dateStr];
       if (dailyRecord && dailyRecord.count > 0) {
+        console.log(`✅ 旧格式记录: 日期 ${dateStr} 已打卡，次数: ${dailyRecord.count}`);
         return true;
       }
     }
     
-    // 2. 检查是否有迁移数据关联
+    // 3. 检查是否有迁移数据关联
     const migratedRecords = this.checkMigratedRecords(dateStr);
     if (migratedRecords) {
+      console.log(`✅ 迁移记录: 日期 ${dateStr} 有迁移记录`);
       return true;
     }
     
-    // 3. 如果没有缓存数据，延迟异步加载并同步到本地
-    this.syncUserCheckinData();
+    // 4. 如果是已登录用户，检查是否需要同步云端数据
+    if (this.isUserLoggedIn()) {
+      // 标记需要重新检查日历，避免频繁调用
+      if (!this.data.needsCalendarRefresh) {
+        this.setData({
+          needsCalendarRefresh: true
+        });
+        
+        // 延迟调用同步，避免阻塞当前函数执行
+        setTimeout(() => {
+          this.syncUserCheckinData();
+        }, 500);
+      }
+    }
     
+    console.log(`❌ 日期 ${dateStr} 未找到打卡记录`);
     return false;
   },
   
@@ -1069,6 +1407,9 @@ Page({
     
     wx.setStorageSync('lastSyncTime', now);
     
+    // 保存当前this的引用，避免setTimeout中的this指向问题
+    const self = this;
+    
     // 异步同步数据
     setTimeout(() => {
       const checkinManager = require('../../utils/checkin.js');
@@ -1091,7 +1432,7 @@ Page({
       
       Promise.all(syncPromises).then(results => {
         const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-        const userRecords = allUserRecords[this.data.userOpenId] || {
+        const userRecords = allUserRecords[self.data.userOpenId] || {
           dailyRecords: {},
           totalCount: 0
         };
@@ -1105,10 +1446,33 @@ Page({
           }
         });
         
-        allUserRecords[this.data.userOpenId] = userRecords;
+        allUserRecords[self.data.userOpenId] = userRecords;
         wx.setStorageSync('meditationUserRecords', allUserRecords);
         
-        console.log('✅ 用户打卡数据同步完成');
+        console.log('✅ 用户打卡数据同步完成，准备刷新日历和本月打卡次数');
+        console.log('同步后的用户记录数据:', JSON.stringify(userRecords.dailyRecords, null, 2));
+        
+        // 数据同步完成后，立即刷新日历显示和本月打卡次数
+        if (typeof self.generateCalendar === 'function' && typeof self.updateMonthlyCount === 'function') {
+          console.log('调用generateCalendar和updateMonthlyCount函数刷新页面');
+          
+          // 立即刷新日历和打卡次数
+          self.generateCalendar();
+          self.updateMonthlyCount();
+          
+          // 强制更新页面数据，确保显示最新状态
+          setTimeout(() => {
+            console.log('强制刷新页面数据，确保显示同步后的结果');
+            self.setData({
+              forceUpdate: Date.now()
+            }, () => {
+              // 再次更新确保数据正确显示
+              self.updateMonthlyCount();
+            });
+          }, 300);
+        } else {
+          console.error('generateCalendar或updateMonthlyCount函数不存在');
+        }
       }).catch(error => {
         console.warn('❌ 数据同步失败:', error);
       });
@@ -1290,6 +1654,7 @@ Page({
     console.log('=== index页面onShow函数开始 ===');
     
     // 检查用户信息状态（不跳转，只更新显示）
+    // 每次显示页面时都检查用户状态，确保显示正确的登录状态
     this.checkUserInfoStatus(false);
     
     // 重新生成日历，确保显示最新的打卡状态
@@ -1298,8 +1663,8 @@ Page({
     // 更新本月打卡次数显示
     this.updateMonthlyCount();
     
-    // 更新用户排名显示
-    this.calculateUserRank();
+    // 加载云端排名
+    this.loadRanking();
     
     console.log('页面显示完成，当前用户状态:', {
       hasUserInfo: this.data.hasUserInfo,
@@ -1328,6 +1693,152 @@ Page({
    */
   onPullDownRefresh() {
 
+  },
+
+  /**
+   * 加载云端排名（6小时缓存）
+   */
+  loadRanking: async function() {
+    // 检查用户是否已登录（通过hasUserInfo判断）
+    if (!this.data.hasUserInfo) {
+      // 未登录用户
+      this.setData({
+        currentUserRank: "暂无排名",
+        totalUsers: 0,
+        showRankUnit: false
+      });
+      return;
+    }
+    
+    // 登录用户：获取真实的用户openid
+    const userOpenId = wx.getStorageSync('userOpenId') || this.data.userOpenId;
+    if (!userOpenId) {
+      this.setData({
+        currentUserRank: "加载中...",
+        totalUsers: 0,
+        showRankUnit: false
+      });
+      return;
+    }
+    
+    try {
+      // 获取缓存排名（6小时缓存）
+      const rankingData = await this.getCachedCloudRanking();
+      
+      console.log('云端排名数据返回:', rankingData);
+      
+      if (rankingData.success && rankingData.data) {
+        // 使用实时排名数据
+        const rankingInfo = rankingData.data;
+        
+        console.log('实时排名数据:', {
+          currentUserOpenId: rankingInfo.currentUserOpenId,
+          currentUserRank: rankingInfo.currentUserRank,
+          currentUserInTop100: rankingInfo.currentUserInTop100,
+          totalUsers: rankingInfo.totalUsers
+        });
+        
+        // 设置排名显示
+        let displayRank = rankingInfo.currentUserRank;
+        let showRankUnit = true;
+        
+        // 处理"未上排行榜"和"暂无排名"状态
+        if (rankingInfo.currentUserRank === "未上排行榜" || 
+            rankingInfo.currentUserRank === "暂无排名" ||
+            rankingInfo.currentUserRank === "暂无排名数据" ||
+            (typeof rankingInfo.currentUserRank === 'number' && rankingInfo.currentUserRank > 100)) {
+          displayRank = rankingInfo.currentUserRank;
+          showRankUnit = false;
+        }
+        
+        // 确保"未上排行榜"状态统一显示
+        if ((typeof rankingInfo.currentUserRank === 'number' && rankingInfo.currentUserRank > 100) ||
+            rankingInfo.currentUserRank === "未上排行榜") {
+          displayRank = "未上排行榜";
+          showRankUnit = false;
+        }
+        
+        this.setData({
+          currentUserRank: displayRank,
+          totalUsers: rankingInfo.totalUsers,
+          showRankUnit: showRankUnit
+        });
+        
+        console.log(`实时排名加载完成：用户排名 ${displayRank}，总用户数：${rankingInfo.totalUsers}`);
+      } else {
+        // 排名数据获取失败，提供更详细的错误信息
+        const errorMessage = rankingData.message || '排名数据获取失败';
+        console.log('云端排名数据获取失败:', errorMessage);
+        
+        // 根据不同的错误类型显示不同的提示
+        if (errorMessage.includes('暂无排名数据')) {
+          // 数据库中没有排名数据，这是正常情况
+          this.setData({
+            currentUserRank: "暂无排名数据",
+            totalUsers: 0,
+            showRankUnit: false
+          });
+        } else {
+          // 其他错误情况
+          this.setData({
+            currentUserRank: "加载失败",
+            totalUsers: 0,
+            showRankUnit: false
+          });
+        }
+      }
+    } catch (error) {
+      // 降级处理
+      console.error('排名加载失败:', error);
+      this.setData({
+        currentUserRank: "加载失败",
+        totalUsers: 0,
+        showRankUnit: false
+      });
+    }
+  },
+
+  /**
+   * 获取缓存排名（调用云函数）
+   */
+  getCachedCloudRanking: function() {
+    return new Promise((resolve, reject) => {
+      const CACHE_KEY = 'cloud_ranking_cache';
+      const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6小时缓存
+      
+      // 临时禁用缓存，强制调用云函数进行测试
+      // 检查缓存
+      const cache = wx.getStorageSync(CACHE_KEY);
+      if (cache && Date.now() - cache.timestamp < CACHE_DURATION) {
+        console.log('缓存存在但强制刷新，跳过缓存');
+        // resolve(cache.data);
+        // return;
+      }
+      
+      // 缓存过期，调用云函数
+      wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'getRankingSnapshot',
+          rankingType: 'daily'
+        },
+        success: (res) => {
+          console.log('云端排名数据获取成功，详细数据:', JSON.stringify(res.result, null, 2));
+          
+          // 更新缓存
+          wx.setStorageSync(CACHE_KEY, {
+            data: res.result,
+            timestamp: Date.now()
+          });
+          console.log('云端排名数据获取成功，已更新缓存');
+          resolve(res.result);
+        },
+        fail: (err) => {
+          console.error('云端排名数据获取失败:', err);
+          reject(err);
+        }
+      });
+    });
   },
 
   /**

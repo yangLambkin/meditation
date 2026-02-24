@@ -2,7 +2,7 @@
 Page({
   data: {
     userNickname: '觉察者', // 用户昵称
-    userAvatar: '/images/avatar.png', // 用户头像，默认使用项目头像
+    userAvatar: '/images/userLogin.png', // 用户头像，默认使用用户登录头像
     totalMinutes: 0, // 总分钟数
     consecutiveDays: 0, // 连续天数
     currentStreak: 0, // 当前连续天数
@@ -69,7 +69,7 @@ Page({
       // 缓存中没有用户头像，使用默认头像
       console.log('缓存中无用户头像，使用默认头像');
       this.setData({
-        userAvatar: '/images/avatar.png',
+        userAvatar: '/images/userLogin.png',
         hasUserInfo: false
       });
     }
@@ -78,144 +78,77 @@ Page({
   /**
    * 计算用户统计信息
    */
-  calculateUserStatistics() {
-    // 获取用户ID
-    const userOpenId = wx.getStorageSync('localUserId');
-    if (!userOpenId) {
-      console.log('未找到用户ID');
-      return;
-    }
-
-    // 获取用户的所有打卡记录
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    const userRecords = allUserRecords[userOpenId];
-
-    if (!userRecords || !userRecords.dailyRecords) {
-      console.log('未找到用户打卡记录');
-      return;
-    }
-
-    // 计算总分钟数
-    const totalMinutes = this.calculateTotalMinutes(userRecords.dailyRecords);
+  async calculateUserStatistics() {
+    // 检查用户是否已登录
+    const userOpenId = wx.getStorageSync('userOpenId');
     
-    // 计算连续天数
-    const consecutiveDays = this.calculateConsecutiveDays(userRecords.dailyRecords);
-    
-    // 计算当前连续天数
-    const currentStreak = this.calculateCurrentStreak(userRecords.dailyRecords);
-
-    // 更新页面数据
-    this.setData({
-      totalMinutes: totalMinutes,
-      consecutiveDays: consecutiveDays,
-      currentStreak: currentStreak
-    });
-
-    console.log('用户统计信息:', {
-      总分钟数: totalMinutes,
-      最长连续天数: consecutiveDays,
-      当前连续天数: currentStreak
-    });
-  },
-
-  /**
-   * 计算当月总分钟数
-   */
-  calculateTotalMinutes(dailyRecords) {
-    let totalMinutes = 0;
-    const today = new Date();
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth() + 1;
-    
-    Object.entries(dailyRecords).forEach(([dateStr, record]) => {
-      // 只统计当月的数据
-      const [year, month] = dateStr.split('-').map(Number);
-      if (year === currentYear && month === currentMonth) {
-        if (record.durations) {
-          record.durations.forEach(duration => {
-            // 确保duration是数字类型
-            totalMinutes += parseInt(duration) || 0;
-          });
-        }
-      }
+    console.log('me.js检查用户登录状态:', {
+      userOpenId: userOpenId,
+      isLoggedIn: userOpenId && userOpenId.startsWith('oz'),
+      currentTime: new Date().toISOString()
     });
     
-    return totalMinutes;
-  },
-
-  /**
-   * 计算最长连续天数
-   */
-  calculateConsecutiveDays(dailyRecords) {
-    const dates = Object.keys(dailyRecords).sort();
-    let maxConsecutive = 0;
-    let currentConsecutive = 0;
-    let prevDate = null;
-
-    dates.forEach(dateStr => {
-      const currentDate = new Date(dateStr);
-      
-      if (prevDate === null) {
-        currentConsecutive = 1;
-      } else {
-        const diffDays = Math.floor((currentDate - prevDate) / (1000 * 60 * 60 * 24));
-        if (diffDays === 1) {
-          currentConsecutive++;
-        } else if (diffDays > 1) {
-          maxConsecutive = Math.max(maxConsecutive, currentConsecutive);
-          currentConsecutive = 1;
-        }
-      }
-      
-      prevDate = currentDate;
-    });
-
-    maxConsecutive = Math.max(maxConsecutive, currentConsecutive);
-    return maxConsecutive;
-  },
-
-  /**
-   * 计算当前连续天数
-   */
-  calculateCurrentStreak(dailyRecords) {
-    const today = new Date();
-    const todayStr = this.formatDate(today);
-    const dates = Object.keys(dailyRecords).sort().reverse();
-    
-    let currentStreak = 0;
-    let checkDate = new Date(today);
-    
-    // 检查今天是否打卡
-    if (dates.includes(todayStr)) {
-      currentStreak = 1;
-      checkDate.setDate(checkDate.getDate() - 1);
+    if (userOpenId && userOpenId.startsWith('oz')) {
+      // 已登录用户（微信openid以'oz'开头）：从云端user_stats表获取数据
+      console.log('用户已登录，从云端获取统计信息');
+      await this.getUserStatisticsFromCloud(userOpenId);
     } else {
-      checkDate.setDate(checkDate.getDate() - 1);
+      // 未登录用户：显示0
+      console.log('用户未登录，显示默认值0');
+        this.setData({
+          totalMinutes: 0,
+          consecutiveDays: 0,
+          currentStreak: 0,
+          medals: 0
+        });
     }
-    
-    // 检查之前的连续天数
-    while (true) {
-      const checkDateStr = this.formatDate(checkDate);
-      if (dates.includes(checkDateStr)) {
-        currentStreak++;
-        checkDate.setDate(checkDate.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-    
-    return currentStreak;
   },
 
   /**
-   * 格式化日期为 YYYY-MM-DD
+   * 从云端获取用户统计信息
    */
-  formatDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  async getUserStatisticsFromCloud(userOpenId) {
+    try {
+      const result = await wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'getUserStats',
+          openid: userOpenId
+        }
+      });
+
+      if (result.result && result.result.success) {
+        const stats = result.result.data;
+        console.log('从云端获取用户统计信息:', stats);
+        
+        this.setData({
+          totalMinutes: stats.monthlyTotalDuration || 0, // 当月总分钟数
+          consecutiveDays: stats.longestCheckInDays || 0, // 最长连续天数
+          currentStreak: stats.currentStreak || 0, // 当前连续天数
+          medals: 0 // 勋章功能待开发
+        });
+      } else {
+        console.error('获取云端统计信息失败:', result.result);
+        // 如果云端获取失败，显示0
+        this.setData({
+          totalMinutes: 0,
+          consecutiveDays: 0,
+          currentStreak: 0,
+          medals: 0
+        });
+      }
+    } catch (error) {
+      console.error('调用云端函数失败:', error);
+      // 如果云端调用失败，显示0
+        this.setData({
+          totalMinutes: 0,
+          consecutiveDays: 0,
+          currentStreak: 0,
+          medals: 0
+        });
+    }
   },
+
 
   /**
    * 跳转到个人信息修改页面

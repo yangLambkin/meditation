@@ -35,6 +35,17 @@ Page({
     console.log('页面基础框架已加载，开始异步数据加载');
   },
 
+  /**
+   * 生命周期函数--监听页面显示
+   */
+  onShow() {
+    console.log('=== daily1页面onShow函数开始 ===');
+    
+    // 重新获取用户数据，确保显示最新的登录状态
+    this.getUserData();
+    
+    console.log('=== daily1页面onShow函数结束 ===');
+  },
 
   /**
    * 设置当前日期信息
@@ -177,6 +188,10 @@ Page({
    * 获取用户数据（支持新旧格式）
    */
   getUserData: function() {
+    // 检查用户是否已登录
+    const userOpenId = wx.getStorageSync('userOpenId');
+    const isLoggedIn = userOpenId && userOpenId.startsWith('oz');
+    
     // 尝试从缓存获取用户信息
     const cachedUserInfo = wx.getStorageSync('userInfo');
     
@@ -189,21 +204,29 @@ Page({
     if (hasValidUserInfo) {
       // 使用缓存的用户信息
       const userName = cachedUserInfo.nickName || '静心者';
-      const userAvatar = cachedUserInfo.avatarUrl || '/images/avatar.png';
+      
+      // 已登录用户使用缓存头像，未登录用户使用默认头像
+      const userAvatar = isLoggedIn ? 
+        (cachedUserInfo.avatarUrl || '/images/userLogin.png') : 
+        '/images/userLogin.png';
       
       this.setData({
         userName: userName,
         userAvatar: userAvatar
       });
       
-      console.log('获取到用户信息 - 昵称:', userName, '头像:', userAvatar);
+      console.log('获取到用户信息 - 昵称:', userName, '头像:', userAvatar, '登录状态:', isLoggedIn);
     } else {
-      // 没有用户信息，使用默认值
-      console.log('未找到用户信息，使用默认值');
+      // 没有用户信息，根据登录状态使用不同默认值
+      const userName = isLoggedIn ? '微信用户' : '静心者';
+      const userAvatar = isLoggedIn ? '/images/userLogin.png' : '/images/avatar.png';
+      
       this.setData({
-        userName: '静心者',
-        userAvatar: '/images/avatar.png'
+        userName: userName,
+        userAvatar: userAvatar
       });
+      
+      console.log('未找到用户信息，使用默认值 - 昵称:', userName, '头像:', userAvatar, '登录状态:', isLoggedIn);
       
       // 提示用户设置个人信息
       this.showProfileHint();

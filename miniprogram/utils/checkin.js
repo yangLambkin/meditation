@@ -6,11 +6,25 @@ const checkinManager = {
   // 存储模式：true使用云存储，false使用本地存储
   useCloudStorage: true,
   
-  // 获取用户ID（简单的用户标识，实际应用中应该用更安全的用户识别方式）
+  // 获取用户ID（优先使用已登录的微信openid，如果没有则使用本地标识）
   getUserId: function() {
-    // 使用设备唯一标识或用户登录信息
-    // 这里简化处理，使用固定用户ID，实际应用中应该根据具体业务逻辑获取
-    return 'default_user';
+    // 优先使用缓存的userOpenId（已登录状态）
+    const userOpenId = wx.getStorageSync('userOpenId');
+    if (userOpenId && userOpenId.startsWith('oz')) {
+      console.log('使用已登录的微信openid:', userOpenId);
+      return userOpenId;
+    }
+    
+    // 如果没有openid，使用本地存储的用户标识
+    let localUserId = wx.getStorageSync('localUserId');
+    if (!localUserId) {
+      // 生成新的本地用户标识
+      localUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      wx.setStorageSync('localUserId', localUserId);
+    }
+    
+    console.log('使用本地用户标识:', localUserId);
+    return localUserId;
   },
   
   // 获取用户打卡数据（本地存储）
@@ -131,6 +145,15 @@ const checkinManager = {
     const success = this.saveUserCheckinData(userData);
     
     if (success) {
+      // 如果是已登录用户，自动同步到云端
+      const userOpenId = wx.getStorageSync('userOpenId');
+      if (userOpenId && userOpenId.startsWith('oz')) {
+        // 异步同步到云端，不阻塞本地保存
+        setTimeout(() => {
+          this.syncLocalCheckinToCloud(duration, rating, experience);
+        }, 100);
+      }
+      
       return {
         success: true,
         date: dateStr,
@@ -145,7 +168,7 @@ const checkinManager = {
     }
   },
   
-  // 获取某天的打卡次数（支持云存储）
+  // 获取某天的打卡次数（支持云存储和本地存储）
   getDailyCheckinCount: async function(dateStr) {
     console.log(`获取 ${dateStr} 的打卡次数...`);
     
@@ -172,6 +195,18 @@ const checkinManager = {
     const userData = this.getUserCheckinData();
     const count = userData.dailyRecords[dateStr] ? userData.dailyRecords[dateStr].count : 0;
     console.log(`本地存储: ${dateStr} 有 ${count} 条记录`);
+    
+    return count;
+  },
+  
+  // 获取某天的打卡次数（同步版本，用于页面显示）
+  getDailyCheckinCountSync: function(dateStr) {
+    console.log(`同步获取 ${dateStr} 的打卡次数...`);
+    
+    // 直接从本地存储获取
+    const userData = this.getUserCheckinData();
+    const count = userData.dailyRecords[dateStr] ? userData.dailyRecords[dateStr].count : 0;
+    console.log(`本地存储同步: ${dateStr} 有 ${count} 条记录`);
     
     return count;
   },
@@ -504,6 +539,283 @@ const checkinManager = {
     }
     
     return null;
+  },
+  
+  // 上传本地数据到云端（迁移历史用户数据）
+  uploadLocalDataToCloud: async function() {
+    console.log('开始上传本地数据到云端...');
+    
+    // 检查是否已经上传过（避免重复上传）
+    const isDataUploaded = wx.getStorageSync('localDataUploaded');
+    if (isDataUploaded) {
+      console.log('本地数据已上传过，跳过上传');
+      return { success: true, message: '数据已上传过，无需重复上传' };
+    }
+    
+    // 检查用户是否已登录（有openid）
+    const userInfo = wx.getStorageSync('userInfo');
+    if (!userInfo || !userInfo.openid) {
+      console.log('用户未登录，无法上传数据');
+      return { success: false, error: '用户未登录' };
+    }
+    
+    // 获取本地数据
+    const localUserData = this.getUserCheckinData();
+    
+    // 只获取近1个月的数据
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    
+    const recentDates = Object.keys(localUserData.dailyRecords)
+      .filter(dateStr => {
+        const recordDate = new Date(dateStr);
+        return recordDate >= oneMonthAgo && localUserData.dailyRecords[dateStr].count > 0;
+      })
+      .sort(); // 按日期排序
+    
+    if (recentDates.length === 0) {
+      console.log('近1个月没有本地打卡数据，无需上传');
+      wx.setStorageSync('localDataUploaded', true); // 标记为已上传
+      return { success: true, message: '没有需要上传的数据' };
+    }
+    
+    console.log(`发现${recentDates.length}天的本地数据需要上传`);
+    
+    try {
+      // 逐个日期上传数据
+      let uploadedCount = 0;
+      
+      for (const dateStr of recentDates) {
+        const dayRecords = localUserData.dailyRecords[dateStr].records;
+        
+        for (const record of dayRecords) {
+          try {
+            // 检查云端是否已有该记录（避免重复上传）
+            const cloudResult = await cloudApi.getUserRecords(dateStr);
+            const existingRecords = cloudResult.success ? cloudResult.data : [];
+            
+            // 检查是否已有相同记录
+            const isDuplicate = existingRecords.some(existing => 
+              existing.duration === record.duration && 
+              existing.rating === record.rating && 
+              existing.experience === record.experience
+            );
+            
+            if (!isDuplicate) {
+              // 上传记录到云端
+              const uploadResult = await cloudApi.recordMeditation(
+                record.duration, 
+                record.rating, 
+                record.experience
+              );
+              
+              if (uploadResult.success) {
+                uploadedCount++;
+                console.log(`✅ 上传记录成功: ${dateStr} ${record.duration}分钟`);
+              } else {
+                console.warn(`⚠️ 上传记录失败: ${dateStr}`, uploadResult.error);
+              }
+            } else {
+              console.log(`⏭️ 跳过已存在的记录: ${dateStr}`);
+            }
+          } catch (error) {
+            console.warn(`❌ 上传记录异常: ${dateStr}`, error);
+          }
+        }
+      }
+      
+      // 标记数据已上传
+      wx.setStorageSync('localDataUploaded', true);
+      
+      console.log(`✅ 本地数据上传完成，成功上传${uploadedCount}条记录`);
+      
+      return { 
+        success: true, 
+        message: `成功上传${uploadedCount}条记录到云端`,
+        uploadedCount: uploadedCount,
+        totalDates: recentDates.length
+      };
+      
+    } catch (error) {
+      console.error('❌ 上传本地数据失败:', error);
+      return { 
+        success: false, 
+        error: '上传本地数据失败: ' + error.message 
+      };
+    }
+  },
+  
+  // 检查是否需要数据迁移
+  checkNeedDataMigration: function() {
+    console.log('检查是否需要数据迁移...');
+    
+    // 检查是否已登录（使用正确的登录状态检查）
+    const userOpenId = wx.getStorageSync('userOpenId');
+    if (!userOpenId || !userOpenId.startsWith('oz')) {
+      console.log('用户未登录，不需要数据迁移');
+      return false;
+    }
+    
+    console.log('用户已登录，检查本地数据...');
+    
+    // 检查本地ID下是否有数据需要迁移（不是基于当前ID）
+    const localUserId = wx.getStorageSync('localUserId');
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const localRecords = allUserRecords[localUserId];
+    
+    const hasLocalData = localRecords && 
+                        localRecords.dailyRecords && 
+                        Object.keys(localRecords.dailyRecords).some(dateStr => 
+                          localRecords.dailyRecords[dateStr] && 
+                          localRecords.dailyRecords[dateStr].count > 0
+                        );
+    
+    if (hasLocalData) {
+      console.log('检测到本地ID下有数据需要迁移');
+      return true;
+    } else {
+      console.log('没有本地数据需要迁移');
+      return false;
+    }
+  },
+  
+  // 建立用户映射关系（local user id ↔ openid）
+  createUserMapping: function(localUserId, openid) {
+    console.log(`建立用户映射关系: localUserId=${localUserId} -> openid=${openid}`);
+    
+    try {
+      // 获取现有的映射关系
+      const userMappings = wx.getStorageSync('userMappings') || {};
+      
+      // 建立双向映射
+      userMappings[localUserId] = openid;
+      userMappings[openid] = localUserId;
+      
+      // 保存映射关系
+      wx.setStorageSync('userMappings', userMappings);
+      
+      console.log('✅ 用户映射关系建立成功');
+      return true;
+    } catch (error) {
+      console.error('❌ 建立用户映射关系失败:', error);
+      return false;
+    }
+  },
+  
+  // 根据openid获取localUserId
+  getLocalUserIdByOpenId: function(openid) {
+    const userMappings = wx.getStorageSync('userMappings') || {};
+    const localUserId = userMappings[openid];
+    
+    if (localUserId) {
+      console.log(`找到映射关系: openid=${openid} -> localUserId=${localUserId}`);
+    } else {
+      console.log(`未找到openid=${openid}的映射关系`);
+    }
+    
+    return localUserId;
+  },
+  
+  // 根据localUserId获取openid
+  getOpenIdByLocalUserId: function(localUserId) {
+    const userMappings = wx.getStorageSync('userMappings') || {};
+    const openid = userMappings[localUserId];
+    
+    if (openid) {
+      console.log(`找到映射关系: localUserId=${localUserId} -> openid=${openid}`);
+    } else {
+      console.log(`未找到localUserId=${localUserId}的映射关系`);
+    }
+    
+    return openid;
+  },
+  
+  // 合并用户数据（将本地数据合并到当前用户）
+  mergeUserData: function(targetOpenId, sourceLocalUserId) {
+    console.log(`合并用户数据: targetOpenId=${targetOpenId}, sourceLocalUserId=${sourceLocalUserId}`);
+    
+    try {
+      // 获取目标用户数据（使用openid）
+      const targetUserData = this.getUserCheckinDataByUserId(targetOpenId);
+      
+      // 获取源用户数据（使用localUserId）
+      const sourceUserData = this.getUserCheckinDataByUserId(sourceLocalUserId);
+      
+      if (!sourceUserData || Object.keys(sourceUserData.dailyRecords || {}).length === 0) {
+        console.log('源用户没有数据，无需合并');
+        return true;
+      }
+      
+      // 合并每日记录
+      for (const dateStr in sourceUserData.dailyRecords) {
+        if (sourceUserData.dailyRecords[dateStr].count > 0) {
+          if (!targetUserData.dailyRecords[dateStr]) {
+            targetUserData.dailyRecords[dateStr] = { count: 0, lastCheckin: 0, records: [] };
+          }
+          
+          // 合并打卡次数
+          targetUserData.dailyRecords[dateStr].count += sourceUserData.dailyRecords[dateStr].count;
+          
+          // 合并记录详情
+          targetUserData.dailyRecords[dateStr].records.push(...sourceUserData.dailyRecords[dateStr].records);
+          
+          // 更新最后打卡时间
+          targetUserData.dailyRecords[dateStr].lastCheckin = Math.max(
+            targetUserData.dailyRecords[dateStr].lastCheckin,
+            sourceUserData.dailyRecords[dateStr].lastCheckin
+          );
+        }
+      }
+      
+      // 合并月度统计
+      for (const monthStr in sourceUserData.monthlyStats) {
+        if (!targetUserData.monthlyStats[monthStr]) {
+          targetUserData.monthlyStats[monthStr] = { total: 0, days: [] };
+        }
+        
+        targetUserData.monthlyStats[monthStr].total += sourceUserData.monthlyStats[monthStr].total;
+        
+        // 合并日期列表（去重）
+        const combinedDays = [...new Set([
+          ...targetUserData.monthlyStats[monthStr].days,
+          ...sourceUserData.monthlyStats[monthStr].days
+        ])];
+        
+        targetUserData.monthlyStats[monthStr].days = combinedDays;
+      }
+      
+      // 保存合并后的数据
+      this.saveUserCheckinDataByUserId(targetOpenId, targetUserData);
+      
+      console.log('✅ 用户数据合并成功');
+      return true;
+      
+    } catch (error) {
+      console.error('❌ 合并用户数据失败:', error);
+      return false;
+    }
+  },
+  
+  // 根据用户ID获取打卡数据
+  getUserCheckinDataByUserId: function(userId) {
+    const userKey = `meditation_checkin_${userId}`;
+    const data = wx.getStorageSync(userKey) || {
+      dailyRecords: {},
+      monthlyStats: {}
+    };
+    return data;
+  },
+  
+  // 根据用户ID保存打卡数据
+  saveUserCheckinDataByUserId: function(userId, data) {
+    const userKey = `meditation_checkin_${userId}`;
+    try {
+      wx.setStorageSync(userKey, data);
+      return true;
+    } catch (error) {
+      console.error('保存打卡数据失败:', error);
+      return false;
+    }
   }
 };
 

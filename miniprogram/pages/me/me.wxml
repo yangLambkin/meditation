@@ -42,7 +42,7 @@
           </view>
         </view>
         <view class="flex-col items-center self-start group_4">
-          <text class="font_3 text_5">5</text>
+          <text class="font_3 text_5">{{medals}}</text>
           <text class="mt-14 font_4 text_6">勋章</text>
         </view>
       </view>
@@ -53,26 +53,22 @@
           <view class="flex-row items-center">
             <image
               class="shrink-0 image"
-              src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=3c8bbdec0c2f6e6fcb9b364e09c746d7.png"
             />
             <text class="font_2 text_7 ml-17">打卡记录</text>
           </view>
           <image
             class="image_3"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=009fc8d62c93960c1b43b638a25e1fef.png"
           />
         </view>
         <view class="flex-row justify-between items-center group_5">
           <view class="flex-row items-center">
             <image
               class="shrink-0 image"
-              src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=411ba5e8963d70f2a4618aeeff263c39.png"
             />
             <text class="font_2 ml-17">我的勋章</text>
           </view>
           <image
             class="image_3"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=009fc8d62c93960c1b43b638a25e1fef.png"
           />
         </view>
       </view>
@@ -80,13 +76,11 @@
         <view class="flex-row items-center">
           <image
             class="shrink-0 image"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=a3a01228d4e24b74da4c1db7c32ca577.png"
           />
           <text class="font_2 ml-17">收藏的引导语</text>
         </view>
         <image
           class="image_3"
-          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=009fc8d62c93960c1b43b638a25e1fef.png"
         />
       </view>
     </view>
@@ -95,29 +89,25 @@
         <view class="flex-row items-center">
           <image
             class="shrink-0 image"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=549913d4128a94d25d33ed49685308d0.png"
           />
           <text class="ml-16 font_2 text_8">个人资料</text>
         </view>
         <image
           class="image_3"
-          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=009fc8d62c93960c1b43b638a25e1fef.png"
         />
       </view>
       <view class="flex-row justify-between items-center group_7">
         <view class="flex-row items-center">
           <image
             class="shrink-0 image"
-            src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=469cd783a12f2ff6a79748f9fb6ac9bf.png"
           />
-          <text class="font_2 text_9 ml-17">通用设置</text>
+          <text class="font_2 text_9 ml-17">版本 V1.1</text>
         </view>
         <image
           class="image_3"
-          src="https://ide.code.fun/api/image?token=697369fc4bd4760011a7c18b&name=009fc8d62c93960c1b43b638a25e1fef.png"
         />
       </view>
     </view>
   </view>
-  <text class="mt-20 self-center font_4 text_10">Designed for Meditation</text>
+  <text class="mt-20 self-center font_4 text_10">Designed by GenXin</text>
 </view>

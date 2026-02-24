@@ -89,6 +89,16 @@ const COLLECTION_SCHEMAS = {
     }
   },
   
+  // user_mappings 表结构（用户ID映射表）
+  user_mappings: {
+    description: '用户ID映射表',
+    sampleData: {
+      _openid: 'user_openid_123',           // 微信openid
+      local_user_id: 'local_1771865524171_7cun3y9q8',  // 本地用户ID
+      created_at: new Date(),               // 创建时间
+      updated_at: new Date()                // 更新时间
+    }
+  }
   
 };
 

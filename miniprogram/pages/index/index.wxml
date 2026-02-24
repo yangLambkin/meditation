@@ -25,7 +25,7 @@
               <text class="self-start font_3">用户排名</text>
               <view class="mt-12 flex-row items-end">
                 <text class="font_2">{{currentUserRank}}</text>
-                <text class="font_4 ml-9">名</text>
+                <text class="font_4 ml-9" wx:if="{{showRankUnit}}">名</text>
               </view>
             </view>
           </view>

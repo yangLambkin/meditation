@@ -1,3 +1,4 @@
+<!--pages/daily/daily1.wxml-->
 <view class="flex-col page">
   <!-- 主要内容区域 - 白色底板 -->
   <view class="content-overlay">

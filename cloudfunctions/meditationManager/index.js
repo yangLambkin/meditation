@@ -7,8 +7,20 @@ const db = cloud.database();
 
 // 云函数入口函数
 exports.main = async (event, context) => {
+  // 处理定时触发器
+  if (event.Type === 'timer') {
+    console.log('定时触发器执行，生成排名快照');
+    return await generateRankingSnapshot({ type: 'daily' });
+  }
+  
+  // 添加调试日志
+  console.log('云函数接收到的参数:', JSON.stringify(event));
+  
   const wxContext = cloud.getWXContext();
   const openid = wxContext.OPENID;
+  
+  console.log('当前用户openid:', openid);
+  console.log('尝试处理的操作类型:', event.type);
   
   switch (event.type) {
     case "recordMeditation":
@@ -39,6 +51,12 @@ exports.main = async (event, context) => {
       return await getUserProfile(openid);
     case "migrateUserProfile":
       return await migrateUserProfile(openid, event.oldUserInfo);
+    case "getRankingSnapshot":
+      return await getRankingSnapshot(event, context);
+    case "generateRankingSnapshot":
+      return await generateRankingSnapshot(event);
+    case "initRankingSnapshot":
+      return await initRankingSnapshot();
     default:
       return { success: false, error: "未知的操作类型" };
   }
@@ -106,13 +124,18 @@ async function updateUserStats(openid, dateStr, duration) {
     const userStats = await userStatsRef.get();
     
     if (userStats.data.length === 0) {
-      // 创建新用户统计 - 字段与数据库完全一致
+      // 创建新用户统计 - 增加每日时长统计
       await db.collection("user_stats").add({
         data: {
           _openid: openid,
           totalDays: 1,
           totalCount: 1,
           totalDuration: duration,
+          dailyTotalDuration: duration, // 当日总时长
+          monthlyTotalDuration: duration, // 当月总分钟数
+          longestCheckInDays: 1,         // 最长连续天数
+          lastCheckinDate: dateStr,     // 上次打卡日期
+          lastCheckinDuration: duration, // 上次打卡时长
           currentStreak: 1,
           longestStreak: 1,
           lastCheckin: dateStr,
@@ -132,11 +155,44 @@ async function updateUserStats(openid, dateStr, duration) {
       const stats = userStats.data[0];
       const isNewDay = !stats.lastCheckin || stats.lastCheckin !== dateStr;
       
+      // 判断是否是同一天（当日总时长需要累加）
+      // 使用lastCheckinDate字段来判断同一天，因为lastCheckin可能被其他逻辑更新
+      const isSameDay = stats.lastCheckinDate === dateStr;
+      
+      console.log(`更新用户统计: openid=${openid}, dateStr=${dateStr}, lastCheckinDate=${stats.lastCheckinDate}, dailyTotalDuration=${stats.dailyTotalDuration || 0}, isSameDay=${isSameDay}, isNewDay=${isNewDay}`);
+      
       const updateData = {
         totalCount: db.command.inc(1),
         totalDuration: db.command.inc(duration),
         updatedAt: today
       };
+      
+      // 处理每日时长统计
+      if (isSameDay) {
+        // 同一天打卡，累加当日总时长
+        const currentDailyTotal = stats.dailyTotalDuration || 0;
+        updateData.dailyTotalDuration = db.command.inc(duration);
+        console.log(`同一天打卡，累加时长: ${currentDailyTotal} + ${duration} = ${currentDailyTotal + duration}`);
+      } else {
+        // 新的一天，重置当日总时长
+        updateData.dailyTotalDuration = duration;
+        updateData.lastCheckinDate = dateStr;
+        updateData.lastCheckinDuration = duration;
+        console.log(`新的一天打卡，重置时长: ${duration}`);
+      }
+      
+      // 更新当月总分钟数
+      const currentMonthlyTotal = stats.monthlyTotalDuration || 0;
+      updateData.monthlyTotalDuration = db.command.inc(duration);
+      console.log(`更新当月总分钟数: ${currentMonthlyTotal} + ${duration} = ${currentMonthlyTotal + duration}`);
+      
+      // 更新最长连续天数
+      const currentLongestCheckInDays = stats.longestCheckInDays || 1;
+      const newCurrentStreak = stats.currentStreak + 1;
+      if (newCurrentStreak > currentLongestCheckInDays) {
+        updateData.longestCheckInDays = newCurrentStreak;
+        console.log(`更新最长连续天数: ${currentLongestCheckInDays} -> ${newCurrentStreak}`);
+      }
       
       if (isNewDay) {
         updateData.totalDays = db.command.inc(1);
@@ -344,9 +400,27 @@ async function getUserStats(openid) {
       };
     }
     
+    const userStats = result.data[0];
+    
+    // 确保返回的数据包含所有必要的字段
     return {
       success: true,
-      data: result.data[0]
+      data: {
+        totalDays: userStats.totalDays || 0,
+        totalCount: userStats.totalCount || 0,
+        totalDuration: userStats.totalDuration || 0,
+        dailyTotalDuration: userStats.dailyTotalDuration || 0,
+        monthlyTotalDuration: userStats.monthlyTotalDuration || 0,
+        longestCheckInDays: userStats.longestCheckInDays || 0,
+        currentStreak: userStats.currentStreak || 0,
+        longestStreak: userStats.longestStreak || 0,
+        lastCheckinDate: userStats.lastCheckinDate || '',
+        lastCheckinDuration: userStats.lastCheckinDuration || 0,
+        lastCheckin: userStats.lastCheckin || '',
+        monthlyStats: userStats.monthlyStats || {},
+        createdAt: userStats.createdAt || '',
+        updatedAt: userStats.updatedAt || ''
+      }
     };
   } catch (error) {
     console.error("获取用户统计失败:", error);
@@ -354,50 +428,95 @@ async function getUserStats(openid) {
   }
 }
 
-// 获取排行榜
+// 获取实时排行榜（基于user_stats，仅显示前100名）
 async function getRankings(period) {
   try {
-    let query = db.collection("rankings");
+    const wxContext = cloud.getWXContext();
+    const currentUserOpenId = wxContext.OPENID;
     
-    if (period === "daily") {
-      const today = new Date().toISOString().split('T')[0];
-      query = query.where({
-        type: "daily",
-        period: today
-      });
-    } else if (period === "monthly") {
-      const monthStr = new Date().toISOString().substring(0, 7);
-      query = query.where({
-        type: "monthly",
-        period: monthStr
-      });
-    } else {
-      query = query.where({
-        type: "total",
-        period: "all"
-      });
-    }
+    console.log(`获取实时排名，用户: ${currentUserOpenId}, 周期: ${period}`);
     
-    const result = await query
-      .orderBy('duration', 'desc')
-      .limit(100)
+    // 直接查询user_stats表，按当日总时长降序排列，获取前100名
+    const userStats = await db.collection("user_stats")
+      .orderBy("dailyTotalDuration", "desc")
+      .limit(100) // 仅显示前100名用户
       .get();
     
-    // 简化版用户信息
-    const rankingsWithUser = result.data.map((ranking, index) => ({
-      ...ranking,
-      rank: index + 1,
-      userInfo: {
-        nickname: "用户" + ranking._openid.substring(0, 6)
+    console.log(`查询到 ${userStats.data.length} 名用户统计信息`);
+    
+    // 构建排名数据，使用更完善的昵称获取逻辑
+    const rankings = await Promise.all(userStats.data.map(async (user, index) => {
+      let userNickname = "用户" + user._openid.substring(0, 6);
+      
+      // 1. 首先尝试从user_stats表中获取昵称
+      if (user.nickname && user.nickname.trim() !== "") {
+        userNickname = user.nickname;
+      } else {
+        // 2. 尝试从user_profiles表中获取昵称
+        try {
+          const userProfile = await db.collection("user_profiles")
+            .where({ _openid: user._openid })
+            .get();
+          
+          if (userProfile.data.length > 0 && userProfile.data[0].nickname && userProfile.data[0].nickname.trim() !== "") {
+            userNickname = userProfile.data[0].nickname;
+          }
+        } catch (error) {
+          console.log(`获取用户 ${user._openid} 档案失败，使用默认昵称`);
+        }
       }
+      
+      // 3. 如果是当前用户，显示"当前用户"标识
+      if (user._openid === currentUserOpenId) {
+        userNickname = "当前用户";
+      }
+      
+      return {
+        openid: user._openid,
+        nickname: userNickname,
+        duration: user.dailyTotalDuration || 0, // 使用当日总时长
+        rank: index + 1
+      };
     }));
+    
+    // 检查当前用户是否在前100名内
+    const currentUserRank = rankings.find(r => r.openid === currentUserOpenId);
+    const currentUserInTop100 = !!currentUserRank;
+    
+    // 如果用户不在前100名，获取其真实排名
+    let userTotalRank = 0;
+    if (!currentUserInTop100) {
+      const userStat = await db.collection("user_stats")
+        .where({ _openid: currentUserOpenId })
+        .get();
+      
+      if (userStat.data.length > 0) {
+        // 计算用户在所有用户中的排名（按当日总时长）
+        const allUsers = await db.collection("user_stats")
+          .orderBy("dailyTotalDuration", "desc")
+          .get();
+        
+        userTotalRank = allUsers.data.findIndex(user => 
+          user._openid === currentUserOpenId
+        ) + 1;
+      }
+    }
     
     return {
       success: true,
-      data: rankingsWithUser
+      data: {
+        type: period,
+        period: new Date().toISOString().split('T')[0],
+        snapshotTime: new Date(),
+        rankings: rankings,
+        totalUsers: userStats.data.length,
+        currentUserOpenId: currentUserOpenId,
+        currentUserRank: currentUserRank ? currentUserRank.rank : userTotalRank,
+        currentUserInTop100: currentUserInTop100
+      }
     };
   } catch (error) {
-    console.error("获取排行榜失败:", error);
+    console.error("获取实时排行榜失败:", error);
     return { success: false, error: error.message };
   }
 }
@@ -597,23 +716,89 @@ async function getUserMapping(openid) {
 }
 
 // 迁移本地数据到微信账号
-async function migrateLocalData(openid, localUserId) {
+async function migrateLocalData(openid, localUserId, localData = null) {
   try {
     console.log(`开始迁移本地数据: openid=${openid}, localUserId=${localUserId}`);
     
     // 1. 创建用户映射
     await createUserMapping(openid, localUserId);
     
-    // 2. 获取本地记录（这里需要前端配合，因为本地数据在前端）
-    // 实际迁移逻辑需要前端调用，这里只返回迁移指令
+    // 2. 如果有提供本地数据，执行实际迁移
+    let migratedCount = 0;
+    if (localData && localData.dailyRecords) {
+      console.log(`接收到本地数据，开始迁移 ${Object.keys(localData.dailyRecords).length} 天的记录`);
+      
+      // 只迁移近1个月的数据
+      const oneMonthAgo = new Date();
+      oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+      
+      for (const dateStr in localData.dailyRecords) {
+        const recordDate = new Date(dateStr);
+        if (recordDate < oneMonthAgo) {
+          console.log(`跳过超过1个月的数据: ${dateStr}`);
+          continue;
+        }
+        
+        const dayRecords = localData.dailyRecords[dateStr].records;
+        if (!dayRecords || dayRecords.length === 0) {
+          continue;
+        }
+        
+        console.log(`迁移日期 ${dateStr} 的 ${dayRecords.length} 条记录`);
+        
+        for (const record of dayRecords) {
+          try {
+            // 检查是否已存在相同记录（避免重复）
+            const existingResult = await db.collection("meditation_records")
+              .where({
+                _openid: openid,
+                date: dateStr,
+                duration: record.duration,
+                rating: record.rating,
+                experience: record.experience
+              })
+              .get();
+            
+            if (existingResult.data.length === 0) {
+              // 创建新的记录
+              const newRecord = {
+                _openid: openid,
+                date: dateStr,
+                timestamp: record.timestamp || Date.now(),
+                duration: record.duration || 0,
+                rating: record.rating || 0,
+                experience: Array.isArray(record.experience) ? record.experience : (record.experience ? [record.experience] : []),
+                createdAt: new Date(record.timestamp || Date.now()),
+                updatedAt: new Date()
+              };
+              
+              await db.collection("meditation_records").add({
+                data: newRecord
+              });
+              
+              migratedCount++;
+              console.log(`✅ 迁移记录成功: ${dateStr} ${record.duration}分钟`);
+            } else {
+              console.log(`⏭️ 跳过已存在的记录: ${dateStr}`);
+            }
+          } catch (error) {
+            console.warn(`⚠️ 迁移记录失败: ${dateStr}`, error);
+          }
+        }
+      }
+      
+      // 更新用户统计
+      await updateUserStats(openid, new Date().toISOString().split('T')[0], 0);
+    }
     
     return {
       success: true,
       data: {
         openid: openid,
         localUserId: localUserId,
-        migrationStatus: "ready",
-        message: "请在前端调用数据迁移功能"
+        migrationStatus: "completed",
+        migratedCount: migratedCount,
+        message: `数据迁移完成，成功迁移${migratedCount}条记录`
       }
     };
   } catch (error) {
@@ -842,5 +1027,160 @@ async function migrateUserProfile(openid, oldUserInfo) {
   } catch (error) {
     console.error("迁移用户档案失败:", error);
     return { success: false, error: error.message };
+  }
+}
+
+// 获取排名快照
+async function getRankingSnapshot(event, context) {
+  try {
+    const { rankingType = 'daily' } = event;
+    
+    // 获取当前用户的微信真实openid
+    const wxContext = cloud.getWXContext();
+    const currentUserOpenId = wxContext.OPENID;
+    
+    console.log('获取实时排名快照，当前用户openid:', currentUserOpenId, '排名类型:', rankingType);
+    
+    // 直接使用实时排名逻辑，不再使用弃用的rankings集合
+    const realTimeRankings = await getRankings(rankingType);
+    
+    if (!realTimeRankings.success) {
+      throw new Error(realTimeRankings.error);
+    }
+    
+    const rankingData = realTimeRankings.data;
+    
+    console.log('当前用户openid:', currentUserOpenId);
+    console.log('排名数据中的openid列表:', rankingData.rankings.map(r => r.openid));
+    
+    // 检查当前用户是否在前100名内
+    const currentUserInTop100 = rankingData.currentUserInTop100;
+    console.log('当前用户是否在前100名内:', currentUserInTop100);
+    console.log('当前用户排名:', rankingData.currentUserRank);
+    
+    // 如果用户不在前100名，显示"未上排行榜"
+    if (!currentUserInTop100 && rankingData.currentUserRank > 100) {
+      console.log('当前用户排名超过100名，显示"未上排行榜"');
+      rankingData.currentUserRank = "未上排行榜";
+    }
+    
+    return {
+      success: true,
+      data: rankingData
+    };
+  } catch (error) {
+    console.error('获取排名快照失败:', error);
+    console.error('错误详情:', error.stack);
+    return {
+      success: false,
+      message: "排名数据加载失败",
+      error: error.message,
+      errorCode: error.errCode || 'UNKNOWN_ERROR'
+    };
+  }
+}
+
+// 生成排名快照
+async function generateRankingSnapshot(event) {
+  try {
+    const { type = 'daily' } = event;
+    const today = new Date().toISOString().split('T')[0];
+    
+    // 查询当前所有登录用户数据（按当日总时长降序）
+    const users = await db.collection("user_stats")
+      .orderBy("dailyTotalDuration", "desc")
+      .limit(1000) // 限制返回数量，避免性能问题
+      .get();
+    
+    // 生成排名快照
+    const snapshot = {
+      type: type,
+      period: today,
+      snapshotTime: new Date(),
+      rankings: users.data.map((user, index) => ({
+        openid: user._openid,
+        nickname: user.nickname || "匿名用户",
+        duration: user.dailyTotalDuration || 0,
+        rank: index + 1
+      })),
+      totalUsers: users.data.length
+    };
+    
+    // 存储快照，覆盖旧数据
+    await db.collection("ranking_snapshots")
+      .where({ type: type, period: today })
+      .remove();
+      
+    await db.collection("ranking_snapshots").add({
+      data: snapshot
+    });
+    
+    console.log(`✅ 排名快照生成成功: type=${type}, period=${today}, users=${users.data.length}`);
+    
+    return {
+      success: true,
+      data: snapshot
+    };
+  } catch (error) {
+    console.error('生成排名快照失败:', error);
+    return {
+      success: false,
+      message: "排名快照生成失败"
+    };
+  }
+}
+
+// 初始化排名快照集合（创建集合和索引）
+async function initRankingSnapshot() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    
+    console.log('开始初始化排名快照集合...');
+    
+    // 创建一个空的排名快照作为测试数据
+    const testSnapshot = {
+      type: 'daily',
+      period: today,
+      snapshotTime: new Date(),
+      rankings: [
+        {
+          openid: 'test_user_1',
+          nickname: '测试用户1',
+          duration: 3600,
+          rank: 1
+        },
+        {
+          openid: 'test_user_2', 
+          nickname: '测试用户2',
+          duration: 1800,
+          rank: 2
+        }
+      ],
+      totalUsers: 2
+    };
+    
+    // 尝试插入测试数据（如果集合不存在会自动创建）
+    const result = await db.collection("ranking_snapshots").add({
+      data: testSnapshot
+    });
+    
+    console.log('排名快照集合初始化成功，插入测试数据ID:', result._id);
+    
+    return {
+      success: true,
+      message: "排名快照集合初始化成功",
+      data: {
+        snapshotId: result._id,
+        testData: testSnapshot
+      }
+    };
+    
+  } catch (error) {
+    console.error('初始化排名快照集合失败:', error);
+    return {
+      success: false,
+      message: "初始化排名快照集合失败",
+      error: error.message
+    };
   }
 }

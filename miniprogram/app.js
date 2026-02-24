@@ -8,7 +8,8 @@ App({
     
     // 初始化云开发
     wx.cloud.init({
-      // 使用自动环境检测，避免env配置错误
+      // 明确指定环境ID
+      env: 'cloud1-2g2rbxbu2c126d4a',
       traceUser: true
     });
     
