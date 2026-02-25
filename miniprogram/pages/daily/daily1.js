@@ -278,15 +278,39 @@ Page({
       // 计算本次打卡的静坐时长（当天最后一次打卡的时长）
       let currentMinutes = 0;
       if (todayRecords && todayRecords.length > 0) {
+        // 调试：打印所有返回的记录，查看数据结构和用户信息
+        console.log('=== 调试：今天所有返回的记录 ===');
+        todayRecords.forEach((record, index) => {
+          console.log(`记录 ${index + 1}:`, {
+            id: record._id || record.id,
+            openid: record._openid || record.openid,
+            duration: record.duration,
+            date: record.date,
+            timestamp: record.timestamp,  // 添加timestamp字段显示
+            createdAt: record.createdAt,
+            timestampToDate: record.timestamp ? new Date(record.timestamp).toISOString() : 'N/A'  // 转换timestamp为日期格式
+          });
+        });
+        
         // 取当天最后一次打卡的时长
-        currentMinutes = todayRecords[todayRecords.length - 1].duration || 0;
+        const lastRecord = todayRecords[todayRecords.length - 1];
+        console.log('=== 最后一条记录详情 ===', lastRecord);
+        
+        // 确保从meditation_records中正确获取duration字段
+        currentMinutes = lastRecord.duration || 0;
+        console.log('从meditation_records获取的时长:', currentMinutes, '分钟');
+        
+        // 检查当前用户的openid
+        const currentUserOpenId = wx.getStorageSync('userOpenId');
+        console.log('当前用户openid:', currentUserOpenId);
+        console.log('最后一条记录的用户openid:', lastRecord._openid || lastRecord.openid);
       }
       
       // 计算用户等级（基于累计总分钟数）
       const userLevel = this.calculateUserLevel(stats.totalDuration || 0);
 
-      // 如果当天没有打卡记录，显示一个默认的本次打卡时长（测试用）
-      const displayMinutes = currentMinutes > 0 ? currentMinutes : 15;
+      // 使用实际获取的时长，不设置默认值
+      const displayMinutes = currentMinutes;
       
       this.setData({
         totalMinutes: displayMinutes, // 显示本次打卡时长
@@ -302,9 +326,9 @@ Page({
       
     } catch (error) {
       console.error('获取用户统计数据失败:', error);
-      // 降级处理：显示默认值
+      // 降级处理：显示0分钟，表示没有打卡记录
       this.setData({
-        totalMinutes: 15,
+        totalMinutes: 0,
         totalCount: 0,
         userLevel: 'Lv.1 新手上路'
       });
@@ -549,6 +573,7 @@ Page({
       }
     });
   },
+
 
   onShareAppMessage() {
     return {

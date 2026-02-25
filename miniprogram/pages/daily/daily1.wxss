@@ -17,7 +17,7 @@
   margin-left: 48rpx;
 }
 .ml-102 {
-  margin-left: 225rpx;
+  margin-left: 100rpx;
 }
 
 /* 白色底板 - 主要内容区域 */
@@ -66,7 +66,7 @@
 }
 .text_3 {
   color: #101828;
-  font-size: 100rpx;
+  font-size: 80rpx;
   font-family: Inter;
   font-weight: 700;
   line-height: 117.09rpx;
@@ -107,7 +107,7 @@
   border-bottom: solid 2.21rpx #e5e7eb99;
 }
 .group_5 {
-  margin-right: -613.24rpx;
+  margin-right: -500rpx;
 }
 .font_2 {
   font-size: 30.88rpx;
@@ -125,13 +125,13 @@
   height: 41.91rpx;
 }
 .group_6 {
-  padding: 0 26.47rpx;
+  padding: 0 25rpx;
 }
 .equal-division-item {
   padding: 8.82rpx 0;
 }
 .font_4 {
-  font-size: 44.12rpx;
+  font-size: 30rpx;
   font-family: Inter;
   line-height: 32.51rpx;
   font-weight: 700;
@@ -198,6 +198,90 @@
 .text_9 {
   color: #ffffff;
   font-weight: 700;
+}
+
+/* 卡牌区域 - 居中显示 */
+.card-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 40rpx 0;
+  padding: 0 44.12rpx;
+}
+
+.card-stack-container {
+  position: relative;
+  width: 320rpx;
+  height: 400rpx;
+}
+
+/* 通用卡牌层样式 */
+.card-layer {
+  position: absolute;
+  border-radius: 22.06rpx;
+  filter: drop-shadow(0rpx 8.82rpx 13.24rpx rgba(0, 0, 0, 0.08));
+}
+
+/* 底层背景 - 使用right_card.png */
+.card-base {
+  width: 400rpx;
+  height: 500rpx;
+  left: 70%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+/* 装饰层 - 使用left_card.png */
+.card-decor {
+  width: 380rpx;
+  height: 500rpx;
+  right: 10.48rpx;
+  bottom: 1.84rpx;
+  z-index: 2;
+}
+
+/* 主卡牌 - 移除倾斜效果 */
+.card-main {
+  width: 330rpx;
+  height: 480rpx;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%); /* 仅保留水平居中 */
+  z-index: 3;
+  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border: 1rpx solid rgba(178, 151, 100, 0.1);
+  border-radius: 15rpx;
+}
+
+
+
+.main-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 22.06rpx;
+  object-fit: cover;
+}
+
+/* 金句区域 - 在卡牌下方居中 */
+.wisdom-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 120rpx 0 80rpx;
+  padding: 0 44.12rpx;
+}
+
+.wisdom-text {
+  color: #364153;
+  font-size: 30rpx;
+  font-family: Times;
+  line-height: 43.01rpx;
+  text-align: center;
+  max-width: 600rpx;
 }
 
 .mt-19 {

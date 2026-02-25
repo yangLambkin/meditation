@@ -22,16 +22,29 @@
       </view>
     </view>
     
-    <!-- 金句区域 -->
-    <view class="flex-row group_4 mt-19">
-      <text class="self-start text_5">
+    <!-- 卡牌区域 - 多层叠加效果，居中显示 -->
+    <view class="card-section">
+      <view class="card-stack-container">
+        <!-- 底层背景 -->
+        <image class="card-layer card-base" src="/images/right_card.png" />
+        <!-- 装饰层 -->
+        <image class="card-layer card-decor" src="/images/left_card.png" />
+        <!-- 主卡牌 - 移除倾斜效果，使用官方长按识别 -->
+        <view class="card-layer card-main">
+          <image 
+            class="main-image" 
+            src="{{displayImage}}" 
+            show-menu-by-longpress="{{true}}"
+          />
+        </view>
+      </view>
+    </view>
+
+    <!-- 金句区域 - 在卡牌下方居中显示 -->
+    <view class="wisdom-section">
+      <text class="wisdom-text">
         {{wisdomQuote || '静坐觉察，每日修行。保持内心的平静与专注。'}}
       </text>
-      <!-- 随机展示云存储中的图片 -->
-      <image
-        class="flex-1 image ml-37"
-        src="{{displayImage}}"
-      />
     </view>
     
     <!-- 用户信息和统计区域 -->
@@ -49,12 +62,12 @@
           <!-- 打卡统计 -->
           <view class="mt-6 flex-row group_6">
             <view class="flex-col items-start equal-division-item">
-              <text class="font_4">{{totalCount || 0}}</text>
+              <text class="font_4">{{totalCount || 0}}次</text>
               <text class="mt-8 font_3">今日打卡</text>
             </view>
             <view class="flex-col items-start equal-division-item ml-102">
-              <text class="font_4">{{totalMinutes || 0}}m</text>
-              <text class="mt-8 font_3">静坐时长</text>
+              <text class="font_4">{{totalMinutes || 0}}分钟</text>
+              <text class="mt-8 font_3">本次觉察时长</text>
             </view>
           </view>
         </view>
@@ -65,9 +78,6 @@
             class="image_2"
             src="{{userAvatar || '/images/avatar.png'}}"
           />
-          <view class="flex-col justify-start items-center text-wrapper_2 pos">
-            <text class="font_3 text_8">✦</text>
-          </view>
         </view>
       </view>
       
