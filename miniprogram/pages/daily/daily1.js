@@ -188,12 +188,19 @@ Page({
    * 获取用户数据（支持新旧格式）
    */
   getUserData: function() {
-    // 检查用户是否已登录
+    // 使用与index页面一致的登录状态检测逻辑
     const userOpenId = wx.getStorageSync('userOpenId');
-    const isLoggedIn = userOpenId && userOpenId.startsWith('oz');
+    const userInfo = wx.getStorageSync('userInfo');
+    const userNickname = wx.getStorageSync('userNickname');
+    
+    const isWechatLoggedIn = userOpenId && userOpenId.startsWith('oz');
+    const hasWechatInfo = !!(userInfo || userNickname);
+    const isLoggedIn = isWechatLoggedIn || hasWechatInfo;
     
     // 尝试从缓存获取用户信息
     const cachedUserInfo = wx.getStorageSync('userInfo');
+    
+    console.log('daily1页面用户状态检测 - 微信登录:', isWechatLoggedIn, '有微信信息:', hasWechatInfo, '已登录:', isLoggedIn);
     
     // 支持新旧格式的用户信息
     const hasValidUserInfo = cachedUserInfo && 
@@ -205,10 +212,15 @@ Page({
       // 使用缓存的用户信息
       const userName = cachedUserInfo.nickName || '静心者';
       
-      // 已登录用户使用缓存头像，未登录用户使用默认头像
-      const userAvatar = isLoggedIn ? 
-        (cachedUserInfo.avatarUrl || '/images/userLogin.png') : 
-        '/images/userLogin.png';
+      // 头像显示逻辑优化：
+      // 1. 已登录用户：优先使用用户头像，否则使用登录图标
+      // 2. 未登录用户：使用默认头像
+      let userAvatar;
+      if (isLoggedIn) {
+        userAvatar = cachedUserInfo.avatarUrl || '/images/userLogin.png';
+      } else {
+        userAvatar = '/images/avatar.png'; // 未登录用户使用默认头像
+      }
       
       this.setData({
         userName: userName,
@@ -219,6 +231,9 @@ Page({
     } else {
       // 没有用户信息，根据登录状态使用不同默认值
       const userName = isLoggedIn ? '微信用户' : '静心者';
+      
+      // 头像显示逻辑优化：
+      // 已登录用户显示登录图标，未登录用户显示默认头像
       const userAvatar = isLoggedIn ? '/images/userLogin.png' : '/images/avatar.png';
       
       this.setData({
@@ -232,8 +247,8 @@ Page({
       this.showProfileHint();
     }
     
-    // 获取用户打卡统计数据
-    this.calculateUserStats();
+    // 获取用户打卡统计数据（使用本地缓存优先的架构）
+    this.calculateUserStatsFromLocal();
   },
 
   /**
@@ -260,78 +275,120 @@ Page({
   },
 
   /**
-   * 计算用户统计数据（使用云存储）
+   * 计算用户统计数据（本地缓存优先架构）
    */
-  calculateUserStats: async function() {
+  calculateUserStatsFromLocal: function() {
+    console.log('=== 开始从本地缓存获取用户统计数据 ===');
+    
     try {
-      // 使用云存储获取用户统计信息
-      const stats = await checkinManager.getUserStats();
-      
-      // 获取今天的打卡记录
+      // 获取当前日期
       const today = new Date();
       const todayStr = today.toISOString().split('T')[0];
-      const todayRecords = await checkinManager.getDailyCheckinRecords(todayStr);
       
-      // 计算今日累计打卡次数
-      const todayCount = todayRecords ? todayRecords.length : 0;
+      // 1. 直接从本地缓存获取今日打卡数据
+      const todayCheckinCount = this.getTodayCheckinCountFromLocal(todayStr);
+      console.log('本地获取今日打卡次数:', todayCheckinCount);
       
-      // 计算本次打卡的静坐时长（当天最后一次打卡的时长）
-      let currentMinutes = 0;
-      if (todayRecords && todayRecords.length > 0) {
-        // 调试：打印所有返回的记录，查看数据结构和用户信息
-        console.log('=== 调试：今天所有返回的记录 ===');
-        todayRecords.forEach((record, index) => {
-          console.log(`记录 ${index + 1}:`, {
-            id: record._id || record.id,
-            openid: record._openid || record.openid,
-            duration: record.duration,
-            date: record.date,
-            timestamp: record.timestamp,  // 添加timestamp字段显示
-            createdAt: record.createdAt,
-            timestampToDate: record.timestamp ? new Date(record.timestamp).toISOString() : 'N/A'  // 转换timestamp为日期格式
-          });
-        });
-        
-        // 取当天最后一次打卡的时长
-        const lastRecord = todayRecords[todayRecords.length - 1];
-        console.log('=== 最后一条记录详情 ===', lastRecord);
-        
-        // 确保从meditation_records中正确获取duration字段
-        currentMinutes = lastRecord.duration || 0;
-        console.log('从meditation_records获取的时长:', currentMinutes, '分钟');
-        
-        // 检查当前用户的openid
-        const currentUserOpenId = wx.getStorageSync('userOpenId');
-        console.log('当前用户openid:', currentUserOpenId);
-        console.log('最后一条记录的用户openid:', lastRecord._openid || lastRecord.openid);
-      }
+      // 2. 获取本次觉察时长（当天最后一次打卡的时长）
+      const currentMinutes = this.getCurrentMeditationMinutes(todayStr);
+      console.log('本地获取本次觉察时长:', currentMinutes, '分钟');
       
-      // 计算用户等级（基于累计总分钟数）
-      const userLevel = this.calculateUserLevel(stats.totalDuration || 0);
-
-      // 使用实际获取的时长，不设置默认值
-      const displayMinutes = currentMinutes;
+      // 3. 获取用户累计统计信息（从本地）
+      const userStats = this.getUserStatsFromLocal();
+      console.log('本地获取用户统计信息:', userStats);
       
+      // 4. 计算用户等级（基于累计总分钟数）
+      const userLevel = this.calculateUserLevel(userStats.totalDuration || 0);
+      
+      // 设置页面数据
       this.setData({
-        totalMinutes: displayMinutes, // 显示本次打卡时长
-        totalCount: todayCount, // 显示今日累计打卡次数
+        totalMinutes: currentMinutes, // 显示本次打卡时长
+        totalCount: todayCheckinCount, // 显示今日累计打卡次数
         userLevel: userLevel
       }, () => {
         // 数据设置完成后的回调，验证数据绑定
-        console.log('用户统计信息:', stats);
-        console.log('本次打卡时长:', currentMinutes + '分钟');
-        console.log('实际设置的totalMinutes:', displayMinutes);
-        console.log('页面数据totalMinutes:', this.data.totalMinutes);
+        console.log('数据设置完成 - 本次打卡时长:', currentMinutes + '分钟');
+        console.log('数据设置完成 - 今日打卡次数:', todayCheckinCount);
+        console.log('数据设置完成 - 用户等级:', userLevel);
+        console.log('页面数据验证:', {
+          totalMinutes: this.data.totalMinutes,
+          totalCount: this.data.totalCount,
+          userLevel: this.data.userLevel
+        });
       });
       
     } catch (error) {
-      console.error('获取用户统计数据失败:', error);
+      console.error('从本地缓存获取用户统计数据失败:', error);
       // 降级处理：显示0分钟，表示没有打卡记录
       this.setData({
         totalMinutes: 0,
         totalCount: 0,
         userLevel: 'Lv.1 新手上路'
       });
+    }
+  },
+
+  /**
+   * 从本地缓存获取今日打卡次数
+   */
+  getTodayCheckinCountFromLocal: function(todayStr) {
+    const checkinManager = require('../../utils/checkin.js');
+    
+    // 使用checkinManager的同步版本获取今日打卡次数
+    const count = checkinManager.getDailyCheckinCountSync(todayStr);
+    return count || 0;
+  },
+
+  /**
+   * 获取本次觉察时长（当天最后一次打卡的时长）
+   */
+  getCurrentMeditationMinutes: function(todayStr) {
+    const checkinManager = require('../../utils/checkin.js');
+    
+    try {
+      // 获取今日所有打卡记录
+      const userData = checkinManager.getUserCheckinData();
+      const todayRecords = userData.dailyRecords[todayStr];
+      
+      if (!todayRecords || !todayRecords.records || todayRecords.records.length === 0) {
+        return 0; // 今天没有打卡记录
+      }
+      
+      // 取当天最后一次打卡的时长
+      const lastRecord = todayRecords.records[todayRecords.records.length - 1];
+      console.log('本次觉察时长 - 最后一条记录:', {
+        duration: lastRecord.duration,
+        timestamp: lastRecord.timestamp,
+        time: lastRecord.timestamp ? new Date(lastRecord.timestamp).toISOString() : 'N/A'
+      });
+      
+      return lastRecord.duration || 0;
+      
+    } catch (error) {
+      console.warn('获取本次觉察时长失败:', error);
+      return 0;
+    }
+  },
+
+  /**
+   * 从本地缓存获取用户统计信息
+   */
+  getUserStatsFromLocal: function() {
+    const checkinManager = require('../../utils/checkin.js');
+    
+    try {
+      // 使用checkinManager的本地统计功能
+      const stats = checkinManager.getUserStats();
+      return stats;
+    } catch (error) {
+      console.warn('获取本地用户统计失败:', error);
+      return {
+        totalDays: 0,
+        totalCount: 0,
+        totalDuration: 0,
+        currentStreak: 0,
+        longestStreak: 0
+      };
     }
   },
 
@@ -349,6 +406,14 @@ Page({
     if (totalMinutes >= 60) return 'Lv.3 修行中';
     if (totalMinutes >= 30) return 'Lv.2 入门者';
     return 'Lv.1 新手上路';
+  },
+
+  /**
+   * 保留原有的云端数据获取函数作为备用（兼容性）
+   */
+  calculateUserStats: async function() {
+    // 直接调用本地版本，保持兼容性
+    this.calculateUserStatsFromLocal();
   },
 
 

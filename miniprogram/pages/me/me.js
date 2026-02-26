@@ -79,17 +79,28 @@ Page({
    * 计算用户统计信息
    */
   async calculateUserStatistics() {
-    // 检查用户是否已登录
+    // 检查用户是否已登录（使用与index页面一致的检测逻辑）
     const userOpenId = wx.getStorageSync('userOpenId');
+    const userInfo = wx.getStorageSync('userInfo');
+    const userNickname = wx.getStorageSync('userNickname');
+    
+    // 使用与index页面一致的登录状态检测逻辑
+    const isWechatLoggedIn = userOpenId && userOpenId.startsWith('oz');
+    const hasWechatInfo = !!(userInfo || userNickname);
+    const isLoggedIn = isWechatLoggedIn || hasWechatInfo;
     
     console.log('me.js检查用户登录状态:', {
       userOpenId: userOpenId,
-      isLoggedIn: userOpenId && userOpenId.startsWith('oz'),
+      userInfo: !!userInfo,
+      userNickname: !!userNickname,
+      isWechatLoggedIn: isWechatLoggedIn,
+      hasWechatInfo: hasWechatInfo,
+      isLoggedIn: isLoggedIn,
       currentTime: new Date().toISOString()
     });
     
-    if (userOpenId && userOpenId.startsWith('oz')) {
-      // 已登录用户（微信openid以'oz'开头）：从云端user_stats表获取数据
+    if (isLoggedIn) {
+      // 已登录用户：从云端user_stats表获取数据
       console.log('用户已登录，从云端获取统计信息');
       await this.getUserStatisticsFromCloud(userOpenId);
     } else {

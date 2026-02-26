@@ -23,6 +23,8 @@ exports.main = async (event, context) => {
   console.log('尝试处理的操作类型:', event.type);
   
   switch (event.type) {
+    case "login":
+      return await handleLogin(wxContext, event.code);
     case "recordMeditation":
       return await recordMeditation(openid, event.data, event.localUserId);
     case "getUserRecords":
@@ -718,78 +720,15 @@ async function getUserMapping(openid) {
 // 迁移本地数据到微信账号
 async function migrateLocalData(openid, localUserId, localData = null) {
   try {
-    console.log(`开始迁移本地数据: openid=${openid}, localUserId=${localUserId}`);
+    console.log(`本地优先架构：用户登录迁移，openid=${openid}, localUserId=${localUserId}`);
     
-    // 1. 创建用户映射
+    // 简化版本：只记录用户登录，不执行复杂的数据迁移
+    // 实际的数据同步由前端按需处理
+    
+    // 记录用户登录事件
     await createUserMapping(openid, localUserId);
     
-    // 2. 如果有提供本地数据，执行实际迁移
-    let migratedCount = 0;
-    if (localData && localData.dailyRecords) {
-      console.log(`接收到本地数据，开始迁移 ${Object.keys(localData.dailyRecords).length} 天的记录`);
-      
-      // 只迁移近1个月的数据
-      const oneMonthAgo = new Date();
-      oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-      
-      for (const dateStr in localData.dailyRecords) {
-        const recordDate = new Date(dateStr);
-        if (recordDate < oneMonthAgo) {
-          console.log(`跳过超过1个月的数据: ${dateStr}`);
-          continue;
-        }
-        
-        const dayRecords = localData.dailyRecords[dateStr].records;
-        if (!dayRecords || dayRecords.length === 0) {
-          continue;
-        }
-        
-        console.log(`迁移日期 ${dateStr} 的 ${dayRecords.length} 条记录`);
-        
-        for (const record of dayRecords) {
-          try {
-            // 检查是否已存在相同记录（避免重复）
-            const existingResult = await db.collection("meditation_records")
-              .where({
-                _openid: openid,
-                date: dateStr,
-                duration: record.duration,
-                rating: record.rating,
-                experience: record.experience
-              })
-              .get();
-            
-            if (existingResult.data.length === 0) {
-              // 创建新的记录
-              const newRecord = {
-                _openid: openid,
-                date: dateStr,
-                timestamp: record.timestamp || Date.now(),
-                duration: record.duration || 0,
-                rating: record.rating || 0,
-                experience: Array.isArray(record.experience) ? record.experience : (record.experience ? [record.experience] : []),
-                createdAt: new Date(record.timestamp || Date.now()),
-                updatedAt: new Date()
-              };
-              
-              await db.collection("meditation_records").add({
-                data: newRecord
-              });
-              
-              migratedCount++;
-              console.log(`✅ 迁移记录成功: ${dateStr} ${record.duration}分钟`);
-            } else {
-              console.log(`⏭️ 跳过已存在的记录: ${dateStr}`);
-            }
-          } catch (error) {
-            console.warn(`⚠️ 迁移记录失败: ${dateStr}`, error);
-          }
-        }
-      }
-      
-      // 更新用户统计
-      await updateUserStats(openid, new Date().toISOString().split('T')[0], 0);
-    }
+    console.log(`用户登录迁移完成`);
     
     return {
       success: true,
@@ -797,12 +736,12 @@ async function migrateLocalData(openid, localUserId, localData = null) {
         openid: openid,
         localUserId: localUserId,
         migrationStatus: "completed",
-        migratedCount: migratedCount,
-        message: `数据迁移完成，成功迁移${migratedCount}条记录`
+        migratedCount: 0,
+        message: `用户登录迁移完成`
       }
     };
   } catch (error) {
-    console.error("迁移本地数据失败:", error);
+    console.error("用户登录迁移失败:", error);
     return { success: false, error: error.message };
   }
 }
@@ -1180,6 +1119,34 @@ async function initRankingSnapshot() {
     return {
       success: false,
       message: "初始化排名快照集合失败",
+      error: error.message
+    };
+  }
+}
+
+// 处理微信登录
+async function handleLogin(wxContext, code) {
+  try {
+    console.log('处理微信登录请求，code:', code);
+    
+    // 获取微信openid
+    const openid = wxContext.OPENID;
+    console.log('当前用户openid:', openid);
+    
+    if (!openid) {
+      throw new Error('无法获取用户openid');
+    }
+    
+    return {
+      success: true,
+      openid: openid,
+      message: '登录成功'
+    };
+    
+  } catch (error) {
+    console.error('处理微信登录失败:', error);
+    return {
+      success: false,
       error: error.message
     };
   }

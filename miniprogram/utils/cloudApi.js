@@ -15,12 +15,22 @@ const cloudApi = {
   // 记录冥想打卡
   recordMeditation: async function(duration, rating, experience = "") {
     try {
+      // 处理experience参数格式（确保与云函数接口兼容）
+      let experienceToSend = experience;
+      if (Array.isArray(experience)) {
+        // 云函数期望experience为数组，直接传递
+        experienceToSend = experience;
+      } else if (typeof experience === 'string') {
+        // 如果是字符串，转换为单元素数组
+        experienceToSend = experience ? [experience] : [];
+      }
+      
       const result = await this.callCloudFunction('meditationManager', {
         type: 'recordMeditation',
         data: {
           duration: duration,
           rating: rating,
-          experience: experience
+          experience: experienceToSend
         }
       });
 

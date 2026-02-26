@@ -211,9 +211,9 @@ Page({
   },
 
   /**
-   * 实际保存用户信息
+   * 实际保存用户信息（包含微信登录流程）
    */
-  saveUserInfo() {
+  async saveUserInfo() {
     const { avatarUrl, nickname, userType, loginCode } = this.data;
     
     // 构建新的用户信息结构
@@ -230,29 +230,193 @@ Page({
     
     console.log('保存用户信息:', userInfo);
     
-    // 获取用户标识
-    const openid = this.getUserOpenId(loginCode);
-    
-    // 保存到本地存储
-    this.saveToLocalStorage(userInfo, openid);
-    
-    // 保存到云端
-    this.saveToCloud(userInfo, openid)
-      .then(() => {
-        this.setData({ isLoading: false });
-        this.showSuccessAndNavigate();
-      })
-      .catch(error => {
-        console.error('保存到云端失败:', error);
-        this.setData({ isLoading: false });
+    try {
+      // 1. 执行微信登录获取openid
+      const wechatOpenId = await this.getWechatOpenId();
+      
+      // 2. 获取当前使用的localUserId
+      const localUserId = wx.getStorageSync('localUserId');
+      
+      // 3. 建立用户映射关系
+      if (localUserId && localUserId.startsWith('local_')) {
+        this.createUserMapping(localUserId, wechatOpenId);
         
-        // 即使云端失败，本地保存成功也要继续
-        this.showSuccessAndNavigate();
+        // 4. 异步迁移本地数据（不影响主流程）
+        this.migrateLocalData(localUserId, wechatOpenId)
+          .then(success => {
+            if (success) {
+              console.log('✅ 数据迁移完成');
+            } else {
+              console.warn('⚠️ 数据迁移失败，但用户可继续使用');
+            }
+          });
+      }
+      
+      // 5. 设置新的主标识
+      wx.setStorageSync('userOpenId', wechatOpenId);
+      
+      console.log('✅ 微信登录完成，映射关系建立:', {
+        from: localUserId,
+        to: wechatOpenId
       });
+      
+      // 6. 保存用户信息到本地存储
+      this.saveToLocalStorage(userInfo, wechatOpenId);
+      
+      // 7. 保存到云端
+      await this.saveToCloud(userInfo, wechatOpenId);
+      
+      this.setData({ isLoading: false });
+      this.showSuccessAndNavigate();
+      
+    } catch (error) {
+      console.error('微信登录流程失败，降级为本地模式:', error);
+      
+      // 降级处理：使用原有的本地标识逻辑
+      const openid = this.getUserOpenId(loginCode);
+      
+      // 保存到本地存储
+      this.saveToLocalStorage(userInfo, openid);
+      
+      // 尝试保存到云端（即使失败也不影响）
+      this.saveToCloud(userInfo, openid)
+        .catch(cloudError => {
+          console.warn('云端保存失败（不影响使用）:', cloudError);
+        })
+        .finally(() => {
+          this.setData({ isLoading: false });
+          this.showSuccessAndNavigate();
+        });
+    }
   },
 
   /**
-   * 获取用户OpenID
+   * 获取微信openid（登录流程）
+   */
+  async getWechatOpenId() {
+    console.log('🔄 开始微信登录流程获取openid');
+    
+    try {
+      // 1. 调用wx.login获取临时登录凭证
+      const loginResult = await new Promise((resolve, reject) => {
+        wx.login({
+          success: resolve,
+          fail: reject
+        });
+      });
+      
+      const code = loginResult.code;
+      console.log('获取到微信登录code:', code);
+      
+      // 2. 调用云函数换取openid
+      const cloudResult = await wx.cloud.callFunction({
+        name: 'meditationManager',
+        data: {
+          type: 'login',
+          code: code
+        }
+      });
+      
+      if (cloudResult.result && cloudResult.result.openid) {
+        const openid = cloudResult.result.openid;
+        console.log('✅ 成功获取微信openid:', openid);
+        return openid;
+      } else {
+        throw new Error('云函数返回的openid为空');
+      }
+      
+    } catch (error) {
+      console.error('获取微信openid失败:', error);
+      throw error; // 向上抛出错误，由调用方处理
+    }
+  },
+
+  /**
+   * 建立用户映射关系
+   */
+  createUserMapping(localUserId, wechatOpenId) {
+    const userMappings = wx.getStorageSync('userMappings') || {};
+    
+    userMappings[localUserId] = {
+      wechatOpenId: wechatOpenId,
+      mappedAt: Date.now(),
+      migrated: false // 初始状态为未迁移
+    };
+    
+    wx.setStorageSync('userMappings', userMappings);
+    
+    console.log('🔗 用户映射建立:', {
+      local: localUserId,
+      wechat: wechatOpenId
+    });
+  },
+
+  /**
+   * 迁移本地数据到新用户标识
+   */
+  async migrateLocalData(fromLocalId, toOpenId) {
+    try {
+      // 1. 获取源数据
+      const sourceKey = `meditation_checkin_${fromLocalId}`;
+      const sourceData = wx.getStorageSync(sourceKey);
+      
+      if (!sourceData || Object.keys(sourceData.dailyRecords).length === 0) {
+        console.log('✅ 源数据为空，无需迁移');
+        return true;
+      }
+      
+      console.log('发现需要迁移的数据，记录数:', Object.keys(sourceData.dailyRecords).length);
+      
+      // 2. 合并到目标数据
+      const targetKey = `meditation_checkin_${toOpenId}`;
+      const targetData = wx.getStorageSync(targetKey) || {
+        dailyRecords: {},
+        monthlyStats: {}
+      };
+      
+      // 3. 合并打卡记录（避免重复）
+      let migratedCount = 0;
+      for (const [dateStr, dayData] of Object.entries(sourceData.dailyRecords)) {
+        if (!targetData.dailyRecords[dateStr]) {
+          targetData.dailyRecords[dateStr] = dayData;
+          migratedCount++;
+        } else {
+          // 合并记录（如果目标日期没有记录）
+          targetData.dailyRecords[dateStr].records.push(...dayData.records);
+          targetData.dailyRecords[dateStr].count += dayData.count;
+          migratedCount++;
+        }
+      }
+      
+      // 4. 保存目标数据
+      wx.setStorageSync(targetKey, targetData);
+      
+      // 5. 标记源数据为已迁移
+      wx.setStorageSync(`${sourceKey}_migrated`, true);
+      
+      // 6. 更新映射状态
+      const userMappings = wx.getStorageSync('userMappings') || {};
+      if (userMappings[fromLocalId]) {
+        userMappings[fromLocalId].migrated = true;
+        wx.setStorageSync('userMappings', userMappings);
+      }
+      
+      console.log('✅ 数据迁移完成:', {
+        from: fromLocalId,
+        to: toOpenId,
+        migratedRecords: migratedCount
+      });
+      
+      return true;
+      
+    } catch (error) {
+      console.warn('数据迁移失败，但不影响使用:', error);
+      return false;
+    }
+  },
+
+  /**
+   * 获取用户OpenID（兼容原有逻辑）
    */
   getUserOpenId(loginCode) {
     // 尝试获取现有的openid

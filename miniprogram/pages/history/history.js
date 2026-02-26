@@ -88,52 +88,76 @@ Page({
       
       if (dailyRecords && dailyRecords.length > 0) {
         // 获取所有关联的体验记录
-        const experienceIds = [];
-        dailyRecords.forEach(record => {
+        const experienceRecords = [];
+        console.log('🔍 分析每日记录中的experience字段:');
+        dailyRecords.forEach((record, index) => {
+          console.log(`  记录${index}: timestamp=${record.timestamp}, experience=`, record.experience, '类型:', typeof record.experience);
+          
           if (record.experience && Array.isArray(record.experience)) {
-            experienceIds.push(...record.experience.filter(id => id && id.length > 0));
+            // 检查数组元素类型
+            const firstElement = record.experience[0];
+            console.log(`    -> 第一个元素类型:`, typeof firstElement, '内容:', firstElement);
+            
+            if (typeof firstElement === 'string') {
+              // 如果是字符串ID数组
+              const validIds = record.experience.filter(id => id && id.length > 0);
+              console.log(`    -> 字符串ID数量: ${validIds.length}`, validIds);
+              experienceRecords.push(...validIds.map(id => ({ type: 'id', value: id })));
+            } else if (typeof firstElement === 'object' && firstElement !== null) {
+              // 如果是对象数组（直接包含体验内容）
+              console.log(`    -> 对象数组数量: ${record.experience.length}`, record.experience);
+              experienceRecords.push(...record.experience.map(exp => ({ type: 'object', value: exp })));
+            }
           } else if (record.experience && typeof record.experience === 'string') {
             // 兼容旧数据：单个ID的情况
-            experienceIds.push(record.experience);
+            console.log(`    -> 字符串ID: ${record.experience}`);
+            experienceRecords.push({ type: 'id', value: record.experience });
+          } else {
+            console.log(`    -> 无体验记录字段或字段为空`);
           }
         });
+        console.log(`📝 总计收集到 ${experienceRecords.length} 个体验记录`);
         
         let experienceRecordsMap = new Map();
         
-        if (experienceIds.length > 0) {
-          // 去重
-          const uniqueIds = [...new Set(experienceIds)];
-          console.log(`开始查询体验记录，共 ${uniqueIds.length} 个唯一ID:`, uniqueIds);
+        if (experienceRecords.length > 0) {
+          console.log(`开始处理 ${experienceRecords.length} 个体验记录`);
           
-          // 改进：直接使用逐个查询，确保每个ID都能正确处理
-          const experienceRecords = [];
+          // 分别处理不同类型
+          const idRecords = experienceRecords.filter(r => r.type === 'id');
+          const objectRecords = experienceRecords.filter(r => r.type === 'object');
           
-          for (const expId of uniqueIds) {
-            try {
-              const db = wx.cloud.database();
-              const { data: singleRecord } = await db.collection('experience_records')
-                .doc(expId)
-                .get();
-              
-              if (singleRecord) {
-                experienceRecords.push(singleRecord);
-                console.log(`✅ 体验记录查询成功: ${expId}`);
-              } else {
-                console.warn(`⚠️ 体验记录不存在: ${expId}`);
-              }
-            } catch (singleError) {
-              console.warn(`❌ 体验记录查询失败: ${expId}`, singleError);
-            }
+          console.log(`  - 字符串ID类型: ${idRecords.length} 个`);
+          console.log(`  - 对象类型: ${objectRecords.length} 个`);
+          
+          // 处理字符串ID类型：从本地缓存获取
+          if (idRecords.length > 0) {
+            const uniqueIds = [...new Set(idRecords.map(r => r.value))];
+            console.log(`  开始查询字符串ID体验记录，共 ${uniqueIds.length} 个唯一ID:`, uniqueIds);
+            
+            const cachedRecords = this.getExperienceRecordsFromLocal(uniqueIds);
+            console.log(`  本地缓存查询完成，共 ${cachedRecords.length} 条有效记录`);
+            
+            cachedRecords.forEach(exp => {
+              const key = exp._id || exp.timestamp;
+              console.log(`    缓存记录: key=${key}, text=${exp.text ? exp.text.substring(0, 20) + '...' : '空'}`);
+              experienceRecordsMap.set(key, exp);
+            });
           }
           
-          console.log(`体验记录查询完成，共 ${experienceRecords.length} 条有效记录`);
-          
-          // 构建体验记录映射
-          experienceRecords.forEach(exp => {
-            experienceRecordsMap.set(exp._id, exp);
-          });
+          // 处理对象类型：直接使用对象内容
+          if (objectRecords.length > 0) {
+            objectRecords.forEach((recordObj, index) => {
+              const exp = recordObj.value;
+              const key = exp._id || exp.timestamp || `obj_${index}`;
+              console.log(`    对象记录: key=${key}, text=${exp.text ? exp.text.substring(0, 20) + '...' : '空'}`);
+              experienceRecordsMap.set(key, exp);
+            });
+          }
           
           console.log(`体验记录映射构建完成，共 ${experienceRecordsMap.size} 条记录`);
+        } else {
+          console.log('⚠️ 没有找到任何体验记录');
         }
         
         formattedRecords = dailyRecords.map((record, index) => {
@@ -146,22 +170,37 @@ Page({
             active: i < (record.rating || 0)
           }));
           
-          // 处理体验记录 - 根据ID数组获取实际内容
+          // 处理体验记录 - 支持多种数据格式
           let experienceTexts = [];
           let hasExperience = false;
           
-          if (record.experience && ((Array.isArray(record.experience) && record.experience.length > 0) || (typeof record.experience === 'string' && record.experience.length > 0))) {
-            // 处理数组类型（新的数据结构）
+          if (record.experience) {
             if (Array.isArray(record.experience)) {
-              record.experience.forEach(expId => {
-                if (expId && experienceRecordsMap.has(expId)) {
-                  const expRecord = experienceRecordsMap.get(expId);
-                  if (expRecord.text) {
-                    experienceTexts.push(expRecord.text);
-                    hasExperience = true;
-                  }
+              // 检查数组元素类型
+              if (record.experience.length > 0) {
+                const firstElement = record.experience[0];
+                
+                if (typeof firstElement === 'string') {
+                  // 字符串ID数组：通过映射查找
+                  record.experience.forEach(expId => {
+                    if (expId && experienceRecordsMap.has(expId)) {
+                      const expRecord = experienceRecordsMap.get(expId);
+                      if (expRecord.text) {
+                        experienceTexts.push(expRecord.text);
+                        hasExperience = true;
+                      }
+                    }
+                  });
+                } else if (typeof firstElement === 'object' && firstElement !== null) {
+                  // 对象数组：直接提取文本内容
+                  record.experience.forEach(expObj => {
+                    if (expObj && expObj.text) {
+                      experienceTexts.push(expObj.text);
+                      hasExperience = true;
+                    }
+                  });
                 }
-              });
+              }
             } else if (typeof record.experience === 'string') {
               // 兼容旧数据：单个ID的情况
               if (experienceRecordsMap.has(record.experience)) {
@@ -252,6 +291,56 @@ Page({
     const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
     const index = monthNames.indexOf(monthName);
     return index !== -1 ? index + 1 : new Date().getMonth() + 1;
+  },
+
+  /**
+   * 从本地缓存获取体验记录（直接使用meditationTextRecords）
+   */
+  getExperienceRecordsFromLocal(uniqueIds) {
+    try {
+      // 直接从meditationTextRecords获取体验记录
+      const meditationTextRecords = wx.getStorageSync('meditationTextRecords') || [];
+      console.log('📄 从meditationTextRecords获取体验记录:', meditationTextRecords.length, '条');
+      
+      // 构建映射：uniqueId -> 体验记录
+      const experienceRecordsMap = new Map();
+      meditationTextRecords.forEach(record => {
+        if (record.uniqueId) {
+          experienceRecordsMap.set(record.uniqueId, {
+            _id: record.uniqueId, // 使用uniqueId作为ID
+            timestamp: record.uniqueId, // 时间戳
+            text: record.text || '', // 体验文本
+            rating: record.rating || 0, // 评分
+            duration: record.duration || '0分钟' // 时长
+          });
+        }
+      });
+      
+      // 根据请求的uniqueIds查找对应的体验记录
+      const result = [];
+      uniqueIds.forEach(id => {
+        if (experienceRecordsMap.has(id)) {
+          result.push(experienceRecordsMap.get(id));
+        }
+      });
+      
+      console.log(`✅ 从meditationTextRecords获取体验记录: 请求${uniqueIds.length}个，找到${result.length}个`);
+      
+      // 如果没找到，尝试降级处理
+      if (result.length === 0 && uniqueIds.length > 0) {
+        console.warn('⚠️ meditationTextRecords中未找到对应体验记录，创建默认记录');
+        return uniqueIds.map(id => ({
+          _id: id,
+          text: `体验记录${id.substring(0, 6)}...`,
+          timestamp: parseInt(id)
+        }));
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('从本地获取体验记录失败:', error);
+      return [];
+    }
   },
 
   /**

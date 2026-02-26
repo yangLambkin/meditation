@@ -400,8 +400,15 @@ Page({
       // 调用云函数保存体验记录
       const result = await cloudApi.saveExperienceRecord(record);
       
+      // 无论云端是否成功，都保存到本地缓存
       if (result.success) {
-        console.log('✅ 体验记录云端保存成功:', result);
+        // 成功保存到云端，同时保存到本地缓存
+        checkinManager.saveExperienceRecordToLocal(record.uniqueId, {
+          _id: result.data.recordId, // 云端返回的ID
+          text: record.text || ''
+        });
+        
+        console.log('✅ 体验记录云端保存成功，并已同步到本地:', result);
         return {
           success: true,
           message: '体验记录保存成功',
@@ -409,7 +416,11 @@ Page({
         };
       } else {
         console.warn('⚠️ 体验记录云端保存失败，仅保存到本地:', result.error);
-        // 云存储失败，仍然返回成功，因为本地已保存
+        // 云存储失败，仅保存到本地缓存
+        checkinManager.saveExperienceRecordToLocal(record.uniqueId, {
+          text: record.text || ''
+        });
+        
         return {
           success: true,
           message: '体验记录本地保存成功'
@@ -418,7 +429,11 @@ Page({
       
     } catch (error) {
       console.error('保存体验记录失败:', error);
-      // 异常情况下，仍然返回成功，因为本地已保存
+      // 异常情况下，仅保存到本地缓存
+      checkinManager.saveExperienceRecordToLocal(record.uniqueId, {
+        text: record.text || ''
+      });
+      
       return {
         success: true,
         message: '体验记录本地保存成功'
@@ -544,50 +559,25 @@ Page({
       });
     }
     
-    // 2. 本地存储记录（兼容原有逻辑）
-    // 获取所有用户的打卡记录
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    
-    // 获取当前用户的打卡记录
-    const userRecords = allUserRecords[this.data.userOpenId] || {
-      totalCount: 0,
-      dailyRecords: {}
-    };
-    
-    // 更新今日打卡次数
-    const todayRecord = userRecords.dailyRecords[dateStr] || {
-      count: 0,
-      lastTimestamp: 0,
-      durations: [],
-      ratings: []
-    };
-    
-    // 确保数组存在，避免undefined错误
-    if (!todayRecord.durations) todayRecord.durations = [];
-    if (!todayRecord.ratings) todayRecord.ratings = [];
-    
-    todayRecord.count += 1;
-    todayRecord.lastTimestamp = today.getTime();
-    todayRecord.durations.push(this.data.duration || '7');
-    
-    // 保存评分记录
-    if (this.data.selectedRating > 0) {
-      todayRecord.ratings.push({
-        rating: this.data.selectedRating,
-        timestamp: today.getTime()
+    // 2. 本地存储记录（使用统一的checkinManager接口）
+    try {
+      // 使用checkinManager来记录本地打卡
+      const localResult = checkinManager.recordCheckin(
+        parseInt(this.data.duration) || 7, // 时长（分钟）
+        this.data.selectedRating || 0,      // 评分
+        this.data.savedRecords             // 体验记录
+      );
+      
+      console.log('✅ 本地打卡记录成功:', localResult);
+    } catch (error) {
+      console.error('❌ 本地打卡记录失败:', error);
+      // 即使本地记录失败，也不影响用户体验
+      wx.showToast({
+        title: '本地记录异常，云端已保存',
+        icon: 'none',
+        duration: 1500
       });
     }
-    
-    // 保存文本记录数量
-    todayRecord.textRecords = this.data.savedRecords.length;
-    
-    // 更新用户记录
-    userRecords.dailyRecords[dateStr] = todayRecord;
-    userRecords.totalCount += 1;
-    
-    // 更新所有用户记录
-    allUserRecords[this.data.userOpenId] = userRecords;
-    wx.setStorageSync('meditationUserRecords', allUserRecords);
     
     // 保存评分记录到单独的存储（兼容原有逻辑）
     if (this.data.selectedRating > 0) {
@@ -602,8 +592,12 @@ Page({
       wx.setStorageSync('meditationRecords', records);
     }
     
+    // 获取今日打卡次数用于显示
+    const todayStr = today.toISOString().split('T')[0];
+    const todayCheckinCount = checkinManager.getDailyCheckinCountSync(todayStr);
+    
     wx.showToast({
-      title: `打卡成功！今日第${todayRecord.count}次打卡`,
+      title: `打卡成功！今日第${todayCheckinCount}次打卡`,
       icon: 'success',
       duration: 2000
     });
