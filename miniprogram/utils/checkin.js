@@ -6,23 +6,25 @@ const checkinManager = {
   
   // === 用户身份管理 ===
   
-  // 获取用户ID（本地优先架构）
+  // 获取用户ID（本地优先架构 - 统一使用local user id）
   getUserId: function() {
-    // 1. 优先检查是否已登录（微信openid）
-    const wechatOpenId = wx.getStorageSync('userOpenId');
-    if (wechatOpenId && wechatOpenId.startsWith('oz')) {
-      console.log('✅ 使用已登录的微信openid:', wechatOpenId);
-      return wechatOpenId;
-    }
+    // 在本地缓存为主架构中，统一使用local user id作为存储键
+    // 微信openid仅用于云端同步
     
-    // 2. 未登录用户使用本地标识
     let localUserId = wx.getStorageSync('localUserId');
     if (!localUserId) {
       localUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
       wx.setStorageSync('localUserId', localUserId);
     }
     
-    console.log('📱 使用本地用户标识:', localUserId);
+    // 检查是否已登录（用于调试信息）
+    const wechatOpenId = wx.getStorageSync('userOpenId');
+    if (wechatOpenId && wechatOpenId.startsWith('oz')) {
+      console.log('✅ 已登录用户，使用本地标识:', localUserId, '(微信openid:', wechatOpenId + ')');
+    } else {
+      console.log('📱 未登录用户，使用本地标识:', localUserId);
+    }
+    
     return localUserId;
   },
 
@@ -30,11 +32,12 @@ const checkinManager = {
   saveExperienceRecordToLocal: function(uniqueId, experienceRecord) {
     try {
       const userId = this.getUserId();
-      const storageKey = `meditation_user_data_${userId}`; // 统一存储键名
+      const storageKey = `meditation_checkin_${userId}`; // 统一存储键名
       
       // 获取用户完整数据
       const userData = wx.getStorageSync(storageKey) || {
-        checkinRecords: { dailyRecords: {}, monthlyStats: {} },
+        dailyRecords: {},
+        monthlyStats: {},
         experienceRecords: {}
       };
       
@@ -59,7 +62,7 @@ const checkinManager = {
   getExperienceRecordsFromLocal: function(uniqueIds) {
     try {
       const userId = this.getUserId();
-      const storageKey = `meditation_user_data_${userId}`;
+      const storageKey = `meditation_checkin_${userId}`;
       const userData = wx.getStorageSync(storageKey) || { experienceRecords: {} };
       
       const result = [];
@@ -77,16 +80,28 @@ const checkinManager = {
     }
   },
 
-  // 获取用户打卡数据（统一架构，支持迁移旧数据）
+  // 获取用户打卡数据（统一架构，支持迁移旧数据和新结构）
   getUserCheckinData: function() {
     const userId = this.getUserId();
-    const storageKey = `meditation_user_data_${userId}`;
+    const storageKey = `meditation_checkin_${userId}`;
     
     // 尝试从统一存储获取数据
     const unifiedData = wx.getStorageSync(storageKey);
-    if (unifiedData && unifiedData.checkinRecords) {
+    
+    // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
+    if (unifiedData && unifiedData.checkinRecords && unifiedData.checkinRecords.dailyRecords) {
+      // 返回新的数据结构，转换为兼容格式
+      return {
+        dailyRecords: unifiedData.checkinRecords.dailyRecords || {},
+        monthlyStats: unifiedData.checkinRecords.monthlyStats || {},
+        userStats: unifiedData.checkinRecords.userStats || {}
+      };
+    }
+    
+    // 支持旧的数据结构：{dailyRecords: {...}, monthlyStats: {...}}
+    if (unifiedData && unifiedData.dailyRecords) {
       // 已经有统一数据，直接返回
-      return unifiedData.checkinRecords;
+      return unifiedData;
     }
     
     // 如果没有统一数据，尝试从旧存储迁移数据
@@ -110,7 +125,7 @@ const checkinManager = {
     };
     
     // 保存到统一存储
-    wx.setStorageSync(`meditation_user_data_${userId}`, unifiedData);
+    wx.setStorageSync(`meditation_checkin_${userId}`, unifiedData);
     
     // 清理旧存储（可选，保留一段时间用于回滚）
     // wx.removeStorageSync(oldStorageKey);
@@ -122,21 +137,536 @@ const checkinManager = {
   // 保存用户打卡数据（统一架构）
   saveUserCheckinData: function(data) {
     const userId = this.getUserId();
-    const storageKey = `meditation_user_data_${userId}`;
+    const storageKey = `meditation_checkin_${userId}`;
     
-    // 获取现有数据
-    const userData = wx.getStorageSync(storageKey) || {
-      checkinRecords: { dailyRecords: {}, monthlyStats: {} },
+    // 直接保存打卡数据（无需嵌套结构）
+    wx.setStorageSync(storageKey, data);
+    
+    return true;
+  },
+
+  // === 严格缓存检测机制 ===
+  
+  // 严格的缓存状态检测
+  strictCacheCheck: function() {
+    try {
+      console.log('🔍 开始严格缓存检测...');
+      
+      // 1. 检查恢复标记位（最快检测）
+      const needsRecovery = wx.getStorageSync('needsRecovery');
+      if (needsRecovery) {
+        console.log('🔍 标记位显示需要数据恢复');
+        return true;
+      }
+      
+      // 2. 检查缓存状态标记
+      const cacheStatus = wx.getStorageSync('cacheStatus');
+      if (!cacheStatus) {
+        console.log('🔍 缓存状态标记不存在，可能是首次启动或缓存清除');
+        // 设置初始标记，但不立即恢复（避免重复）
+        wx.setStorageSync('cacheStatus', 'initialized');
+        wx.setStorageSync('needsRecovery', true);
+        return true;
+      }
+      
+      // 3. 轻量级关键数据检查
+      const criticalDataExists = this.checkCriticalDataExists();
+      if (!criticalDataExists) {
+        console.log('🔍 关键数据不存在，需要恢复');
+        return true;
+      }
+      
+      // 4. 详细用户数据完整性检查
+      const hasActualData = this.hasActualUserData();
+      if (!hasActualData) {
+        console.log('🔍 无实际用户数据，需要恢复');
+        return true;
+      }
+      
+      console.log('✅ 缓存状态正常，无需恢复');
+      return false;
+      
+    } catch (error) {
+      console.error('严格缓存检测失败:', error);
+      return false; // 出错时保守处理，不触发恢复
+    }
+  },
+  
+  // 检查关键数据存在性
+  checkCriticalDataExists: function() {
+    const keysToCheck = [
+      'userOpenId',
+      'localUserId',
+      'userNickname'
+    ];
+    
+    for (const key of keysToCheck) {
+      const data = wx.getStorageSync(key);
+      if (data && data !== '') {
+        console.log('🔑 关键数据存在:', key);
+        return true;
+      }
+    }
+    
+    console.log('❌ 关键数据不存在');
+    return false;
+  },
+  
+  // 检查是否有实际用户数据
+  hasActualUserData: function() {
+    const userId = this.getUserId();
+    const storageKey = `meditation_checkin_${userId}`;
+    const localData = wx.getStorageSync(storageKey);
+    
+    if (!localData) {
+      console.log('📭 用户数据存储键不存在');
+      return false;
+    }
+    
+    // 1. 检查是否有实际打卡记录（排除空对象）
+    const hasDailyRecords = localData.checkinRecords && 
+                           localData.checkinRecords.dailyRecords && 
+                           Object.keys(localData.checkinRecords.dailyRecords).length > 0;
+    
+    // 2. 检查是否有体验记录
+    const hasExperienceRecords = localData.experienceRecords && 
+                                Object.keys(localData.experienceRecords).length > 0;
+    
+    // 3. 检查是否有用户统计信息
+    const hasUserStats = localData.checkinRecords && 
+                        localData.checkinRecords.userStats && 
+                        Object.keys(localData.checkinRecords.userStats).length > 0;
+    
+    const result = hasDailyRecords || hasExperienceRecords || hasUserStats;
+    
+    console.log('📊 实际用户数据检查结果:', {
+      hasDailyRecords,
+      hasExperienceRecords, 
+      hasUserStats,
+      result
+    });
+    
+    return result;
+  },
+
+  // 检查是否需要从云端恢复数据（使用严格检测）
+  checkAndRecoverFromCloud: async function() {
+    try {
+      console.log('🔍 checkAndRecoverFromCloud开始执行');
+      
+      // 使用严格的缓存检测
+      const needsRecovery = this.strictCacheCheck();
+      
+      if (!needsRecovery) {
+        console.log('✅ 严格缓存检测通过，无需从云端恢复');
+        return false;
+      }
+      
+      // 检查用户是否已登录（只有已登录用户才能从云端恢复）
+      const isLoggedIn = this.isUserLoggedIn();
+      console.log('  - 用户登录状态:', isLoggedIn);
+      
+      if (!isLoggedIn) {
+        console.log('⚠️ 用户未登录，无法从云端恢复数据');
+        return false;
+      }
+      
+      console.log('🔄 严格检测到需要数据恢复，开始从云端恢复...');
+      
+      const userId = this.getUserId();
+      const success = await this.safeRecoverFromCloud(userId);
+      
+      if (success) {
+        console.log('✅ 云端数据恢复完成');
+        // 恢复成功后清除恢复标记
+        wx.setStorageSync('needsRecovery', false);
+        return true;
+      } else {
+        console.log('⚠️ 云端数据恢复失败，保留恢复标记');
+        return false;
+      }
+      
+    } catch (error) {
+      console.error('检查数据恢复状态失败:', error);
+      return false;
+    }
+  },
+
+  // 安全的云端数据恢复（含去重保护）
+  async safeRecoverFromCloud(userId) {
+    try {
+      console.log('🛡️ 开始安全数据恢复...');
+      
+      // 1. 获取当前本地数据快照（用于去重检查）
+      const currentData = this.getUserCheckinDataByUserId(userId);
+      
+      console.log('📊 当前本地数据状态:', {
+        hasData: !!currentData,
+        recordCount: Object.keys(currentData?.dailyRecords || {}).length
+      });
+      
+      // 2. 从云端获取数据
+      const cloudApi = require('./cloudApi.js');
+      const allRecordsResult = await cloudApi.getAllRecords();
+      
+      if (!allRecordsResult.success) {
+        console.error('获取云端打卡记录失败:', allRecordsResult.error);
+        return false;
+      }
+      
+      console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
+      
+      // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
+      const mergedData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      
+      // 4. 获取用户统计信息
+      const userStatsResult = await cloudApi.getUserStats();
+      if (userStatsResult.success) {
+        mergedData.checkinRecords.userStats = userStatsResult.data;
+      }
+      
+      // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
+      const storageKey = `meditation_checkin_${userId}`;
+      wx.setStorageSync(storageKey, mergedData);
+      
+      console.log('✅ 安全数据恢复完成，合并结果:', {
+        '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
+        '云端记录数': allRecordsResult.data?.length || 0,
+        '合并后记录数': Object.keys(mergedData.checkinRecords.dailyRecords || {}).length
+      });
+      
+      return true;
+      
+    } catch (error) {
+      console.error('安全数据恢复失败:', error);
+      return false;
+    }
+  },
+  
+  // 数据指纹（用于去重检查）
+  getDataFingerprint: function(data) {
+    if (!data || !data.checkinRecords) return 'empty';
+    
+    const dailyRecords = data.checkinRecords.dailyRecords || {};
+    const recordKeys = Object.keys(dailyRecords).sort();
+    
+    return {
+      recordCount: recordKeys.length,
+      latestRecord: recordKeys[recordKeys.length - 1] || 'none',
+      totalRecords: recordKeys.reduce((sum, date) => {
+        const dayData = dailyRecords[date];
+        return sum + (dayData.records ? dayData.records.length : 0);
+      }, 0)
+    };
+  },
+  
+  // 智能数据合并（避免重复）
+  intelligentMerge: function(localData, cloudRecords) {
+    const mergedData = {
+      checkinRecords: {
+        dailyRecords: { ...(localData?.dailyRecords || {}) },
+        monthlyStats: { ...(localData?.monthlyStats || {}) }
+      },
+      experienceRecords: { ...(localData?.experienceRecords || {}) }
+    };
+    
+    if (!cloudRecords || cloudRecords.length === 0) {
+      console.log('📭 云端无数据，使用本地数据');
+      return mergedData;
+    }
+    
+    console.log('🔄 开始智能数据合并...');
+    
+    // 按日期合并云端记录
+    for (const cloudRecord of cloudRecords) {
+      if (!cloudRecord.date) continue;
+      
+      const dateStr = cloudRecord.date;
+      const existingDayData = mergedData.checkinRecords.dailyRecords[dateStr];
+      
+      if (!existingDayData) {
+        // 本地没有该日期数据，直接添加
+        mergedData.checkinRecords.dailyRecords[dateStr] = {
+          date: dateStr,
+          records: [this.formatCloudRecord(cloudRecord)]
+        };
+      } else {
+        // 本地已有该日期数据，进行记录级去重
+        mergedData.checkinRecords.dailyRecords[dateStr] = this.mergeDailyRecords(
+          existingDayData, 
+          cloudRecord
+        );
+      }
+    }
+    
+    console.log('✅ 智能合并完成');
+    return mergedData;
+  },
+  
+  // 合并单日记录（去重逻辑）
+  mergeDailyRecords: function(existingDayData, cloudRecord) {
+    const existingRecords = existingDayData.records || [];
+    
+    // 检查是否已存在相同记录（基于时间戳和内容）
+    const isDuplicate = existingRecords.some(existingRecord => 
+      existingRecord.timestamp === cloudRecord.timestamp &&
+      existingRecord.duration === cloudRecord.duration
+    );
+    
+    if (isDuplicate) {
+      console.log('🔄 跳过重复记录:', cloudRecord.timestamp);
+      return existingDayData;
+    }
+    
+    // 添加新记录
+    return {
+      ...existingDayData,
+      records: [...existingRecords, this.formatCloudRecord(cloudRecord)]
+    };
+  },
+  
+  // 格式化云端记录
+  formatCloudRecord: function(cloudRecord) {
+    return {
+      _id: cloudRecord._id,
+      timestamp: cloudRecord.timestamp,
+      duration: cloudRecord.duration,
+      rating: cloudRecord.rating,
+      experience: cloudRecord.experience,
+      created_at: cloudRecord.created_at
+    };
+  },
+
+  // 安全的云端数据恢复（含去重保护）
+  async safeRecoverFromCloud(userId) {
+    try {
+      console.log('🛡️ 开始安全数据恢复...');
+      
+      // 1. 获取当前本地数据快照（用于去重检查）
+      const currentData = this.getUserCheckinDataByUserId(userId);
+      
+      console.log('📊 当前本地数据状态:', {
+        hasData: !!currentData,
+        recordCount: Object.keys(currentData?.dailyRecords || {}).length
+      });
+      
+      // 2. 从云端获取数据
+      const cloudApi = require('./cloudApi.js');
+      const allRecordsResult = await cloudApi.getAllRecords();
+      
+      if (!allRecordsResult.success) {
+        console.error('获取云端打卡记录失败:', allRecordsResult.error);
+        return false;
+      }
+      
+      console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
+      
+      // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
+      const mergedData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      
+      // 4. 获取用户统计信息
+      const userStatsResult = await cloudApi.getUserStats();
+      if (userStatsResult.success) {
+        mergedData.checkinRecords.userStats = userStatsResult.data;
+      }
+      
+      // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
+      const storageKey = `meditation_checkin_${userId}`;
+      wx.setStorageSync(storageKey, mergedData);
+      
+      console.log('✅ 安全数据恢复完成，合并结果:', {
+        '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
+        '云端记录数': allRecordsResult.data?.length || 0,
+        '合并后记录数': Object.keys(mergedData.checkinRecords.dailyRecords || {}).length
+      });
+      
+      return true;
+      
+    } catch (error) {
+      console.error('安全数据恢复失败:', error);
+      return false;
+    }
+  },
+  
+  // 智能数据合并（避免重复）
+  intelligentMerge: function(localData, cloudRecords) {
+    const mergedData = {
+      checkinRecords: {
+        dailyRecords: { ...(localData?.dailyRecords || {}) },
+        monthlyStats: { ...(localData?.monthlyStats || {}) }
+      },
+      experienceRecords: { ...(localData?.experienceRecords || {}) }
+    };
+    
+    if (!cloudRecords || cloudRecords.length === 0) {
+      console.log('📭 云端无数据，使用本地数据');
+      return mergedData;
+    }
+    
+    console.log('🔄 开始智能数据合并...');
+    
+    // 按日期合并云端记录
+    for (const cloudRecord of cloudRecords) {
+      if (!cloudRecord.date) continue;
+      
+      const dateStr = cloudRecord.date;
+      const existingDayData = mergedData.checkinRecords.dailyRecords[dateStr];
+      
+      if (!existingDayData) {
+        // 本地没有该日期数据，直接添加
+        mergedData.checkinRecords.dailyRecords[dateStr] = {
+          date: dateStr,
+          records: [this.formatCloudRecord(cloudRecord)]
+        };
+      } else {
+        // 本地已有该日期数据，进行记录级去重
+        mergedData.checkinRecords.dailyRecords[dateStr] = this.mergeDailyRecords(
+          existingDayData, 
+          cloudRecord
+        );
+      }
+    }
+    
+    console.log('✅ 智能合并完成');
+    return mergedData;
+  },
+  
+  // 合并单日记录（去重逻辑）
+  mergeDailyRecords: function(existingDayData, cloudRecord) {
+    const existingRecords = existingDayData.records || [];
+    
+    // 检查是否已存在相同记录（基于时间戳和内容）
+    const isDuplicate = existingRecords.some(existingRecord => 
+      existingRecord.timestamp === cloudRecord.timestamp &&
+      existingRecord.duration === cloudRecord.duration
+    );
+    
+    if (isDuplicate) {
+      console.log('🔄 跳过重复记录:', cloudRecord.timestamp);
+      return existingDayData;
+    }
+    
+    // 添加新记录
+    return {
+      ...existingDayData,
+      records: [...existingRecords, this.formatCloudRecord(cloudRecord)]
+    };
+  },
+  
+  // 格式化云端记录
+  formatCloudRecord: function(cloudRecord) {
+    return {
+      _id: cloudRecord._id,
+      timestamp: cloudRecord.timestamp,
+      duration: cloudRecord.duration,
+      rating: cloudRecord.rating,
+      experience: cloudRecord.experience,
+      created_at: cloudRecord.created_at
+    };
+  },
+
+  // 从云端恢复用户数据
+  async recoverUserDataFromCloud(userId) {
+    try {
+      const cloudApi = require('./cloudApi.js');
+      
+      console.log('📡 开始从云端恢复用户数据...');
+      
+      // 1. 获取用户所有打卡记录
+      const allRecordsResult = await cloudApi.getAllRecords();
+      if (!allRecordsResult.success) {
+        console.error('获取云端打卡记录失败:', allRecordsResult.error);
+        return false;
+      }
+      
+      // 2. 重建本地缓存结构
+      const recoveredData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      
+      // 3. 获取用户统计信息
+      const userStatsResult = await cloudApi.getUserStats();
+      if (userStatsResult.success) {
+        recoveredData.checkinRecords.userStats = userStatsResult.data;
+      }
+      
+      // 4. 保存到本地缓存
+      const storageKey = `meditation_checkin_${userId}`;
+      wx.setStorageSync(storageKey, recoveredData);
+      
+      console.log('✅ 云端数据恢复完成，共恢复:', {
+        checkinRecords: Object.keys(recoveredData.checkinRecords.dailyRecords || {}).length,
+        experienceRecords: Object.keys(recoveredData.experienceRecords || {}).length
+      });
+      
+      return true;
+      
+    } catch (error) {
+      console.error('从云端恢复数据失败:', error);
+      return false;
+    }
+  },
+
+  // 根据云端记录重建本地缓存（确保格式与本地打卡记录一致）
+  rebuildLocalCacheFromCloudRecords(cloudRecords) {
+    const localData = {
+      checkinRecords: {
+        dailyRecords: {},
+        monthlyStats: {},
+        userStats: {}
+      },
       experienceRecords: {}
     };
     
-    // 更新打卡记录
-    userData.checkinRecords = data;
+    console.log(`🔄 重建本地缓存，共 ${cloudRecords.length} 条云端记录`);
     
-    // 保存回统一存储
-    wx.setStorageSync(storageKey, userData);
+    // 处理打卡记录（格式与本地打卡记录一致）
+    cloudRecords.forEach(record => {
+      const dateStr = record.date;
+      
+      if (!localData.checkinRecords.dailyRecords[dateStr]) {
+        localData.checkinRecords.dailyRecords[dateStr] = {
+          count: 0,
+          lastCheckin: record.timestamp,
+          records: []
+        };
+      }
+      
+      // 增加打卡次数
+      localData.checkinRecords.dailyRecords[dateStr].count++;
+      
+      // 添加详细记录（格式与本地打卡记录一致）
+      localData.checkinRecords.dailyRecords[dateStr].records.push({
+        timestamp: record.timestamp,
+        duration: record.duration || 0,
+        rating: record.rating || 0,
+        experience: record.experience || [],
+        textCount: Array.isArray(record.experience) ? record.experience.length : 0,
+        textPreview: Array.isArray(record.experience) && record.experience.length > 0 ? 
+          `包含${record.experience.length}条体验记录` : ''
+      });
+      
+      // 处理体验记录
+      if (record.experience && Array.isArray(record.experience)) {
+        record.experience.forEach(exp => {
+          if (exp && exp._id) {
+            // 保存体验记录到experienceRecords中
+            localData.experienceRecords[exp._id] = {
+              _id: exp._id,
+              timestamp: exp.timestamp || record.timestamp,
+              text: exp.text || '',
+              rating: exp.rating || 0,
+              duration: exp.duration || 0
+            };
+          }
+        });
+      }
+      
+      // 更新最后打卡时间
+      localData.checkinRecords.dailyRecords[dateStr].lastCheckin = record.timestamp;
+    });
     
-    return true;
+    console.log(`✅ 重建完成: 打卡记录${Object.keys(localData.checkinRecords.dailyRecords).length}天，体验记录${Object.keys(localData.experienceRecords).length}条`);
+    
+    return localData;
   },
   
   // 检查用户是否已登录
@@ -256,20 +786,38 @@ const checkinManager = {
   
   // === 数据获取（本地优先） ===
   
-  // 获取用户打卡数据（直接从本地）
+  // 获取用户打卡数据（直接从本地，支持新格式）
   getUserCheckinData: function() {
     const userId = this.getUserId();
     const userKey = `meditation_checkin_${userId}`;
     
-    const data = wx.getStorageSync(userKey) || {
+    const data = wx.getStorageSync(userKey);
+    
+    // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
+    if (data && data.checkinRecords && data.checkinRecords.dailyRecords) {
+      // 返回新的数据结构，转换为兼容格式
+      const result = {
+        dailyRecords: data.checkinRecords.dailyRecords || {},
+        monthlyStats: data.checkinRecords.monthlyStats || {},
+        userStats: data.checkinRecords.userStats || {}
+      };
+      return result;
+    }
+    
+    // 支持旧的数据结构：{dailyRecords: {...}, monthlyStats: {...}}
+    if (data && data.dailyRecords) {
+      // 执行数据完整性检查
+      this.validateDataIntegrity(data);
+      return data;
+    }
+    
+    // 如果没有数据，返回默认结构
+    const defaultData = {
       dailyRecords: {},
       monthlyStats: {}
     };
     
-    // 执行数据完整性检查
-    this.validateDataIntegrity(data);
-    
-    return data;
+    return defaultData;
   },
   
   // 保存用户打卡数据
@@ -387,6 +935,38 @@ const checkinManager = {
     wx.setStorageSync('hasSyncedOnLogin', true);
     
     console.log('✅ 登录同步完成');
+    
+    // 登录后立即检查是否需要数据恢复
+    console.log('🔍 登录后检查数据恢复状态...');
+    const needsRecovery = this.strictCacheCheck();
+    
+    if (needsRecovery) {
+      console.log('🔄 登录后检测到需要数据恢复，开始恢复...');
+      const recoverySuccess = await this.checkAndRecoverFromCloud();
+      
+      // 数据恢复完成后，触发页面刷新
+      if (recoverySuccess) {
+        console.log('🔄 数据恢复完成，触发页面刷新');
+        // 通过全局事件机制通知页面刷新
+        if (typeof globalThis !== 'undefined' && globalThis.triggerPageRefresh) {
+          globalThis.triggerPageRefresh();
+        }
+        // 兼容旧版本：直接调用页面方法（如果页面已加载）
+        try {
+          const pages = getCurrentPages();
+          if (pages.length > 0) {
+            const currentPage = pages[pages.length - 1];
+            if (currentPage && currentPage.refreshCalendarData) {
+              currentPage.refreshCalendarData();
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ 自动刷新页面失败，需要手动刷新:', e.message);
+        }
+      }
+    } else {
+      console.log('✅ 登录后数据状态正常，无需恢复');
+    }
   },
   
   // 同步本地数据到云端（简化版本）
@@ -438,6 +1018,13 @@ const checkinManager = {
   validateDataIntegrity: function(data) {
     let needsFix = false;
     
+    // 支持新格式数据：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
+    if (data.checkinRecords && data.checkinRecords.dailyRecords) {
+      // 新格式数据，不需要修复
+      return false;
+    }
+    
+    // 旧格式数据：{dailyRecords: {...}, monthlyStats: {...}}
     if (!data.dailyRecords) {
       data.dailyRecords = {};
       needsFix = true;
@@ -504,6 +1091,12 @@ const checkinManager = {
     };
   },
   
+  // 检查用户是否已登录
+  isUserLoggedIn: function() {
+    const wechatOpenId = wx.getStorageSync('userOpenId');
+    return !!(wechatOpenId && wechatOpenId.startsWith('oz'));
+  },
+
   // 建立用户映射关系（简化版本）
   createUserMapping: function(localUserId, wechatOpenId) {
     // 本地优先架构下，只需要记录当前用户正在使用的标识

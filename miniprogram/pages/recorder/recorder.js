@@ -532,24 +532,7 @@ Page({
         console.log('📝 关联体验记录ID列表:', experienceRecordIds);
       }
       
-      console.log('📡 开始云存储打卡:', { duration, rating, experienceRecordIds });
-      
-      // experience字段现在存储体验记录ID数组，而不是单个ID
-      const cloudResult = await cloudApi.recordMeditation(duration, rating, experienceRecordIds);
-      
-      console.log('📡 云存储返回结果:', cloudResult);
-      
-      if (cloudResult.success) {
-        console.log('✅ 云存储打卡记录成功，记录ID:', cloudResult.data.recordId);
-      } else {
-        console.error('❌ 云存储打卡失败:', cloudResult.error);
-        // 如果云存储失败，显示错误提示但继续本地存储
-        wx.showToast({
-          title: '云存储失败，已保存到本地',
-          icon: 'none',
-          duration: 2000
-        });
-      }
+      console.log('✅ 跳过冗余的云端保存，避免重复保存体验记录');
     } catch (error) {
       console.error('❌ 打卡过程出错:', error);
       wx.showToast({

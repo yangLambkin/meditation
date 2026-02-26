@@ -294,46 +294,54 @@ Page({
   },
 
   /**
-   * 从本地缓存获取体验记录（直接使用meditationTextRecords）
+   * 从本地缓存获取体验记录（使用统一的checkin.js接口）
    */
   getExperienceRecordsFromLocal(uniqueIds) {
     try {
-      // 直接从meditationTextRecords获取体验记录
-      const meditationTextRecords = wx.getStorageSync('meditationTextRecords') || [];
-      console.log('📄 从meditationTextRecords获取体验记录:', meditationTextRecords.length, '条');
+      // 使用checkin.js的统一接口获取体验记录
+      const result = checkinManager.getExperienceRecordsFromLocal(uniqueIds);
+      console.log(`✅ 从统一本地缓存获取体验记录: 请求${uniqueIds.length}个，找到${result.length}个`);
       
-      // 构建映射：uniqueId -> 体验记录
-      const experienceRecordsMap = new Map();
-      meditationTextRecords.forEach(record => {
-        if (record.uniqueId) {
-          experienceRecordsMap.set(record.uniqueId, {
-            _id: record.uniqueId, // 使用uniqueId作为ID
-            timestamp: record.uniqueId, // 时间戳
-            text: record.text || '', // 体验文本
-            rating: record.rating || 0, // 评分
-            duration: record.duration || '0分钟' // 时长
-          });
-        }
-      });
-      
-      // 根据请求的uniqueIds查找对应的体验记录
-      const result = [];
-      uniqueIds.forEach(id => {
-        if (experienceRecordsMap.has(id)) {
-          result.push(experienceRecordsMap.get(id));
-        }
-      });
-      
-      console.log(`✅ 从meditationTextRecords获取体验记录: 请求${uniqueIds.length}个，找到${result.length}个`);
-      
-      // 如果没找到，尝试降级处理
+      // 如果没找到，说明数据可能不在统一的存储结构中
       if (result.length === 0 && uniqueIds.length > 0) {
-        console.warn('⚠️ meditationTextRecords中未找到对应体验记录，创建默认记录');
-        return uniqueIds.map(id => ({
-          _id: id,
-          text: `体验记录${id.substring(0, 6)}...`,
-          timestamp: parseInt(id)
-        }));
+        console.warn('⚠️ 统一存储中未找到对应体验记录，可能还在旧存储中');
+        
+        // 尝试从旧存储meditationTextRecords中获取（兼容性处理）
+        const meditationTextRecords = wx.getStorageSync('meditationTextRecords') || [];
+        console.log('📄 尝试从meditationTextRecords获取体验记录:', meditationTextRecords.length, '条');
+        
+        // 构建映射：uniqueId -> 体验记录
+        const experienceRecordsMap = new Map();
+        meditationTextRecords.forEach(record => {
+          if (record.uniqueId) {
+            experienceRecordsMap.set(record.uniqueId, {
+              _id: record.uniqueId, // 使用uniqueId作为ID
+              timestamp: record.uniqueId, // 时间戳
+              text: record.text || '', // 体验文本
+              rating: record.rating || 0, // 评分
+              duration: record.duration || '0分钟' // 时长
+            });
+          }
+        });
+        
+        // 根据请求的uniqueIds查找对应的体验记录
+        const oldResult = [];
+        uniqueIds.forEach(id => {
+          if (experienceRecordsMap.has(id)) {
+            oldResult.push(experienceRecordsMap.get(id));
+          }
+        });
+        
+        console.log(`✅ 从meditationTextRecords获取体验记录: 找到${oldResult.length}个`);
+        
+        if (oldResult.length > 0) {
+          // 如果从旧存储找到记录，将其迁移到统一存储中
+          console.log('🔄 将旧存储记录迁移到统一存储中');
+          oldResult.forEach(record => {
+            checkinManager.saveExperienceRecordToLocal(record._id, record);
+          });
+          return oldResult;
+        }
       }
       
       return result;

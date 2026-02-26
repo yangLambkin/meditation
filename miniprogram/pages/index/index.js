@@ -20,33 +20,94 @@ Page({
    * 获取用户openId（简化版本）
    */
   getUserOpenId: function() {
-    // 本地优先：检查是否已有用户标识
-    const existingOpenId = wx.getStorageSync('userOpenId');
-    
-    // 检查用户是否已登录
-    const hasUserInfo = this.hasUserInfo();
-    
-    if (existingOpenId) {
-      // 使用现有用户标识
+    return new Promise((resolve) => {
+      console.log('🔍 getUserOpenId开始执行');
+      
+      // 本地优先：检查是否已有用户标识
+      const existingOpenId = wx.getStorageSync('userOpenId');
+      console.log('当前存储的userOpenId:', existingOpenId);
+      
+      // 检查用户是否已登录
+      const hasUserInfo = this.hasUserInfo();
+      console.log('hasUserInfo检查结果:', hasUserInfo);
+      
+      // 检查是否已有微信登录信息
+      const wechatOpenId = wx.getStorageSync('userOpenId');
+      const isWechatLoggedIn = wechatOpenId && wechatOpenId.startsWith('oz');
+      console.log('微信登录状态检查:', { wechatOpenId, isWechatLoggedIn });
+      
+      // 关键诊断：检查微信登录状态与现有用户标识的匹配情况
+      console.log('🔍 关键诊断信息:');
+      console.log('  - 现有用户标识类型:', existingOpenId ? (existingOpenId.startsWith('oz') ? '微信openid' : '本地用户ID') : '无');
+      console.log('  - 微信登录状态:', isWechatLoggedIn);
+      console.log('  - 是否需要更新标识:', isWechatLoggedIn && existingOpenId && !existingOpenId.startsWith('oz'));
+      
+      if (existingOpenId) {
+        // 使用现有用户标识
+        console.log('使用现有用户标识:', existingOpenId);
+        this.setData({
+          userOpenId: existingOpenId,
+          hasUserInfo: hasUserInfo
+        }, () => {
+          console.log('用户标识设置完成，开始刷新页面数据');
+          this.refreshPageData();
+          resolve();
+        });
+        return;
+      }
+      
+      // 如果没有现有标识，检查是否有微信登录信息
+      if (isWechatLoggedIn) {
+        console.log('检测到微信已登录，使用微信openid:', wechatOpenId);
+        this.setData({
+          userOpenId: wechatOpenId,
+          hasUserInfo: hasUserInfo
+        }, () => {
+          console.log('微信用户标识设置完成，开始刷新页面数据');
+          this.refreshPageData();
+          resolve();
+        });
+        return;
+      }
+      
+      // 生成新的本地用户标识
+      const newLocalUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      console.log('生成新的本地用户标识:', newLocalUserId);
+      wx.setStorageSync('localUserId', newLocalUserId);
+      wx.setStorageSync('userOpenId', newLocalUserId);
+      
       this.setData({
-        userOpenId: existingOpenId,
+        userOpenId: newLocalUserId,
         hasUserInfo: hasUserInfo
       }, () => {
+        console.log('新的本地用户标识设置完成，开始刷新页面数据');
         this.refreshPageData();
+        resolve();
       });
-      return;
-    }
-    
-    // 生成新的本地用户标识
-    const newLocalUserId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    wx.setStorageSync('localUserId', newLocalUserId);
-    wx.setStorageSync('userOpenId', newLocalUserId);
-    
-    this.setData({
-      userOpenId: newLocalUserId,
-      hasUserInfo: hasUserInfo
-    }, () => {
-      this.refreshPageData();
+    });
+  },
+
+  // 检查是否需要从云端恢复数据
+  checkAndRecoverFromCloud: function() {
+    return new Promise((resolve) => {
+      try {
+        const checkinManager = require('../../utils/checkin.js');
+        
+        checkinManager.checkAndRecoverFromCloud().then((recovered) => {
+          if (recovered) {
+            console.log('✅ 云端数据恢复完成，刷新页面数据');
+            this.refreshPageData();
+          }
+          resolve();
+        }).catch(error => {
+          console.error('数据恢复检查失败:', error);
+          resolve();
+        });
+        
+      } catch (error) {
+        console.error('数据恢复检查异常:', error);
+        resolve();
+      }
     });
   },
 
@@ -641,7 +702,14 @@ Page({
    * 判断用户是否已登录（微信openid以'oz'开头）
    */
   isUserLoggedIn() {
-    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    // 优先检查是否有微信openid存储在本地
+    const wechatOpenId = wx.getStorageSync('userOpenId');
+    if (wechatOpenId && wechatOpenId.startsWith('oz')) {
+      return true;
+    }
+    
+    // 如果本地存储中没有微信openid，再检查页面数据
+    const userOpenId = this.data.userOpenId;
     return userOpenId && userOpenId.startsWith('oz');
   },
 
@@ -987,7 +1055,13 @@ Page({
     console.log('初始化页面数据完成');
     
     // 获取用户标识，完成后会自动更新数据
-    this.getUserOpenId();
+    this.getUserOpenId().then(() => {
+      // 用户标识获取完成后，检查是否需要从云端恢复数据
+      return this.checkAndRecoverFromCloud();
+    }).then(() => {
+      // 数据恢复完成后，刷新页面数据
+      this.refreshPageData();
+    });
     
     // 获取随机金句
     this.getRandomWisdom();

@@ -85,10 +85,11 @@ async function safeCleanupTestData() {
   console.log('🛡️  安全清理模式启动...');
   
   try {
-    // 定义测试期间
+    // 定义测试期间（包括今天的数据）
+    const today = new Date();
     const testPeriod = {
       startDate: '2026-01-01',  // 测试开始日期
-      endDate: '2026-02-11'     // 测试结束日期（今天）
+      endDate: today.toISOString().split('T')[0]  // 今天，包括今天的数据
     };
     
     let totalDeleted = 0;

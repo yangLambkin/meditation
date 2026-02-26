@@ -15,6 +15,9 @@ App({
     
     console.log('云开发初始化完成');
     
+    // 设置缓存状态标记
+    this.setupCacheStatus();
+    
     // 测试云环境连接
     this.testCloudEnvironment();
     
@@ -45,6 +48,36 @@ App({
       });
       
     }, 500); // 延迟500毫秒执行
+  },
+  
+  // 设置缓存状态标记
+  setupCacheStatus: function() {
+    try {
+      console.log('🔍 设置缓存状态标记...');
+      
+      // 检查是否首次启动或缓存已清除
+      const cacheStatus = wx.getStorageSync('cacheStatus');
+      if (!cacheStatus) {
+        console.log('✅ 设置初始缓存状态标记');
+        wx.setStorageSync('cacheStatus', 'initialized');
+        wx.setStorageSync('needsRecovery', true);
+      } else {
+        console.log('✅ 缓存状态标记已存在:', cacheStatus);
+      }
+      
+      // 检查应用版本，版本变更时可能需要数据恢复
+      const CURRENT_VERSION = '1.0.0';
+      const storedVersion = wx.getStorageSync('appVersion');
+      
+      if (storedVersion !== CURRENT_VERSION) {
+        console.log('🔄 检测到版本变更，设置恢复标记');
+        wx.setStorageSync('appVersion', CURRENT_VERSION);
+        wx.setStorageSync('needsRecovery', true);
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ 设置缓存状态标记失败:', error);
+    }
   },
   
   // 自动创建数据库集合

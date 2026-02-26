@@ -15,10 +15,10 @@ const { execSync } = require('child_process');
 // 配置
 const CONFIG = {
   cloudFunctionName: 'cleanupTestData',
-  // 测试期间日期范围（默认：2026年1月1日到2026年2月7日）
+  // 测试期间日期范围（默认：2026年1月1日到今天）
   testPeriod: {
     startDate: '2026-01-01',
-    endDate: '2026-02-07'
+    endDate: new Date().toISOString().split('T')[0]  // 今天，包括今天的数据
   }
 };
 
