@@ -107,7 +107,8 @@
   border-bottom: solid 2.21rpx #e5e7eb99;
 }
 .group_5 {
-  margin-right: -500rpx;
+  flex: 1;
+  margin-right: 40rpx;
 }
 .font_2 {
   font-size: 30.88rpx;
@@ -148,7 +149,7 @@
   line-height: 20.54rpx;
 }
 .group_7 {
-  margin-right: 533.82rpx;
+  margin-right: 40rpx;
   width: 127.94rpx;
 }
 .image_2 {
@@ -305,4 +306,10 @@
 .image {
   border-radius: 11rpx;
   height: 600rpx;
+}
+
+.image_6 {
+  width: 100rpx;
+  height: 100rpx;
+  align-self: center;
 }

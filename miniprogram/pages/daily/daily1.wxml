@@ -50,6 +50,15 @@
     <!-- 用户信息和统计区域 -->
     <view class="flex-col group_3">
       <view class="flex-row justify-end items-center group_4">
+        <!-- 用户头像 -->
+        <view class="flex-col justify-start items-center relative group_7">
+          <image
+            class="image_2"
+            src="{{userAvatar || '/images/avatar.png'}}"
+          />
+        </view>
+        
+        <!-- 用户信息区域 -->
         <view class="flex-col group_5">
           <!-- 用户信息和等级 -->
           <view class="flex-row items-center group_6">
@@ -72,12 +81,10 @@
           </view>
         </view>
         
-        <!-- 用户头像 -->
-        <view class="flex-col justify-start items-center relative group_7">
-          <image
-            class="image_2"
-            src="{{userAvatar || '/images/avatar.png'}}"
-          />
+        <!-- 觉察计时器 -->
+        <view class="flex-col items-start equal-division-item">
+          <image class="image_6" src="/images/miniP.jpg"/>
+          <text class="mt-8 font_3">觉察计时器</text>
         </view>
       </view>
       
