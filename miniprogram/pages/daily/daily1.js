@@ -15,24 +15,31 @@ Page({
     totalMinutes: 0, // 本次打卡静坐分钟数
     totalCount: 43, // 累计打卡次数
     wisdomQuote: '', // 金句内容，初始为空
-    displayImage: '/images/p1.png' // 展示图片，初始使用默认图片
+    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' // 1x1透明gif占位，避免闪烁
   },
 
   onLoad(options) {
-    // 优化：分阶段加载，立即显示页面框架
+    // 优化：预加载图片，避免闪烁
     
-    // 1. 立即设置基本数据（同步操作）
-    this.setCurrentDateInfo();
+    // 1. 先预加载随机图片
+    this.preloadRandomImage().then(() => {
+      // 图片预加载完成后，设置基本数据
+      this.setCurrentDateInfo();
+    }).catch(error => {
+      // 如果预加载失败，降级到默认图片并继续
+      console.warn('图片预加载失败，使用默认图片:', error);
+      this.setData({
+        displayImage: '/images/p1.png'
+      });
+      this.setCurrentDateInfo();
+    });
     
-    // 2. 立即开始加载网络数据，但不阻塞页面渲染
+    // 2. 异步加载金句（不影响图片显示）
     setTimeout(() => {
-      // 后台加载金句
       this.getRandomWisdom();
-      // 后台加载随机图片
-      this.getRandomImage();
-    }, 100); // 微小延迟，确保页面先渲染
+    }, 100);
     
-    console.log('页面基础框架已加载，开始异步数据加载');
+    console.log('开始预加载图片，避免闪烁');
   },
 
   /**
@@ -114,26 +121,21 @@ Page({
   },
 
   /**
-   * 高性能随机图片获取 - 配置文件方案（最佳实践）
-   * 使用单独的配置文件管理图片列表
+   * 预加载随机图片 - 避免页面闪烁
    */
-  getRandomImage: async function() {
+  preloadRandomImage: async function() {
     try {
-      console.log('🎯 开始获取随机图片（配置文件方案）...');
+      console.log('🎯 开始预加载随机图片...');
       
       // 从配置文件获取随机图片信息
       const randomImageInfo = imageConfig.getRandomDailyPokerImage();
       
-      console.log('📋 随机图片信息:', randomImageInfo);
-      
       if (randomImageInfo.isDefault) {
         console.warn('⚠️ 没有可用的图片，使用默认图片');
-        this.fallbackToDefaultImage();
-        return;
+        return Promise.reject(new Error('No available images'));
       }
       
-      console.log('🎲 随机选择的图片:', randomImageInfo.filename);
-      console.log('📁 文件ID:', randomImageInfo.fileID);
+      console.log('🎲 预加载图片:', randomImageInfo.filename);
       
       // 初始化云开发环境
       wx.cloud.init({
@@ -141,7 +143,55 @@ Page({
       });
       
       // 转换为可访问的URL
-      console.log('🔄 转换图片URL...');
+      const urlResult = await wx.cloud.getTempFileURL({
+        fileList: [randomImageInfo.fileID]
+      });
+      
+      if (urlResult.fileList && urlResult.fileList.length > 0 && urlResult.fileList[0].tempFileURL) {
+        const imageUrl = urlResult.fileList[0].tempFileURL;
+        
+        // 更新页面图片（在预加载阶段就设置，避免闪烁）
+        this.setData({
+          displayImage: imageUrl
+        });
+        
+        console.log('✅ 图片预加载成功，URL长度:', imageUrl.length);
+        return imageUrl;
+      } else {
+        console.warn('⚠️ 图片URL转换失败');
+        return Promise.reject(new Error('URL conversion failed'));
+      }
+      
+    } catch (error) {
+      console.error('❌ 图片预加载失败:', error);
+      return Promise.reject(error);
+    }
+  },
+
+  /**
+   * 高性能随机图片获取 - 配置文件方案（最佳实践）
+   * 使用单独的配置文件管理图片列表
+   * 注意：此函数已由预加载机制替代，保留作为备用
+   */
+  getRandomImage: async function() {
+    try {
+      console.log('🎯 备用方案：重新获取随机图片...');
+      
+      // 从配置文件获取随机图片信息
+      const randomImageInfo = imageConfig.getRandomDailyPokerImage();
+      
+      if (randomImageInfo.isDefault) {
+        console.warn('⚠️ 没有可用的图片，使用默认图片');
+        this.fallbackToDefaultImage();
+        return;
+      }
+      
+      // 初始化云开发环境
+      wx.cloud.init({
+        env: 'cloud1-2g2rbxbu2c126d4a'
+      });
+      
+      // 转换为可访问的URL
       const urlResult = await wx.cloud.getTempFileURL({
         fileList: [randomImageInfo.fileID]
       });
@@ -154,21 +204,14 @@ Page({
           displayImage: imageUrl
         });
         
-        console.log('✅ 随机图片设置成功，URL长度:', imageUrl.length);
-        console.log('📝 图片描述:', randomImageInfo.description);
+        console.log('✅ 备用图片设置成功');
       } else {
         console.warn('⚠️ 图片URL转换失败，使用默认图片');
         this.fallbackToDefaultImage();
       }
       
     } catch (error) {
-      console.error('❌ 获取随机图片失败:', error);
-      console.log('📋 错误详情:', {
-        message: error.message,
-        errCode: error.errCode,
-        errMsg: error.errMsg
-      });
-      
+      console.error('❌ 获取备用图片失败:', error);
       // 降级处理
       this.fallbackToDefaultImage();
     }

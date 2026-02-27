@@ -20,7 +20,7 @@ const checkinManager = {
     // 检查是否已登录（用于调试信息）
     const wechatOpenId = wx.getStorageSync('userOpenId');
     if (wechatOpenId && wechatOpenId.startsWith('oz')) {
-      console.log('✅ 已登录用户，使用本地标识:', localUserId, '(微信openid:', wechatOpenId + ')');
+      // 静默处理用户登录状态
     } else {
       console.log('📱 未登录用户，使用本地标识:', localUserId);
     }
@@ -839,7 +839,7 @@ const checkinManager = {
     const userData = this.getUserCheckinData();
     const count = userData.dailyRecords[dateStr] ? userData.dailyRecords[dateStr].count : 0;
     
-    console.log(`📊 本地获取(同步): ${dateStr} 有 ${count} 条记录`);
+    // 静默返回本地获取结果
     return count;
   },
 

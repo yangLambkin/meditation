@@ -844,7 +844,7 @@ Page({
       }
     }
     
-    console.log(`❌ 日期 ${dateStr} 未找到打卡记录`);
+    // 静默处理未找到打卡记录的情况
     return false;
   },
   
