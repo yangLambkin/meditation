@@ -60,7 +60,7 @@
             class="image_3"
           />
         </view>
-        <view class="flex-row justify-between items-center group_5">
+        <view class="flex-row justify-between items-center group_5" bindtap="goToBadgePage">
           <view class="flex-row items-center">
             <image
               class="shrink-0 image"
@@ -101,7 +101,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V1.1</text>
+          <text class="font_2 text_9 ml-17">版本 V1.2</text>
         </view>
         <image
           class="image_3"

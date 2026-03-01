@@ -114,6 +114,8 @@
   font-size: 30.88rpx;
   font-family: Inter;
   line-height: 28.72rpx;
+  display: flex;
+  align-items: flex-end; /* 底部对齐 */
 }
 .text_6 {
   color: #1e2939;
@@ -127,6 +129,8 @@
 }
 .group_6 {
   padding: 0 25rpx;
+  display: flex;
+  align-items: flex-end; /* 底部对齐 */
 }
 .equal-division-item {
   padding: 8.82rpx 0;
@@ -149,7 +153,7 @@
   line-height: 20.54rpx;
 }
 .group_7 {
-  margin-right: 40rpx;
+  margin-right: 10rpx;
   width: 127.94rpx;
 }
 .image_2 {
@@ -312,4 +316,56 @@
   width: 100rpx;
   height: 100rpx;
   align-self: center;
+}
+
+/* 最高等级勋章样式 - 与用户昵称高度协调 */
+.highest-level-badge {
+  display: flex;
+  align-items: flex-end; /* 底部对齐 */
+  margin-left: 10rpx; /* 增加与昵称的间距 */
+  padding: 0rpx 20rpx;
+  background: #f8f9fa;
+  height: 36rpx; /* 与昵称文字高度一致 */
+  max-width: 140rpx;
+}
+
+.level-badge-icon {
+  width: 35rpx;
+  height: 35rpx;
+  border-radius: 50%;
+  margin-right: 6rpx;
+}
+
+.badge-level-text {
+  font-size: 22rpx;
+  font-family: Inter;
+  font-weight: 400; /* 正常字体，不加粗 */
+  color: #b29764;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 10rpx; /* 增加与图标的间距 */
+}
+
+/* 最高等级文字样式 - 头像下方（参照原有样式） */
+.highest-level-text {
+  padding: 8.82rpx 0;
+  background-color: #b297641a;
+  border-radius: 30rpx;
+  width: 140rpx;
+  height: 41.91rpx;
+  margin-top: 15rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.level-text {
+  font-size: 22.06rpx;
+  font-family: Inter;
+  line-height: 20.54rpx;
+  color: #b29764;
+  text-align: center;
 }

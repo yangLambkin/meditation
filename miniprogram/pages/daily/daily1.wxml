@@ -56,6 +56,10 @@
             class="image_2"
             src="{{userAvatar || '/images/avatar.png'}}"
           />
+          <!-- 最高等级文字 -->
+          <view class="highest-level-text" wx:if="{{highestLevelBadge}}">
+            <text class="level-text">{{highestLevelBadge.name}}</text>
+          </view>
         </view>
         
         <!-- 用户信息区域 -->
@@ -63,8 +67,14 @@
           <!-- 用户信息和等级 -->
           <view class="flex-row items-center group_6">
             <text class="font_2 text_6">{{userName || '静心者'}}</text>
-            <view class="flex-col justify-start items-center text-wrapper ml-5">
-              <text class="font_3 text_7">{{userLevel || 'Lv.1 新手上路'}}</text>
+            <!-- 等级显示和最高等级勋章 -->
+            <view class="highest-level-badge" wx:if="{{highestLevelBadge}}">
+              <image 
+                class="level-badge-icon" 
+                src="{{highestLevelBadge.imageUrl}}" 
+                mode="aspectFit"
+              />
+              
             </view>
           </view>
           

@@ -267,6 +267,10 @@ Page({
       await this.saveToCloud(userInfo, wechatOpenId);
       
       this.setData({ isLoading: false });
+      
+      // 登录成功后检查勋章解锁条件
+      this.checkBadgeAfterLogin();
+      
       this.showSuccessAndNavigate();
       
     } catch (error) {
@@ -568,6 +572,51 @@ Page({
     const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
     
     return prefix + suffix + Math.floor(Math.random() * 1000);
+  },
+
+  /**
+   * 登录成功后检查勋章解锁条件
+   */
+  checkBadgeAfterLogin() {
+    console.log('🔍 登录成功后检查勋章解锁条件');
+    
+    try {
+      // 动态引入勋章管理器
+      const badgeManager = require('../../utils/badgeManager.js');
+      
+      // 延迟执行，确保登录流程完全完成
+      setTimeout(() => {
+        // 从本地缓存获取用户统计数据
+        const checkinManager = require('../../utils/checkin.js');
+        const localStats = checkinManager.getUserStats();
+        
+        console.log('📊 登录后检查勋章条件，用户统计:', localStats);
+        
+        // 检查勋章解锁条件
+        const userStats = {
+          currentStreak: localStats.currentStreak || 0,
+          totalCheckinDays: localStats.totalDays || 0,
+          lastDuration: localStats.lastDuration || 0,
+          totalDuration: localStats.totalDuration || 0
+        };
+        
+        const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
+        
+        if (hasUnlocked) {
+          console.log('🎉 登录后检测到新勋章解锁！');
+          
+          // 显示勋章解锁提示
+          wx.showToast({
+            title: '恭喜解锁新勋章！',
+            icon: 'success',
+            duration: 3000
+          });
+        }
+      }, 1000); // 延迟1秒确保登录流程完成
+      
+    } catch (error) {
+      console.warn('勋章检查失败（不影响登录流程）:', error.message);
+    }
   },
 
   /**

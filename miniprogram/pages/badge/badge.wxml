@@ -1,0 +1,59 @@
+<!--pages/badge/badge.wxml-->
+<view class="flex-col page">
+  <view class="flex-row items-start section">
+    <view class="flex-col justify-start shrink-0 group_3"><view class="section_3"></view></view>
+    <view class="flex-col justify-start items-end group ml-16">
+      <view class="flex-col justify-start items-end relative group_2">
+        <view class="section_2"></view>
+        <text class="text pos_2">我的勋章</text>
+        <text class="font text_2 pos_3">已获得 {{totalUnlockedCount}}枚勋章</text>
+      </view>
+    </view>
+  </view>
+  <view class="flex-col group_4">
+    <view class="flex-row justify-between items-baseline group_1">
+      <text class="text_5">已获得勋章</text>
+      <text class="font text_6">{{totalUnlockedCount}}个</text>
+    </view>
+    
+    <view wx:if="{{hasBadges}}" class="flex-col mt-22">
+      <!-- 按分类显示勋章 -->
+      <view wx:for="{{badgeCategories}}" wx:key="id" class="badge-category mb-40">
+        <!-- 分类标题 -->
+        <view class="category-header flex-row justify-between items-center mb-24">
+          <text class="category-title font_3">{{item.name}}</text>
+          <text class="category-count font_3" style="color: #666;">{{item.unlockedCount}}/{{item.totalCount}}</text>
+        </view>
+        
+        <!-- 分类下的勋章列表 -->
+        <view wx:if="{{item.unlockedCount > 0}}" class="badges-grid flex-row flex-wrap justify-start">
+          <view wx:for="{{item.badges}}" wx:key="id" class="flex-col items-center badge-item" style="width: 33.33%; margin-bottom: 40rpx;">
+            <image
+              class="font_2"
+              src="{{item.imageUrl}}"
+              mode="aspectFit"
+              style="width: 200rpx; height: 200rpx; border-radius: 20rpx;"
+            />
+            <text class="font_3 mt-14">{{item.name}}</text>
+          </view>
+        </view>
+        
+        <!-- 该分类无勋章时的提示 -->
+        <view wx:else class="no-badges-hint flex-col items-center" style="padding: 60rpx 0;">
+          <text class="font_4" style="color: #999;">暂无{{item.name}}类勋章</text>
+          <text class="font_3 mt-16" style="color: #666;">继续努力获得{{item.name}}类勋章吧！</text>
+        </view>
+      </view>
+    </view>
+    
+    <!-- 无任何勋章时显示提示 -->
+    <view wx:else class="flex-col items-center" style="padding: 200rpx 0;">
+      <text class="font_4" style="color: #999;">暂无勋章</text>
+      <text class="font_3 mt-16" style="color: #666;">坚持打卡获得更多勋章吧！</text>
+    </view>
+  </view>
+  <view class="flex-col items-center group_5">
+    <text class="font_4">点击已获得的勋章查看详情并佩戴</text>
+    <text class="font_4 text_9 mt-9">佩戴的勋章将在个人主页展示</text>
+  </view>
+</view>

@@ -690,6 +690,9 @@ const checkinManager = {
       this.asyncBackupToCloud(duration, rating, experience);
     }
     
+    // 3. 异步检查勋章解锁条件（基于本地统计数据）
+    this.asyncCheckBadgeUnlock(duration);
+    
     return localResult;
   },
   
@@ -747,6 +750,9 @@ const checkinManager = {
     // 更新月度统计
     this.updateMonthlyStats(userData, monthStr);
     
+    // 更新月度统计缓存
+    this.updateMonthlyStatsCache(userData, duration, monthStr);
+    
     // 保存数据
     this.saveUserCheckinData(userData);
     
@@ -781,6 +787,72 @@ const checkinManager = {
       }
     } catch (error) {
       console.warn('⚠️ 云端备份异常（不影响本地使用）:', error.message);
+    }
+  },
+
+  // 异步检查勋章解锁条件（基于本地统计数据）
+  asyncCheckBadgeUnlock: async function(duration) {
+    try {
+      // 延迟执行，确保本地数据已经保存
+      setTimeout(() => {
+        // 基于本地统计数据检查勋章条件
+        const localStats = this.getUserStats();
+        
+        // 获取最后一条记录的时长
+        const lastDuration = duration;
+        
+        // 准备勋章检查需要的用户数据
+        const userStats = {
+          currentStreak: localStats.currentStreak || 0,
+          totalCheckinDays: localStats.totalDays || 0,
+          lastDuration: lastDuration,
+          totalDuration: localStats.totalDuration || 0
+        };
+        
+        console.log('🔍 打卡后检查勋章条件:', userStats);
+        
+        // 动态引入勋章管理器（避免循环依赖）
+        const badgeManager = require('./badgeManager.js');
+        
+        // 检查勋章解锁条件
+        const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
+        
+        if (hasUnlocked) {
+          console.log('🎉 打卡后检测到新勋章解锁！');
+          
+          // 触发勋章解锁通知
+          this.triggerBadgeUnlockNotification();
+        }
+        
+      }, 100); // 延迟100ms确保本地数据保存完成
+      
+    } catch (error) {
+      console.warn('⚠️ 勋章检查失败（不影响打卡）:', error.message);
+    }
+  },
+
+  // 触发勋章解锁通知
+  triggerBadgeUnlockNotification: function() {
+    try {
+      // 获取最新解锁的勋章
+      const badgeManager = require('./badgeManager.js');
+      const unlockedBadges = badgeManager.getUnlockedBadges();
+      
+      if (unlockedBadges.length > 0) {
+        // 显示勋章解锁通知
+        wx.showToast({
+          title: `解锁新勋章: ${unlockedBadges[unlockedBadges.length - 1].name}`,
+          icon: 'success',
+          duration: 3000
+        });
+        
+        // 设置全局标记，在me页面显示解锁提示
+        wx.setStorageSync('showBadgeUnlockHint', true);
+        
+        console.log('✅ 勋章解锁通知已触发');
+      }
+    } catch (error) {
+      console.warn('⚠️ 勋章解锁通知失败:', error.message);
     }
   },
   
@@ -1080,6 +1152,69 @@ const checkinManager = {
       .filter(date => date.startsWith(monthStr) && data.dailyRecords[date].count > 0)
       .sort()
       .reverse();
+  },
+
+  // === 月度统计缓存管理 ===
+  
+  // 更新月度统计缓存（每次打卡后调用）
+  updateMonthlyStatsCache: function(data, duration, monthStr) {
+    try {
+      const userId = this.getUserId();
+      const storageKey = `meditation_monthly_stats_${userId}`;
+      
+      // 获取现有的月度统计缓存
+      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      
+      // 检查是否需要重置（新月份）
+      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      if (monthlyStatsCache.lastMonth !== currentMonth) {
+        // 新月份，重置统计
+        monthlyStatsCache.currentMonth = currentMonth;
+        monthlyStatsCache.totalMinutes = 0;
+        monthlyStatsCache.lastMonth = currentMonth;
+        console.log(`🔄 检测到新月份 ${currentMonth}，重置月度统计`);
+      }
+      
+      // 更新当月总分钟数
+      monthlyStatsCache.totalMinutes = (monthlyStatsCache.totalMinutes || 0) + duration;
+      monthlyStatsCache.lastUpdateTime = new Date().toISOString();
+      
+      // 保存到缓存
+      wx.setStorageSync(storageKey, monthlyStatsCache);
+      
+      console.log(`📊 月度统计缓存更新: ${monthlyStatsCache.totalMinutes} 分钟 (当前月: ${currentMonth})`);
+      
+      return monthlyStatsCache.totalMinutes;
+    } catch (error) {
+      console.error('更新月度统计缓存失败:', error);
+      return 0;
+    }
+  },
+
+  // 获取当月总分钟数（从缓存读取）
+  getCurrentMonthMinutes: function() {
+    try {
+      const userId = this.getUserId();
+      const storageKey = `meditation_monthly_stats_${userId}`;
+      
+      // 获取月度统计缓存
+      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      
+      // 检查缓存是否有效（当前月份）
+      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      if (monthlyStatsCache.currentMonth !== currentMonth) {
+        console.log(`📊 缓存月份不匹配，重置为0 (缓存: ${monthlyStatsCache.currentMonth}, 当前: ${currentMonth})`);
+        return 0;
+      }
+      
+      const totalMinutes = monthlyStatsCache.totalMinutes || 0;
+      console.log(`📊 从缓存读取当月总分钟数: ${totalMinutes} 分钟`);
+      
+      return totalMinutes;
+    } catch (error) {
+      console.error('获取当月总分钟数失败:', error);
+      return 0;
+    }
   },
   
   // 根据用户ID获取数据

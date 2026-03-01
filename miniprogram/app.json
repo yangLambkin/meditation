@@ -7,7 +7,8 @@
     "pages/daily/daily1",
     "pages/me/me",
     "pages/history/history",
-    "pages/profile/profile"
+    "pages/profile/profile",
+    "pages/badge/badge"
   ],
   "window": {
     "backgroundColor": "#F6F6F6",

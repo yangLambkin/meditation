@@ -1,6 +1,7 @@
 const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
 const imageConfig = require('../../config/images.js');
+const badgeManager = require('../../utils/badgeManager.js');
 
 Page({
   data: {
@@ -15,7 +16,8 @@ Page({
     totalMinutes: 0, // 本次打卡静坐分钟数
     totalCount: 43, // 累计打卡次数
     wisdomQuote: '', // 金句内容，初始为空
-    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' // 1x1透明gif占位，避免闪烁
+    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1透明gif占位，避免闪烁
+    highestLevelBadge: null // 最高等级勋章
   },
 
   onLoad(options) {
@@ -292,6 +294,51 @@ Page({
     
     // 获取用户打卡统计数据（使用本地缓存优先的架构）
     this.calculateUserStatsFromLocal();
+    
+    // 获取最高等级勋章
+    this.getHighestLevelBadge();
+  },
+
+  /**
+   * 获取当前用户的最高等级勋章
+   */
+  getHighestLevelBadge: function() {
+    try {
+      // 获取所有已解锁的勋章
+      const unlockedBadges = badgeManager.getUnlockedBadges();
+      
+      // 筛选出等级勋章
+      const levelBadges = unlockedBadges.filter(badge => badge.category === 'level' && badge.isUnlocked);
+      
+      if (levelBadges.length === 0) {
+        console.log('用户暂未解锁任何等级勋章');
+        this.setData({
+          highestLevelBadge: null
+        });
+        return;
+      }
+      
+      // 找出最高等级的勋章（按level序号排序）
+      const highestBadge = levelBadges.reduce((max, badge) => {
+        // 从level-X中提取数字X
+        const currentLevel = parseInt(badge.id.split('-')[1]);
+        const maxLevel = max ? parseInt(max.id.split('-')[1]) : -1;
+        
+        return currentLevel > maxLevel ? badge : max;
+      }, null);
+      
+      console.log('📊 最高等级勋章:', highestBadge);
+      
+      this.setData({
+        highestLevelBadge: highestBadge
+      });
+      
+    } catch (error) {
+      console.warn('获取最高等级勋章失败:', error);
+      this.setData({
+        highestLevelBadge: null
+      });
+    }
   },
 
   /**

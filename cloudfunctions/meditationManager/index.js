@@ -59,6 +59,10 @@ exports.main = async (event, context) => {
       return await generateRankingSnapshot(event);
     case "initRankingSnapshot":
       return await initRankingSnapshot();
+    case "updateUserBadges":
+      return await updateUserBadges(openid, event.badges);
+    case "getUserBadges":
+      return await getUserBadges(openid);
     default:
       return { success: false, error: "未知的操作类型" };
   }
@@ -1119,6 +1123,97 @@ async function initRankingSnapshot() {
     return {
       success: false,
       message: "初始化排名快照集合失败",
+      error: error.message
+    };
+  }
+}
+
+// 更新用户勋章信息
+async function updateUserBadges(openid, badges) {
+  try {
+    console.log('更新用户勋章信息:', { openid, badges });
+    
+    const userStatsRef = db.collection("user_stats").where({ _openid: openid });
+    const userStats = await userStatsRef.get();
+    
+    if (userStats.data.length === 0) {
+      // 用户不存在，创建新的用户统计记录
+      const now = new Date();
+      await db.collection("user_stats").add({
+        data: {
+          _openid: openid,
+          badges: badges,
+          totalDays: 0,
+          totalCount: 0,
+          totalDuration: 0,
+          dailyTotalDuration: 0,
+          monthlyTotalDuration: 0,
+          longestCheckInDays: 0,
+          currentStreak: 0,
+          longestStreak: 0,
+          lastCheckinDate: '',
+          lastCheckinDuration: 0,
+          lastCheckin: '',
+          monthlyStats: {},
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    } else {
+      // 更新现有用户的勋章信息
+      await userStatsRef.update({
+        data: {
+          badges: badges,
+          updatedAt: new Date()
+        }
+      });
+    }
+    
+    console.log('✅ 用户勋章信息更新成功');
+    return {
+      success: true,
+      data: { updatedBadges: Object.keys(badges).length }
+    };
+    
+  } catch (error) {
+    console.error('更新用户勋章信息失败:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// 获取用户勋章信息
+async function getUserBadges(openid) {
+  try {
+    console.log('获取用户勋章信息:', openid);
+    
+    const userStats = await db.collection("user_stats")
+      .where({ _openid: openid })
+      .get();
+    
+    if (userStats.data.length === 0) {
+      console.log('用户统计记录不存在，返回空勋章数据');
+      return {
+        success: true,
+        data: {}
+      };
+    }
+    
+    const userData = userStats.data[0];
+    const badges = userData.badges || {};
+    
+    console.log('✅ 获取用户勋章信息成功，勋章数量:', Object.keys(badges).length);
+    return {
+      success: true,
+      data: badges
+    };
+    
+  } catch (error) {
+    console.error('获取用户勋章信息失败:', error);
+    return {
+      success: false,
       error: error.message
     };
   }
