@@ -85,8 +85,12 @@ const cloudApi = {
   // 获取用户统计信息
   getUserStats: async function() {
     try {
+      // 获取当前用户的微信openid
+      const userOpenId = wx.getStorageSync('userOpenId');
+      
       const result = await this.callCloudFunction('meditationManager', {
-        type: 'getUserStats'
+        type: 'getUserStats',
+        openid: userOpenId
       });
 
       if (result.result.success) {
@@ -168,8 +172,12 @@ const cloudApi = {
   // 获取所有记录
   getAllRecords: async function() {
     try {
+      // 获取当前用户的微信openid
+      const userOpenId = wx.getStorageSync('userOpenId');
+      
       const result = await this.callCloudFunction('meditationManager', {
-        type: 'getAllRecords'
+        type: 'getAllRecords',
+        openid: userOpenId
       });
 
       if (result.result.success) {

@@ -50,15 +50,15 @@
     <!-- 用户信息和统计区域 -->
     <view class="flex-col group_3">
       <view class="flex-row justify-end items-center group_4">
-        <!-- 用户头像 -->
+        <!-- 用户头像和等级 -->
         <view class="flex-col justify-start items-center relative group_7">
           <image
             class="image_2"
             src="{{userAvatar || '/images/avatar.png'}}"
           />
           <!-- 最高等级文字 -->
-          <view class="highest-level-text" wx:if="{{highestLevelBadge}}">
-            <text class="level-text">{{highestLevelBadge.name}}</text>
+          <view class="flex-col justify-start items-center shrink-0 text-wrapper_2 ml-5" wx:if="{{highestLevelBadge}}">
+            <text class="font_2 text_8">{{highestLevelBadge.name}}</text>
           </view>
         </view>
         
@@ -66,7 +66,7 @@
         <view class="flex-col group_5">
           <!-- 用户信息和等级 -->
           <view class="flex-row items-center group_6">
-            <text class="font_2 text_6">{{userName || '静心者'}}</text>
+            <text class="user-nickname">{{userName || '静心者'}}</text>
             <!-- 等级显示和最高等级勋章 -->
             <view class="highest-level-badge" wx:if="{{highestLevelBadge}}">
               <image 
@@ -74,12 +74,11 @@
                 src="{{highestLevelBadge.imageUrl}}" 
                 mode="aspectFit"
               />
-              
             </view>
           </view>
           
           <!-- 打卡统计 -->
-          <view class="mt-6 flex-row group_6">
+          <view class="mt-15 flex-row group_6">
             <view class="flex-col items-start equal-division-item">
               <text class="font_4">{{totalCount || 0}}次</text>
               <text class="mt-8 font_3">今日打卡</text>
@@ -104,7 +103,7 @@
             class="image_3"
             src="/images/icons/share.png"
           />
-          <text class="font_2 text_9 ml-9">立即分享</text>
+          <text class="share-text ml-9">立即分享</text>
         </view>
     </view>
   </view>

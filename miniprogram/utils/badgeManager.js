@@ -5,7 +5,7 @@
 
 // 勋章配置信息
 const badgeConfig = {
-  // 连续打卡天数勋章
+  // 连续打卡7天勋章
   'continuous-7': {
     id: 'continuous-7',
     name: '连续打卡7天',
@@ -20,12 +20,27 @@ const badgeConfig = {
     isUnlocked: false
   },
   
-  // 连续打卡天数勋章
+  // 连续打卡14天勋章
+  'continuous-14': {
+    id: 'continuous-14', 
+    name: '连续打卡14天',
+    description: '连续打卡14天即可获得',
+    imageUrl: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/badge/连续打卡14天.png',
+    category: 'continuous',
+    condition: {
+      type: 'continuous_checkin',
+      days: 14
+    },
+    unlockTime: null,
+    isUnlocked: false
+  },
+
+  // 连续打卡30天勋章
   'continuous-30': {
     id: 'continuous-30', 
-    name: '坚持者',
+    name: '连续打卡30天',
     description: '连续打卡30天即可获得',
-    imageUrl: 'https://ide.code.fun/api/image?token=69a3014c97ce84001180a784&name=445ee2f851c97efccc04772d85330a60.png',
+    imageUrl: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/badge/连续打卡30天.png',
     category: 'continuous',
     condition: {
       type: 'continuous_checkin',
@@ -34,17 +49,47 @@ const badgeConfig = {
     unlockTime: null,
     isUnlocked: false
   },
-  
-  // 累计打卡天数勋章
-  'total-100': {
-    id: 'total-100',
-    name: '修行者',
-    description: '累计打卡100天即可获得',
-    imageUrl: '', // 使用emoji暂时代替
+
+  // 连续打卡60天勋章
+  'continuous-60': {
+    id: 'continuous-60', 
+    name: '连续打卡60天',
+    description: '连续打卡60天即可获得',
+    imageUrl: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/badge/连续打卡60天.png',
+    category: 'continuous',
+    condition: {
+      type: 'continuous_checkin',
+      days: 60
+    },
+    unlockTime: null,
+    isUnlocked: false
+  },
+
+  // 连续打卡100天勋章
+  'continuous-100': {
+    id: 'continuous-100', 
+    name: '连续打卡100天',
+    description: '连续打卡100天即可获得',
+    imageUrl: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/badge/连续打卡100天.png',
     category: 'continuous',
     condition: {
       type: 'continuous_checkin',
       days: 100
+    },
+    unlockTime: null,
+    isUnlocked: false
+  },
+  
+  // 累计打卡365天勋章
+  'continuous-365': {
+    id: 'continuous-365',
+    name: '连续打卡365天',
+    description: '累计打卡365天即可获得',
+    imageUrl: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/badge/连续打卡365天.png', 
+    category: 'continuous',
+    condition: {
+      type: 'continuous_checkin',
+      days: 365
     },
     unlockTime: null,
     isUnlocked: false

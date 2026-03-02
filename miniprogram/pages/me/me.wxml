@@ -41,9 +41,9 @@
             <text class="mt-14 font_4">最长连续天数</text>
           </view>
         </view>
-        <view class="flex-col items-center self-start group_4">
+        <view class="flex-col items-center group_3">
           <text class="font_3 text_5">{{medals}}</text>
-          <text class="mt-14 font_4 text_6">勋章</text>
+          <text class="mt-14 font_4">勋章</text>
         </view>
       </view>
     </view>

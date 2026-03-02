@@ -148,7 +148,7 @@ Page({
         // 获取实际勋章数量
         const unlockedBadgeCount = badgeManager.getUnlockedCount();
         
-        // 从本地缓存直接获取当月总分钟数（支持月度清零）
+        // 实时计算当月总分钟数（支持月度清零）
         const checkinManager = require('../../utils/checkin.js');
         const currentMonthMinutes = checkinManager.getCurrentMonthMinutes();
         

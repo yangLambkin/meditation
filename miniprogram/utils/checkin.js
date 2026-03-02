@@ -1159,61 +1159,124 @@ const checkinManager = {
   // 更新月度统计缓存（每次打卡后调用）
   updateMonthlyStatsCache: function(data, duration, monthStr) {
     try {
-      const userId = this.getUserId();
-      const storageKey = `meditation_monthly_stats_${userId}`;
+      // 实时计算最新的当月总分钟数
+      const currentMinutes = this.calculateCurrentMonthMinutes();
       
-      // 获取现有的月度统计缓存
-      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      // 更新缓存
+      this.updateMonthlyCache(currentMinutes);
       
-      // 检查是否需要重置（新月份）
-      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
-      if (monthlyStatsCache.lastMonth !== currentMonth) {
-        // 新月份，重置统计
-        monthlyStatsCache.currentMonth = currentMonth;
-        monthlyStatsCache.totalMinutes = 0;
-        monthlyStatsCache.lastMonth = currentMonth;
-        console.log(`🔄 检测到新月份 ${currentMonth}，重置月度统计`);
-      }
+      console.log(`📊 打卡后缓存更新完成: ${currentMinutes} 分钟 (月: ${monthStr})`);
       
-      // 更新当月总分钟数
-      monthlyStatsCache.totalMinutes = (monthlyStatsCache.totalMinutes || 0) + duration;
-      monthlyStatsCache.lastUpdateTime = new Date().toISOString();
-      
-      // 保存到缓存
-      wx.setStorageSync(storageKey, monthlyStatsCache);
-      
-      console.log(`📊 月度统计缓存更新: ${monthlyStatsCache.totalMinutes} 分钟 (当前月: ${currentMonth})`);
-      
-      return monthlyStatsCache.totalMinutes;
+      return currentMinutes;
     } catch (error) {
       console.error('更新月度统计缓存失败:', error);
       return 0;
     }
   },
 
-  // 获取当月总分钟数（从缓存读取）
+  // 获取当月总分钟数（智能缓存 + 实时计算）
   getCurrentMonthMinutes: function() {
     try {
-      const userId = this.getUserId();
-      const storageKey = `meditation_monthly_stats_${userId}`;
-      
-      // 获取月度统计缓存
-      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
-      
-      // 检查缓存是否有效（当前月份）
-      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
-      if (monthlyStatsCache.currentMonth !== currentMonth) {
-        console.log(`📊 缓存月份不匹配，重置为0 (缓存: ${monthlyStatsCache.currentMonth}, 当前: ${currentMonth})`);
-        return 0;
+      // 先检查缓存是否有效
+      if (this.isMonthlyCacheValid()) {
+        return this.getCachedMonthlyMinutes();
       }
       
-      const totalMinutes = monthlyStatsCache.totalMinutes || 0;
-      console.log(`📊 从缓存读取当月总分钟数: ${totalMinutes} 分钟`);
-      
-      return totalMinutes;
+      // 缓存失效时实时计算并更新缓存
+      const minutes = this.calculateCurrentMonthMinutes();
+      this.updateMonthlyCache(minutes);
+      return minutes;
     } catch (error) {
       console.error('获取当月总分钟数失败:', error);
       return 0;
+    }
+  },
+
+  // 实时计算当月总分钟数
+  calculateCurrentMonthMinutes: function() {
+    try {
+      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      const userData = this.getUserCheckinData();
+      
+      const totalMinutes = Object.keys(userData.dailyRecords || {})
+        .filter(date => date.startsWith(currentMonth))
+        .reduce((total, date) => {
+          const dayRecords = userData.dailyRecords[date].records || [];
+          return total + dayRecords.reduce((sum, record) => 
+            sum + (record.duration || 0), 0
+          );
+        }, 0);
+      
+      console.log(`📊 实时计算当月总分钟数: ${totalMinutes} 分钟 (月: ${currentMonth})`);
+      return totalMinutes;
+    } catch (error) {
+      console.error('实时计算当月分钟数失败:', error);
+      return 0;
+    }
+  },
+
+  // 检查月度统计缓存是否有效
+  isMonthlyCacheValid: function() {
+    try {
+      const userId = this.getUserId();
+      const storageKey = `meditation_monthly_stats_${userId}`;
+      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      
+      // 检查缓存月份是否匹配
+      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      if (monthlyStatsCache.currentMonth !== currentMonth) {
+        console.log(`📊 缓存月份不匹配，需要重新计算 (缓存: ${monthlyStatsCache.currentMonth}, 当前: ${currentMonth})`);
+        return false;
+      }
+      
+      // 检查缓存是否过期（1小时有效期）
+      const lastUpdateTime = new Date(monthlyStatsCache.lastUpdateTime || 0).getTime();
+      const cacheExpiry = 60 * 60 * 1000; // 1小时
+      const isExpired = Date.now() - lastUpdateTime > cacheExpiry;
+      
+      if (isExpired) {
+        console.log(`📊 缓存已过期，需要重新计算 (最后更新: ${monthlyStatsCache.lastUpdateTime})`);
+        return false;
+      }
+      
+      console.log(`📊 缓存有效，使用缓存数据: ${monthlyStatsCache.totalMinutes} 分钟`);
+      return true;
+    } catch (error) {
+      console.error('检查缓存有效性失败:', error);
+      return false;
+    }
+  },
+
+  // 获取缓存中的当月分钟数
+  getCachedMonthlyMinutes: function() {
+    try {
+      const userId = this.getUserId();
+      const storageKey = `meditation_monthly_stats_${userId}`;
+      const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      return monthlyStatsCache.totalMinutes || 0;
+    } catch (error) {
+      console.error('获取缓存数据失败:', error);
+      return 0;
+    }
+  },
+
+  // 更新月度统计缓存
+  updateMonthlyCache: function(minutes) {
+    try {
+      const userId = this.getUserId();
+      const storageKey = `meditation_monthly_stats_${userId}`;
+      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      
+      const monthlyStatsCache = {
+        currentMonth: currentMonth,
+        totalMinutes: minutes,
+        lastUpdateTime: new Date().toISOString()
+      };
+      
+      wx.setStorageSync(storageKey, monthlyStatsCache);
+      console.log(`📊 月度缓存更新完成: ${minutes} 分钟 (月: ${currentMonth})`);
+    } catch (error) {
+      console.error('更新月度缓存失败:', error);
     }
   },
   

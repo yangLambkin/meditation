@@ -1,3 +1,6 @@
+.mt-6 {
+  margin-top: 20rpx;
+}
 .mt-7 {
   margin-top: 15.44rpx;
 }
@@ -6,6 +9,9 @@
 }
 .mt-12 {
   margin-top: 26.47rpx;
+}
+.mt-15 {
+  margin-top: 40rpx;
 }
 .ml-5 {
   margin-left: 11.03rpx;
@@ -111,13 +117,21 @@
   margin-right: 40rpx;
 }
 .font_2 {
-  font-size: 30.88rpx;
+  font-size: 22.06rpx;
   font-family: Inter;
-  line-height: 28.72rpx;
-  display: flex;
-  align-items: flex-end; /* 底部对齐 */
+  line-height: 20.38rpx;
+  color: #6a7282;
 }
 .text_6 {
+  color: #1e2939;
+}
+
+/* 微信昵称样式 - 单独设置字体大小和加粗 */
+.user-nickname {
+  font-size: 35rpx;
+  font-family: Inter;
+  font-weight: 700;
+  line-height: 28.72rpx;
   color: #1e2939;
 }
 .text-wrapper {
@@ -163,11 +177,11 @@
   height: 123.53rpx;
 }
 .text-wrapper_2 {
-  padding: 13.24rpx 0;
-  background-image: linear-gradient(135deg, #ffb900 0%, #d08700 100%);
-  border-radius: 37008529.41rpx;
-  filter: drop-shadow(0rpx 0rpx 0rpx #faf9f6);
-  width: 44.12rpx;
+  padding: 8.82rpx 0;
+  background-color: #b297641a;
+  border-radius: 37rpx;
+  width: 130.86rpx;
+  height: 40rpx;
 }
 .pos {
   position: absolute;
@@ -175,8 +189,8 @@
   top: 83.82rpx;
 }
 .text_8 {
-  color: #0a0a0a;
-  line-height: 16.94rpx;
+  color: #b29764;
+  line-height: 20.54rpx;
 }
 /* 立即分享按钮 */
 .section {
@@ -203,6 +217,18 @@
 .text_9 {
   color: #ffffff;
   font-weight: 700;
+}
+
+/* 立即分享文字样式 - 单独设置字体大小 */
+.share-text {
+  font-size: 35rpx;
+  font-family: Inter;
+  font-weight: 700;
+  color: #ffffff;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 卡牌区域 - 居中显示 */
