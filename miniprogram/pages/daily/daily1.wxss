@@ -168,13 +168,14 @@
 }
 .group_7 {
   margin-right: 10rpx;
-  width: 127.94rpx;
+  flex-shrink: 0;
 }
 .image_2 {
-  border-radius: 37008529.41rpx;
+  border-radius: 50%;
   filter: drop-shadow(0rpx 0rpx 0rpx #b2976433);
   width: 123.53rpx;
   height: 123.53rpx;
+  object-fit: cover;
 }
 .text-wrapper_2 {
   padding: 8.82rpx 0;

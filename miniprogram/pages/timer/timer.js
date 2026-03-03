@@ -628,7 +628,7 @@ Page({
 
   createAudioPlayer() {
     this.audioPlayer = wx.createInnerAudioContext();
-    this.audioPlayer.src = '/audio/belling.mp3';
+    this.audioPlayer.src = '/audio/风铃声.mp3';
     this.audioPlayer.loop = false;
     this.audioPlayer.obeyMuteSwitch = false;
     
