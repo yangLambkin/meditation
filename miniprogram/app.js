@@ -21,6 +21,9 @@ App({
     // 测试云环境连接
     this.testCloudEnvironment();
     
+    // 设置音频选项，解决iOS静音模式下无声音问题
+    this.setAudioOptions();
+    
     // 注意：数据库集合只需在项目部署时创建一次
     // 如需创建数据库集合，请手动调用 autoCreateCollections 云函数
     // this.autoCreateCollections();
@@ -80,6 +83,23 @@ App({
     }
   },
   
+  // 设置音频选项
+  setAudioOptions: function() {
+    try {
+      wx.setInnerAudioOption({
+        obeyMuteSwitch: false,  // 不遵循静音开关，iOS静音模式下也能播放声音
+        success: () => {
+          console.log('✅ 音频选项设置成功，iOS静音模式可播放声音');
+        },
+        fail: (err) => {
+          console.warn('⚠️ 音频选项设置失败:', err);
+        }
+      });
+    } catch (error) {
+      console.warn('⚠️ 设置音频选项时出错:', error);
+    }
+  },
+
   // 自动创建数据库集合
   autoCreateCollections: function() {
     // 延迟执行，确保云开发初始化完成
