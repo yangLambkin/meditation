@@ -8,8 +8,43 @@
     "pages/me/me",
     "pages/history/history",
     "pages/profile/profile",
-    "pages/badge/badge"
+    "pages/badge/badge",
+    "pages/team/team"
   ],
+  "subPackages": [
+    {
+      "root": "subpackages/team",
+      "pages": [
+        "pages/createTeam/createTeam",
+        "pages/teamDetails/teamDetails",
+        "pages/joinTeam/joinTeam"
+      ]
+    },
+    {
+      "root": "subpackages/chattool",
+      "name": "chattool",
+      "pages": [
+        "pages/invite/invite"
+      ],
+      "independent": true,
+      "renderer": "skyline",
+      "componentFramework": "glass-easel"
+    }
+  ],
+  "chatTools": [
+    {
+      "root": "subpackages/chattool",
+      "entryPagePath": "pages/invite/invite",
+      "desc": "团队邀请工具",
+      "scopes": ["scope.userInfo"]
+    }
+  ],
+  "rendererOptions": {
+    "skyline": {
+      "defaultDisplayBlock": true,
+      "sdkVersionBegin": "3.7.0"
+    }
+  },
   "window": {
     "backgroundColor": "#F6F6F6",
     "backgroundTextStyle": "light",
@@ -34,6 +69,12 @@
         "text": "计时",
         "iconPath": "/images/icons/timer.png",
         "selectedIconPath": "/images/icons/timer-active.png"
+      },
+      {
+        "pagePath": "pages/team/team",
+        "text": "团队",
+        "iconPath": "/images/icons/team.png",
+        "selectedIconPath": "/images/icons/team-active.png"
       },
       {
         "pagePath": "pages/me/me",

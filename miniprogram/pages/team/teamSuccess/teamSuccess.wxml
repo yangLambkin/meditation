@@ -1,0 +1,49 @@
+<view class="flex-col page">
+  <view class="flex-col justify-start items-center self-center image-wrapper">
+    <image
+      class="image"
+      src="/images/icons/team-active.png"
+    />
+  </view>
+  <view class="flex-col items-center self-stretch group">
+    <text class="text">创建成功！</text>
+    <text class="text_2 mt-17">你的团队已经成功创建</text>
+  </view>
+  <view class="flex-col self-stretch group_2">
+    <view class="flex-row items-center section">
+      <view class="flex-col justify-start items-center text-wrapper">
+        <text class="text_3">{{teamIcon}}</text>
+      </view>
+      <view class="flex-col items-start flex-1 ml-13">
+        <text class="font text_4">{{teamName}}</text>
+        <text class="mt-8 text_5">{{teamDescription}}</text>
+      </view>
+    </view>
+    <view class="mt-22 flex-col section_2">
+      <view class="flex-row items-center">
+        <image
+          class="image_2"
+          src="/images/icons/team-active.png"
+        />
+        <text class="text_6 ml-5">邀请成员加入</text>
+      </view>
+      <view class="mt-14 flex-col">
+        <view class="flex-row justify-center items-center section_3" bindtap="shareTeam">
+          <image
+            class="image_3"
+            src="/images/icons/team-active.png"
+          />
+          <text class="ml-8 font text_7">分享团队</text>
+        </view>
+        <view class="mt-8 flex-row justify-center items-center section_4" bindtap="copyInviteLink">
+          <image
+            class="image_3"
+            src="/images/icons/team-active.png"
+          />
+          <text class="font text_8 ml-11">复制邀请链接</text>
+        </view>
+      </view>
+    </view>
+  </view>
+  <text class="self-center font text_9" bindtap="closeModal">稍后再说</text>
+</view>

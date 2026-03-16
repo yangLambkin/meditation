@@ -1,0 +1,182 @@
+<!--subpackages/team/pages/teamDetails/teamDetails.wxml-->
+<view class="flex-col justify-start page">
+  <!-- 加载状态 -->
+  <view class="loading-container" wx:if="{{isLoading}}">
+    <text class="loading-text">加载中...</text>
+  </view>
+  
+  <!-- 团队信息 -->
+  <view class="flex-col justify-start section" wx:if="{{!isLoading && teamInfo}}">
+    <view class="flex-col group">
+      <view class="flex-col section_3">
+        <view class="flex-col self-stretch group_2">
+          <view class="flex-col justify-start items-end relative group_3">
+            <view class="section_2"></view>
+            <!-- 团队图标 -->
+            <image class="team-icon" src="{{teamInfo.icon}}" mode="aspectFit" />
+            <!-- 团队名称 -->
+            <text class="font text_2 pos_2">{{teamInfo.name}}</text>
+            <!-- 团队描述 -->
+            <text class="text_3 pos_3">{{teamInfo.description || '暂无团队介绍'}}</text>
+          </view>
+          <!-- 团队统计信息 -->
+          <view class="mt-26 flex-row equal-division">
+            <view class="flex-col items-center section_4 equal-division-item">
+              <image
+                class="image"
+                src="/subpackages/team/images/icons/team.png"
+              />
+              <text class="mt-4 font mt-9">{{members.length}}人</text>
+              <text class="mt-4 font_2 mt-9">成员</text>
+            </view>
+            <view class="ml-12 flex-col items-center section_4 equal-division-item">
+              <image
+                class="image"
+                src="/subpackages/team/images/icons/totalCheckin.png"
+              />
+              <text class="font mt-3 mt-9">{{calculateTotalCheckins()}}</text>
+              <text class="font_2 mt-3 mt-9">总打卡</text>
+            </view>
+            <view class="ml-12 flex-col items-center section_4 equal-division-item">
+              <image
+                class="image"
+                src="/subpackages/team/images/icons/activity.png"
+              />
+              <text class="font mt-3">{{calculateActivityRate()}}%</text>
+              <text class="font_2 mt-3">活跃度</text>
+            </view>
+          </view>
+          
+          <!-- 功能按钮区域 -->
+          <view class="flex-col justify-center items-center mt-20 button-group">
+            <view class="flex-row justify-center items-center">
+              <view class="flex-row justify-center items-center button-item" bindtap="inviteMember">
+                <image
+                  class="image_2"
+                  src="/subpackages/team/images/icons/invite.png"
+                />
+                <text class="font_3 text_4 ml-9">邀请成员</text>
+              </view>
+              <view class="ml-20 flex-row justify-center items-center button-item" bindtap="viewTeamActivity">
+                <image
+                  class="image_2"
+                  src="/subpackages/team/images/icons/teamActivity.png"
+                />
+                <text class="font_3 text_5 ml-9">团队动态</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+      
+      <!-- 标签页切换 -->
+      <view class="tab-container">
+        <view 
+          class="tab-item {{currentTab === 'members' ? 'active' : ''}}" 
+          bindtap="switchTab" 
+          data-tab="members"
+        >
+          <text class="tab-text">团队成员</text>
+          <view class="tab-indicator"></view>
+        </view>
+        <view 
+          class="tab-item {{currentTab === 'activities' ? 'active' : ''}}" 
+          bindtap="switchTab" 
+          data-tab="activities"
+        >
+          <text class="tab-text">练习动态</text>
+          <view class="tab-indicator"></view>
+        </view>
+      </view>
+
+      <!-- 团队成员列表 -->
+      <view class="flex-col relative group_4" wx:if="{{currentTab === 'members'}}">
+        
+        <view class="flex-col list">
+          <view
+            class="flex-row items-center mt-12 list-item"
+            wx:for="{{members}}"
+            wx:for-item="member"
+            wx:for-index="index"
+            wx:key="id"
+          >
+            <view class="flex-col justify-start items-center text-wrapper_3">
+              <text class="font_6">{{member.avatar}}</text>
+            </view>
+            <view class="ml-12 flex-col flex-1">
+              <view class="flex-row items-center">
+                <view class="flex-col justify-start items-center text-wrapper_4">
+                  <text class="font_5 text_8">{{member.name}}</text>
+                </view>
+                <view class="ml-8 flex-col justify-start items-center text-wrapper_5">
+                  <text class="text_9">{{member.role}}</text>
+                </view>
+              </view>
+              <view class="flex-row items-center mt-5">
+                <image
+                  class="image_3"
+                  src="/images/icons/checkin-small.png"
+                />
+                <text class="font_7 text_10">打卡 {{member.checkInCount}} 次</text>
+                <image
+                  class="image_3 image_4"
+                  src="/images/icons/time.png"
+                />
+                <text class="font_7 text_11 text_12">{{member.lastActive}}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- 练习动态 -->
+      <view class="flex-col relative group_4" wx:if="{{currentTab === 'activities'}}">
+          <view class="flex-col justify-start items-start text-wrapper_2">
+            <text class="font_4 text_7">本周练习动态</text>
+          </view>
+        <view class="flex-col list">
+          <view 
+            class="flex-col mt-12 activity-item" 
+            wx:for="{{activities}}" 
+            wx:for-item="activity" 
+            wx:for-index="index" 
+            wx:key="id"
+          >
+            <view class="flex-row items-center">
+              <view class="flex-col justify-start items-center text-wrapper_3">
+                <text class="font_6">{{activity.avatar}}</text>
+              </view>
+              <view class="ml-12 flex-col flex-1">
+                <view class="flex-row items-center">
+                  <view class="flex-col justify-start items-center text-wrapper_4">
+                    <text class="font_5 text_8">{{activity.memberName}}</text>
+                  </view>
+                  <view class="ml-8 flex-col justify-start items-center text-wrapper_5">
+                    <text class="text_9">{{activity.time}}</text>
+                  </view>
+                </view>
+                <view class="flex-col mt-5">
+                  <text class="font_7 text_10">{{activity.content}}</text>
+                  <view class="flex-row items-center mt-4">
+                    <image class="image_3" src="/images/icons/like.png" />
+                    <text class="font_7 text_10 ml-4">{{activity.likes}} 点赞</text>
+                    <image class="image_3 image_4" src="/images/icons/comment.png" />
+                    <text class="font_7 text_11 text_12 ml-4">{{activity.comments}} 评论</text>
+                  </view>
+                </view>
+              </view>
+            </view>
+          </view>
+          <view class="empty-state" wx:if="{{activities.length === 0}}">
+            <text class="empty-text">暂无练习动态</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+  
+  <!-- 错误状态 -->
+  <view class="error-container" wx:if="{{!isLoading && !teamInfo}}">
+    <text class="error-text">团队信息加载失败</text>
+  </view>
+</view>

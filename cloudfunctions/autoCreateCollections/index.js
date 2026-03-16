@@ -98,6 +98,54 @@ const COLLECTION_SCHEMAS = {
       created_at: new Date(),               // 创建时间
       updated_at: new Date()                // 更新时间
     }
+  },
+  
+  // invites 表结构（邀请记录表）
+  invites: {
+    description: '团队邀请记录表',
+    sampleData: {
+      _id: 'invite_123456789',              // 邀请ID
+      team_id: 'team_123456789',            // 团队ID
+      inviter_openid: 'user_openid_123',    // 邀请人openid
+      invitee_openid: '',                   // 被邀请人openid（为空表示未加入）
+      invite_code: 'TEAM123456789',         // 邀请码
+      invite_url: 'pages/joinTeam/joinTeam?invite_code=TEAM123456789', // 邀请链接
+      status: 'pending',                    // 邀请状态：pending/accepted/expired
+      expire_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7天后过期
+      created_at: new Date(),               // 创建时间
+      updated_at: new Date()                // 更新时间
+    }
+  },
+  
+  // team_members 表结构（团队成员关系表）
+  team_members: {
+    description: '团队成员关系表',
+    sampleData: {
+      _id: 'member_123456789',              // 成员关系ID
+      team_id: 'team_123456789',            // 团队ID
+      user_openid: 'user_openid_123',       // 成员openid
+      role: 'member',                       // 角色：creator/admin/member
+      joined_at: new Date(),                // 加入时间
+      created_at: new Date(),               // 创建时间
+      updated_at: new Date()                // 更新时间
+    }
+  },
+  
+  // invite_actions 表结构（邀请行为记录表）
+  invite_actions: {
+    description: '邀请行为记录表',
+    sampleData: {
+      _id: 'action_123456789',              // 行为ID
+      invite_id: 'invite_123456789',        // 邀请ID
+      action_type: 'accept',                // 行为类型：create/invite/accept
+      user_openid: 'user_openid_123',       // 执行人openid
+      action_data: {                        // 行为数据
+        timestamp: 1643625600000,
+        device_info: 'iPhone 12'
+      },
+      created_at: new Date(),               // 创建时间
+      updated_at: new Date()                // 更新时间
+    }
   }
   
 };

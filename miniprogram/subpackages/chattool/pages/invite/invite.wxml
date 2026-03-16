@@ -1,0 +1,28 @@
+<!-- 聊天工具模式页面 - 用于发送团队邀请卡片 -->
+<view class="container">
+  <!-- 邀请卡片预览 -->
+  <view class="invite-card" wx:if="{{!isLoading}}">
+    <view class="card-header">
+      <image class="team-icon" src="/images/icons/team.png"></image>
+      <text class="team-name">{{teamInfo.teamName}}</text>
+    </view>
+    <view class="card-content">
+      <text class="invite-title">团队邀请</text>
+      <text class="invite-desc">邀请您加入团队，一起体验静坐觉察</text>
+    </view>
+    <view class="card-footer">
+      <text class="inviter">邀请人：{{teamInfo.inviterName}}</text>
+    </view>
+  </view>
+  
+  <!-- 加载状态 -->
+  <view class="loading-content" wx:if="{{isLoading}}">
+    <view class="loading-spinner"></view>
+    <text class="loading-text">正在准备邀请卡片...</text>
+  </view>
+  
+  <!-- 发送按钮 -->
+  <view class="send-button" wx:if="{{!isLoading}}" bindtap="sendInvite">
+    <text class="send-text">发送邀请</text>
+  </view>
+</view>

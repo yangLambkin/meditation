@@ -222,7 +222,7 @@ text {
 }
 
 .mt-26 {
-  margin-top: 52rpx;
+  margin-top: 5rpx;
 }
 
 .ml-28 {
