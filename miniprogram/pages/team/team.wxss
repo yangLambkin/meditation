@@ -26,7 +26,7 @@
   padding-top: 60rpx;
   background-color: #b29764;
   overflow: hidden;
-  height: 400rpx;
+  height: 450rpx;
 }
 .font {
   font-size: 32rpx;
@@ -68,31 +68,19 @@
   font-size: 28rpx;
   text-align: left; /* 确保左对齐 */
 }
-.section_5 {
-  margin: 250.59rpx 0 -112.94rpx;
-  background-color: #ffffff1a;
-  border-radius: 0 88820470.59rpx 88820470.59rpx 0;
-  width: 169.99rpx;
-  height: 282.32rpx;
-}
+
 .pos {
   position: absolute;
   left: 42.35rpx;
   right: 0;
   top: 0;
 }
-.section_3 {
-  margin-left: 370.59rpx;
-  background-image: linear-gradient(135deg, #b29764 0%, #c9a870 100%);
-  background-size: 100% 100%;
-  width: 300rpx;
-  height: 337rpx;
-}
+
 .equal-division {
   position: absolute;
   left: 0;
   right: 41.52rpx;
-  top: 220rpx;
+  top: 180rpx;
 }
 .font_3 {
   font-size: 26rpx;
@@ -153,6 +141,14 @@
   margin-top: 40rpx;
 }
 
+/* 创建团队按钮容器 */
+.create-team-btn-container {
+  position: absolute;
+  left: 42.35rpx;
+  right: 0;
+  top: 340rpx; /* 统计卡片高度180rpx + 卡片高度140rpx + 间距20rpx */
+}
+
 /* 创建团队按钮 */
 .create-team-btn {
   background: white;
@@ -162,7 +158,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 32rpx;
+  width: calc(100% - 41.52rpx);
+  height: 80rpx;
   transition: all 0.3s ease;
 }
 
@@ -434,4 +431,27 @@
   .team-name {
     font-size: 28rpx;
   }
+}
+
+/* 自建团队标签样式 */
+.team-name-container {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.self-created-tag {
+  background: #b29764;
+  border-radius: 12rpx;
+  padding: 4rpx 12rpx;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.self-created-text {
+  color: white;
+  font-size: 20rpx;
+  font-weight: bold;
+  line-height: 1;
 }

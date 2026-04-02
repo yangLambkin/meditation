@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "登录",
+  "navigationBarBackgroundColor": "#ffffff",
+  "navigationBarTextStyle": "black",
+  "navigationStyle": "custom",
+  "usingComponents": {},
+  "componentFramework": "glass-easel",
+  "renderer": "skyline",
+  "disableScroll": true
+}

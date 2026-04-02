@@ -135,7 +135,7 @@ async function addSampleData(collectionName) {
       sampleData.inviterId = 'sample_inviter';
       sampleData.inviterName = '示例邀请者';
       sampleData.inviteToken = 'sample_token_123';
-      sampleData.sharePath = '/subpackages/team/pages/joinTeam/joinTeam?teamId=team_sample_001&inviterId=sample_inviter&inviteId=invite_sample_001';
+      sampleData.sharePath = '/subpackages/chattool/pages/joinTeam/joinTeam?teamId=team_sample_001&inviterId=sample_inviter&inviteId=invite_sample_001';
       sampleData.status = 'pending';
       sampleData.inviteTime = new Date();
       sampleData.expireTime = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7天后过期

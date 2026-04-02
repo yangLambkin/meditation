@@ -1,0 +1,58 @@
+<!-- subpackages/chattool/pages/login/login.wxml -->
+<view class="login-container">
+  <!-- 头部标题 -->
+  <view class="header">
+    <view class="title">完善个人信息</view>
+    <view class="subtitle">开始冥想之旅</view>
+  </view>
+
+  <!-- 头像选择区域 -->
+  <view class="avatar-section">
+    <view class="avatar-label">选择头像</view>
+    <button class="avatar-button" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+      <image class="avatar-image" src="{{avatarUrl}}" mode="aspectFill"></image>
+    </button>
+    <view class="avatar-hint">{{isAvatarSelected ? '头像已选择' : '点击选择头像'}}</view>
+  </view>
+
+  <!-- 昵称输入区域 -->
+  <view class="nickname-section">
+    <view class="nickname-label">设置昵称</view>
+    <form bindsubmit="onFormSubmit">
+      <input 
+        class="nickname-input" 
+        type="nickname" 
+        placeholder="请输入昵称（1-15个字符）" 
+        maxlength="15"
+        value="{{nickname}}"
+        bindinput="onNicknameInput"
+      />
+    </form>
+    <view class="nickname-hint">{{nicknameHint}}</view>
+  </view>
+
+  <!-- 操作按钮区域 -->
+  <view class="action-section">
+    <button 
+      class="primary-button" 
+      bindtap="saveProfile"
+      disabled="{{!isProfileValid || isLoading}}"
+    >
+      {{isLoading ? '保存中...' : '保存并开始'}}
+    </button>
+    
+    <button 
+      class="secondary-button" 
+      bindtap="skipProfile"
+    >
+      跳过设置
+    </button>
+  </view>
+
+  <!-- 提示信息 -->
+  <view class="tip-section">
+    <view class="tip-item">• 昵称将用于团队中显示您的身份</view>
+    <view class="tip-item">• 头像和昵称可以在个人中心随时修改</view>
+    <view class="tip-item">• 完善的个人资料将获得更好的体验</view>
+  </view>
+</view>

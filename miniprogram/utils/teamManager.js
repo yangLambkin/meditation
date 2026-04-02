@@ -6,7 +6,7 @@
 // 团队配置
 const teamConfig = {
   maxMembers: 50, // 最大成员数
-  maxTeamsPerUser: 5 // 每个用户最多创建的团队数
+  maxTeamsPerUser: 1 // 每个用户最多创建1个团队
 };
 
 // 获取本地存储键名（按openid隔离）
@@ -61,17 +61,28 @@ class TeamManager {
    */
   async createTeam(teamInfo) {
     try {
-      // 1. 本地验证
+      // 1. 重新加载本地缓存，确保数据最新
+      this.teams = this.loadTeamsFromStorage();
+      
+      // 2. 本地验证
       if (this.teams.length >= teamConfig.maxTeamsPerUser) {
         throw new Error(`每个用户最多只能创建${teamConfig.maxTeamsPerUser}个团队`);
       }
 
-      // 2. 生成团队信息
+      // 3. 处理团队头像：如果使用临时路径，需要上传到云存储
+      let teamIconUrl = teamInfo.icon;
+      if (teamIconUrl && teamIconUrl.startsWith('http://tmp/')) {
+        console.log('检测到临时头像路径，开始上传到云存储...');
+        teamIconUrl = await this.uploadTeamIconToCloud(teamIconUrl);
+        console.log('头像上传完成，新URL:', teamIconUrl);
+      }
+
+      // 4. 生成团队信息
       const newTeam = {
         _id: this.generateTeamId(),
         name: teamInfo.name,
         description: teamInfo.description || '',
-        icon: teamInfo.icon,
+        icon: teamIconUrl || '/images/icons/team.png',
         creator: wx.getStorageSync('userOpenId'),
         creatorName: wx.getStorageSync('userNickname') || '匿名用户',
         members: [],
@@ -157,7 +168,7 @@ class TeamManager {
   }
 
   /**
-   * 获取用户加入的团队列表
+   * 获取用户加入的团队列表（包含用户自己创建的团队）
    */
   getJoinedTeams() {
     const openid = wx.getStorageSync('userOpenId');
@@ -166,7 +177,7 @@ class TeamManager {
     }
     
     return this.teams.filter(team => 
-      team.members.includes(openid) && team.isActive && team.creator !== openid
+      team.members.includes(openid) && team.isActive
     );
   }
 
@@ -178,12 +189,14 @@ class TeamManager {
   }
 
   /**
-   * 从云端加载团队数据
+   * 从云端加载团队数据（改进版：清理本地缓存中已不存在的团队）
    */
   async loadTeamsFromCloud() {
     try {
       const openid = wx.getStorageSync('userOpenId');
       if (!openid) return;
+
+      console.log('🔄 开始从云端加载团队数据，并清理本地缓存...');
 
       const result = await wx.cloud.callFunction({
         name: 'teamManager',
@@ -197,30 +210,130 @@ class TeamManager {
         const cloudTeams = result.result.data;
         let hasUpdate = false;
 
-        // 合并云端数据
+        // 记录清理前的团队数量
+        const originalTeamCount = this.teams.length;
+
+        // 1. 检查本地缓存中哪些团队在云端已不存在（被解散）
+        const cloudTeamIds = cloudTeams.map(team => team._id);
+        
+        // 清理本地缓存中已不存在的团队（基于cloudId匹配）
+        const teamsBeforeCleanup = [...this.teams];
+        this.teams = this.teams.filter(team => {
+          // 如果团队有cloudId且云端不存在，则删除
+          if (team.cloudId && !cloudTeamIds.includes(team.cloudId)) {
+            console.log(`🗑️ 清理无效团队: ${team.name} (cloudId: ${team.cloudId})`);
+            return false;
+          }
+          return true;
+        });
+
+        // 如果清理了团队，标记需要更新
+        if (teamsBeforeCleanup.length !== this.teams.length) {
+          hasUpdate = true;
+        }
+
+        // 2. 合并云端数据
         cloudTeams.forEach(cloudTeam => {
           const existingTeam = this.teams.find(t => t.cloudId === cloudTeam._id);
           if (!existingTeam) {
-            // 添加新团队
-            this.teams.push({
+            // 添加新团队，确保createdAt字段存在
+            const newTeam = {
               ...cloudTeam,
               cloudId: cloudTeam._id
-            });
+            };
+            // 确保createdAt字段存在
+            if (!newTeam.createdAt) {
+              newTeam.createdAt = new Date().toISOString();
+            }
+            // 确保头像URL使用云端的版本，避免临时路径问题
+            if (cloudTeam.icon && !cloudTeam.icon.startsWith('cloud://')) {
+              // 如果云端头像不是云存储路径，检查本地是否有云存储路径
+              const localTeam = this.teams.find(t => t._id === cloudTeam._id);
+              if (localTeam && localTeam.icon && localTeam.icon.startsWith('cloud://')) {
+                newTeam.icon = localTeam.icon;
+              }
+            }
+            this.teams.push(newTeam);
             hasUpdate = true;
           } else {
-            // 更新现有团队信息
-            Object.assign(existingTeam, cloudTeam);
+            // 更新现有团队信息，但保留本地的createdAt字段
+            const localCreatedAt = existingTeam.createdAt;
+            const localIcon = existingTeam.icon;
+            
+            // 复制云端数据，但不覆盖createdAt和头像
+            Object.keys(cloudTeam).forEach(key => {
+              if (key !== 'createdAt' && key !== 'icon') {
+                existingTeam[key] = cloudTeam[key];
+              }
+            });
+            
+            // 头像处理：优先使用云存储路径，如果本地有云存储路径就使用本地的
+            if (localIcon && localIcon.startsWith('cloud://')) {
+              // 保持本地云存储路径
+              existingTeam.icon = localIcon;
+            } else if (cloudTeam.icon && cloudTeam.icon.startsWith('cloud://')) {
+              // 使用云端的云存储路径
+              existingTeam.icon = cloudTeam.icon;
+            } else {
+              // 使用本地的路径
+              existingTeam.icon = cloudTeam.icon;
+            }
+            
+            // 如果本地没有createdAt，使用云端的createdAt
+            if (!localCreatedAt && cloudTeam.createdAt) {
+              existingTeam.createdAt = cloudTeam.createdAt;
+            }
+            // 如果都没有，使用当前时间
+            if (!existingTeam.createdAt) {
+              existingTeam.createdAt = new Date().toISOString();
+            }
             hasUpdate = true;
           }
         });
 
         if (hasUpdate) {
           this.saveTeamsToStorage();
-          console.log('✅ 从云端加载团队数据成功');
+          console.log('✅ 从云端加载团队数据成功', {
+            清理前团队数: originalTeamCount,
+            清理后团队数: this.teams.length,
+            清理的无效团队数: originalTeamCount - this.teams.length
+          });
+          
+          // 3. 同时清理已加入团队的缓存
+          this.cleanupJoinedTeamsFromCloud(cloudTeams);
         }
+      } else {
+        console.warn('⚠️ 云端返回数据格式异常:', result.result);
       }
     } catch (error) {
       console.error('从云端加载团队数据失败:', error);
+    }
+  }
+
+  /**
+   * 清理已加入团队缓存中已不存在的团队
+   */
+  cleanupJoinedTeamsFromCloud(cloudTeams) {
+    try {
+      const cloudTeamIds = cloudTeams.map(team => team._id);
+      const joinedTeams = this.loadJoinedTeamsFromStorage();
+      
+      // 过滤掉云端已不存在的团队（基于cloudId匹配）
+      const validJoinedTeams = joinedTeams.filter(team => {
+        // 如果团队有cloudId且云端不存在，则删除
+        if (team.cloudId && !cloudTeamIds.includes(team.cloudId)) {
+          console.log(`🗑️ 清理无效的已加入团队: ${team.name} (cloudId: ${team.cloudId})`);
+          return false;
+        }
+        return true;
+      });
+      
+      if (validJoinedTeams.length !== joinedTeams.length) {
+        this.saveJoinedTeamsToStorage(validJoinedTeams);
+        console.log(`✅ 已清理已加入团队缓存中的无效团队: ${joinedTeams.length - validJoinedTeams.length}个`);
+      }
+    } catch (error) {
+      console.error('清理已加入团队缓存失败:', error);
     }
   }
 
@@ -375,6 +488,53 @@ class TeamManager {
       console.error('移除已加入团队失败:', error);
       return false;
     }
+  }
+
+  /**
+   * 清理本地团队缓存
+   */
+  clearLocalTeamCache() {
+    try {
+      const storageKey = getTeamStorageKey();
+      wx.removeStorageSync(storageKey);
+      this.teams = [];
+      console.log('✅ 本地团队缓存已清理');
+      return true;
+    } catch (error) {
+      console.error('清理本地团队缓存失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 上传团队头像到云存储
+   */
+  async uploadTeamIconToCloud(tempFilePath) {
+    return new Promise((resolve, reject) => {
+      if (!tempFilePath || !tempFilePath.startsWith('http://tmp/')) {
+        resolve(tempFilePath); // 如果不是临时路径，直接返回原路径
+        return;
+      }
+
+      // 生成云存储路径
+      const cloudPath = `team-icons/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.png`;
+      
+      console.log('开始上传头像到云存储:', { tempFilePath, cloudPath });
+      
+      wx.cloud.uploadFile({
+        cloudPath: cloudPath,
+        filePath: tempFilePath,
+        success: (res) => {
+          console.log('头像上传成功:', res);
+          resolve(res.fileID); // 返回云存储文件ID
+        },
+        fail: (err) => {
+          console.error('头像上传失败:', err);
+          // 上传失败时返回默认头像
+          resolve('/images/icons/team.png');
+        }
+      });
+    });
   }
 }
 

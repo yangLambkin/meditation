@@ -9,22 +9,26 @@
     "pages/history/history",
     "pages/profile/profile",
     "pages/badge/badge",
-    "pages/team/team"
+    "pages/team/team",
+    "pages/test/test",
+    "pages/test/inviteTest/inviteTest"
   ],
   "subPackages": [
     {
       "root": "subpackages/team",
       "pages": [
         "pages/createTeam/createTeam",
-        "pages/teamDetails/teamDetails",
-        "pages/joinTeam/joinTeam"
+        "pages/teamDetails/teamDetails"
       ]
     },
     {
       "root": "subpackages/chattool",
       "name": "chattool",
       "pages": [
-        "pages/invite/invite"
+        "pages/invite/invite",
+        "pages/joinTeam/joinTeam",
+        "pages/login/login",
+        "pages/testUserSwitch/testUserSwitch"
       ],
       "independent": true,
       "renderer": "skyline",

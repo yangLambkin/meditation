@@ -8,14 +8,13 @@
           <text class="font text team-title">我的团队</text>
           <text class="font_2 text_2 subtitle">与志同道合的伙伴一起修行</text>
         </view>
-        <view class="shrink-0 relative section_5"></view>
+
         <view class="flex-col justify-start items-end pos">
-          <view class="section_3"></view>
           <view class="flex-row equal-division">
             <view class="flex-col section_4 equal-division-item">
               <text class="self-start font_3">已加入团队</text>
               <view class="mt-14 flex-row items-end">
-                <text class="font_2">{{myTeams.length + joinedTeams.length}}</text>
+                <text class="font_2">{{totalJoinedTeams}}</text>
                 <text class="font_4 ml-7">个</text>
               </view>
             </view>
@@ -28,17 +27,18 @@
               </view>
             </view>
           </view>
-          
+        </view>
+
+        <!-- 创建团队按钮 -->
+        <view class="create-team-btn-container">
+          <view class="create-team-btn" bindtap="createNewTeam">
+            <image class="create-icon" src="/images/icons/create.png" />
+            <text class="create-text">创建新团队</text>
+          </view>
         </view>
       </view>
 
       <view class="flex-col relative section_6">
-        <!-- 创建团队按钮 -->
-        <view class="create-team-btn" bindtap="createNewTeam">
-          <image class="create-icon" src="/images/icons/plus.png" />
-          <text class="create-text">创建新团队</text>
-        </view>
-
         <!-- 标签页切换 -->
         <view class="tab-container">
           <view 
@@ -46,7 +46,7 @@
             bindtap="switchTab" 
             data-tab="created"
           >
-            <text class="tab-text">我创建的团队</text>
+            <text class="tab-text">我加入的团队</text>
             <view class="tab-indicator"></view>
           </view>
           <view 
@@ -54,7 +54,7 @@
             bindtap="switchTab" 
             data-tab="joined"
           >
-            <text class="tab-text">我加入的团队</text>
+            <text class="tab-text">更多团队</text>
             <view class="tab-indicator"></view>
           </view>
         </view>
@@ -64,11 +64,10 @@
           <text class="loading-text">加载中...</text>
         </view>
 
-        <!-- 我创建的团队 -->
+        <!-- 我加入的团队（包含我创建的和我加入的） -->
         <view class="team-list" wx:if="{{currentTab === 'created'}}">
-          <view class="empty-state" wx:if="{{myTeams.length === 0 && !isLoading}}">
-            <image class="empty-icon" src="/images/icons/empty.png" />
-            <text class="empty-text">您还没有创建任何团队</text>
+          <view class="empty-state" wx:if="{{totalJoinedTeams === 0 && !isLoading}}">
+            <text class="empty-text">您还没有加入任何团队</text>
             <text class="empty-subtext">点击上方按钮创建您的第一个团队</text>
           </view>
 
@@ -79,7 +78,12 @@
               </view>
               <view class="team-info">
                 <view class="team-header-info">
-                  <text class="team-name">{{item.name}}</text>
+                  <view class="team-name-container">
+                    <text class="team-name">{{item.name}}</text>
+                    <view class="self-created-tag" wx:if="{{item.isSelfCreated}}">
+                      <text class="self-created-text">自建</text>
+                    </view>
+                  </view>
                   <image class="team-arrow" src="/images/icons/right.png" />
                 </view>
                 <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
@@ -94,49 +98,86 @@
                   </view>
                 </view>
                 <view class="team-footer">
-                  <text class="create-time">创建于：{{item.createdAt ? item.createdAt.split('T')[0] : '未知'}}</text>
+                  <text class="create-time">创建于：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
                 </view>
               </view>
             </view>
-            <!-- 删除按钮 - 仅在我创建的团队中显示 -->
-            <view class="delete-btn-container">
-              <view class="delete-btn" bindtap="deleteTeam" data-team-id="{{item._id}}" data-team-name="{{item.name}}">
-                <image class="delete-icon" src="/images/icons/delete.png" />
-                <text class="delete-text">删除</text>
+          </view>
+          
+          <!-- 我加入的团队（非自建） -->
+          <view class="team-item" wx:for="{{joinedTeams}}" wx:key="_id">
+            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
+              <view class="team-icon-container">
+                <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
+              </view>
+              <view class="team-info">
+                <view class="team-header-info">
+                  <view class="team-name-container">
+                    <text class="team-name">{{item.name}}</text>
+                    <view class="self-created-tag" wx:if="{{item.isSelfCreated}}">
+                      <text class="self-created-text">自建</text>
+                    </view>
+                  </view>
+                  <image class="team-arrow" src="/images/icons/right.png" />
+                </view>
+                <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
+                <view class="team-stats">
+                  <view class="team-stat">
+                    <image class="stat-icon" src="/images/icons/team.png" />
+                    <text class="stat-text">{{item.memberCount || 0}}人</text>
+                  </view>
+                  <view class="team-stat">
+                    <image class="stat-icon" src="/images/icons/active.png" />
+                    <text class="stat-text">{{item.isActive ? '活跃' : '已解散'}}</text>
+                  </view>
+                </view>
+                <view class="team-footer">
+                  <text class="create-time">加入于：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
+                </view>
               </view>
             </view>
           </view>
         </view>
 
-        <!-- 我加入的团队 -->
+        <!-- 所有团队（向所有用户开放） -->
         <view class="team-list" wx:if="{{currentTab === 'joined'}}">
-          <view class="empty-state" wx:if="{{joinedTeams.length === 0 && !isLoading}}">
+          
+          
+          <view class="empty-state" wx:if="{{allTeams.length === 0 && !isLoading}}">
             <image class="empty-icon" src="/images/icons/empty.png" />
-            <text class="empty-text">您还没有加入任何团队</text>
-            <text class="empty-subtext">可以邀请朋友创建团队或加入现有团队</text>
+            <text class="empty-text">暂无公开团队</text>
+            <text class="empty-subtext">您可以创建第一个团队</text>
           </view>
 
-          <view class="team-item" wx:for="{{joinedTeams}}" wx:key="_id" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
-            <view class="team-icon-container">
-              <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
-            </view>
-            <view class="team-info">
-              <view class="team-header-info">
-                <text class="team-name">{{item.name}}</text>
-                <image class="team-arrow" src="/images/icons/right.png" />
+          <view class="team-item" wx:for="{{allTeams}}" wx:key="_id">
+            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
+              <view class="team-icon-container">
+                <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
               </view>
-              <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
-              <view class="team-stats">
-                <view class="team-stat">
-                  <image class="stat-icon" src="/images/icons/team.png" />
-                  <text class="stat-text">{{item.memberCount || 0}}人</text>
+              <view class="team-info">
+                <view class="team-header-info">
+                  <view class="team-name-container">
+                    <text class="team-name">{{item.name}}</text>
+                    <view class="self-created-tag" wx:if="{{item.isSelfCreated}}">
+                      <text class="self-created-text">自建</text>
+                    </view>
+                  </view>
+                  <image class="team-arrow" src="/images/icons/right.png" />
                 </view>
-                <view class="team-stat">
-                  <text class="creator-text">创建者：{{item.creatorName || '匿名'}}</text>
+                <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
+                <view class="team-stats">
+                  <view class="team-stat">
+                    <image class="stat-icon" src="/images/icons/team.png" />
+                    <text class="stat-text">{{item.memberCount || 0}}人</text>
+                  </view>
+                  <view class="team-stat">
+                    <image class="stat-icon" src="/images/icons/active.png" />
+                    <text class="stat-text">{{item.isActive ? '活跃' : '已解散'}}</text>
+                  </view>
                 </view>
-              </view>
-              <view class="team-footer">
-                <text class="join-time">加入时间：{{item.joinedAt || '未知'}}</text>
+                <view class="team-footer">
+                  <text class="create-time">创建于：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
+                </view>
               </view>
             </view>
           </view>

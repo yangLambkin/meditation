@@ -1,4 +1,4 @@
-// pages/profile/profile.js
+// subpackages/chattool/pages/login/login.js
 Page({
   /**
    * 页面的初始数据
@@ -13,12 +13,11 @@ Page({
     isProfileValid: false,
     isLoading: false,
     
-    
     // 页面参数
-    loginCode: '',
-    userType: 'new', // new: 新用户, wechat: 微信用户, local: 本地用户
+    redirectUrl: '', // 登录成功后跳转的页面
+    teamId: '', // 需要加入的团队ID
     
-    // 默认头像列表（用于跳过选择的备选）
+    // 默认头像列表
     defaultAvatars: [
       '/images/avatar-1.png',
       '/images/avatar-2.png', 
@@ -31,56 +30,103 @@ Page({
    * 生命周期函数--监听页面加载
    */
   onLoad(options) {
-    console.log('用户信息收集页面加载，参数:', options);
+    console.log('聊天工具子包登录页面加载，参数:', options);
     
     // 保存页面参数
     this.setData({
-      userType: options.type || 'new'
+      redirectUrl: options.redirectUrl || '',
+      teamId: options.teamId || ''
     });
     
-    // 根据用户类型初始化页面
-    this.initByUserType();
+    // 检查是否已登录
+    if (this.hasUserInfo()) {
+      console.log('用户已登录，直接跳转');
+      this.redirectAfterLogin();
+      return;
+    }
+    
+    // 初始化页面
+    this.initPage();
   },
 
   /**
-   * 根据用户类型初始化页面
+   * 初始化页面
    */
-  initByUserType() {
+  initPage() {
+    // 检查是否有缓存的用户信息
     const userInfo = wx.getStorageSync('userInfo');
     
-    switch (this.data.userType) {
-      case 'wechat':
-        // 微信用户：迁移现有数据
-        if (userInfo && userInfo.nickName) {
-          this.setData({
-            avatarUrl: userInfo.avatarUrl || '/images/avatar.png',
-            nickname: userInfo.nickName,
-            isAvatarSelected: !!userInfo.avatarUrl,
-            isProfileValid: true
-          });
-          this.setData({
-            nicknameHint: '检测到您之前的微信头像和昵称，可以修改或直接保存'
-          });
-        }
-        break;
-        
-      case 'local':
-        // 本地用户：提示完善信息
-        this.setData({
-          nicknameHint: '完善个人信息，享受更好的服务体验'
-        });
-        break;
-        
-      default:
-        // 新用户：默认提示
-        this.setData({
-          nicknameHint: '昵称将用于显示您的身份'
-        });
-        break;
+    // 支持新旧格式的用户信息
+    const hasValidUserInfo = userInfo && 
+                           (userInfo.nickName || 
+                            (userInfo.isCustomAvatar !== undefined && 
+                             userInfo.profileComplete));
+    
+    if (hasValidUserInfo) {
+      // 有完整的用户信息，直接使用
+      const nickname = userInfo.nickName || '觉察者';
+      
+      this.setData({
+        avatarUrl: userInfo.avatarUrl || '/images/avatar.png',
+        nickname: nickname,
+        isAvatarSelected: !!userInfo.avatarUrl,
+        isProfileValid: true
+      });
+      
+      this.setData({
+        nicknameHint: '检测到您之前的头像和昵称，可以修改或直接保存'
+      });
+    } else {
+      // 缓存中没有用户信息
+      console.log('缓存中没有用户信息，需要登录');
+      
+      this.setData({
+        nicknameHint: '昵称将用于显示您的身份'
+      });
     }
     
     // 更新表单验证状态
     this.checkFormValidity();
+  },
+
+  /**
+   * 检查用户是否有登录信息 - 完全复制主包逻辑
+   */
+  hasUserInfo() {
+    const userInfo = wx.getStorageSync('userInfo');
+    const userNickname = wx.getStorageSync('userNickname');
+    const userOpenId = wx.getStorageSync('userOpenId');
+    
+    console.log('用户信息检测 - userInfo:', userInfo, 'userNickname:', userNickname, 'userOpenId:', userOpenId);
+    
+    // 正确的用户状态检测逻辑：
+    // 1. 真正登录：userOpenId以'oz'开头（微信openid）
+    // 2. 本地用户：userOpenId以'local_'开头（未登录，但有本地标识）
+    // 3. 未登录：没有任何用户信息
+    const isWechatLoggedIn = userOpenId && userOpenId.startsWith('oz');
+    const isLocalUser = userOpenId && userOpenId.startsWith('local_');
+    
+    // 只有当有微信登录信息或有用户昵称时，才认为是已登录
+    const hasInfo = !!(isWechatLoggedIn || userInfo || userNickname);
+    console.log('登录状态检测 - 微信登录:', isWechatLoggedIn, '本地用户:', isLocalUser, '有用户信息:', !!userInfo, '有昵称:', !!userNickname);
+    console.log('hasUserInfo计算结果:', hasInfo);
+    
+    return hasInfo;
+  },
+
+  /**
+   * 判断用户是否已登录（微信openid以'oz'开头）- 复制主包逻辑
+   */
+  isUserLoggedIn() {
+    // 优先检查是否有微信openid存储在本地
+    const wechatOpenId = wx.getStorageSync('userOpenId');
+    if (wechatOpenId && wechatOpenId.startsWith('oz')) {
+      return true;
+    }
+    
+    // 如果本地存储中没有微信openid，再检查页面数据
+    const userOpenId = this.data.userOpenId;
+    return userOpenId && userOpenId.startsWith('oz');
   },
 
   /**
@@ -177,7 +223,7 @@ Page({
   },
 
   /**
-   * 表单提交处理（确保安全检测）
+   * 表单提交处理
    */
   onFormSubmit(e) {
     console.log('表单提交:', e.detail);
@@ -204,44 +250,28 @@ Page({
     
     this.setData({ isLoading: true });
     
-    // 模拟异步保存过程
+    // 异步保存过程
     setTimeout(() => {
       this.saveUserInfo();
     }, 500);
   },
 
   /**
-   * 实际保存用户信息（包含微信登录流程）
+   * 实际保存用户信息（包含微信登录流程）- 复制主包逻辑
    */
   async saveUserInfo() {
-    const { avatarUrl, nickname, userType, loginCode } = this.data;
-    
-    // 将本地临时文件头像转换为永久网络URL
-    let finalAvatarUrl = avatarUrl;
-    if (avatarUrl && avatarUrl.startsWith('wxfile://tmp_')) {
-      console.log('检测到本地临时文件头像，尝试转换为永久链接');
-      
-      try {
-        // 使用云存储上传文件获取永久URL
-        const cloudFileUrl = await this.uploadAvatarToCloud(avatarUrl);
-        finalAvatarUrl = cloudFileUrl;
-        console.log('✅ 头像已上传到云存储:', finalAvatarUrl);
-      } catch (error) {
-        console.warn('⚠️ 头像上传失败，使用默认头像:', error);
-        finalAvatarUrl = '/images/avatar.png';
-      }
-    }
+    const { avatarUrl, nickname, redirectUrl, teamId } = this.data;
     
     // 构建新的用户信息结构
     const userInfo = {
       nickName: nickname.trim(),
-      avatarUrl: finalAvatarUrl,
+      avatarUrl: avatarUrl,
       isCustomAvatar: true, // 标记为自定义信息
       profileComplete: true,
       createTime: new Date().toISOString(),
       lastUpdateTime: new Date().toISOString(),
       dataSource: 'custom', // 数据来源：自定义
-      migrationStatus: userType === 'wechat' ? 'migrated' : 'new'
+      migrationStatus: 'new'
     };
     
     console.log('保存用户信息:', userInfo);
@@ -279,13 +309,10 @@ Page({
       // 6. 保存用户信息到本地存储
       this.saveToLocalStorage(userInfo, wechatOpenId);
       
-      // 7. 保存到云端
+      // 7. 保存到云端（本地缓存为主，云端为辅）
       await this.saveToCloud(userInfo, wechatOpenId);
       
       this.setData({ isLoading: false });
-      
-      // 登录成功后检查勋章解锁条件
-      this.checkBadgeAfterLogin();
       
       this.showSuccessAndNavigate();
       
@@ -293,7 +320,7 @@ Page({
       console.error('微信登录流程失败，降级为本地模式:', error);
       
       // 降级处理：使用原有的本地标识逻辑
-      const openid = this.getUserOpenId(loginCode);
+      const openid = this.getUserOpenId();
       
       // 保存到本地存储
       this.saveToLocalStorage(userInfo, openid);
@@ -311,38 +338,7 @@ Page({
   },
 
   /**
-   * 上传头像到云存储，获取永久URL
-   */
-  uploadAvatarToCloud(localFilePath) {
-    return new Promise((resolve, reject) => {
-      // 生成唯一的文件名
-      const timestamp = new Date().getTime();
-      const randomStr = Math.random().toString(36).substring(2, 8);
-      const cloudPath = `avatars/${timestamp}_${randomStr}.jpg`;
-      
-      console.log('开始上传头像到云存储:', {
-        localPath: localFilePath,
-        cloudPath: cloudPath
-      });
-      
-      wx.cloud.uploadFile({
-        cloudPath: cloudPath,
-        filePath: localFilePath,
-        success: (res) => {
-          console.log('头像上传成功:', res);
-          // 返回文件的FileID，这是永久有效的URL
-          resolve(res.fileID);
-        },
-        fail: (err) => {
-          console.error('头像上传失败:', err);
-          reject(err);
-        }
-      });
-    });
-  },
-
-  /**
-   * 获取微信openid（登录流程）
+   * 获取微信openid（登录流程）- 复制主包逻辑
    */
   async getWechatOpenId() {
     console.log('🔄 开始微信登录流程获取openid');
@@ -383,7 +379,7 @@ Page({
   },
 
   /**
-   * 建立用户映射关系
+   * 建立用户映射关系 - 复制主包逻辑
    */
   createUserMapping(localUserId, wechatOpenId) {
     const userMappings = wx.getStorageSync('userMappings') || {};
@@ -403,7 +399,7 @@ Page({
   },
 
   /**
-   * 迁移本地数据到新用户标识
+   * 迁移本地数据到新用户标识 - 复制主包逻辑
    */
   async migrateLocalData(fromLocalId, toOpenId) {
     try {
@@ -467,9 +463,9 @@ Page({
   },
 
   /**
-   * 获取用户OpenID（兼容原有逻辑）
+   * 获取用户OpenID（兼容原有逻辑）- 复制主包逻辑
    */
-  getUserOpenId(loginCode) {
+  getUserOpenId() {
     // 尝试获取现有的openid
     let openid = wx.getStorageSync('userOpenId');
     
@@ -482,7 +478,7 @@ Page({
   },
 
   /**
-   * 保存到本地存储
+   * 保存到本地存储 - 复制主包逻辑
    */
   saveToLocalStorage(userInfo, openid) {
     // 保存用户信息
@@ -504,7 +500,7 @@ Page({
   },
 
   /**
-   * 保存到云端
+   * 保存到云端 - 复制主包逻辑
    */
   saveToCloud(userInfo, openid) {
     return new Promise((resolve, reject) => {
@@ -514,8 +510,7 @@ Page({
         data: {
           type: 'updateUserProfile',
           openid: openid,
-          userInfo: userInfo,
-          userType: this.data.userType
+          userInfo: userInfo
         },
         success: (res) => {
           console.log('用户信息保存到云端成功:', res);
@@ -530,7 +525,47 @@ Page({
   },
 
   /**
-   * 显示成功提示并导航
+   * 登录成功后跳转
+   */
+  redirectAfterLogin() {
+    wx.showToast({
+      title: `欢迎${this.data.nickname}`,
+      icon: 'success',
+      duration: 2000
+    });
+    
+    // 延迟后跳转
+    setTimeout(() => {
+      console.log('🔍 登录成功，准备跳转:');
+      console.log('  - teamId:', this.data.teamId);
+      console.log('  - teamName:', this.data.teamName);
+      
+      if (this.data.teamId) {
+        // 跳转到团队加入页面，并携带登录成功的标记
+        const url = `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${this.data.teamId}&fromLogin=true&teamName=${encodeURIComponent(this.data.teamName || '')}&teamIcon=${encodeURIComponent(this.data.teamIcon || '')}&inviterName=${encodeURIComponent(this.data.inviterName || '')}`;
+        console.log('  - 跳转到joinTeam:', url);
+        
+        wx.navigateTo({
+          url: url
+        });
+      } else if (this.data.redirectUrl) {
+        // 跳转到指定页面
+        console.log('  - 跳转到redirectUrl:', this.data.redirectUrl);
+        wx.navigateTo({
+          url: this.data.redirectUrl
+        });
+      } else {
+        // 默认跳转到聊天工具邀请页面
+        console.log('  - 跳转到默认页面');
+        wx.navigateTo({
+          url: '/subpackages/chattool/pages/invite/invite'
+        });
+      }
+    }, 1500);
+  },
+
+  /**
+   * 显示成功提示并导航 - 复制主包逻辑
    */
   showSuccessAndNavigate() {
     wx.showToast({
@@ -539,16 +574,14 @@ Page({
       duration: 2000
     });
     
-    // 延迟后返回首页
+    // 延迟后返回
     setTimeout(() => {
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
+      this.redirectAfterLogin();
     }, 1500);
   },
 
   /**
-   * 跳过信息设置
+   * 跳过信息设置 - 复制主包逻辑
    */
   skipProfile() {
     wx.showModal({
@@ -565,7 +598,7 @@ Page({
   },
 
   /**
-   * 保存默认用户信息
+   * 保存默认用户信息 - 复制主包逻辑
    */
   saveDefaultProfile() {
     this.setData({ isLoading: true });
@@ -588,7 +621,7 @@ Page({
       migrationStatus: 'skipped'
     };
     
-    const openid = this.getUserOpenId(this.data.loginCode);
+    const openid = this.getUserOpenId();
     
     // 保存到本地
     this.saveToLocalStorage(userInfo, openid);
@@ -602,14 +635,12 @@ Page({
     });
     
     setTimeout(() => {
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
+      this.redirectAfterLogin();
     }, 1000);
   },
 
   /**
-   * 生成随机昵称
+   * 生成随机昵称 - 复制主包逻辑
    */
   generateRandomNickname() {
     const prefixes = ['静心', '觉察', '冥想', '修行', '禅意', '平和', '安宁'];
@@ -619,51 +650,6 @@ Page({
     const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
     
     return prefix + suffix + Math.floor(Math.random() * 1000);
-  },
-
-  /**
-   * 登录成功后检查勋章解锁条件
-   */
-  checkBadgeAfterLogin() {
-    console.log('🔍 登录成功后检查勋章解锁条件');
-    
-    try {
-      // 动态引入勋章管理器
-      const badgeManager = require('../../utils/badgeManager.js');
-      
-      // 延迟执行，确保登录流程完全完成
-      setTimeout(() => {
-        // 从本地缓存获取用户统计数据
-        const checkinManager = require('../../utils/checkin.js');
-        const localStats = checkinManager.getUserStats();
-        
-        console.log('📊 登录后检查勋章条件，用户统计:', localStats);
-        
-        // 检查勋章解锁条件
-        const userStats = {
-          currentStreak: localStats.currentStreak || 0,
-          totalCheckinDays: localStats.totalDays || 0,
-          lastDuration: localStats.lastDuration || 0,
-          totalDuration: localStats.totalDuration || 0
-        };
-        
-        const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
-        
-        if (hasUnlocked) {
-          console.log('🎉 登录后检测到新勋章解锁！');
-          
-          // 显示勋章解锁提示
-          wx.showToast({
-            title: '恭喜解锁新勋章！',
-            icon: 'success',
-            duration: 3000
-          });
-        }
-      }, 1000); // 延迟1秒确保登录流程完成
-      
-    } catch (error) {
-      console.warn('勋章检查失败（不影响登录流程）:', error.message);
-    }
   },
 
   /**
@@ -714,7 +700,7 @@ Page({
   onShareAppMessage() {
     return {
       title: '完善个人信息，开始冥想之旅',
-      path: '/pages/profile/profile'
+      path: '/subpackages/chattool/pages/login/login'
     };
   }
 })

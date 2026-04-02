@@ -1,0 +1,7 @@
+{
+  "usingComponents": {},
+  "navigationStyle": "custom",
+  "navigationBarTitleText": "用户身份切换测试",
+  "renderer": "skyline",
+  "componentFramework": "glass-easel"
+}

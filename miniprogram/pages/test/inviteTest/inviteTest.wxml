@@ -1,0 +1,60 @@
+<view class="container">
+  <view class="header">
+    <text class="title">邀请流程自动化测试</text>
+    <text class="subtitle">快速验证邀请功能，无需审核等待</text>
+  </view>
+
+  <view class="controls">
+    <button class="btn btn-clear" bindtap="clearResults">清空结果</button>
+    <button class="btn btn-export" bindtap="exportResults">导出结果</button>
+  </view>
+
+  <view class="test-cases">
+    <view class="section-title">测试用例</view>
+    <view class="case-list">
+      <block wx:for="{{testCases}}" wx:key="id">
+        <view class="case-item">
+          <view class="case-header">
+            <text class="case-name">{{item.name}}</text>
+            <button 
+              class="btn btn-run" 
+              bindtap="runTestCase" 
+              data-test-id="{{item.id}}"
+              disabled="{{isTesting}}"
+            >
+              {{isTesting && currentTest === item.name ? '测试中...' : '运行'}}
+            </button>
+          </view>
+          <text class="case-desc">{{item.description}}</text>
+        </view>
+      </block>
+    </view>
+  </view>
+
+  <view class="results">
+    <view class="section-title">
+      测试结果
+      <text class="result-count">({{testResults.length}} 条)</text>
+    </view>
+    
+    <scroll-view class="log-container" scroll-y>
+      <block wx:for="{{testResults}}" wx:key="index">
+        <view class="log-item {{item.type}}">
+          <view class="log-time">{{item.time}}</view>
+          <text class="log-message">{{item.message}}</text>
+        </view>
+      </block>
+      
+      <view wx:if="{{testResults.length === 0}}" class="empty-state">
+        <text>暂无测试结果，请先运行测试用例</text>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view class="current-test" wx:if="{{isTesting}}">
+    <view class="loading">
+      <text>正在执行: {{currentTest}}</text>
+      <view class="spinner"></view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,85 @@
+<!-- 团队加入页面 - skyline 版本 -->
+<view class="container">
+<!-- 团队信息卡片 - 采用teamDetails相同样式 -->
+<view class="flex-col justify-start section" wx:if="{{!isLoading && teamInfo}}">
+  <view class="flex-col group">
+    <view class="flex-col section_3">
+      <view class="flex-col self-stretch group_2">
+        <!-- 团队基本信息区域 -->
+        <view class="flex-col justify-start items-center relative group_3">
+          <image class="team-icon" src="{{teamInfo.icon || '/images/icons/team.png'}}" mode="aspectFit" />
+          <text class="font text_2 pos_2">{{teamInfo.name}}</text>
+          <text class="text_3 pos_3">{{teamInfo.description || '暂无团队介绍'}}</text>
+        </view>
+        
+        <!-- 团队统计信息区域 -->
+        <view class="mt-26 flex-row equal-division">
+          <view class="flex-col items-center section_4 equal-division-item">
+            <image class="image" src="/subpackages/team/images/icons/team.png" />
+            <text class="mt-4 font mt-9">{{members.length}}人</text>
+            <text class="mt-4 font_2 mt-9">成员</text>
+          </view>
+          <view class="ml-12 flex-col items-center section_4 equal-division-item">
+            <image class="image" src="/subpackages/team/images/icons/checkin.png" />
+            <text class="font mt-3 mt-9">{{teamTotalCheckins}}</text>
+            <text class="font_2 mt-3 mt-9">总打卡</text>
+          </view>
+          <view class="ml-12 flex-col items-center section_4 equal-division-item">
+            <image class="image" src="/subpackages/team/images/icons/activity.png" />
+            <text class="font mt-3">{{teamActivityRate}}%</text>
+            <text class="font_2 mt-3">活跃度</text>
+          </view>
+        </view>
+        
+        <!-- 加入按钮 -->
+        <view class="join-button-container">
+          <button class="custom-join-button" bindtap="joinTeam" wx:if="{{!isMember && teamInfo}}">
+            加入团队
+          </button>
+          <view class="joined-status" wx:if="{{isMember}}">
+            <text class="joined-text">您已是团队成员</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>
+
+  <!-- 团队成员列表
+  <view class="members-section" wx:if="{{members && members.length > 0}}">
+    <text class="section-title">团队成员 ({{members.length}})</text>
+    <scroll-view class="members-list" scroll-y>
+      <view class="member-item" wx:for="{{members}}" wx:key="id">
+        <view class="member-avatar">
+          <text class="avatar-icon">{{item.avatar || '👤'}}</text>
+        </view>
+        <view class="member-info">
+          <view class="member-header">
+            <text class="member-name">{{item.name}}</text>
+            <text class="member-role">{{item.role}}</text>
+          </view>
+          <view class="member-stats">
+            <text class="checkin-count">打卡 {{item.checkInCount || 0}} 次</text>
+            <text class="last-active">{{item.lastActive || '刚刚'}}</text>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+  -->
+
+  <!-- 加载状态 -->
+  <view class="loading-container" wx:if="{{isLoading}}">
+    <view class="loading-spinner"></view>
+    <text class="loading-text">加载中...</text>
+  </view>
+
+
+  <!-- 错误状态 -->
+  <view class="error-container" wx:if="{{!isLoading && !teamInfo}}">
+    <text class="error-text">团队信息加载失败</text>
+    <button class="retry-button" bindtap="loadTeamInfo">
+      重试
+    </button>
+  </view>
+</view>

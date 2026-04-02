@@ -1,0 +1,112 @@
+.container {
+  padding: 20rpx;
+  min-height: 100vh;
+  background: #f5f5f5;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 40rpx;
+  background: white;
+  padding: 30rpx;
+  border-radius: 16rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.1);
+}
+
+.title {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: #333;
+  display: block;
+  margin-bottom: 10rpx;
+}
+
+.subtitle {
+  font-size: 26rpx;
+  color: #666;
+}
+
+.section-title {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 20rpx;
+}
+
+.btn {
+  width: 100%;
+  height: 100rpx;
+  line-height: 100rpx;
+  border-radius: 12rpx;
+  font-size: 32rpx;
+  border: none;
+  margin-bottom: 40rpx;
+}
+
+.btn-primary {
+  background: #3498db;
+  color: white;
+}
+
+.tool-list {
+  background: white;
+  border-radius: 16rpx;
+  overflow: hidden;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.1);
+}
+
+.tool-item {
+  padding: 30rpx;
+  border-bottom: 1rpx solid #eee;
+}
+
+.tool-item:last-child {
+  border-bottom: none;
+}
+
+.tool-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15rpx;
+}
+
+.tool-name {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #333;
+}
+
+.tool-arrow {
+  font-size: 36rpx;
+  color: #999;
+}
+
+.tool-desc {
+  font-size: 24rpx;
+  color: #666;
+  line-height: 1.4;
+}
+
+.tips {
+  margin-top: 40rpx;
+}
+
+.tip-list {
+  background: white;
+  border-radius: 16rpx;
+  padding: 30rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.1);
+}
+
+.tip {
+  display: block;
+  font-size: 24rpx;
+  color: #666;
+  line-height: 1.6;
+  margin-bottom: 10rpx;
+}
+
+.tip:last-child {
+  margin-bottom: 0;
+}

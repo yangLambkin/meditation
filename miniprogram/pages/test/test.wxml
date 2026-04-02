@@ -1,0 +1,38 @@
+<view class="container">
+  <view class="header">
+    <text class="title">测试工具集</text>
+    <text class="subtitle">快速验证功能，提升测试效率</text>
+  </view>
+
+  <view class="quick-test">
+    <view class="section-title">快速测试</view>
+    <button class="btn btn-primary" bindtap="quickTestInvite">
+      一键测试邀请功能
+    </button>
+  </view>
+
+  <view class="test-tools">
+    <view class="section-title">测试工具</view>
+    <view class="tool-list">
+      <block wx:for="{{testTools}}" wx:key="name">
+        <view class="tool-item" bindtap="navigateToTest" data-path="{{item.path}}">
+          <view class="tool-header">
+            <text class="tool-name">{{item.name}}</text>
+            <text class="tool-arrow">›</text>
+          </view>
+          <text class="tool-desc">{{item.description}}</text>
+        </view>
+      </block>
+    </view>
+  </view>
+
+  <view class="tips">
+    <view class="section-title">使用提示</view>
+    <view class="tip-list">
+      <text class="tip">• 无需审核即可测试邀请功能</text>
+      <text class="tip">• 自动化验证路径和跳转逻辑</text>
+      <text class="tip">• 支持批量测试多种场景</text>
+      <text class="tip">• 详细日志记录便于问题排查</text>
+    </view>
+  </view>
+</view>

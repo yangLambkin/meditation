@@ -18,7 +18,33 @@
     "bigPackageSizeSupport": false,
     "useIsolateContext": true
   },
-  "condition": {},
+  "condition": {
+    "miniprogram": {
+      "list": [
+        {
+          "name": "subpackages/chattool/pages/testUserSwitch/testUserSwitch",
+          "pathName": "subpackages/chattool/pages/testUserSwitch/testUserSwitch",
+          "query": "teamId=3bef321d69ca6cb5023b3f3a4184ac8a&teamName=%25E5%2586%25A5%25E6%2583%25B3%25E6%25B5%258B%25E8%25AF%2595%25E5%259B%25A2%25E9%2598%259F",
+          "scene": null,
+          "launchMode": "default"
+        },
+        {
+          "name": "subpackages/chattool/pages/joinTeam/joinTeam",
+          "pathName": "subpackages/chattool/pages/joinTeam/joinTeam",
+          "query": "teamId=3bef321d69ca6cb5023b3f3a4184ac8a&teamName=亘心的团队&inviterId=invite_1775136483661_nqtjr4srs&teamIcon=cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/team-icons/1774873779200_vdv19wfdv.png",
+          "launchMode": "default",
+          "scene": null
+        },
+        {
+          "name": "pages/index/index",
+          "pathName": "pages/index/index",
+          "query": "",
+          "launchMode": "default",
+          "scene": null
+        }
+      ]
+    }
+  },
   "description": "项目私有配置文件。此文件中的内容将覆盖 project.config.json 中的相同字段。项目的改动优先同步到此文件中。详见文档：https://developers.weixin.qq.com/miniprogram/dev/devtools/projectconfig.html",
   "projectname": "meditation",
   "libVersion": "3.13.2"

@@ -1,28 +1,42 @@
-<!-- 聊天工具模式页面 - 用于发送团队邀请卡片 -->
+<!-- 聊天工具模式页面 - 用于自动发送团队邀请卡片 -->
 <view class="container">
-  <!-- 邀请卡片预览 -->
-  <view class="invite-card" wx:if="{{!isLoading}}">
-    <view class="card-header">
-      <image class="team-icon" src="/images/icons/team.png"></image>
+  <!-- 邀请加入团队页面 -->
+  <view class="join-content" wx:if="{{isJoinInvitation}}">
+    <view class="invite-card">
+      <image class="team-icon" src="{{teamInfo.teamIcon}}"></image>
       <text class="team-name">{{teamInfo.teamName}}</text>
-    </view>
-    <view class="card-content">
-      <text class="invite-title">团队邀请</text>
-      <text class="invite-desc">邀请您加入团队，一起体验静坐觉察</text>
-    </view>
-    <view class="card-footer">
-      <text class="inviter">邀请人：{{teamInfo.inviterName}}</text>
+      <text class="inviter-text">{{teamInfo.inviterName}} 邀请您加入团队</text>
+      <view class="join-button" bindtap="joinTeam">
+        <text class="join-text">查看团队详情</text>
+      </view>
     </view>
   </view>
   
-  <!-- 加载状态 -->
-  <view class="loading-content" wx:if="{{isLoading}}">
-    <view class="loading-spinner"></view>
-    <text class="loading-text">正在准备邀请卡片...</text>
-  </view>
-  
-  <!-- 发送按钮 -->
-  <view class="send-button" wx:if="{{!isLoading}}" bindtap="sendInvite">
-    <text class="send-text">发送邀请</text>
+  <!-- 邀请发送流程页面 -->
+  <view wx:if="{{!isJoinInvitation}}">
+    <!-- 发送中状态 
+    <view class="loading-content" wx:if="{{isLoading}}">
+      <view class="loading-spinner"></view>
+      <text class="loading-text">正在发送邀请...</text>
+      <text class="sub-text">请稍候，邀请将自动发送</text>
+    </view>-->
+    
+    <!-- 发送完成状态
+    <view class="success-content" wx:if="{{!isLoading && sendSuccess}}">
+      <view class="success-icon">✓</view>
+      <text class="success-text">邀请发送成功！</text>
+      <view class="confirm-button" bindtap="confirmReturn">
+        <text class="confirm-text">确定</text>
+      </view>
+    </view> -->
+    
+    <!-- 发送失败状态 
+    <view class="error-content" wx:if="{{!isLoading && !sendSuccess}}">
+      <view class="error-icon">✗</view>
+      <text class="error-text">发送失败</text>
+      <view class="retry-button" bindtap="retrySend">
+        <text class="retry-text">重试</text>
+      </view>
+    </view>-->
   </view>
 </view>
