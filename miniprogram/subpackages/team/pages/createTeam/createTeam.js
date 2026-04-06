@@ -179,8 +179,15 @@ Page({
       // 确定使用的图标路径
       let iconPath = '';
       if (this.data.customIconPath) {
-        // 使用自定义上传的图片
-        iconPath = this.data.customIconPath;
+        // 如果是临时文件路径，需要上传到云存储获取永久链接
+        if (this.data.customIconPath.startsWith('wxfile://tmp_')) {
+          console.log('🔄 上传临时头像到云存储...');
+          iconPath = await this.uploadImageToCloud(this.data.customIconPath);
+          console.log('✅ 头像上传成功，永久链接:', iconPath);
+        } else {
+          // 已经是永久链接
+          iconPath = this.data.customIconPath;
+        }
       } else {
         // 使用预设图标
         const selectedIcon = this.data.teamIcons.find(icon => icon.id === this.data.selectedIcon);
@@ -315,5 +322,41 @@ Page({
    */
   onShareAppMessage() {
 
+  },
+
+  /**
+   * 上传图片到云存储，获取永久链接
+   */
+  async uploadImageToCloud(tempFilePath) {
+    try {
+      // 生成唯一的文件名
+      const timestamp = new Date().getTime();
+      const randomStr = Math.random().toString(36).substring(2, 8);
+      const cloudPath = `team_icons/${timestamp}_${randomStr}.png`;
+      
+      // 上传到云存储
+      const uploadResult = await wx.cloud.uploadFile({
+        cloudPath: cloudPath,
+        filePath: tempFilePath
+      });
+      
+      console.log('✅ 图片上传成功:', uploadResult);
+      
+      // 返回云存储文件ID，可以构建永久链接
+      // 云存储文件ID格式：cloud://cloud-name/file-id
+      return uploadResult.fileID;
+      
+    } catch (error) {
+      console.error('❌ 图片上传失败:', error);
+      
+      // 上传失败时降级使用临时路径，但给出警告
+      wx.showToast({
+        title: '头像上传失败，使用临时路径',
+        icon: 'none',
+        duration: 2000
+      });
+      
+      return tempFilePath;
+    }
   }
 })

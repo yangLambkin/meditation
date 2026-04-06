@@ -664,7 +664,7 @@ Page({
             const shareParams = {
               title: `邀请您加入 ${teamInfo.name}`,
               imageUrl: '/images/icons/team.png',
-              path: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&inviteId=${inviteData.inviteId}`
+              path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&inviteId=${inviteData.inviteId}`
             };
             
             console.log('分享参数配置:', shareParams);
@@ -791,7 +791,7 @@ Page({
   generateShareInfo(teamInfo) {
     return {
       title: `邀请您加入${teamInfo.name}团队`,
-      path: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&teamName=${encodeURIComponent(teamInfo.name)}`,
+      path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&teamName=${encodeURIComponent(teamInfo.name)}`,
       imageUrl: teamInfo.icon || '/images/icons/team.png' // 使用团队创建时上传的头像
     };
   },
@@ -1197,12 +1197,16 @@ Page({
                 const timestamp = record.timestamp || Date.now();
                 const date = new Date(timestamp);
                 
+                // 使用history页面相同的完整时间格式：YYYY-MM-DD HH:MM:SS
+                const timeStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+                
                 activities.push({
                   id: `${member.openid}_${timestamp}`,
                   memberName: member.name || member.nickname || '未知用户',
                   avatar: member.avatarUrl || '/images/icons/user.png',
-                  time: this.formatTimestamp(timestamp),
-                  dateTime: this.formatDateTime(timestamp), // 添加完整日期时间
+                  originalTime: timeStr, // 使用与history页面相同的格式
+                  time: timeStr, // 兼容旧字段
+                  dateTime: timeStr, // 兼容旧字段
                   duration: `${record.duration || 0}分钟`,
                   content: `练习了${record.duration || 0}分钟冥想`,
                   timestamp: timestamp,
@@ -1271,12 +1275,26 @@ Page({
           }
           const date = new Date(timestamp);
           
+          // 使用history页面相同的完整时间格式：YYYY-MM-DD HH:MM:SS
+          console.log(`🔍 云端记录时间分析:`, {
+            timestamp: timestamp,
+            时间对象: date,
+            年: date.getFullYear(),
+            月: date.getMonth() + 1,
+            日: date.getDate(),
+            时: date.getHours(),
+            分: date.getMinutes(),
+            秒: date.getSeconds()
+          });
+          const timeStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+          
           return {
             id: `${member.openid}_${timestamp}`,
             memberName: member.name || member.nickname || '未知用户',
             avatar: member.avatarUrl || '/images/icons/user.png',
-            time: this.formatTimestamp(timestamp),
-            dateTime: this.formatDateTime(timestamp), // 添加完整日期时间
+            originalTime: timeStr, // 使用与history页面相同的格式
+            time: timeStr, // 兼容旧字段
+            dateTime: timeStr, // 兼容旧字段
             duration: `${record.duration || 0}分钟`,
             content: `练习了${record.duration || 0}分钟冥想`,
             timestamp: timestamp,
@@ -1354,7 +1372,7 @@ Page({
    */
   async getDirectMemberWeekActivities(teamInfo) {
     try {
-      console.log('🚀 使用直接获取方式获取成员本周打卡记录...');
+      console.log('🚀 从meditation_records云端数据库实时获取团队练习动态...');
       
       // 直接获取团队的所有成员openid
       if (!teamInfo.members || !Array.isArray(teamInfo.members)) {
@@ -1365,63 +1383,76 @@ Page({
       const weekRange = this.getCurrentWeekRange();
       const activities = [];
       
-      // 获取所有成员的打卡记录
+      // 从meditation_records数据库实时获取所有成员的打卡记录
       const result = await wx.cloud.callFunction({
         name: 'teamManager',
         data: {
-          type: 'getTeamWeekActivities',
+          type: 'getTeamMeditationRecords',
           data: {
-            memberOpenids: teamInfo.members,
+            teamId: teamInfo._id,
             weekStart: weekRange.start,
             weekEnd: weekRange.end
           }
         }
       });
       
-      console.log('☁️ 直接获取方式云端返回结果:', result);
+      console.log('☁️ meditation_records数据库返回结果:', result);
       
       if (result.result && result.result.success) {
         const allRecords = result.result.data.records || [];
         
-        // 处理返回的记录
-        allRecords.forEach(record => {
-          // 将时间戳转换为 YYYY-MM-DD HH:MM:SS 格式
-          const formatTime = (timestamp) => {
-            const date = new Date(timestamp);
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            const hours = String(date.getHours()).padStart(2, '0');
-            const minutes = String(date.getMinutes()).padStart(2, '0');
-            const seconds = String(date.getSeconds()).padStart(2, '0');
-            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-          };
-          
-          const timestamp = record.timestamp || Date.now();
-          const formattedTime = formatTime(timestamp);
-          
-          activities.push({
-            id: `${record.memberOpenid}_${timestamp}`,
-            memberName: record.memberName || '成员',
-            avatar: record.avatarUrl || '/images/icons/user.png',
-            originalTime: formattedTime, // 使用格式化后的时间
-            time: formattedTime, // 兼容旧字段
-            dateTime: formattedTime, // 兼容旧字段
-            duration: `${record.duration || 0}分钟`,
-            content: `练习了${record.duration || 0}分钟冥想`,
-            timestamp: timestamp,
-            memberOpenid: record.memberOpenid
-          });
+        console.log('📊 meditation_records数据库返回的原始记录详情:', {
+          记录数量: allRecords.length,
+          第一条记录: allRecords[0] ? {
+            timestamp: allRecords[0].timestamp,
+            timestamp类型: typeof allRecords[0].timestamp,
+            duration: allRecords[0].duration,
+            memberName: allRecords[0].memberName
+          } : '无记录'
         });
         
-        console.log(`✅ 直接获取方式成功，共获取 ${activities.length} 条记录`);
-        return activities.sort((a, b) => b.timestamp - a.timestamp);
+        // 处理返回的记录，使用history页面相同的时间格式
+        allRecords.forEach((record, index) => {
+          // 使用history页面相同的时间格式：YYYY-MM-DD HH:MM:SS
+          const time = new Date(record.timestamp);
+          const timeStr = `${time.getFullYear()}-${(time.getMonth() + 1).toString().padStart(2, '0')}-${time.getDate().toString().padStart(2, '0')} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}:${time.getSeconds().toString().padStart(2, '0')}`;
+          
+          console.log(`📝 第${index}条记录时间分析:`, {
+            原始timestamp: record.timestamp,
+            时间对象: time.toISOString(),
+            格式化时间: timeStr,
+            时: time.getHours(),
+            分: time.getMinutes(),
+            秒: time.getSeconds()
+          });
+          
+          const activity = {
+            id: `${record.memberOpenid}_${record.timestamp}`,
+            memberName: record.memberName || '成员',
+            avatar: record.avatarUrl || '/images/icons/user.png',
+            originalTime: timeStr, // 使用与history页面相同的格式
+            time: timeStr, // 兼容旧字段
+            dateTime: timeStr, // 兼容旧字段
+            duration: `${record.duration || 0}分钟`,
+            content: `练习了${record.duration || 0}分钟冥想`,
+            timestamp: record.timestamp,
+            memberOpenid: record.memberOpenid
+          };
+          
+          activities.push(activity);
+        });
+        
+        // 按时间倒序排列
+        const sortedActivities = activities.sort((a, b) => b.timestamp - a.timestamp);
+        
+        console.log(`✅ 从meditation_records数据库实时获取成功，共 ${sortedActivities.length} 条记录`);
+        return sortedActivities;
       } else {
-        console.warn('⚠️ 直接获取方式云端返回数据异常:', result.result);
+        console.warn('⚠️ meditation_records数据库返回数据异常:', result.result);
         return [];
       }
     } catch (error) {
-      console.warn('直接获取方式失败:', error);
+      console.warn('从meditation_records数据库实时获取数据失败:', error);
       return [];
     }
   },
@@ -1826,5 +1857,15 @@ Page({
     } catch (error) {
       console.error('清理本地缓存失败:', error);
     }
+  },
+
+  /**
+   * 返回首页
+   */
+  goToHomePage() {
+    console.log('返回首页');
+    wx.switchTab({
+      url: '/pages/index/index'
+    });
   }
 })

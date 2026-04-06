@@ -1,5 +1,6 @@
-// 团队加入页面 - skyline 版本
-// 尝试正确的绝对路径引用
+// 团队加入页面 - 迁移到team子包版本
+// 不受ChatTool限制，可以正常调用主包页面
+
 let teamManager = null;
 
 Page({
@@ -20,14 +21,13 @@ Page({
    * 生命周期函数--监听页面加载
    */
   async onLoad(options) {
-    // 尝试不同的引用方式
-      try {
-        // 方法2：异步加载
-        teamManager = await require.async('../../../../utils/teamManager.js');
-        console.log('✅ teamManager异步加载成功');
-      } catch (error2) {
-        console.error('❌ 异步加载也失败:', error2); 
-      }
+    // 加载teamManager
+    try {
+      teamManager = require('../../../../utils/teamManager.js');
+      console.log('✅ teamManager加载成功');
+    } catch (error) {
+      console.error('❌ teamManager加载失败:', error);
+    }
 
     // 解析邀请链接参数
     const teamId = options.teamId || options.team_id;
@@ -80,7 +80,7 @@ Page({
       });
       setTimeout(() => {
         wx.navigateBack();
-      }, 1500);
+      }, 500);
     }
   },
 
@@ -110,9 +110,11 @@ Page({
         if (teamInfo) {
           console.log('✅ 从云端加载团队信息成功');
         } else {
-          // 3. 云端也没有，使用传入的参数创建临时团队信息
-          teamInfo = this.createTemporaryTeamInfo();
-          console.log('⚠️ 云端未找到团队信息，使用传入参数创建临时信息');
+          // 3. 云端也没有，团队不存在
+          console.log('❌ 团队不存在');
+          this.showTeamNotExist();
+          this.setData({ isLoading: false });
+          return;
         }
       }
       
@@ -188,19 +190,19 @@ Page({
   },
 
   /**
-   * 使用传入参数创建临时团队信息
+   * 显示团队不存在提示
    */
-  createTemporaryTeamInfo() {
-    return {
-      _id: this.data.teamId,
-      name: this.data.teamName || '未知团队',
-      description: '欢迎加入我们的冥想团队',
-      icon: this.data.teamIcon || '/images/icons/team.png',
-      memberCount: 1,
-      totalCheckIns: 0,
-      activityRate: '0%',
-      members: []
-    };
+  showTeamNotExist() {
+    wx.showModal({
+      title: '团队不存在',
+      content: '您要加入的团队不存在或已被解散。',
+      showCancel: false,
+      confirmText: '知道了',
+      success: () => {
+        // 返回上一页或关闭页面
+        wx.navigateBack();
+      }
+    });
   },
 
   /**
@@ -249,61 +251,140 @@ Page({
    */
   async loadTeamMembers(teamInfo) {
     try {
-      // 如果团队信息中已经有成员数据，直接使用
+      // 优先从本地缓存获取团队成员信息
+      const cachedMembers = await this.loadMembersFromCache(teamInfo._id);
+      if (cachedMembers && cachedMembers.length > 0) {
+        console.log('✅ 从本地缓存加载团队成员信息成功', cachedMembers.length);
+        return cachedMembers;
+      }
+      
+      // 本地缓存没有，尝试从云端加载
+      const cloudMembers = await this.loadMembersFromCloud(teamInfo._id);
+      if (cloudMembers && cloudMembers.length > 0) {
+        console.log('✅ 从云端加载团队成员信息成功', cloudMembers.length);
+        // 保存到本地缓存
+        this.saveMembersToCache(teamInfo._id, cloudMembers);
+        return cloudMembers;
+      }
+      
+      // 云端也没有，使用团队信息中的成员数据
       if (teamInfo.members && Array.isArray(teamInfo.members)) {
-        // 转换云端成员数据格式
-        return teamInfo.members.map((member, index) => ({
+        console.log('⚠️ 使用团队信息中的成员数据', teamInfo.members.length);
+        const formattedMembers = teamInfo.members.map((member, index) => ({
           id: member.openid || `member_${index + 1}`,
           name: member.nickname || `成员${index + 1}`,
           role: member.isCreator ? '团长' : '成员',
-          avatar: member.avatarUrl || ['👩', '👨', '👧', '👦'][index % 4],
+          avatar: member.avatarUrl || this.getDefaultAvatar(index),
+          avatarEmoji: this.getDefaultAvatarEmoji(index),
+          checkInCount: member.checkInCount || Math.floor(Math.random() * 100) + 10,
+          lastActive: '在线'
+        }));
+        // 保存到本地缓存
+        this.saveMembersToCache(teamInfo._id, formattedMembers);
+        return formattedMembers;
+      }
+      
+      // 所有方式都失败，返回空数组
+      console.log('❌ 无法加载团队成员信息');
+      return [];
+      
+    } catch (error) {
+      console.error('加载成员信息失败:', error);
+      return [];
+    }
+  },
+
+  /**
+   * 从本地缓存加载团队成员信息
+   */
+  async loadMembersFromCache(teamId) {
+    try {
+      const cacheKey = `team_members_${teamId}`;
+      const cachedData = wx.getStorageSync(cacheKey);
+      
+      if (cachedData && Array.isArray(cachedData)) {
+        // 检查缓存是否过期（30分钟）
+        const cacheTime = wx.getStorageSync(`${cacheKey}_time`);
+        if (cacheTime && Date.now() - cacheTime < 30 * 60 * 1000) {
+          return cachedData;
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn('从本地缓存加载成员信息失败:', error);
+      return null;
+    }
+  },
+
+  /**
+   * 从云端加载团队成员信息
+   */
+  async loadMembersFromCloud(teamId) {
+    try {
+      const result = await wx.cloud.callFunction({
+        name: 'teamManager',
+        data: {
+          type: 'getTeamMembers',
+          data: {
+            teamId: teamId
+          }
+        }
+      });
+      
+      if (result.result && result.result.success && result.result.data) {
+        // 格式化云端成员数据
+        return result.result.data.map((member, index) => ({
+          id: member.openid || `member_${index + 1}`,
+          name: member.nickname || `成员${index + 1}`,
+          role: member.isCreator ? '团长' : '成员',
+          avatar: member.avatarUrl || this.getDefaultAvatar(index),
+          avatarEmoji: this.getDefaultAvatarEmoji(index),
           checkInCount: member.checkInCount || Math.floor(Math.random() * 100) + 10,
           lastActive: '在线'
         }));
       }
       
-      // 如果没有成员数据，创建模拟数据
-      return this.generateMockMembers(teamInfo);
-      
+      return null;
     } catch (error) {
-      console.error('加载成员信息失败，使用模拟数据:', error);
-      return this.generateMockMembers(teamInfo);
+      console.warn('从云端加载成员信息失败:', error);
+      return null;
     }
   },
 
   /**
-   * 生成模拟成员数据
+   * 保存成员信息到本地缓存
    */
-  generateMockMembers(teamInfo) {
-    const members = [];
-    
-    // 添加创建者
-    members.push({
-      id: 'creator',
-      name: teamInfo.creatorName || '团队创建者',
-      role: '团长',
-      avatar: '👨',
-      checkInCount: Math.floor(Math.random() * 100) + 50,
-      monthlyCount: Math.floor(Math.random() * 30) + 5,
-      lastActive: '在线'
-    });
-    
-    // 添加其他成员
-    const memberCount = Math.min(teamInfo.memberCount || 3, 10);
-    for (let i = 1; i < memberCount; i++) {
-      const hasCheckins = Math.random() > 0.3; // 70%的成员有打卡记录
-      members.push({
-        id: `member_${i}`,
-        name: `成员${i}`,
-        role: '成员',
-        avatar: ['👩', '👨', '👧', '👦'][i % 4],
-        checkInCount: hasCheckins ? Math.floor(Math.random() * 80) + 10 : 0,
-        monthlyCount: hasCheckins ? Math.floor(Math.random() * 25) + 1 : 0,
-        lastActive: i % 3 === 0 ? '刚刚' : `${i % 7}天前`
-      });
+  saveMembersToCache(teamId, members) {
+    try {
+      const cacheKey = `team_members_${teamId}`;
+      wx.setStorageSync(cacheKey, members);
+      wx.setStorageSync(`${cacheKey}_time`, Date.now());
+      console.log('✅ 成员信息已保存到本地缓存');
+    } catch (error) {
+      console.warn('保存成员信息到本地缓存失败:', error);
     }
-    
-    return members;
+  },
+
+  /**
+   * 获取默认头像URL
+   */
+  getDefaultAvatar(index) {
+    const defaultAvatars = [
+      '/images/avatar-1.png',
+      '/images/avatar-2.png',
+      '/images/avatar-3.png',
+      '/images/avatar-4.png'
+    ];
+    return defaultAvatars[index % defaultAvatars.length] || '/images/avatar.png';
+  },
+
+  /**
+   * 获取默认头像emoji（备用）
+   */
+  getDefaultAvatarEmoji(index) {
+    const emojis = ['👩', '👨', '👧', '👦'];
+    return emojis[index % emojis.length] || '👤';
   },
 
   /**
@@ -413,7 +494,7 @@ Page({
   },
 
   /**
-   * 检查用户是否有登录信息 - 复制主包逻辑
+   * 检查用户是否有登录信息
    */
   hasUserInfo() {
     const userInfo = wx.getStorageSync('userInfo');
@@ -449,7 +530,7 @@ Page({
   },
 
   /**
-   * 加入团队
+   * 加入团队（核心方法）
    */
   async joinTeam() {
     const teamInfo = this.data.teamInfo;
@@ -476,21 +557,46 @@ Page({
       return;
     }
     
-    // 检查用户是否已登录 - 添加详细调试
+    // 检查用户是否已登录
     console.log('🔍 开始检查登录状态...');
     const isLoggedIn = this.hasUserInfo();
     console.log('登录状态检查结果:', isLoggedIn);
     
     if (!isLoggedIn) {
-      console.log('用户未登录，跳转到登录页面');
-      // 用户未登录，跳转到子包内的登录页面
+      console.log('用户未登录，跳转到主包profile页面进行登录');
+      
+      // 关键修改：直接跳转到主包profile页面（不受ChatTool限制）
+      // 明确传递调用页面信息，用于登录后正确跳转
+      const fromParams = JSON.stringify({
+        teamId: this.data.teamId,
+        teamName: this.data.teamInfo?.name || '',
+        teamIcon: this.data.teamInfo?.icon || '',
+        inviterName: this.data.teamInfo?.creatorName || ''
+      });
+      
+      // 构建查询参数，避免双重编码
+      const params = {
+        teamId: this.data.teamId,
+        teamName: this.data.teamInfo?.name || '',
+        teamIcon: this.data.teamInfo?.icon || '',
+        inviterName: this.data.teamInfo?.creatorName || '',
+        type: 'new', // 新用户注册
+        fromPage: '/subpackages/team/pages/joinTeam/joinTeam', // 路径不需要额外编码
+        fromParams: fromParams // JSON字符串会被encodeURIComponent处理
+      };
+      
+      const queryString = Object.keys(params)
+        .map(key => `${key}=${encodeURIComponent(params[key])}`)
+        .join('&');
+      
+      // 跳转到主包profile页面
       wx.navigateTo({
-        url: `/subpackages/chattool/pages/login/login?teamId=${this.data.teamId}&teamName=${encodeURIComponent(this.data.teamInfo?.name || '')}&teamIcon=${encodeURIComponent(this.data.teamInfo?.icon || '')}&inviterName=${encodeURIComponent(this.data.teamInfo?.creatorName || '')}`,
+        url: `/pages/profile/profile?${queryString}`,
         success: () => {
-          console.log('跳转到子包登录页面');
+          console.log('跳转到主包profile页面成功，已传递调用页面上下文');
         },
         fail: (err) => {
-          console.error('跳转登录页面失败:', err);
+          console.error('跳转到主包profile页面失败:', err);
           wx.showToast({
             title: '登录跳转失败',
             icon: 'none'
@@ -529,11 +635,11 @@ Page({
       if (result.result && result.result.success) {
         console.log('✅ 加入团队成功');
         
-        // 2. 更新本地缓存
+        // 更新本地缓存
         console.log('🔄 开始更新本地缓存...');
         teamManager.addJoinedTeam(teamInfo);
         
-        // 3. 强制刷新本地缓存（确保数据同步）
+        // 强制刷新本地缓存（确保数据同步）
         console.log('🔄 强制刷新本地缓存...');
         try {
           await teamManager.loadTeamsFromCloud();
@@ -542,12 +648,12 @@ Page({
           console.warn('⚠️ 缓存刷新失败，使用降级方案:', cacheError);
         }
         
-        // 4. 记录邀请关系（云端持久化）
+        // 记录邀请关系（云端持久化）
         if (this.data.inviterId) {
           await this.recordInviteRelation();
         }
         
-        // 5. 更新页面状态
+        // 更新页面状态
         this.setData({
           isMember: true
         });
@@ -559,10 +665,28 @@ Page({
           duration: 2000
         });
         
-        // 6. 延迟返回团队详情页面
+        // 延迟跳转到团队详情页面
         setTimeout(() => {
+          console.log('✅ 跳转到团队详情页面，团队ID:', this.data.teamId);
           wx.navigateTo({
-            url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${this.data.teamId}`
+            url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${this.data.teamId}`,
+            success: () => {
+              console.log('✅ 跳转到团队详情页面成功');
+            },
+            fail: (err) => {
+              console.error('❌ 跳转到团队详情页面失败:', err);
+              
+              // 如果绝对路径失败，尝试相对路径
+              wx.navigateTo({
+                url: `../teamDetails/teamDetails?teamId=${this.data.teamId}`,
+                success: () => {
+                  console.log('✅ 相对路径跳转成功');
+                },
+                fail: (err2) => {
+                  console.error('❌ 相对路径跳转也失败:', err2);
+                }
+              });
+            }
           });
         }, 1500);
         
@@ -611,6 +735,57 @@ Page({
       }
     } catch (error) {
       console.warn('记录邀请关系失败:', error);
+    }
+  },
+
+  /**
+   * 进入团队详情页面
+   */
+  enterTeamDetails() {
+    console.log('🔄 用户手动点击进入团队详情，团队ID:', this.data.teamId);
+    
+    if (!this.data.teamId) {
+      wx.showToast({
+        title: '团队ID不存在',
+        icon: 'none'
+      });
+      return;
+    }
+    
+    // 尝试绝对路径跳转
+    wx.navigateTo({
+      url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${this.data.teamId}`,
+      success: () => {
+        console.log('✅ 手动跳转到团队详情页面成功');
+      },
+      fail: (err) => {
+        console.error('❌ 手动跳转到团队详情页面失败:', err);
+        
+        // 如果绝对路径失败，尝试相对路径
+        wx.navigateTo({
+          url: `../teamDetails/teamDetails?teamId=${this.data.teamId}`,
+          success: () => {
+            console.log('✅ 相对路径跳转成功');
+          },
+          fail: (err2) => {
+            console.error('❌ 相对路径跳转也失败:', err2);
+          }
+        });
+      }
+    });
+  },
+
+  /**
+   * 头像加载错误处理
+   */
+  onAvatarError(e) {
+    console.log('头像加载失败:', e.detail);
+    // 设置默认头像
+    const index = e.currentTarget.dataset.index;
+    if (index !== undefined) {
+      const members = this.data.members;
+      members[index].avatar = '/images/userLogin.png';
+      this.setData({ members: members });
     }
   },
 

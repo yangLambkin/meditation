@@ -33,10 +33,32 @@ Page({
   onLoad(options) {
     console.log('用户信息收集页面加载，参数:', options);
     
-    // 保存页面参数
+    // 解析调用页面上下文（URL参数会自动解码）
+    const callingPage = {
+      route: options.fromPage || '',
+      params: options.fromParams || ''
+    };
+    
+    console.log('解析后的调用页面信息:', callingPage);
+    
+    // 保存页面参数和调用上下文
     this.setData({
-      userType: options.type || 'new'
+      userType: options.type || 'new',
+      inviteTeamId: options.teamId || '',
+      inviteTeamName: options.teamName || '',
+      inviteTeamIcon: options.teamIcon || '',
+      inviteInviterName: options.inviterName || '',
+      inviteFromJoinTeam: !!options.teamId, // 标记来自邀请流程
+      // 保存调用页面信息，用于登录后正确跳转
+      callingPage: callingPage
     });
+    
+    // 如果没有显式传递调用页面信息，但检测到来自邀请流程，自动设置
+    if (!this.data.callingPage.route && this.data.inviteFromJoinTeam) {
+      this.setData({
+        'callingPage.route': '/subpackages/team/pages/joinTeam/joinTeam'
+      });
+    }
     
     // 根据用户类型初始化页面
     this.initByUserType();
@@ -539,11 +561,66 @@ Page({
       duration: 2000
     });
     
-    // 延迟后返回首页
+    // 延迟后导航
     setTimeout(() => {
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
+      // 如果有明确的调用页面信息，优先使用
+      if (this.data.callingPage && this.data.callingPage.route) {
+        console.log('登录成功，返回调用页面:', this.data.callingPage);
+        
+        // 解析调用页面路由和参数
+        const { route, params } = this.data.callingPage;
+        let queryParams = '';
+        
+        // 解码路由路径（处理URL编码）
+        const decodedRoute = decodeURIComponent(route);
+        
+        console.log('解码后的路由:', decodedRoute);
+        
+        // 如果是来自joinTeam页面，携带团队信息参数
+        if (this.data.inviteFromJoinTeam && this.data.inviteTeamId) {
+          queryParams = `?teamId=${this.data.inviteTeamId}&teamName=${encodeURIComponent(this.data.inviteTeamName || '')}&teamIcon=${encodeURIComponent(this.data.inviteTeamIcon || '')}&inviterName=${encodeURIComponent(this.data.inviteInviterName || '')}`;
+        }
+        
+        // 根据路由类型选择不同的导航方式
+        if (decodedRoute.includes('tabBar')) {
+          // Tab页面使用switchTab
+          wx.switchTab({
+            url: decodedRoute
+          });
+        } else if (decodedRoute.includes('joinTeam')) {
+          // joinTeam页面使用redirectTo确保重新加载
+          wx.redirectTo({
+            url: decodedRoute + queryParams
+          });
+        } else {
+          // 其他页面使用navigateBack或redirectTo
+          try {
+            // 尝试返回上一页
+            wx.navigateBack({
+              delta: 1
+            });
+          } catch (error) {
+            // 如果返回失败，使用redirectTo
+            wx.redirectTo({
+              url: decodedRoute + queryParams
+            });
+          }
+        }
+        
+      } else if (this.data.inviteFromJoinTeam && this.data.inviteTeamId) {
+        // 兼容旧逻辑：来自邀请流程但没有调用页面信息
+        console.log('登录成功，返回邀请流程，团队ID:', this.data.inviteTeamId);
+        
+        wx.redirectTo({
+          url: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${this.data.inviteTeamId}&teamName=${encodeURIComponent(this.data.inviteTeamName || '')}&teamIcon=${encodeURIComponent(this.data.inviteTeamIcon || '')}&inviterName=${encodeURIComponent(this.data.inviteInviterName || '')}`
+        });
+        
+      } else {
+        // 正常登录流程，返回首页
+        wx.switchTab({
+          url: '/pages/index/index'
+        });
+      }
     }, 1500);
   },
 

@@ -12,7 +12,9 @@
         </view>
         <view class="shrink-0 relative section_5"></view>
         <view class="flex-col justify-start items-end pos">
-          <view class="section_3"></view>
+          <view class="section_3">
+            <image class="section_3_bg" src="../../images/bg_image.png" mode="aspectFill" />
+          </view>
           <view class="flex-row equal-division">
             <view class="flex-col section_4 equal-division-item">
               <text class="self-start font_3">本月打卡</text>

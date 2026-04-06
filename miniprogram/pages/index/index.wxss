@@ -74,10 +74,17 @@
 }
 .section_3 {
   margin-left: 370.59rpx;
-  background-image: url('https://codefun-proj-user-res-1256085488.cos.ap-guangzhou.myqcloud.com/6970dd1431bc27f41b3ed961/6970dd614bd4760011a78d92/54d69eddc2eda4f2c1670a8082ebb1b6.png');
-  background-size: 100% 100%;
   width: 337.99rpx;
   height: 337.99rpx;
+  position: relative;
+}
+
+.section_3_bg {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 .equal-division {
   position: absolute;

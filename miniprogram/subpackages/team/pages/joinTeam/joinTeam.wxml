@@ -1,0 +1,87 @@
+<!-- 团队加入页面 - 迁移到team子包版本 -->
+<view class="join-team-page">
+  
+  <!-- 团队信息头部 -->
+  <view class="team-header">
+    <view class="team-info">
+      <image class="team-icon" src="{{teamInfo.icon || '/images/icons/team.png'}}"></image>
+      <view class="team-details">
+        <text class="team-name">{{teamInfo.name || '团队'}}</text>
+        <text class="team-description">{{teamInfo.description || '欢迎加入冥想团队'}}</text>
+        <view class="team-stats">
+          <text class="stat-item">{{members.length}} 成员</text>
+          <text class="stat-item">{{teamTotalCheckins}} 次打卡</text>
+          <text class="stat-item">{{teamActivityRate}}% 活跃</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 加载状态 -->
+  <view wx:if="{{isLoading}}" class="loading-container">
+    <view class="loading-spinner"></view>
+    <text class="loading-text">加载团队信息中...</text>
+  </view>
+
+  <!-- 团队成员列表 -->
+  <view wx:if="{{!isLoading}}" class="members-section">
+    <view class="section-header">
+      <text class="section-title">团队成员</text>
+      <text wx:if="{{members.length > 0}}" class="member-count">{{members.length}}人</text>
+      <text wx:else class="member-count">暂无成员</text>
+    </view>
+    
+    <view wx:if="{{members.length > 0}}" class="members-list-container">
+      <scroll-view class="members-list" scroll-y="true">
+        <view class="member-item" wx:for="{{members}}" wx:key="id">
+          <view class="member-avatar">
+            <image src="{{item.avatar || '/images/userLogin.png'}}" 
+                   mode="aspectFill"
+                   class="avatar-image"
+                   data-index="{{index}}"
+                   binderror="onAvatarError">
+            </image>
+          </view>
+          <view class="member-info">
+            <text class="member-name">{{item.name}}</text>
+            <text class="member-role">{{item.role}}</text>
+            <text class="member-stats">{{item.checkInCount}}次打卡</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+    
+    <view wx:else class="empty-members">
+      <text class="empty-text">暂无团队成员信息</text>
+    </view>
+  </view>
+
+  <!-- 加入按钮区域 -->
+  <view class="action-section">
+    <view wx:if="{{!isMember}}" class="join-container">
+      <button 
+        class="join-btn" 
+        bindtap="joinTeam"
+        hover-class="btn-hover"
+        loading="{{isLoading}}"
+      >
+        {{isLoading ? '加入中...' : '加入团队'}}
+      </button>
+    </view>
+
+    <view wx:if="{{isMember}}" class="member-container">
+      <text class="member-tip">🎉 您已是团队成员</text>
+      <button 
+        class="view-details-btn" 
+        bindtap="enterTeamDetails"
+        hover-class="btn-hover"
+      >
+        查看团队详情
+      </button>
+    </view>
+  </view>
+
+  <!-- 占位空间 -->
+  <view style="height: 120rpx;"></view>
+
+</view>

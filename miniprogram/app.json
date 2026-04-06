@@ -18,7 +18,9 @@
       "root": "subpackages/team",
       "pages": [
         "pages/createTeam/createTeam",
-        "pages/teamDetails/teamDetails"
+        "pages/teamDetails/teamDetails",
+        "pages/joinTeam/joinTeam",
+        "pages/testJoinTeam/testJoinTeam"
       ]
     },
     {
@@ -26,7 +28,6 @@
       "name": "chattool",
       "pages": [
         "pages/invite/invite",
-        "pages/joinTeam/joinTeam",
         "pages/login/login",
         "pages/testUserSwitch/testUserSwitch"
       ],
@@ -40,7 +41,9 @@
       "root": "subpackages/chattool",
       "entryPagePath": "pages/invite/invite",
       "desc": "团队邀请工具",
-      "scopes": ["scope.userInfo"]
+      "scopes": [
+        "scope.userInfo"
+      ]
     }
   ],
   "rendererOptions": {

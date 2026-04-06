@@ -1,5 +1,34 @@
 /* subpackages/team/pages/teamDetails/teamDetails.wxss */
 
+/* 返回首页按钮样式 */
+.back-home-container {
+  position: absolute;
+  top: 20rpx;
+  left: 20rpx;
+  z-index: 100;
+}
+
+.back-home-btn {
+  display: flex;
+  align-items: center;
+  padding: 12rpx 20rpx;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+.home-icon {
+  width: 32rpx;
+  height: 32rpx;
+}
+
+.back-home-text {
+  margin-left: 8rpx;
+  font-size: 24rpx;
+  color: #333;
+  font-weight: 500;
+}
+
 /* 团队头像样式 - 调整为140x140 */
 .team-icon {
   width: 140rpx;

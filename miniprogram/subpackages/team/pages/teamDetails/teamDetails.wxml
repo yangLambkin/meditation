@@ -9,6 +9,14 @@
   <view class="flex-col justify-start section" wx:if="{{!isLoading && teamInfo}}">
     <view class="flex-col group">
       <view class="flex-col section_3">
+        <!-- 返回首页按钮 -->
+        <view class="back-home-container">
+          <view class="back-home-btn" bindtap="goToHomePage">
+            <image class="home-icon" src="/images/icons/home.png" mode="aspectFit" />
+            <text class="back-home-text">首页</text>
+          </view>
+        </view>
+        
         <view class="flex-col self-stretch group_2">
           <view class="flex-col justify-start items-end relative group_3">
             <!-- 团队图标 -->
@@ -106,8 +114,8 @@
                 <view class="flex-col justify-start items-left text-wrapper_4">
                   <text class="font_5 text_8">{{member.name}}</text>
                 </view>
-                <view class="ml-8 flex-col justify-start items-center text-wrapper_5">
-                  <text class="text_9 {{member.role === '团长' ? 'leader-tag' : ''}}">{{member.role}}</text>
+                <view class="ml-8 flex-col justify-start items-center text-wrapper_5" wx:if="{{member.role === '团长'}}">
+                  <text class="text_9 leader-tag">{{member.role}}</text>
                 </view>
               </view>
               <view class="flex-row items-center mt-5">
@@ -168,7 +176,7 @@
                         class="image_3"
                         src="/subpackages/team/images/icons/time.png"
                       />
-                      <text class="text_9 ml-4">{{formatTime(activity.timestamp) || activity.originalTime || activity.dateTime || activity.time}}</text>
+                      <text class="text_9 ml-4">{{activity.originalTime || activity.dateTime || activity.time || formatTime(activity.timestamp)}}</text>
                     </view>
                   </view>
                 </view>

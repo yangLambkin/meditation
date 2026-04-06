@@ -256,11 +256,15 @@ Page({
       // 计算正确的已加入团队数量（去重计算）
       const totalJoinedTeams = this.calculateTotalJoinedTeams(formattedMyTeams, formattedJoinedTeams);
       
+      // 计算去重后的团队列表（用于页面显示）
+      const mergedJoinedTeams = this.mergeJoinedTeams(formattedMyTeams, formattedJoinedTeams);
+      
       this.setData({
         myTeams: formattedMyTeams,
         joinedTeams: formattedJoinedTeams,
         allTeams: formattedAllTeams,
         totalJoinedTeams: totalJoinedTeams,
+        mergedJoinedTeams: mergedJoinedTeams,
         isLoading: false
       });
       
@@ -431,5 +435,41 @@ Page({
     });
     
     return totalCount;
+  },
+
+  /**
+   * 合并去重团队列表（用于页面显示）
+   */
+  mergeJoinedTeams(myTeams, joinedTeams) {
+    // 使用Map去重，基于团队ID
+    const teamsMap = new Map();
+    
+    // 首先添加我创建的团队
+    myTeams.forEach(team => {
+      teamsMap.set(team._id, {
+        ...team,
+        isSelfCreated: true // 确保标记为自建
+      });
+    });
+    
+    // 然后添加我加入的团队（不包括已存在的自建团队）
+    joinedTeams.forEach(team => {
+      if (!teamsMap.has(team._id)) {
+        teamsMap.set(team._id, {
+          ...team,
+          isSelfCreated: false // 标记为已加入
+        });
+      }
+    });
+    
+    const mergedTeams = Array.from(teamsMap.values());
+    
+    console.log('✅ 团队合并去重结果:', {
+      我创建的团队数: myTeams.length,
+      我加入的团队数: joinedTeams.length,
+      去重后总数: mergedTeams.length
+    });
+    
+    return mergedTeams;
   }
 })

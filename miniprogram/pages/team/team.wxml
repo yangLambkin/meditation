@@ -64,14 +64,15 @@
           <text class="loading-text">加载中...</text>
         </view>
 
-        <!-- 我加入的团队（包含我创建的和我加入的） -->
+        <!-- 我加入的团队（包含我创建的和我加入的，去重显示） -->
         <view class="team-list" wx:if="{{currentTab === 'created'}}">
           <view class="empty-state" wx:if="{{totalJoinedTeams === 0 && !isLoading}}">
             <text class="empty-text">您还没有加入任何团队</text>
             <text class="empty-subtext">点击上方按钮创建您的第一个团队</text>
           </view>
 
-          <view class="team-item" wx:for="{{myTeams}}" wx:key="_id">
+          <!-- 显示去重后的团队列表 -->
+          <view class="team-item" wx:for="{{mergedJoinedTeams}}" wx:key="_id">
             <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
               <view class="team-icon-container">
                 <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
@@ -82,6 +83,9 @@
                     <text class="team-name">{{item.name}}</text>
                     <view class="self-created-tag" wx:if="{{item.isSelfCreated}}">
                       <text class="self-created-text">自建</text>
+                    </view>
+                    <view class="joined-tag" wx:if="{{!item.isSelfCreated}}">
+                      <text class="self-created-text">已加入</text>
                     </view>
                   </view>
                   <image class="team-arrow" src="/images/icons/right.png" />
@@ -98,41 +102,7 @@
                   </view>
                 </view>
                 <view class="team-footer">
-                  <text class="create-time">创建于：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
-                </view>
-              </view>
-            </view>
-          </view>
-          
-          <!-- 我加入的团队（非自建） -->
-          <view class="team-item" wx:for="{{joinedTeams}}" wx:key="_id">
-            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
-              <view class="team-icon-container">
-                <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
-              </view>
-              <view class="team-info">
-                <view class="team-header-info">
-                  <view class="team-name-container">
-                    <text class="team-name">{{item.name}}</text>
-                    <view class="self-created-tag" wx:if="{{item.isSelfCreated}}">
-                      <text class="self-created-text">自建</text>
-                    </view>
-                  </view>
-                  <image class="team-arrow" src="/images/icons/right.png" />
-                </view>
-                <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
-                <view class="team-stats">
-                  <view class="team-stat">
-                    <image class="stat-icon" src="/images/icons/team.png" />
-                    <text class="stat-text">{{item.memberCount || 0}}人</text>
-                  </view>
-                  <view class="team-stat">
-                    <image class="stat-icon" src="/images/icons/active.png" />
-                    <text class="stat-text">{{item.isActive ? '活跃' : '已解散'}}</text>
-                  </view>
-                </view>
-                <view class="team-footer">
-                  <text class="create-time">加入于：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
+                  <text class="create-time">{{item.isSelfCreated ? '创建于' : '加入于'}}：{{item.formattedCreateTime || item.createdAt || '未知时间'}}</text>
                 </view>
               </view>
             </view>

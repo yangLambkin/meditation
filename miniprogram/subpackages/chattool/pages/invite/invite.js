@@ -25,7 +25,7 @@ Page({
     return {
       title: `邀请您加入 ${teamInfo.teamName}`,
       imageUrl: '/images/icons/team.png',
-      path: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}`
+      path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}`
     };
   },
 
@@ -104,7 +104,7 @@ Page({
     console.log('调用 wx.shareAppMessageToGroup');
     
     wx.shareAppMessageToGroup({
-      path: `subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}&teamName=${encodeURIComponent(teamInfo.teamName)}&teamIcon=${encodeURIComponent(teamInfo.teamIcon)}&inviterName=${encodeURIComponent(teamInfo.inviterName)}`,
+      path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}&teamName=${encodeURIComponent(teamInfo.teamName)}&teamIcon=${encodeURIComponent(teamInfo.teamIcon)}&inviterName=${encodeURIComponent(teamInfo.inviterName)}`,
       title: `邀请您加入 ${teamInfo.teamName}`,
       imageUrl: teamInfo.teamIcon || '/images/icons/team.png',
       success: (res) => {
@@ -166,7 +166,7 @@ Page({
     
     // 直接跳转到团队加入页面
     wx.navigateTo({
-      url: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamId}&inviteId=${inviteId}&teamName=${encodeURIComponent(teamName || '')}&teamIcon=${encodeURIComponent(teamIcon || '')}&inviterName=${encodeURIComponent(inviterName || '')}`,
+      url: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamId}&inviteId=${inviteId}&teamName=${encodeURIComponent(teamName || '')}&teamIcon=${encodeURIComponent(teamIcon || '')}&inviterName=${encodeURIComponent(inviterName || '')}`,
       success: () => {
         console.log('成功跳转到团队加入页面');
         // 跳转成功后关闭当前页面
@@ -229,31 +229,6 @@ Page({
   },
 
   /**
-   * 用户点击查看团队详情按钮
-   */
-  joinTeam() {
-    const teamInfo = this.teamInfo;
-    if (!teamInfo || !teamInfo.teamId || !teamInfo.inviteId) {
-      this.showErrorModal('邀请信息不完整');
-      return;
-    }
-    
-    console.log('用户点击查看团队详情，团队信息:', teamInfo);
-    
-    // 跳转到团队加入页面
-    wx.navigateTo({
-      url: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}`,
-      success: () => {
-        console.log('成功跳转到团队加入页面');
-      },
-      fail: (err) => {
-        console.error('跳转失败:', err);
-        this.showErrorModal('跳转失败，请重试');
-      }
-    });
-  },
-
-  /**
    * 用户点击加入团队按钮
    */
   joinTeam() {
@@ -267,7 +242,7 @@ Page({
     
     // 跳转到团队加入页面
     wx.navigateTo({
-      url: `/subpackages/chattool/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}`,
+      url: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo.teamId}&inviteId=${teamInfo.inviteId}`,
       success: () => {
         console.log('成功跳转到团队加入页面');
       },

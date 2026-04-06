@@ -71,10 +71,10 @@ class TeamManager {
 
       // 3. 处理团队头像：如果使用临时路径，需要上传到云存储
       let teamIconUrl = teamInfo.icon;
-      if (teamIconUrl && teamIconUrl.startsWith('http://tmp/')) {
-        console.log('检测到临时头像路径，开始上传到云存储...');
+      if (teamIconUrl && (teamIconUrl.startsWith('wxfile://tmp_') || teamIconUrl.startsWith('http://tmp/'))) {
+        console.log('🔄 检测到临时头像路径，开始上传到云存储...', teamIconUrl);
         teamIconUrl = await this.uploadTeamIconToCloud(teamIconUrl);
-        console.log('头像上传完成，新URL:', teamIconUrl);
+        console.log('✅ 头像上传完成，新URL:', teamIconUrl);
       }
 
       // 4. 生成团队信息
