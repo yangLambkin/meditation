@@ -73,7 +73,7 @@
 
           <!-- 显示去重后的团队列表 -->
           <view class="team-item" wx:for="{{mergedJoinedTeams}}" wx:key="_id">
-            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
+            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}" data-from-tab="created">
               <view class="team-icon-container">
                 <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
               </view>
@@ -120,7 +120,7 @@
           </view>
 
           <view class="team-item" wx:for="{{allTeams}}" wx:key="_id">
-            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
+            <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}" data-from-tab="all">
               <view class="team-icon-container">
                 <image class="team-item-icon" src="{{item.icon}}" mode="aspectFit" />
               </view>

@@ -48,11 +48,12 @@ Page({
    */
   viewTeamDetail: function(e) {
     const teamId = e.currentTarget.dataset.teamId;
-    console.log('查看团队详情:', teamId);
+    const fromTab = e.currentTarget.dataset.fromTab; // 页面来源：'created' | 'joined' | 'all'
+    console.log('查看团队详情:', { teamId, fromTab });
     
-    // 跳转到团队详情页面
+    // 跳转到团队详情页面，传递页面来源信息
     wx.navigateTo({
-      url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${teamId}`
+      url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${teamId}&fromTab=${fromTab || 'all'}`
     });
   },
 
@@ -89,8 +90,8 @@ Page({
     // 获取用户信息
     this.getUserInfo();
     
-    // 加载团队数据
-    this.loadTeamData();
+    // 强制从云端加载团队数据，确保数据最新
+    this.loadTeamData(true);
   },
 
   /**
@@ -99,8 +100,8 @@ Page({
   onShow() {
     console.log('=== team页面显示 ===');
     
-    // 刷新团队数据
-    this.loadTeamData();
+    // 每次显示页面时都强制从云端刷新数据
+    this.loadTeamData(true);
   },
 
   /**
@@ -157,23 +158,65 @@ Page({
   },
 
   /**
-   * 加载团队数据
-   * @param {boolean} fromCloud 是否从云端加载数据，默认true
+   * 从云端获取所有团队数据（强制刷新版）
    */
-  async loadTeamData(fromCloud = true) {
+  async getAllTeamsFromCloud() {
+    try {
+      console.log('🚀 强制从云端获取所有团队数据...');
+      
+      const result = await wx.cloud.callFunction({
+        name: 'teamManager',
+        data: {
+          type: 'getAllTeams'
+        }
+      });
+      
+      if (result.result && result.result.success) {
+        const allTeams = result.result.data.teams || [];
+        console.log('✅ 云端所有团队数据获取成功:', {
+          团队数量: allTeams.length,
+          团队列表: allTeams.map(t => ({name: t.name, id: t._id}))
+        });
+        
+        // 缓存所有团队数据，用于下次快速显示
+        wx.setStorageSync('allTeams_cache', allTeams);
+        
+        return allTeams;
+      } else {
+        console.warn('⚠️ 云端返回数据格式异常:', result.result);
+        // 尝试使用缓存的数据
+        const cachedAllTeams = wx.getStorageSync('allTeams_cache') || [];
+        console.log('⚠️ 使用缓存的全部团队数据:', cachedAllTeams.length);
+        return cachedAllTeams;
+      }
+    } catch (error) {
+      console.error('❌ 获取所有团队数据失败:', error);
+      // 尝试使用缓存的数据
+      const cachedAllTeams = wx.getStorageSync('allTeams_cache') || [];
+      console.log('⚠️ 使用缓存的全部团队数据作为降级:', cachedAllTeams.length);
+      return cachedAllTeams;
+    }
+  },
+
+  /**
+   * 加载团队数据
+   * @param {boolean} forceCloud 是否强制从云端加载数据，默认true
+   */
+  async loadTeamData(forceCloud = true) {
     if (this.data.isLoading) return;
     
     this.setData({ isLoading: true });
     
     try {
-      console.log('开始加载团队数据，从云端:', fromCloud);
+      console.log('开始加载团队数据，强制从云端:', forceCloud);
       
-      if (fromCloud) {
-        // 从云端加载团队数据
-        await teamManager.loadTeamsFromCloud();
+      // 强制从云端加载最新数据，覆盖本地缓存
+      if (forceCloud) {
+        console.log('🔄 强制从云端加载最新团队数据...');
+        await this.loadTeamsFromCloudAndRefresh();
       }
       
-      // 从本地缓存获取团队数据
+      // 从本地缓存获取团队数据（此时已经是云端最新数据）
       const myTeams = teamManager.getMyTeams();
       const joinedTeams = teamManager.getJoinedTeams();
       
@@ -207,11 +250,11 @@ Page({
         isSelfCreated: team.creator === wx.getStorageSync('userOpenId') // 判断是否为自建团队
       }));
       
-      // 加载所有团队数据（向所有用户开放）- 添加容错处理
+      // 加载所有团队数据（向所有用户开放）- 确保使用云端最新数据
       let allTeams = [];
       try {
         console.log('🔄 开始加载所有团队数据...');
-        allTeams = await this.getAllTeams();
+        allTeams = await this.getAllTeamsFromCloud();
       } catch (error) {
         console.warn('⚠️ 加载所有团队数据失败，使用降级方案:', error);
         // 降级：使用我创建的团队和加入的团队合并作为所有团队
@@ -277,6 +320,114 @@ Page({
         icon: 'none'
       });
     }
+  },
+
+  /**
+   * 强制从云端加载团队数据并刷新缓存
+   */
+  async loadTeamsFromCloudAndRefresh() {
+    try {
+      console.log('🚀 执行强制云端数据刷新...');
+      
+      const openid = wx.getStorageSync('userOpenId');
+      if (!openid) {
+        console.warn('用户未登录，无法从云端加载');
+        return;
+      }
+      
+      // 直接从云端获取用户团队数据
+      const result = await wx.cloud.callFunction({
+        name: 'teamManager',
+        data: {
+          type: 'getUserTeams',
+          openid: openid
+        }
+      });
+      
+      if (result.result && result.result.success) {
+        const cloudTeams = result.result.data || [];
+        console.log('✅ 云端数据获取成功:', {
+          团队数量: cloudTeams.length,
+          团队列表: cloudTeams.map(t => ({ name: t.name, id: t._id }))
+        });
+        
+        // 构建新的本地团队数据
+        const newTeamData = cloudTeams.map(team => ({
+          ...team,
+          cloudId: team._id, // 保存云端ID用于后续匹配
+          createdAt: team.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          isActive: true
+        }));
+        
+        // 完全覆盖本地缓存
+        const storageKey = this.getTeamStorageKey();
+        wx.setStorageSync(storageKey, newTeamData);
+        
+        // 更新teamManager实例中的数据
+        teamManager.teams = newTeamData;
+        
+        console.log('✅ 本地缓存已完全刷新为云端最新数据');
+        
+        // 同时清理已加入团队缓存
+        await this.refreshJoinedTeamsFromCloud(cloudTeams);
+        
+      } else {
+        console.error('云端数据获取失败:', result.result);
+        throw new Error('获取云端团队数据失败');
+      }
+      
+    } catch (error) {
+      console.error('强制云端数据刷新失败:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 刷新已加入团队缓存
+   */
+  async refreshJoinedTeamsFromCloud(cloudTeams) {
+    try {
+      const openid = wx.getStorageSync('userOpenId');
+      if (!openid) return;
+      
+      // 过滤用户已加入的团队
+      const joinedTeams = cloudTeams.filter(team => 
+        team.members && team.members.includes(openid)
+      );
+      
+      const joinedTeamsWithInfo = joinedTeams.map(team => ({
+        ...team,
+        joinedAt: new Date().toISOString()
+      }));
+      
+      // 保存到已加入团队缓存
+      const joinedStorageKey = this.getJoinedTeamsKey();
+      wx.setStorageSync(joinedStorageKey, joinedTeamsWithInfo);
+      
+      console.log('✅ 已加入团队缓存已刷新:', {
+        已加入团队数: joinedTeams.length
+      });
+      
+    } catch (error) {
+      console.error('刷新已加入团队缓存失败:', error);
+    }
+  },
+
+  /**
+   * 获取团队存储键名
+   */
+  getTeamStorageKey() {
+    const openid = wx.getStorageSync('userOpenId');
+    return openid ? `userTeams_${openid}` : 'userTeams_guest';
+  },
+
+  /**
+   * 获取已加入团队存储键名
+   */
+  getJoinedTeamsKey() {
+    const openid = wx.getStorageSync('userOpenId');
+    return openid ? `joinedTeams_${openid}` : 'joinedTeams_guest';
   },
 
   /**

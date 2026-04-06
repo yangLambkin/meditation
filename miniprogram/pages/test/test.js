@@ -9,12 +9,12 @@ Page({
   // 测试从主包跳转到子包
   testToSubPackage() {
     wx.navigateTo({
-      url: '/subpackages/chattool/pages/testUserSwitch/testUserSwitch',
+      url: '/pages/team/team',
       success: () => {
-        console.log('跳转到子包成功')
+        console.log('跳转到团队页面成功')
       },
       fail: (err) => {
-        console.error('跳转到子包失败:', err)
+        console.error('跳转到团队页面失败:', err)
       }
     })
   },

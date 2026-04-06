@@ -19,7 +19,8 @@ Page({
     members: [],
     activities: [],
     currentTab: 'members', // 默认显示团队成员
-    isCreator: false // 当前用户是否为团队创建者
+    isCreator: false, // 当前用户是否为团队创建者
+    fromTab: 'all' // 页面来源：'created' | 'joined' | 'all'，默认'all'
   },
 
   /**
@@ -27,11 +28,13 @@ Page({
    */
   onLoad(options) {
     const teamId = options.teamId;
-    console.log('团队详情页面加载，团队ID:', teamId);
+    const fromTab = options.fromTab || 'all'; // 页面来源参数
+    console.log('团队详情页面加载，团队ID:', teamId, '页面来源:', fromTab);
     
     if (teamId) {
       this.setData({
-        teamId: teamId
+        teamId: teamId,
+        fromTab: fromTab
       });
       this.loadTeamData();
     } else {
@@ -615,7 +618,7 @@ Page({
   },
 
   /**
-   * 邀请成员
+   * 邀请成员 - 生成邀请信息
    */
   async inviteMember() {
     const teamInfo = this.data.teamInfo;
@@ -632,7 +635,7 @@ Page({
     });
 
     try {
-      // 1. 调用云函数生成邀请链接，让云函数自动获取openid
+      // 1. 调用云函数生成邀请信息
       const result = await wx.cloud.callFunction({
         name: 'teamManager',
         data: {
@@ -648,81 +651,27 @@ Page({
       if (result.result && result.result.success) {
         const inviteData = result.result.data;
         
-        // 2. 使用微信聊天工具发送邀请
-        try {
-          // 检查微信版本和API可用性
-          if (this.canUseChatTool()) {
-            // 在聊天工具模式下，微信会自动处理好友选择
-            // 我们只需要配置正确的分享内容
-            
-            // 设置分享配置
-            wx.showShareMenu({
-              withShareTicket: true
-            });
-            
-            // 配置分享内容
-            const shareParams = {
-              title: `邀请您加入 ${teamInfo.name}`,
-              imageUrl: '/images/icons/team.png',
-              path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&inviteId=${inviteData.inviteId}`
-            };
-            
-            console.log('分享参数配置:', shareParams);
-            
-            // 触发聊天工具模式
-            try {
-              const result = await wx.openChatTool({
-                url: `/subpackages/chattool/pages/invite/invite?teamInfo=${encodeURIComponent(JSON.stringify({
-                  teamId: teamInfo._id,
-                  teamName: teamInfo.name,
-                  teamIcon: teamInfo.icon || '/images/icons/team.png',
-                  inviterName: wx.getStorageSync('userNickname') || '匿名用户',
-                  inviteId: inviteData.inviteId
-                }))}`,
-                success: (res) => {
-                  console.log('聊天工具调用成功:', res);
-                  
-                  // 记录邀请行为
-                  this.recordInviteAction(teamInfo._id, inviteData.inviteId);
-                  
-                  wx.showToast({
-                    title: '邀请发送成功',
-                    icon: 'success',
-                    duration: 2000
-                  });
-                },
-                fail: (err) => {
-                  console.error('聊天工具调用失败:', err);
-                  throw new Error('聊天工具调用失败');
-                }
-              });
-              
-              console.log('聊天工具结果:', result);
-              
-            } catch (error) {
-              console.error('聊天工具异常:', error);
-              throw error;
-            }
-            
-            // 如果执行到这里，说明调用成功，微信会自动处理后续流程
-            
-          } else {
-            console.log('wx.openChatTool API不可用，使用降级方案');
-            // 降级处理：使用复制链接方式
-            this.showInviteLinkFallback(inviteData, teamInfo);
-          }
-        } catch (error) {
-          console.error('聊天工具调用失败:', error);
-          
-          // 降级处理：使用复制链接方式
-          this.showInviteLinkFallback(inviteData, teamInfo);
-        }
+        wx.hideLoading();
+        
+        // 2. 设置当前邀请信息，准备分享
+        this.currentInviteData = {
+          teamId: teamInfo._id,
+          inviteId: inviteData.inviteId,
+          teamName: teamInfo.name,
+          inviterName: wx.getStorageSync('userNickname') || '匿名用户'
+        };
+        
+        // 3. 显示分享引导提示
+        wx.showModal({
+          title: '邀请准备就绪',
+          content: '邀请信息已生成，请点击上方的"邀请成员"按钮分享给好友',
+          showCancel: false,
+          confirmText: '知道了'
+        });
 
       } else {
         throw new Error(result.result?.error || '生成邀请失败');
       }
-
-      wx.hideLoading();
 
     } catch (error) {
       wx.hideLoading();
@@ -1602,58 +1551,50 @@ Page({
   },
 
   /**
-   * 用户点击右上角分享
+   * 用户点击分享按钮触发
    */
   onShareAppMessage() {
-
-  },
-
-  /**
-   * 检查是否可以使用聊天工具模式
-   */
-  canUseChatTool() {
-    try {
-      // 检查系统信息
-      const systemInfo = wx.getSystemInfoSync();
-      const version = systemInfo.SDKVersion;
-      
-      // 检查基础库版本（聊天工具需要3.7.8+）
-      const canUseVersion = this.compareVersion(version, '3.7.8') >= 0;
-      
-      // 检查API是否存在
-      const hasApi = typeof wx.openChatTool === 'function';
-      
-      console.log('聊天工具兼容性检查:', {
-        version,
-        canUseVersion,
-        hasApi,
-        result: canUseVersion && hasApi
-      });
-      
-      return canUseVersion && hasApi;
-      
-    } catch (error) {
-      console.error('检查聊天工具兼容性失败:', error);
-      return false;
-    }
-  },
-
-  /**
-   * 版本比较函数
-   */
-  compareVersion(v1, v2) {
-    const arr1 = v1.split('.');
-    const arr2 = v2.split('.');
+    const teamInfo = this.data.teamInfo;
     
-    for (let i = 0; i < Math.max(arr1.length, arr2.length); i++) {
-      const num1 = parseInt(arr1[i] || '0');
-      const num2 = parseInt(arr2[i] || '0');
-      
-      if (num1 > num2) return 1;
-      if (num1 < num2) return -1;
+    if (!teamInfo) {
+      return {
+        title: '邀请您加入冥想团队',
+        path: '/pages/index/index'
+      };
     }
-    return 0;
+    
+    // 如果有正在进行的邀请，使用邀请参数
+    if (this.currentInviteData) {
+      const { teamId, inviteId, teamName, inviterName } = this.currentInviteData;
+      
+      // 构建分享路径，包含邀请信息（使用包名路径）
+      const sharePath = `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamId}&inviteId=${inviteId}&teamName=${encodeURIComponent(teamName)}&inviterName=${encodeURIComponent(inviterName)}`;
+      
+      // 分享成功后记录邀请行为
+      setTimeout(() => {
+        this.recordInviteAction(teamId, inviteId);
+        wx.showToast({
+          title: '邀请发送成功',
+          icon: 'success',
+          duration: 2000
+        });
+      }, 500);
+      
+      return {
+        title: `邀请您加入 ${teamName}`,
+        imageUrl: teamInfo.icon || '/images/icons/team.png',
+        path: sharePath
+      };
+    }
+    
+      // 默认分享内容（直接分享团队）
+    return {
+      title: `邀请您加入 ${teamInfo.name}`,
+      imageUrl: teamInfo.icon || '/images/icons/team.png',
+      path: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${teamInfo._id}&teamName=${encodeURIComponent(teamInfo.name || '')}`
+    };
   },
+
 
   /**
    * 获取更详细的兼容性信息
@@ -1664,9 +1605,7 @@ Page({
       return {
         SDKVersion: systemInfo.SDKVersion,
         version: systemInfo.version,
-        platform: systemInfo.platform,
-        canUseChatTool: this.canUseChatTool(),
-        hasOpenChatTool: typeof wx.openChatTool === 'function'
+        platform: systemInfo.platform
       };
     } catch (error) {
       return { error: error.message };

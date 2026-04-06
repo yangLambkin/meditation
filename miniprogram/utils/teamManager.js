@@ -196,7 +196,7 @@ class TeamManager {
       const openid = wx.getStorageSync('userOpenId');
       if (!openid) return;
 
-      console.log('🔄 开始从云端加载团队数据，并清理本地缓存...');
+      console.log('🚀 强制从云端加载最新团队数据，完全覆盖本地缓存...');
 
       const result = await wx.cloud.callFunction({
         name: 'teamManager',

@@ -57,15 +57,16 @@
           <!-- 功能按钮区域 -->
           <view class="flex-col justify-center items-center mt-20 button-group">
             <view class="flex-row justify-center items-center">
-              <view class="flex-row justify-center items-center button-item" bindtap="inviteMember">
+              <!-- 邀请成员按钮（仅从"我加入的团队"页面进入时可见） -->
+              <button class="flex-row justify-center items-center button-item" open-type="share" wx:if="{{fromTab === 'created'}}">
                 <image
                   class="image_2"
                   src="/subpackages/team/images/icons/invite.png"
                 />
                 <text class="font_3 text_4 ml-9">邀请成员</text>
-              </view>
-              <!-- 解散团队按钮（仅创建者可见） -->
-              <view class="ml-20 flex-row justify-center items-center button-item" wx:if="{{isCreator}}" bindtap="confirmDeleteTeam">
+              </button>
+              <!-- 解散团队按钮（仅创建者可见，且从"我加入的团队"页面进入） -->
+              <view class="flex-row justify-center items-center button-item" wx:if="{{isCreator && fromTab === 'created'}}" bindtap="confirmDeleteTeam">
                 <image
                   class="image_2"
                   src="/subpackages/team/images/icons/delete.png"

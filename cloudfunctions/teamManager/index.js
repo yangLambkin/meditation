@@ -499,8 +499,8 @@ async function generateInvite(inviteData, openid) {
   const inviteId = 'invite_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   const inviteToken = 'token_' + Math.random().toString(36).substr(2, 16);
 
-  // 构建分享路径（修复路径：页面在chattool分包中）
-  const sharePath = `/subpackages/chattool/pages/joinTeam/joinTeam?` +
+  // 构建分享路径
+  const sharePath = `/pages/joinTeam/joinTeam?` +
     `teamId=${inviteData.teamId}&` +
     `teamName=${encodeURIComponent(inviteData.teamName)}&` +
     `inviterId=${openid}&` +

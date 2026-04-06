@@ -6,9 +6,9 @@ Page({
    */
   data: {
     // 测试参数
-    teamId: 'd3a457a269cfd43702d28083527b655d', // 测试团队ID
-    teamName: '亘心打卡',
-    teamIcon: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/team_icons/1775227957980_yph78o.png',
+    teamId: '2d12bec269d363c3032cab5c66a2282e', // 测试团队ID
+    teamName: '亘心每日觉察',
+    teamIcon: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/team_icons/1775461314263_g2w01n.png',
     inviterName: '邀请者',
     
     // 多用户测试配置

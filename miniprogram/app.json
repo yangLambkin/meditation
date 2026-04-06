@@ -16,42 +16,15 @@
   "subPackages": [
     {
       "root": "subpackages/team",
+      "name": "team",
       "pages": [
         "pages/createTeam/createTeam",
         "pages/teamDetails/teamDetails",
         "pages/joinTeam/joinTeam",
         "pages/testJoinTeam/testJoinTeam"
       ]
-    },
-    {
-      "root": "subpackages/chattool",
-      "name": "chattool",
-      "pages": [
-        "pages/invite/invite",
-        "pages/login/login",
-        "pages/testUserSwitch/testUserSwitch"
-      ],
-      "independent": true,
-      "renderer": "skyline",
-      "componentFramework": "glass-easel"
     }
   ],
-  "chatTools": [
-    {
-      "root": "subpackages/chattool",
-      "entryPagePath": "pages/invite/invite",
-      "desc": "团队邀请工具",
-      "scopes": [
-        "scope.userInfo"
-      ]
-    }
-  ],
-  "rendererOptions": {
-    "skyline": {
-      "defaultDisplayBlock": true,
-      "sdkVersionBegin": "3.7.0"
-    }
-  },
   "window": {
     "backgroundColor": "#F6F6F6",
     "backgroundTextStyle": "light",

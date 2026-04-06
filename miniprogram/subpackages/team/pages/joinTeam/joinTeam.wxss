@@ -121,11 +121,11 @@
 }
 
 .members-list-container {
-  max-height: 400rpx;
+  max-height: 900rpx;
 }
 
 .members-list {
-  max-height: 400rpx;
+  max-height: 900rpx;
 }
 
 .empty-members {

@@ -91,9 +91,8 @@ Page({
   // 路径验证测试
   async testPathValidation() {
     const paths = [
-      '/subpackages/chattool/pages/joinTeam/joinTeam',
-      '/subpackages/chattool/pages/invite/invite',
-      '/subpackages/team/pages/teamDetails/teamDetails',
+      '/pages/joinTeam/joinTeam',
+      '/pages/team/team',
       '/pages/team/team'
     ];
 
@@ -158,7 +157,7 @@ Page({
 
   // 生成邀请链接
   generateInviteUrl(teamData) {
-    const basePath = '/subpackages/chattool/pages/joinTeam/joinTeam';
+    const basePath = '/pages/joinTeam/joinTeam';
     const params = `?teamId=${teamData._id}&teamName=${encodeURIComponent(teamData.name)}&testMode=true`;
     return basePath + params;
   },
@@ -183,7 +182,7 @@ Page({
       }
     }
     
-    return url.startsWith('/subpackages/chattool/pages/joinTeam/joinTeam');
+    return url.startsWith('/pages/joinTeam/joinTeam');
   },
 
   // 模拟页面跳转
@@ -216,9 +215,7 @@ Page({
       setTimeout(() => {
         // 这里简化处理，实际应该根据路径检查文件
         const validPaths = [
-          '/subpackages/chattool/pages/joinTeam/joinTeam',
-          '/subpackages/chattool/pages/invite/invite',
-          '/subpackages/team/pages/teamDetails/teamDetails',
+          '/pages/joinTeam/joinTeam',
           '/pages/team/team'
         ];
         resolve(validPaths.includes(path));
