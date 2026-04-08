@@ -4,16 +4,25 @@ const cloudApi = require('../../utils/cloudApi.js');
 
 Page({
   data: {
-    stars: [
-      { active: false, hover: false },
-      { active: false, hover: false },
-      { active: false, hover: false },
-      { active: false, hover: false },
-      { active: false, hover: false }
+    // 情绪选择器数据
+    currentEmotion: '不悲不喜',
+    sliderPosition: 293,
+    currentSubEmotions: [
+      { name: '冷漠', selected: false },
+      { name: '平淡', selected: false },
+      { name: '中立', selected: false },
+      { name: '无感', selected: false }
     ],
-    selectedRating: 0,
-    isHovering: false,
-    currentHoverIndex: -1,
+    emotionMap: [
+      { name: '非常不愉快', sub: ['愤怒','害怕','不堪重负', '绝望', '崩溃', '痛苦','厌恶','有压力','精疲力尽'], position: 0 },
+      { name: '不愉快', sub: ['烦躁', '挫败', '沮丧', '失望','嫉妒','忧虑','内疚','羞愧','伤心'], position: 98 },
+      { name: '有点不愉快', sub: ['焦虑', '不安', '担忧', '紧张','孤独','冷漠'], position: 196 },
+      { name: '不悲不喜', sub: ['满足', '平静', '感恩','中立', '无感'], position: 294 },
+      { name: '有点愉快', sub: ['平静', '满足', '放松', '舒适'], position: 392 },
+      { name: '愉快', sub: ['愉悦', '开心', '感恩', '欣慰'], position: 490 },
+      { name: '非常愉快', sub: ['喜悦', '幸福', '激动', '狂喜'], position: 588 }
+    ],
+    isSliding: false,
     currentText: '',
     currentTextLength: 0,
     savedRecords: [],
@@ -47,59 +56,96 @@ Page({
     console.log('🎯 本次会话ID:', sessionId);
   },
 
-  // 选择评分
-  selectRating: function(e) {
-    const index = e.currentTarget.dataset.index;
-    const newStars = this.data.stars.map((star, i) => ({
-      ...star,
-      active: i <= index,
-      hover: false
-    }));
+  // 情绪选择器滑动条触摸开始
+  handleSliderStart: function(e) {
+    this.setData({
+      isSliding: true
+    });
+    this.handleSliderMove(e);
+  },
+
+  // 情绪选择器滑动条触摸移动
+  handleSliderMove: function(e) {
+    if (!this.data.isSliding) return;
+    
+    const touch = e.touches[0];
+    const sliderWidth = 600; // 滑动条宽度
+    const thumbWidth = 40; // 滑块宽度
+    const minX = 16; // 左边距
+    const maxX = minX + sliderWidth - thumbWidth;
+    
+    let clientX = touch.clientX;
+    
+    // 限制在滑动条范围内
+    if (clientX < minX) clientX = minX;
+    if (clientX > maxX) clientX = maxX;
+    
+    const sliderPosition = clientX - minX;
     
     this.setData({
-      stars: newStars,
-      selectedRating: index + 1,
-      isHovering: false,
-      currentHoverIndex: -1
+      sliderPosition: sliderPosition
+    });
+    
+    this.updateEmotion(sliderPosition);
+  },
+
+  // 情绪选择器滑动条触摸结束
+  handleSliderEnd: function(e) {
+    this.setData({
+      isSliding: false
     });
   },
 
-  // 星星触摸开始（模拟悬停）
-  starTouchStart: function(e) {
-    const index = e.currentTarget.dataset.index;
-    const newStars = this.data.stars.map((star, i) => ({
-      ...star,
-      hover: i <= index
+  // 更新情绪显示
+  updateEmotion: function(position) {
+    const emotionMap = this.data.emotionMap;
+    let currentEmotion = emotionMap[3]; // 默认中间位置
+    
+    // 找到最近的预设位置
+    for (let i = 0; i < emotionMap.length; i++) {
+      if (Math.abs(position - emotionMap[i].position) < 50) {
+        currentEmotion = emotionMap[i];
+        break;
+      }
+    }
+    
+    // 更新子情绪列表
+    const subEmotions = currentEmotion.sub.map(name => ({
+      name: name,
+      selected: false
     }));
     
     this.setData({
-      stars: newStars,
-      isHovering: true,
-      currentHoverIndex: index
+      currentEmotion: currentEmotion.name,
+      currentSubEmotions: subEmotions
     });
   },
 
-  // 星星触摸结束
-  starTouchEnd: function(e) {
-    if (this.data.isHovering) {
-      const newStars = this.data.stars.map(star => ({
-        ...star,
-        hover: false
-      }));
-      
-      this.setData({
-        stars: newStars,
-        isHovering: false,
-        currentHoverIndex: -1
-      });
-    }
+  // 切换子情绪选择
+  toggleSubEmotion: function(e) {
+    const index = e.currentTarget.dataset.index;
+    const subEmotions = this.data.currentSubEmotions.map((item, i) => ({
+      ...item,
+      selected: i === index ? !item.selected : item.selected
+    }));
+    
+    this.setData({
+      currentSubEmotions: subEmotions
+    });
   },
 
-  // 星星触摸移动（模拟悬停跟随）
-  starTouchMove: function(e) {
-    if (this.data.isHovering) {
-      // 可以在这里添加触摸跟随效果
+  // 获取选中的情绪数组
+  getSelectedEmotions: function() {
+    const selectedSubEmotions = this.data.currentSubEmotions
+      .filter(item => item.selected)
+      .map(item => item.name);
+    
+    // 如果没有选择子情绪，返回主情绪
+    if (selectedSubEmotions.length === 0) {
+      return [this.data.currentEmotion];
     }
+    
+    return selectedSubEmotions;
   },
 
   // 文本输入处理
@@ -142,7 +188,7 @@ Page({
     const newRecord = {
       text: experienceText,
       timestamp: timestamp,
-      rating: this.data.selectedRating,
+      rating: this.getSelectedEmotions(),
       duration: this.data.durationText || '7分钟',
       // 添加唯一标识用于后续删除
       uniqueId: nowTime.toString(),
@@ -510,7 +556,7 @@ Page({
     try {
       // 1. 记录云存储打卡（仅在用户点击打卡按钮时调用）
       const duration = parseInt(this.data.duration) || 7;
-      const rating = this.data.selectedRating || 0;
+      const rating = this.getSelectedEmotions();
       
       // 获取已保存的体验记录ID（如果有的话）
       let experienceRecordIds = [];
@@ -547,7 +593,7 @@ Page({
       // 使用checkinManager来记录本地打卡
       const localResult = checkinManager.recordCheckin(
         parseInt(this.data.duration) || 7, // 时长（分钟）
-        this.data.selectedRating || 0,      // 评分
+        this.getSelectedEmotions(),        // 情绪评分
         this.data.savedRecords             // 体验记录
       );
       
@@ -563,10 +609,11 @@ Page({
     }
     
     // 保存评分记录到单独的存储（兼容原有逻辑）
-    if (this.data.selectedRating > 0) {
+    const selectedEmotions = this.getSelectedEmotions();
+    if (selectedEmotions.length > 0) {
       const records = wx.getStorageSync('meditationRecords') || {};
       records[dateStr] = {
-        rating: this.data.selectedRating,
+        rating: selectedEmotions,
         duration: this.data.durationText || '7分钟',
         timestamp: today.getTime(),
         textRecords: this.data.savedRecords.length,

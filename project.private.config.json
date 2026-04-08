@@ -22,6 +22,13 @@
     "miniprogram": {
       "list": [
         {
+          "name": "pages/recorder/recorder",
+          "pathName": "pages/recorder/recorder",
+          "query": "",
+          "scene": null,
+          "launchMode": "default"
+        },
+        {
           "name": "/subpackages/team/pages/testJoinTeam/testJoinTeam",
           "pathName": "/subpackages/team/pages/testJoinTeam/testJoinTeam",
           "query": "",

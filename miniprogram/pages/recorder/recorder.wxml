@@ -5,40 +5,40 @@
       <!-- 页面标题 -->
       <view class="flex-row justify-center self-stretch relative">
         <view class="flex-col items-center">
-          <text class="font text_2 mt-8">分享您的感受</text>
+          <text class="font text_2 mt-8">本次冥想时长</text>
         </view>
       </view>
       
       <!-- 冥想时长显示 -->
-      <text class="self-center font_2 text_3 mt-20">本次冥想时长</text>
       <text class="self-center text_4 mt-8">{{durationText || '0分钟'}}</text>
       
-      <!-- 5星评分组件 -->
-      <view class="flex-row justify-between equal-division group mt-30">
-        <view 
-          wx:for="{{stars}}" 
-          wx:key="index"
-          class="star-item {{item.active ? 'active' : ''}} {{item.hover ? 'hover' : ''}}"
-          bindtap="selectRating"
-          data-index="{{index}}"
-          bindtouchstart="starTouchStart"
-          bindtouchend="starTouchEnd"
-          bindtouchcancel="starTouchEnd"
-          bindtouchmove="starTouchMove"
-          data-value="{{index + 1}}"
-        >
-          <image 
-            class="star-icon" 
-            src="{{item.active ? '/images/icons/star-active.png' : '/images/icons/star.png'}}"
-            mode="aspectFit"
-          />
+      <!-- 情绪选择器 -->
+      <view class="flex-col self-stretch group_2 mt-30">
+        <text class="self-center emotion-main-text">{{currentEmotion}}</text>
+        <view class="flex-col self-stretch mt-25">
+          <!-- 滑动条 -->
+          <view class="flex-col justify-start self-stretch relative group_2" 
+                bindtouchstart="handleSliderStart"
+                bindtouchmove="handleSliderMove"
+                bindtouchend="handleSliderEnd">
+            <view class="section_3"></view>
+            <view class="slider-thumb pos" style="left: {{sliderPosition}}rpx"></view>
+          </view>
+          <text class="self-center font_2 text_5">选择具体情绪</text>
+          <!-- 子情绪选择 -->
+          <view class="flex-row self-stretch group_3">
+            <view wx:for="{{currentSubEmotions}}" wx:key="index" 
+                  class="flex-col justify-start items-center text-wrapper {{item.selected ? 'selected' : ''}}"
+                  bindtap="toggleSubEmotion" data-index="{{index}}">
+              <text class="font">{{item.name}}</text>
+            </view>
+          </view>
         </view>
       </view>
-      <text class="self-center font_2 text_5 mt-12">轻触评分</text>
       
       <!-- 记录区域 -->
       <view class="flex-col self-stretch group_2 mt-30">
-        <view class="flex-col section_2">
+        <view class="flex-col text-input-container">
           <textarea
             placeholder="记录您的感受和想法..." 
             class="textarea-input"

@@ -44,7 +44,7 @@
 .text_4 {
   margin-top: 24rpx;
   color: #ffffff;
-  font-size: 56rpx;
+  font-size: 40rpx;
   font-family: Arimo;
   font-weight: 700;
   line-height: 52rpx;
@@ -66,7 +66,7 @@
   color: #c2ae89;
 }
 .group_2 {
-  margin-top: 55.94rpx;
+  margin-top: 0rpx;
   padding-left: 16.04rpx;
   padding-right: 16.04rpx;
 }
@@ -88,7 +88,7 @@
   line-height: 14.68rpx;
 }
 .text-wrapper {
-  padding: 32.96rpx 0 33.38rpx;
+  padding: 10rpx 0 10rpx;
   background-color: #b29764;
   border-radius: 28rpx;
   border: solid 2rpx #b29764;
@@ -154,10 +154,14 @@
   margin-top: 120rpx;
 }
 
-/* 调整文本区域高度 */
-.section_2 {
+/* 文本输入容器 */
+.text-input-container {
   padding: 24rpx 32rpx 16rpx;
   min-height: 160rpx;
+  background-color: #f8f8f8;
+  border-radius: 32rpx;
+  overflow: hidden;
+  border: solid 2rpx #e8e8e8;
 }
 
 /* 调整保存记录按钮 */
@@ -412,4 +416,198 @@
   line-height: 32rpx;
   text-align: center;
   padding: 64rpx;
+}
+
+/* ===== 情绪选择器样式 ===== */
+
+/* 情绪选择器间距 */
+.mt-25 {
+  margin-top: 30rpx;
+}
+
+.ml-7 {
+  margin-left: 14rpx;
+}
+
+/* 情绪选择器字体 */
+.font {
+  font-size: 28rpx;
+  font-family: Inter;
+  line-height: 26.06rpx;
+  color: #ffffff;
+}
+
+.font_2 {
+  font-size: 24rpx;
+  font-family: Inter;
+  line-height: 22.12rpx;
+  color: #ffffff99;
+}
+
+/* 情绪选择器容器 */
+.group {
+  margin-top: 48rpx;
+  padding: 0 8rpx;
+}
+
+.font_3 {
+  color: #999999;
+  font-size: 20rpx;
+  font-family: Arimo;
+  line-height: 14.68rpx;
+}
+
+/* 情绪主选项增强效果 */
+.emotion-main-text {
+  font-size: 32rpx;
+  font-weight: 800;
+  font-family: Inter;
+  line-height: 30.12rpx;
+  color: #ffffff;
+  position: relative;
+  transition: all 0.3s ease;
+  text-shadow: 0 0 10rpx rgba(255, 215, 0, 0.7);
+  animation: mainEmotionGlow 2s ease-in-out infinite alternate;
+}
+
+/* 主情绪发光动画 */
+@keyframes mainEmotionGlow {
+  from {
+    text-shadow: 0 0 5rpx rgba(255, 215, 0, 0.5),
+                 0 0 10rpx rgba(255, 215, 0, 0.3);
+    transform: scale(1);
+  }
+  to {
+    text-shadow: 0 0 15rpx rgba(255, 215, 0, 0.8),
+                 0 0 25rpx rgba(255, 215, 0, 0.5),
+                 0 0 35rpx rgba(255, 215, 0, 0.3);
+    transform: scale(1.05);
+  }
+}
+
+/* 滑动条容器 */
+.group_2 {
+  padding: 0;
+}
+
+/* 滑动条背景 */
+.section_3 {
+  margin: 0 8rpx;
+  background-image: linear-gradient(90deg, #ffffff66 0%, #ffffff66 100%, #ffffff33 100%, #ffffff33 100%);
+  border-radius: 400rpx;
+  height: 50rpx;
+}
+
+/* 滑动条滑块 */
+.slider-thumb {
+  background-color: #ffffff;
+  border-radius: 50%;
+  height: 50rpx;
+  width: 50rpx;
+  position: absolute;
+  top: 0rpx;
+}
+
+.pos {
+  position: absolute;
+  top: 0;
+}
+
+/* 子情绪标题 */
+.text_5 {
+  margin-top: 52rpx;
+}
+
+/* 子情绪容器 */
+.group_3 {
+  margin-top: 28rpx;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start; /* 左对齐 */
+  gap: 8rpx; /* 选项间的固定间距 */
+}
+
+/* 子情绪按钮 */
+.text-wrapper {
+  flex: 0 0 calc((100% - 32rpx) / 5); /* 每行5个，减去总间距后平均分配 */
+  padding: 16rpx 0;
+  background-color: #ffffff1a;
+  border-radius: 20rpx;
+  height: 76rpx;
+  border-left: solid 2rpx #ffffff33;
+  border-right: solid 2rpx #ffffff33;
+  border-top: solid 2rpx #ffffff33;
+  border-bottom: solid 2rpx #ffffff33;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 8rpx; /* 行间距 */
+}
+
+/* 子情绪选中状态 - 灯被点亮效果 */
+.text-wrapper.selected {
+  background-color: #fff8e6; /* 偏黄色的亮色背景 */
+  border-color: #ffd700; /* 金色边框 */
+  border-width: 3rpx;
+  box-shadow: 0 0 20rpx rgba(255, 215, 0, 0.6); /* 金色发光效果 */
+  transform: scale(1.05);
+  transition: all 0.3s ease;
+  position: relative;
+  z-index: 1;
+}
+
+/* 选中状态下的字体颜色 */
+.text-wrapper.selected .font {
+  color: #8b6b00; /* 深棕色字体，在黄色背景上清晰可见 */
+  font-weight: 600;
+}
+
+/* 添加发光效果 */
+.text-wrapper.selected::before {
+  content: '';
+  position: absolute;
+  top: -2rpx;
+  left: -2rpx;
+  right: -2rpx;
+  bottom: -2rpx;
+  border-radius: 20rpx;
+  background: radial-gradient(circle at center, rgba(255, 215, 0, 0.3) 0%, transparent 70%);
+  z-index: -1;
+  animation: glow 1.5s ease-in-out infinite alternate;
+}
+
+/* 发光动画 */
+@keyframes glow {
+  from {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
+/* 子情绪文字 */
+.text_6 {
+  line-height: 26.34rpx;
+}
+
+.text_7 {
+  line-height: 26.02rpx;
+}
+
+.text_8 {
+  line-height: 26.2rpx;
+}
+
+.text_9 {
+  line-height: 26.04rpx;
+}
+
+/* 提示文字 */
+.text_10 {
+  margin-top: 24rpx;
+  color: #ffffff66;
+  line-height: 22.24rpx;
 }
