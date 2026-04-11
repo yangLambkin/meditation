@@ -51,6 +51,12 @@
         "selectedIconPath": "/images/icons/timer-active.png"
       },
       {
+        "pagePath": "pages/team/team",
+        "text": "空间",
+        "iconPath": "/images/icons/team.png",
+        "selectedIconPath": "/images/icons/team-active.png"
+      },
+      {
         "pagePath": "pages/me/me",
         "text": "我",
         "iconPath": "/images/icons/me.png",

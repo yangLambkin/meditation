@@ -1,12 +1,12 @@
 /**
- * 团队管理器
- * 负责团队创建、本地缓存和云端同步
+ * 空间管理器
+ * 负责空间创建、本地缓存和云端同步
  */
 
-// 团队配置
+// 空间配置
 const teamConfig = {
   maxMembers: 50, // 最大成员数
-  maxTeamsPerUser: 1 // 每个用户最多创建1个团队
+  maxTeamsPerUser: 1 // 每个用户最多创建1个空间
 };
 
 // 获取本地存储键名（按openid隔离）
@@ -15,7 +15,7 @@ const getTeamStorageKey = () => {
   return openid ? `userTeams_${openid}` : 'userTeams_guest';
 };
 
-// 获取加入团队的存储键名
+// 获取加入空间的存储键名
 const getJoinedTeamsKey = () => {
   const openid = wx.getStorageSync('userOpenId');
   return openid ? `joinedTeams_${openid}` : 'joinedTeams_guest';
@@ -27,37 +27,37 @@ class TeamManager {
   }
 
   /**
-   * 从本地缓存加载团队数据
+   * 从本地缓存加载空间数据
    */
   loadTeamsFromStorage() {
     try {
       const storageKey = getTeamStorageKey();
       const storedTeams = wx.getStorageSync(storageKey);
       if (storedTeams) {
-        console.log(`✅ 从本地缓存加载团队数据: ${storageKey}`);
+        console.log(`✅ 从本地缓存加载空间数据: ${storageKey}`);
         return storedTeams;
       }
     } catch (error) {
-      console.error('加载团队数据失败:', error);
+      console.error('加载空间数据失败:', error);
     }
     return [];
   }
 
   /**
-   * 保存团队数据到本地缓存
+   * 保存空间数据到本地缓存
    */
   saveTeamsToStorage() {
     try {
       const storageKey = getTeamStorageKey();
       wx.setStorageSync(storageKey, this.teams);
-      console.log(`✅ 团队数据保存到本地缓存: ${storageKey}`);
+      console.log(`✅ 空间数据保存到本地缓存: ${storageKey}`);
     } catch (error) {
-      console.error('保存团队数据失败:', error);
+      console.error('保存空间数据失败:', error);
     }
   }
 
   /**
-   * 创建新团队
+   * 创建新空间
    */
   async createTeam(teamInfo) {
     try {
@@ -66,10 +66,10 @@ class TeamManager {
       
       // 2. 本地验证
       if (this.teams.length >= teamConfig.maxTeamsPerUser) {
-        throw new Error(`每个用户最多只能创建${teamConfig.maxTeamsPerUser}个团队`);
+        throw new Error(`每个用户最多只能创建${teamConfig.maxTeamsPerUser}个空间`);
       }
 
-      // 3. 处理团队头像：如果使用临时路径，需要上传到云存储
+      // 3. 处理空间头像：如果使用临时路径，需要上传到云存储
       let teamIconUrl = teamInfo.icon;
       if (teamIconUrl && (teamIconUrl.startsWith('wxfile://tmp_') || teamIconUrl.startsWith('http://tmp/'))) {
         console.log('🔄 检测到临时头像路径，开始上传到云存储...', teamIconUrl);
@@ -77,7 +77,7 @@ class TeamManager {
         console.log('✅ 头像上传完成，新URL:', teamIconUrl);
       }
 
-      // 4. 生成团队信息
+      // 4. 生成空间信息
       const newTeam = {
         _id: this.generateTeamId(),
         name: teamInfo.name,
@@ -96,7 +96,7 @@ class TeamManager {
       this.teams.push(newTeam);
       this.saveTeamsToStorage();
 
-      console.log('✅ 团队创建成功（本地）:', newTeam.name);
+      console.log('✅ 空间创建成功（本地）:', newTeam.name);
 
       // 4. 异步同步到云端（不阻塞本地创建）
       this.syncTeamToCloud(newTeam).catch(error => {
@@ -105,26 +105,26 @@ class TeamManager {
 
       return { success: true, team: newTeam };
     } catch (error) {
-      console.error('❌ 创建团队失败:', error);
+      console.error('❌ 创建空间失败:', error);
       return { success: false, error: error.message };
     }
   }
 
   /**
-   * 生成团队ID
+   * 生成空间ID
    */
   generateTeamId() {
     return 'team_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   }
 
   /**
-   * 同步团队数据到云端
+   * 同步空间数据到云端
    */
   async syncTeamToCloud(team) {
     try {
       const openid = wx.getStorageSync('userOpenId');
       if (!openid) {
-        console.warn('无法同步团队数据：缺少openid');
+        console.warn('无法同步空间数据：缺少openid');
         return;
       }
 
@@ -138,9 +138,9 @@ class TeamManager {
       });
 
       if (result.result && result.result.success) {
-        console.log('✅ 团队数据同步到云端成功');
+        console.log('✅ 空间数据同步到云端成功');
         
-        // 更新本地团队的云端ID
+        // 更新本地空间的云端ID
         const cloudTeamId = result.result.data.teamId;
         const teamIndex = this.teams.findIndex(t => t._id === team._id);
         if (teamIndex !== -1) {
@@ -148,15 +148,15 @@ class TeamManager {
           this.saveTeamsToStorage();
         }
       } else {
-        console.error('团队数据同步到云端失败:', result.result);
+        console.error('空间数据同步到云端失败:', result.result);
       }
     } catch (error) {
-      console.error('团队数据同步到云端失败:', error);
+      console.error('空间数据同步到云端失败:', error);
     }
   }
 
   /**
-   * 获取用户创建的团队列表
+   * 获取用户创建的空间列表
    */
   getMyTeams() {
     const openid = wx.getStorageSync('userOpenId');
@@ -168,7 +168,7 @@ class TeamManager {
   }
 
   /**
-   * 获取用户加入的团队列表（包含用户自己创建的团队）
+   * 获取用户加入的空间列表（包含用户自己创建的空间）
    */
   getJoinedTeams() {
     const openid = wx.getStorageSync('userOpenId');
@@ -182,21 +182,21 @@ class TeamManager {
   }
 
   /**
-   * 获取团队总数
+   * 获取空间总数
    */
   getTeamCount() {
     return this.teams.filter(team => team.isActive).length;
   }
 
   /**
-   * 从云端加载团队数据（改进版：清理本地缓存中已不存在的团队）
+   * 从云端加载空间数据（改进版：清理本地缓存中已不存在的空间）
    */
   async loadTeamsFromCloud() {
     try {
       const openid = wx.getStorageSync('userOpenId');
       if (!openid) return;
 
-      console.log('🚀 强制从云端加载最新团队数据，完全覆盖本地缓存...');
+      console.log('🚀 强制从云端加载最新空间数据，完全覆盖本地缓存...');
 
       const result = await wx.cloud.callFunction({
         name: 'teamManager',
@@ -210,24 +210,24 @@ class TeamManager {
         const cloudTeams = result.result.data;
         let hasUpdate = false;
 
-        // 记录清理前的团队数量
+        // 记录清理前的空间数量
         const originalTeamCount = this.teams.length;
 
-        // 1. 检查本地缓存中哪些团队在云端已不存在（被解散）
+        // 1. 检查本地缓存中哪些空间在云端已不存在（被解散）
         const cloudTeamIds = cloudTeams.map(team => team._id);
         
-        // 清理本地缓存中已不存在的团队（基于cloudId匹配）
+        // 清理本地缓存中已不存在的空间（基于cloudId匹配）
         const teamsBeforeCleanup = [...this.teams];
         this.teams = this.teams.filter(team => {
-          // 如果团队有cloudId且云端不存在，则删除
+          // 如果空间有cloudId且云端不存在，则删除
           if (team.cloudId && !cloudTeamIds.includes(team.cloudId)) {
-            console.log(`🗑️ 清理无效团队: ${team.name} (cloudId: ${team.cloudId})`);
+            console.log(`🗑️ 清理无效空间: ${team.name} (cloudId: ${team.cloudId})`);
             return false;
           }
           return true;
         });
 
-        // 如果清理了团队，标记需要更新
+        // 如果清理了空间，标记需要更新
         if (teamsBeforeCleanup.length !== this.teams.length) {
           hasUpdate = true;
         }
@@ -236,7 +236,7 @@ class TeamManager {
         cloudTeams.forEach(cloudTeam => {
           const existingTeam = this.teams.find(t => t.cloudId === cloudTeam._id);
           if (!existingTeam) {
-            // 添加新团队，确保createdAt字段存在
+            // 添加新空间，确保createdAt字段存在
             const newTeam = {
               ...cloudTeam,
               cloudId: cloudTeam._id
@@ -256,7 +256,7 @@ class TeamManager {
             this.teams.push(newTeam);
             hasUpdate = true;
           } else {
-            // 更新现有团队信息，但保留本地的createdAt字段
+            // 更新现有空间信息，但保留本地的createdAt字段
             const localCreatedAt = existingTeam.createdAt;
             const localIcon = existingTeam.icon;
             
@@ -293,36 +293,36 @@ class TeamManager {
 
         if (hasUpdate) {
           this.saveTeamsToStorage();
-          console.log('✅ 从云端加载团队数据成功', {
-            清理前团队数: originalTeamCount,
-            清理后团队数: this.teams.length,
-            清理的无效团队数: originalTeamCount - this.teams.length
+          console.log('✅ 从云端加载空间数据成功', {
+            清理前空间数: originalTeamCount,
+            清理后空间数: this.teams.length,
+            清理的无效空间数: originalTeamCount - this.teams.length
           });
           
-          // 3. 同时清理已加入团队的缓存
+          // 3. 同时清理已加入空间的缓存
           this.cleanupJoinedTeamsFromCloud(cloudTeams);
         }
       } else {
         console.warn('⚠️ 云端返回数据格式异常:', result.result);
       }
     } catch (error) {
-      console.error('从云端加载团队数据失败:', error);
+      console.error('从云端加载空间数据失败:', error);
     }
   }
 
   /**
-   * 清理已加入团队缓存中已不存在的团队
+   * 清理已加入空间缓存中已不存在的空间
    */
   cleanupJoinedTeamsFromCloud(cloudTeams) {
     try {
       const cloudTeamIds = cloudTeams.map(team => team._id);
       const joinedTeams = this.loadJoinedTeamsFromStorage();
       
-      // 过滤掉云端已不存在的团队（基于cloudId匹配）
+      // 过滤掉云端已不存在的空间（基于cloudId匹配）
       const validJoinedTeams = joinedTeams.filter(team => {
-        // 如果团队有cloudId且云端不存在，则删除
+        // 如果空间有cloudId且云端不存在，则删除
         if (team.cloudId && !cloudTeamIds.includes(team.cloudId)) {
-          console.log(`🗑️ 清理无效的已加入团队: ${team.name} (cloudId: ${team.cloudId})`);
+          console.log(`🗑️ 清理无效的已加入空间: ${team.name} (cloudId: ${team.cloudId})`);
           return false;
         }
         return true;
@@ -330,21 +330,21 @@ class TeamManager {
       
       if (validJoinedTeams.length !== joinedTeams.length) {
         this.saveJoinedTeamsToStorage(validJoinedTeams);
-        console.log(`✅ 已清理已加入团队缓存中的无效团队: ${joinedTeams.length - validJoinedTeams.length}个`);
+        console.log(`✅ 已清理已加入空间缓存中的无效空间: ${joinedTeams.length - validJoinedTeams.length}个`);
       }
     } catch (error) {
-      console.error('清理已加入团队缓存失败:', error);
+      console.error('清理已加入空间缓存失败:', error);
     }
   }
 
   /**
-   * 删除团队
+   * 删除空间
    */
   async deleteTeam(teamId) {
     try {
       const teamIndex = this.teams.findIndex(team => team._id === teamId);
       if (teamIndex === -1) {
-        throw new Error('团队不存在');
+        throw new Error('空间不存在');
       }
 
       // 标记为删除状态
@@ -356,13 +356,13 @@ class TeamManager {
 
       return { success: true };
     } catch (error) {
-      console.error('删除团队失败:', error);
+      console.error('删除空间失败:', error);
       return { success: false, error: error.message };
     }
   }
 
   /**
-   * 同步删除团队到云端
+   * 同步删除空间到云端
    */
   async syncDeleteTeamToCloud(teamId) {
     try {
@@ -384,45 +384,45 @@ class TeamManager {
       });
 
       if (result.result && result.result.success) {
-        console.log('✅ 团队删除同步到云端成功');
+        console.log('✅ 空间删除同步到云端成功');
       }
     } catch (error) {
-      console.error('团队删除同步到云端失败:', error);
+      console.error('空间删除同步到云端失败:', error);
     }
   }
 
   /**
-   * 从本地缓存加载已加入的团队
+   * 从本地缓存加载已加入的空间
    */
   loadJoinedTeamsFromStorage() {
     try {
       const storageKey = getJoinedTeamsKey();
       const joinedTeams = wx.getStorageSync(storageKey);
       if (joinedTeams) {
-        console.log(`✅ 从本地缓存加载已加入团队: ${storageKey}`);
+        console.log(`✅ 从本地缓存加载已加入空间: ${storageKey}`);
         return joinedTeams;
       }
     } catch (error) {
-      console.error('加载已加入团队失败:', error);
+      console.error('加载已加入空间失败:', error);
     }
     return [];
   }
 
   /**
-   * 保存已加入团队到本地缓存
+   * 保存已加入空间到本地缓存
    */
   saveJoinedTeamsToStorage(teams) {
     try {
       const storageKey = getJoinedTeamsKey();
       wx.setStorageSync(storageKey, teams);
-      console.log(`✅ 已加入团队保存到本地缓存: ${storageKey}`);
+      console.log(`✅ 已加入空间保存到本地缓存: ${storageKey}`);
     } catch (error) {
-      console.error('保存已加入团队失败:', error);
+      console.error('保存已加入空间失败:', error);
     }
   }
 
   /**
-   * 添加已加入团队
+   * 添加已加入空间
    */
   addJoinedTeam(teamInfo) {
     try {
@@ -430,11 +430,11 @@ class TeamManager {
       
       // 检查是否已加入
       if (joinedTeams.some(team => team._id === teamInfo._id)) {
-        console.log('⚠️ 用户已是团队成员');
+        console.log('⚠️ 用户已是空间成员');
         return;
       }
 
-      // 添加团队信息
+      // 添加空间信息
       const joinedTeam = {
         ...teamInfo,
         joinedAt: new Date().toISOString()
@@ -443,14 +443,14 @@ class TeamManager {
       joinedTeams.push(joinedTeam);
       this.saveJoinedTeamsToStorage(joinedTeams);
       
-      console.log('✅ 已加入团队添加到本地缓存');
+      console.log('✅ 已加入空间添加到本地缓存');
     } catch (error) {
-      console.error('添加已加入团队失败:', error);
+      console.error('添加已加入空间失败:', error);
     }
   }
 
   /**
-   * 检查是否已加入团队
+   * 检查是否已加入空间
    */
   checkIsMember(teamId) {
     try {
@@ -463,14 +463,14 @@ class TeamManager {
   }
 
   /**
-   * 获取用户加入的所有团队
+   * 获取用户加入的所有空间
    */
   getUserJoinedTeams() {
     return this.loadJoinedTeamsFromStorage();
   }
 
   /**
-   * 移除已加入的团队
+   * 移除已加入的空间
    */
   removeJoinedTeam(teamId) {
     try {
@@ -479,35 +479,35 @@ class TeamManager {
       
       if (filteredTeams.length !== joinedTeams.length) {
         this.saveJoinedTeamsToStorage(filteredTeams);
-        console.log('✅ 已从加入列表中移除团队');
+        console.log('✅ 已从加入列表中移除空间');
         return true;
       }
       
       return false;
     } catch (error) {
-      console.error('移除已加入团队失败:', error);
+      console.error('移除已加入空间失败:', error);
       return false;
     }
   }
 
   /**
-   * 清理本地团队缓存
+   * 清理本地空间缓存
    */
   clearLocalTeamCache() {
     try {
       const storageKey = getTeamStorageKey();
       wx.removeStorageSync(storageKey);
       this.teams = [];
-      console.log('✅ 本地团队缓存已清理');
+      console.log('✅ 本地空间缓存已清理');
       return true;
     } catch (error) {
-      console.error('清理本地团队缓存失败:', error);
+      console.error('清理本地空间缓存失败:', error);
       return false;
     }
   }
 
   /**
-   * 上传团队头像到云存储
+   * 上传空间头像到云存储
    */
   async uploadTeamIconToCloud(tempFilePath) {
     return new Promise((resolve, reject) => {

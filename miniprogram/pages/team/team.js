@@ -28,6 +28,19 @@ Page({
    * 创建新团队按钮点击事件
    */
   createNewTeam: function() {
+    // 检查用户是否登录（通过userLoginData缓存）
+    const userLoginData = wx.getStorageSync('userLoginData');
+    
+    if (!userLoginData) {
+      wx.showModal({
+        title: '提示',
+        content: '请先登录后再创建空间',
+        showCancel: false,
+        confirmText: '确定'
+      });
+      return;
+    }
+    
     wx.navigateTo({
       url: '/subpackages/team/pages/createTeam/createTeam'
     })

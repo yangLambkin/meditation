@@ -6,7 +6,7 @@ Page({
   data: {
     // 情绪选择器数据
     currentEmotion: '不悲不喜',
-    sliderPosition: 293,
+    sliderPosition: 300,
     currentSubEmotions: [
       { name: '冷漠', selected: false },
       { name: '平淡', selected: false },
@@ -15,14 +15,16 @@ Page({
     ],
     emotionMap: [
       { name: '非常不愉快', sub: ['愤怒','害怕','不堪重负', '绝望', '崩溃', '痛苦','厌恶','有压力','精疲力尽'], position: 0 },
-      { name: '不愉快', sub: ['烦躁', '挫败', '沮丧', '失望','嫉妒','忧虑','内疚','羞愧','伤心'], position: 98 },
-      { name: '有点不愉快', sub: ['焦虑', '不安', '担忧', '紧张','孤独','冷漠'], position: 196 },
-      { name: '不悲不喜', sub: ['满足', '平静', '感恩','中立', '无感'], position: 294 },
-      { name: '有点愉快', sub: ['平静', '满足', '放松', '舒适'], position: 392 },
-      { name: '愉快', sub: ['愉悦', '开心', '感恩', '欣慰'], position: 490 },
-      { name: '非常愉快', sub: ['喜悦', '幸福', '激动', '狂喜'], position: 588 }
+      { name: '不愉快', sub: ['烦躁', '挫败', '沮丧', '失望','嫉妒','忧虑','内疚','羞愧','伤心'], position: 100 },
+      { name: '有点不愉快', sub: ['焦虑', '不安', '担忧', '紧张','孤独','冷漠'], position: 200 },
+      { name: '不悲不喜', sub: ['满足', '平静', '感恩','中立', '无感'], position: 300 },
+      { name: '有点愉快', sub: ['平静', '满足', '放松', '舒适'], position: 400 },
+      { name: '愉快', sub: ['愉悦', '开心', '感恩', '欣慰'], position: 500 },
+      { name: '非常愉快', sub: ['喜悦', '幸福', '激动', '狂喜'], position: 600 }
     ],
     isSliding: false,
+    startTouchX: 0, // 记录触摸开始位置
+    startSliderPosition: 300, // 记录触摸开始时的滑块位置
     currentText: '',
     currentTextLength: 0,
     savedRecords: [],
@@ -58,35 +60,63 @@ Page({
 
   // 情绪选择器滑动条触摸开始
   handleSliderStart: function(e) {
-    this.setData({
-      isSliding: true
+    const touch = e.touches[0];
+    
+    // 获取轨道元素的位置，更精确
+    const query = wx.createSelectorQuery();
+    query.select('.section_3').boundingClientRect();
+    query.exec((res) => {
+      if (res && res[0]) {
+        const trackRect = res[0];
+        
+        console.log('🔍 轨道信息:', {
+          trackLeft: trackRect.left,
+          trackWidth: trackRect.width,
+          trackRight: trackRect.right
+        });
+        
+        this.setData({
+          isSliding: true,
+          trackLeft: trackRect.left, // 记录轨道位置
+          trackWidth: trackRect.width // 记录轨道宽度
+        });
+      }
     });
-    this.handleSliderMove(e);
   },
 
   // 情绪选择器滑动条触摸移动
   handleSliderMove: function(e) {
-    if (!this.data.isSliding) return;
+    if (!this.data.isSliding || !this.data.trackLeft) return;
     
     const touch = e.touches[0];
-    const sliderWidth = 600; // 滑动条宽度
-    const thumbWidth = 40; // 滑块宽度
-    const minX = 16; // 左边距
-    const maxX = minX + sliderWidth - thumbWidth;
+    const sliderWidth = 600; // 预设滑动条宽度
     
-    let clientX = touch.clientX;
+    // 使用记录的轨道位置计算相对位置
+    const relativeX = touch.clientX - this.data.trackLeft;
     
-    // 限制在滑动条范围内
-    if (clientX < minX) clientX = minX;
-    if (clientX > maxX) clientX = maxX;
+    // 将实际轨道位置映射到预设的0-600范围
+    const actualTrackWidth = this.data.trackWidth;
+    const sliderPosition = (relativeX / actualTrackWidth) * sliderWidth;
     
-    const sliderPosition = clientX - minX;
+    // 限制在滑动条范围内 (0 到 sliderWidth)
+    const clampedPosition = Math.max(0, Math.min(sliderPosition, sliderWidth));
     
-    this.setData({
-      sliderPosition: sliderPosition
+    // 调试信息
+    console.log('🔍 滑动调试:', {
+      touchX: touch.clientX,
+      trackLeft: this.data.trackLeft,
+      trackWidth: actualTrackWidth,
+      relativeX: relativeX,
+      sliderPosition: clampedPosition,
+      maxPosition: sliderWidth
     });
     
-    this.updateEmotion(sliderPosition);
+    // 更新滑块位置和情绪
+    this.setData({
+      sliderPosition: clampedPosition
+    });
+    
+    this.updateEmotion(clampedPosition);
   },
 
   // 情绪选择器滑动条触摸结束
@@ -101,9 +131,9 @@ Page({
     const emotionMap = this.data.emotionMap;
     let currentEmotion = emotionMap[3]; // 默认中间位置
     
-    // 找到最近的预设位置
+    // 找到最近的预设位置（增加吸附范围，提高滑动体验）
     for (let i = 0; i < emotionMap.length; i++) {
-      if (Math.abs(position - emotionMap[i].position) < 50) {
+      if (Math.abs(position - emotionMap[i].position) < 60) {
         currentEmotion = emotionMap[i];
         break;
       }

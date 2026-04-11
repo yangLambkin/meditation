@@ -1,8 +1,8 @@
 <!--pages/createTeam/createTeam.wxml-->
 <view class="flex-col page">
   <view class="flex-col items-start relative section">
-    <text class="text">创建团队</text>
-    <text class="font text_2">打造你的专属觉察圈</text>
+    <text class="text">创建空间</text>
+    <text class="font text_2">打造你的觉察空间</text>
   </view>
   <view class="flex-col group">
     <view class="flex-col group_2">
@@ -11,10 +11,10 @@
           class="image_2"
           src="/images/icons/team.png"
         />
-        <text class="font text_3 ml-5">选择团队图标</text>
+        <text class="font text_3 ml-5">选择图标</text>
       </view>
       <view class="mt-12 flex-col group_2">
-        <!-- 团队icon选择区域 - 生产版本 -->
+        <!-- 空间icon选择区域 - 生产版本 -->
         <view class="team-icons-container">
           <!-- 第一行：前6个图标 -->
           <view class="team-icons-row">
@@ -48,12 +48,12 @@
           class="image_2"
           src="/subpackages/team/images/icons/text.png"
         />
-        <text class="font text_4 ml-5">团队名称</text>
+        <text class="font text_4 ml-5">空间名称</text>
       </view>
       <view class="flex-col justify-start items-start self-stretch text-wrapper_3">
         <input 
           class="font_3 text_5 input-field" 
-          placeholder="填写团队名称"
+          placeholder="请填写"
           value="{{teamName}}"
           bindinput="onTeamNameInput"
           maxlength="20"
@@ -67,12 +67,12 @@
           class="image_2"
           src="/subpackages/team/images/icons/text.png"
         />
-        <text class="font ml-5">团队介绍</text>
+        <text class="font ml-5">空间介绍</text>
       </view>
       <view class="flex-col justify-start items-start self-stretch text-wrapper_4">
         <textarea 
           class="font_3 text_7 textarea-field" 
-          placeholder="介绍一下你的团队吧" 
+          placeholder="请填写" 
           value="{{teamDescription}}"
           bindinput="onTeamDescriptionInput"
           maxlength="100"
@@ -84,7 +84,7 @@
   </view>
   <view class="flex-col justify-start group_4">
     <view class="flex-col justify-start items-center text-wrapper_5" bindtap="createTeam">
-      <text class="font_3 text_9">创建团队</text>
+      <text class="font_3 text_9">创建</text>
     </view>
   </view>
 </view>

@@ -26,7 +26,7 @@
   padding-top: 60rpx;
   background-color: #b29764;
   overflow: hidden;
-  height: 450rpx;
+  height: 300rpx;
 }
 .font {
   font-size: 32rpx;
@@ -146,7 +146,7 @@
   position: absolute;
   left: 42.35rpx;
   right: 0;
-  top: 340rpx; /* 统计卡片高度180rpx + 卡片高度140rpx + 间距20rpx */
+  top: 180rpx; /* 统计卡片高度180rpx + 卡片高度140rpx + 间距20rpx */
 }
 
 /* 创建团队按钮 */

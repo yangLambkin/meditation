@@ -5,14 +5,15 @@
     <view class="flex-col group">
       <view class="flex-col items-start relative section_2">
         <view class="title-section">
-          <text class="font text team-title">我的团队</text>
-          <text class="font_2 text_2 subtitle">与志同道合的伙伴一起修行</text>
+          <text class="font text team-title">我的空间</text>
+          <text class="font_2 text_2 subtitle">如如不动，念念分明</text>
         </view>
 
+        <!--
         <view class="flex-col justify-start items-end pos">
           <view class="flex-row equal-division">
             <view class="flex-col section_4 equal-division-item">
-              <text class="self-start font_3">已加入团队</text>
+              <text class="self-start font_3">已加入</text>
               <view class="mt-14 flex-row items-end">
                 <text class="font_2">{{totalJoinedTeams}}</text>
                 <text class="font_4 ml-7">个</text>
@@ -20,7 +21,7 @@
             </view>
             
             <view class="ml-16 flex-col section_4 equal-division-item">
-              <text class="self-start font_3">我创建的团队</text>
+              <text class="self-start font_3">已创建</text>
               <view class="mt-12 flex-row items-end">
                 <text class="font_2">{{myTeams.length}}</text>
                 <text class="font_4 ml-9">个</text>
@@ -28,12 +29,13 @@
             </view>
           </view>
         </view>
+      -->
 
-        <!-- 创建团队按钮 -->
+        <!-- 创建空间按钮 -->
         <view class="create-team-btn-container">
           <view class="create-team-btn" bindtap="createNewTeam">
             <image class="create-icon" src="/images/icons/create.png" />
-            <text class="create-text">创建新团队</text>
+            <text class="create-text">创建</text>
           </view>
         </view>
       </view>
@@ -46,7 +48,7 @@
             bindtap="switchTab" 
             data-tab="created"
           >
-            <text class="tab-text">我加入的团队</text>
+            <text class="tab-text">我的打卡空间</text>
             <view class="tab-indicator"></view>
           </view>
           <view 
@@ -54,7 +56,7 @@
             bindtap="switchTab" 
             data-tab="joined"
           >
-            <text class="tab-text">更多团队</text>
+            <text class="tab-text">更多空间</text>
             <view class="tab-indicator"></view>
           </view>
         </view>
@@ -64,14 +66,14 @@
           <text class="loading-text">加载中...</text>
         </view>
 
-        <!-- 我加入的团队（包含我创建的和我加入的，去重显示） -->
+        <!-- 我加入的空间（包含我创建的和我加入的，去重显示） -->
         <view class="team-list" wx:if="{{currentTab === 'created'}}">
           <view class="empty-state" wx:if="{{totalJoinedTeams === 0 && !isLoading}}">
-            <text class="empty-text">您还没有加入任何团队</text>
-            <text class="empty-subtext">点击上方按钮创建您的第一个团队</text>
+            <text class="empty-text">您还没有加入任何空间</text>
+            <text class="empty-subtext">点击上方按钮创建您的空间</text>
           </view>
 
-          <!-- 显示去重后的团队列表 -->
+          <!-- 显示去重后的空间列表 -->
           <view class="team-item" wx:for="{{mergedJoinedTeams}}" wx:key="_id">
             <view class="team-content" bindtap="viewTeamDetail" data-team-id="{{item._id}}" data-from-tab="created">
               <view class="team-icon-container">
@@ -90,7 +92,7 @@
                   </view>
                   <image class="team-arrow" src="/images/icons/right.png" />
                 </view>
-                <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
+                <text class="team-description">{{item.description || '暂无空间介绍'}}</text>
                 <view class="team-stats">
                   <view class="team-stat">
                     <image class="stat-icon" src="/images/icons/team.png" />
@@ -109,14 +111,13 @@
           </view>
         </view>
 
-        <!-- 所有团队（向所有用户开放） -->
+        <!-- 所有空间（向所有用户开放） -->
         <view class="team-list" wx:if="{{currentTab === 'joined'}}">
           
           
           <view class="empty-state" wx:if="{{allTeams.length === 0 && !isLoading}}">
-            <image class="empty-icon" src="/images/icons/empty.png" />
-            <text class="empty-text">暂无公开团队</text>
-            <text class="empty-subtext">您可以创建第一个团队</text>
+            <text class="empty-text">暂无公开空间</text>
+            <text class="empty-subtext">您可以创建第一个空间</text>
           </view>
 
           <view class="team-item" wx:for="{{allTeams}}" wx:key="_id">
@@ -134,7 +135,7 @@
                   </view>
                   <image class="team-arrow" src="/images/icons/right.png" />
                 </view>
-                <text class="team-description">{{item.description || '暂无团队介绍'}}</text>
+                <text class="team-description">{{item.description || '暂无空间介绍'}}</text>
                 <view class="team-stats">
                   <view class="team-stat">
                     <image class="stat-icon" src="/images/icons/team.png" />

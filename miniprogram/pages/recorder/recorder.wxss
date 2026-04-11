@@ -67,8 +67,8 @@
 }
 .group_2 {
   margin-top: 0rpx;
-  padding-left: 16.04rpx;
-  padding-right: 16.04rpx;
+  padding-left: 10rpx;
+  padding-right: 10rpx;
 }
 .section_2 {
   padding: 40.32rpx 32.46rpx 21.8rpx 33.28rpx;
@@ -492,7 +492,7 @@
 
 /* 滑动条背景 */
 .section_3 {
-  margin: 0 8rpx;
+  margin: 0 0rpx;
   background-image: linear-gradient(90deg, #ffffff66 0%, #ffffff66 100%, #ffffff33 100%, #ffffff33 100%);
   border-radius: 400rpx;
   height: 50rpx;

@@ -41,7 +41,7 @@
     <!-- 场景1：用户已登录 -->
     <view class="scenario-card">
       <text class="scenario-title">场景1：用户已登录</text>
-      <text class="scenario-desc">用户已登录状态下进入JoinTeam页面，直接点击"加入团队"</text>
+      <text class="scenario-desc">用户已登录状态下进入JoinTeam页面，直接点击"加入空间"</text>
       <button class="scenario-btn scenario1" bindtap="testScenario1LoggedIn">
         🚀 开始测试场景1
       </button>
@@ -50,7 +50,7 @@
     <!-- 场景2：用户未登录 -->
     <view class="scenario-card">
       <text class="scenario-title">场景2：用户未登录</text>
-      <text class="scenario-desc">用户未登录状态下进入JoinTeam页面，点击"加入团队"后跳转登录</text>
+      <text class="scenario-desc">用户未登录状态下进入JoinTeam页面，点击"加入空间"后跳转登录</text>
       <button class="scenario-btn scenario2" bindtap="testScenario2LoggedOut">
         🚀 开始测试场景2
       </button>
@@ -59,7 +59,7 @@
     <!-- 场景3：完整流程 -->
     <view class="scenario-card">
       <text class="scenario-title">场景3：完整流程测试</text>
-      <text class="scenario-desc">完整流程：未登录 → JoinTeam页面 → 登录 → 自动加入团队 → 团队详情页</text>
+      <text class="scenario-desc">完整流程：未登录 → JoinTeam页面 → 登录 → 自动加入空间 → 空间详情页</text>
       <button class="scenario-btn scenario3" bindtap="testScenario3FullFlow">
         🎯 开始完整流程测试
       </button>
@@ -74,7 +74,7 @@
         📱 直接进入JoinTeam页面
       </button>
       <button class="manual-btn" bindtap="gotoTeamDetails">
-        🏢 跳转到团队详情页
+        🏢 跳转到空间详情页
       </button>
     </view>
   </view>
