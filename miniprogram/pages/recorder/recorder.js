@@ -6,25 +6,26 @@ Page({
   data: {
     // 情绪选择器数据
     currentEmotion: '不悲不喜',
-    sliderPosition: 300,
+    sliderPosition: 325,
     currentSubEmotions: [
-      { name: '冷漠', selected: false },
-      { name: '平淡', selected: false },
+      { name: '满足', selected: false },
+      { name: '平静', selected: false },
+      { name: '感恩', selected: false },
       { name: '中立', selected: false },
-      { name: '无感', selected: false }
+      { name: '无感', selected: false },
     ],
     emotionMap: [
       { name: '非常不愉快', sub: ['愤怒','害怕','不堪重负', '绝望', '崩溃', '痛苦','厌恶','有压力','精疲力尽'], position: 0 },
-      { name: '不愉快', sub: ['烦躁', '挫败', '沮丧', '失望','嫉妒','忧虑','内疚','羞愧','伤心'], position: 100 },
-      { name: '有点不愉快', sub: ['焦虑', '不安', '担忧', '紧张','孤独','冷漠'], position: 200 },
-      { name: '不悲不喜', sub: ['满足', '平静', '感恩','中立', '无感'], position: 300 },
-      { name: '有点愉快', sub: ['平静', '满足', '放松', '舒适'], position: 400 },
-      { name: '愉快', sub: ['愉悦', '开心', '感恩', '欣慰'], position: 500 },
+      { name: '不愉快', sub: ['烦躁', '挫败', '沮丧', '失望','嫉妒','忧虑','内疚','羞愧','伤心'], position: 85 },
+      { name: '有点不愉快', sub: ['焦虑', '不安', '担忧', '紧张','孤独','冷漠'], position: 160 },
+      { name: '不悲不喜', sub: ['满足', '平静', '感恩','中立', '无感'], position: 325},
+      { name: '有点愉快', sub: ['平静', '满足', '放松', '舒适'], position: 410 },
+      { name: '愉快', sub: ['愉悦', '开心', '感恩', '欣慰'], position: 490 },
       { name: '非常愉快', sub: ['喜悦', '幸福', '激动', '狂喜'], position: 600 }
     ],
     isSliding: false,
     startTouchX: 0, // 记录触摸开始位置
-    startSliderPosition: 300, // 记录触摸开始时的滑块位置
+    startSliderPosition: 325, // 记录触摸开始时的滑块位置
     currentText: '',
     currentTextLength: 0,
     savedRecords: [],
@@ -69,16 +70,26 @@ Page({
       if (res && res[0]) {
         const trackRect = res[0];
         
-        console.log('🔍 轨道信息:', {
-          trackLeft: trackRect.left,
-          trackWidth: trackRect.width,
-          trackRight: trackRect.right
+        // 获取屏幕宽度，计算rpx与px的换算关系
+        const screenWidth = wx.getSystemInfoSync().screenWidth;
+        const rpxRatio = 750 / screenWidth; // 750rpx = 屏幕宽度px
+        
+        console.log('🔍 单位换算信息:', {
+          screenWidth: screenWidth,
+          rpxRatio: rpxRatio,
+          trackWidthPx: trackRect.width,
+          trackWidthRpx: trackRect.width * rpxRatio
         });
+        
+        // 计算轨道的实际rpx宽度
+        const trackWidthRpx = trackRect.width * rpxRatio;
         
         this.setData({
           isSliding: true,
-          trackLeft: trackRect.left, // 记录轨道位置
-          trackWidth: trackRect.width // 记录轨道宽度
+          trackLeft: trackRect.left, // px单位
+          trackWidth: trackRect.width, // px单位
+          trackWidthRpx: trackWidthRpx, // 轨道实际rpx宽度
+          rpxRatio: rpxRatio // rpx与px的换算比例
         });
       }
     });
@@ -89,27 +100,27 @@ Page({
     if (!this.data.isSliding || !this.data.trackLeft) return;
     
     const touch = e.touches[0];
-    const sliderWidth = 600; // 预设滑动条宽度
+    // 使用记录的轨道位置计算相对位置（px单位）
+    const relativeXPx = touch.clientX - this.data.trackLeft;
     
-    // 使用记录的轨道位置计算相对位置
-    const relativeX = touch.clientX - this.data.trackLeft;
+    // 转换为rpx单位
+    const relativeXRpx = relativeXPx * this.data.rpxRatio;
     
-    // 将实际轨道位置映射到预设的0-600范围
-    const actualTrackWidth = this.data.trackWidth;
-    const sliderPosition = (relativeX / actualTrackWidth) * sliderWidth;
+    // 使用轨道的实际rpx宽度进行限制（考虑滑块thumb的宽度）
+    const trackWidthRpx = this.data.trackWidthRpx || 358;
+    const thumbWidthRpx = 50; // 滑块thumb的宽度
+    const maxSliderPosition = trackWidthRpx - thumbWidthRpx; // 确保滑块thumb不超出轨道
+    const clampedPosition = Math.max(0, Math.min(relativeXRpx, maxSliderPosition));
     
-    // 限制在滑动条范围内 (0 到 sliderWidth)
-    const clampedPosition = Math.max(0, Math.min(sliderPosition, sliderWidth));
-    
-    // 调试信息
-    console.log('🔍 滑动调试:', {
+    console.log('🔍 滑动位置计算:', {
       touchX: touch.clientX,
-      trackLeft: this.data.trackLeft,
-      trackWidth: actualTrackWidth,
-      relativeX: relativeX,
+      relativeXPx: relativeXPx,
+      relativeXRpx: relativeXRpx,
       sliderPosition: clampedPosition,
-      maxPosition: sliderWidth
+      maxPosition: trackWidthRpx
     });
+    
+
     
     // 更新滑块位置和情绪
     this.setData({
