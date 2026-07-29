@@ -27,14 +27,14 @@
         
         <!-- 分类下的勋章列表 -->
         <view wx:if="{{item.unlockedCount > 0}}" class="badges-grid flex-row flex-wrap justify-start">
-          <view wx:for="{{item.badges}}" wx:key="id" class="flex-col items-center badge-item" style="width: 33.33%; margin-bottom: 40rpx;">
+          <view wx:for="{{item.badges}}" wx:for-item="badge" wx:key="id" class="flex-col items-center badge-item" style="width: 33.33%; margin-bottom: 40rpx;">
             <image
               class="font_2"
-              src="{{item.imageUrl}}"
+              src="{{badge.imageUrl}}"
               mode="aspectFit"
               style="width: 200rpx; height: 200rpx; border-radius: 20rpx;"
             />
-            <text class="font_3 mt-14">{{item.name}}</text>
+            <text class="font_3 mt-14">{{badge.name}}</text>
           </view>
         </view>
         

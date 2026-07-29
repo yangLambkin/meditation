@@ -61,10 +61,12 @@ const TEAM_COLLECTION_SCHEMAS = {
       _id: 'string',                 // 行为ID
       teamId: 'string',              // 团队ID
       inviterId: 'string',           // 邀请者openid
+      inviteeId: 'string',           // 被邀请者openid（可为空，recordInviteRelation 写入）
       inviteId: 'string',            // 邀请记录ID
       actionType: 'string',          // 行为类型（generate/accept/decline）
       actionTime: 'date',            // 行为时间
-      targetUser: 'string',          // 目标用户openid（可为空）
+      inviteTime: 'date',            // 邀请时间（recordInviteRelation 写入）
+      status: 'string',              // 状态（recordInviteRelation 写入）
       details: 'object',             // 行为详情
       createdAt: 'date'              // 创建时间
     },

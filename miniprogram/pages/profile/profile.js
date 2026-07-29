@@ -291,7 +291,10 @@ Page({
       }
       
       // 5. 设置新的主标识
+      const oldUserOpenId = wx.getStorageSync('userOpenId');
       wx.setStorageSync('userOpenId', wechatOpenId);
+      // 登录换绑：将本地(local_)期间已解锁的勋章迁移到微信 openid 缓存（修复风险③）
+      require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, wechatOpenId);
       
       console.log('✅ 微信登录完成，映射关系建立:', {
         from: localUserId,
@@ -508,9 +511,12 @@ Page({
    */
   saveToLocalStorage(userInfo, openid) {
     // 保存用户信息
+    const oldUserOpenId = wx.getStorageSync('userOpenId');
     wx.setStorageSync('userInfo', userInfo);
     wx.setStorageSync('userNickname', userInfo.nickName);
     wx.setStorageSync('userOpenId', openid);
+    // 登录/保存：将本地(local_)期间已解锁的勋章迁移到新 openid 缓存（修复风险③）
+    require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, openid);
     
     // 保存完整的用户数据
     const userData = {

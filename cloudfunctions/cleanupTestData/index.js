@@ -7,6 +7,16 @@ cloud.init({
 
 const db = cloud.database();
 
+// 业务日期工具：按东八区（中国时区 UTC+8）生成 YYYY-MM-DD，与前端/主云函数统一基准（根因③）
+function getBusinessDate(date) {
+  const d = date ? new Date(date) : new Date();
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const y = utc8.getUTCFullYear();
+  const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(utc8.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /**
  * 一键删除测试数据云函数
  * 支持完整清理和安全清理两种模式
@@ -89,7 +99,7 @@ async function safeCleanupTestData() {
     const today = new Date();
     const testPeriod = {
       startDate: '2026-01-01',  // 测试开始日期
-      endDate: today.toISOString().split('T')[0]  // 今天，包括今天的数据
+      endDate: getBusinessDate(today)  // 今天（东八区），包括今天的数据
     };
     
     let totalDeleted = 0;

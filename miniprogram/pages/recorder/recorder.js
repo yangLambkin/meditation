@@ -1,6 +1,7 @@
 // 引入云存储API
 const checkinManager = require('../../utils/checkin.js');
 const cloudApi = require('../../utils/cloudApi.js');
+const dateUtil = require('../../utils/dateUtil.js');
 
 Page({
   data: {
@@ -323,7 +324,7 @@ Page({
       
       // 获取当天日期（YYYY-MM-DD格式）
       const today = new Date();
-      const todayDate = today.toISOString().split('T')[0];
+      const todayDate = dateUtil.getBusinessDate(today);
       
       console.log('🔍 加载记录调试:', {
         totalRecords: allRecords.length,
@@ -664,7 +665,7 @@ Page({
     }
     
     // 获取今日打卡次数用于显示
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = dateUtil.getBusinessDate(today);
     const todayCheckinCount = checkinManager.getDailyCheckinCountSync(todayStr);
     
     wx.showToast({

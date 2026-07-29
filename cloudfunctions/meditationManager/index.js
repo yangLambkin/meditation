@@ -5,6 +5,23 @@ cloud.init({
 
 const db = cloud.database();
 
+// 业务日期工具：统一按东八区（中国时区 UTC+8）划分"天/月"，作为唯一日期基准。
+// 避免 new Date().toISOString() 返回 UTC 日期导致中国时区 00:00-08:00 归属前一天/月（全局根因③）。
+// 采用"时间 +8h 后用 UTC 分量取值"技巧，使结果不受运行环境本地时区影响，
+// 保证云端与前端（用户手机）使用完全一致的日期基准。
+function getBusinessDate(date) {
+  const d = date ? new Date(date) : new Date();
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const y = utc8.getUTCFullYear();
+  const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(utc8.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getBusinessMonth(date) {
+  return getBusinessDate(date).substring(0, 7);
+}
+
 // 云函数入口函数
 exports.main = async (event, context) => {
   // 处理定时触发器
@@ -72,7 +89,7 @@ exports.main = async (event, context) => {
 async function recordMeditation(openid, data, localUserId = null) {
   try {
     const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
+    const dateStr = getBusinessDate(now);
     
     // 创建打卡记录 - 支持本地用户标识映射
     const record = {
@@ -187,17 +204,38 @@ async function updateUserStats(openid, dateStr, duration) {
         console.log(`新的一天打卡，重置时长: ${duration}`);
       }
       
-      // 更新当月总分钟数
+      // 更新当月总分钟数：跨月时清零重置为当月值，避免 monthlyTotalDuration 沦为累计值（修复 4.2）
       const currentMonthlyTotal = stats.monthlyTotalDuration || 0;
-      updateData.monthlyTotalDuration = db.command.inc(duration);
-      console.log(`更新当月总分钟数: ${currentMonthlyTotal} + ${duration} = ${currentMonthlyTotal + duration}`);
+      const lastMonthStr = (stats.lastCheckinDate || '').substring(0, 7);
+      const isNewMonth = lastMonthStr !== monthStr;
+      if (isNewMonth) {
+        // 跨月首次打卡：重置为当月当前时长（与 dailyTotalDuration 同口径）
+        updateData.monthlyTotalDuration = duration;
+        console.log(`跨月重置当月总分钟数: ${currentMonthlyTotal} -> ${duration} (${lastMonthStr} -> ${monthStr})`);
+      } else {
+        updateData.monthlyTotalDuration = db.command.inc(duration);
+        console.log(`更新当月总分钟数: ${currentMonthlyTotal} + ${duration} = ${currentMonthlyTotal + duration}`);
+      }
       
-      // 更新最长连续天数
+      // 计算本次打卡后的连续天数（用于最长连续天数取 max；修复 4.3：同一天多次打卡不再虚高）
+      let newStreak = stats.currentStreak || 1;
+      if (isNewDay && stats.lastCheckin) {
+        const lastDate = new Date(stats.lastCheckin);
+        const currentDate = new Date(dateStr);
+        const diffDays = Math.floor((currentDate - lastDate) / (1000 * 60 * 60 * 24));
+        if (diffDays === 1) {
+          newStreak = (stats.currentStreak || 0) + 1;
+        } else if (diffDays > 1) {
+          newStreak = 1;
+        }
+        // diffDays === 0（同一天）时 newStreak 保持 stats.currentStreak，连续天数不增长
+      }
+
+      // 更新最长连续天数：取历史最大值，仅在连续天数真正增长时更新
       const currentLongestCheckInDays = stats.longestCheckInDays || 1;
-      const newCurrentStreak = stats.currentStreak + 1;
-      if (newCurrentStreak > currentLongestCheckInDays) {
-        updateData.longestCheckInDays = newCurrentStreak;
-        console.log(`更新最长连续天数: ${currentLongestCheckInDays} -> ${newCurrentStreak}`);
+      if (newStreak > currentLongestCheckInDays) {
+        updateData.longestCheckInDays = newStreak;
+        console.log(`更新最长连续天数: ${currentLongestCheckInDays} -> ${newStreak}`);
       }
       
       if (isNewDay) {
@@ -512,7 +550,7 @@ async function getRankings(period) {
       success: true,
       data: {
         type: period,
-        period: new Date().toISOString().split('T')[0],
+        period: getBusinessDate(),
         snapshotTime: new Date(),
         rankings: rankings,
         totalUsers: userStats.data.length,
@@ -1027,7 +1065,7 @@ async function getRankingSnapshot(event, context) {
 async function generateRankingSnapshot(event) {
   try {
     const { type = 'daily' } = event;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getBusinessDate();
     
     // 查询当前所有登录用户数据（按当日总时长降序）
     const users = await db.collection("user_stats")
@@ -1076,7 +1114,7 @@ async function generateRankingSnapshot(event) {
 // 初始化排名快照集合（创建集合和索引）
 async function initRankingSnapshot() {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getBusinessDate();
     
     console.log('开始初始化排名快照集合...');
     

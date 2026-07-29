@@ -1,5 +1,6 @@
 // 云存储API（仅在需要时使用）
 const cloudApi = require('./cloudApi.js');
+const dateUtil = require('./dateUtil.js');
 
 // 打卡管理系统 - 本地优先架构
 const checkinManager = {
@@ -680,7 +681,7 @@ const checkinManager = {
   // 记录打卡（本地优先，异步云端备份）
   recordCheckin: function(duration, rating, experience = "") {
     const today = new Date();
-    const dateStr = today.toISOString().split('T')[0];
+    const dateStr = dateUtil.getBusinessDate(today);
     
     // 1. 立即写入本地存储（保证响应速度）
     const localResult = this.recordToLocal(duration, rating, experience);
@@ -699,7 +700,7 @@ const checkinManager = {
   // 本地存储记录
   recordToLocal: function(duration, rating, experience = "") {
     const today = new Date();
-    const dateStr = today.toISOString().split('T')[0];
+    const dateStr = dateUtil.getBusinessDate(today);
     const monthStr = dateStr.substring(0, 7);
     
     // 获取本地数据
@@ -1195,7 +1196,7 @@ const checkinManager = {
   // 实时计算当月总分钟数
   calculateCurrentMonthMinutes: function() {
     try {
-      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      const currentMonth = dateUtil.getBusinessMonth();
       const userData = this.getUserCheckinData();
       
       const totalMinutes = Object.keys(userData.dailyRecords || {})
@@ -1223,7 +1224,7 @@ const checkinManager = {
       const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
       
       // 检查缓存月份是否匹配
-      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      const currentMonth = dateUtil.getBusinessMonth();
       if (monthlyStatsCache.currentMonth !== currentMonth) {
         console.log(`📊 缓存月份不匹配，需要重新计算 (缓存: ${monthlyStatsCache.currentMonth}, 当前: ${currentMonth})`);
         return false;
@@ -1265,7 +1266,7 @@ const checkinManager = {
     try {
       const userId = this.getUserId();
       const storageKey = `meditation_monthly_stats_${userId}`;
-      const currentMonth = new Date().toISOString().split('T')[0].substring(0, 7);
+      const currentMonth = dateUtil.getBusinessMonth();
       
       const monthlyStatsCache = {
         currentMonth: currentMonth,

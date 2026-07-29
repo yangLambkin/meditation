@@ -28,19 +28,30 @@ Page({
    * 创建新团队按钮点击事件
    */
   createNewTeam: function() {
-    // 检查用户是否登录（通过userLoginData缓存）
+    // 检查用户是否登录（检查多个可能的缓存字段）
     const userLoginData = wx.getStorageSync('userLoginData');
+    const userOpenId = wx.getStorageSync('userOpenId');
+    const userInfo = wx.getStorageSync('userInfo');
     
-    if (!userLoginData) {
+    console.log('🔍 登录验证调试:', {
+      userLoginData: !!userLoginData,
+      userOpenId: userOpenId,
+      userInfo: !!userInfo,
+      所有缓存: wx.getStorageInfoSync()
+    });
+    
+    // 使用更宽松的登录验证逻辑
+    if (!userOpenId && !userInfo && !userLoginData) {
       wx.showModal({
         title: '提示',
-        content: '请先登录后再创建空间',
+        content: '请先登录后再创建团队',
         showCancel: false,
         confirmText: '确定'
       });
       return;
     }
     
+    console.log('✅ 用户已登录，允许创建团队');
     wx.navigateTo({
       url: '/subpackages/team/pages/createTeam/createTeam'
     })

@@ -1,6 +1,7 @@
 // pages/history/history.js
 const checkinManager = require('../../utils/checkin.js');
 const lunarUtil = require('../../utils/lunar.js');
+const dateUtil = require('../../utils/dateUtil.js');
 
 Page({
   data: {
@@ -44,7 +45,7 @@ Page({
       this.loadHistoryRecords(date);
     } else {
       // 如果没有日期参数，默认显示今天
-      const today = new Date().toISOString().split('T')[0];
+      const today = dateUtil.getBusinessDate();
       const [year, month, day] = today.split('-');
       const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
       const solarDate = new Date();

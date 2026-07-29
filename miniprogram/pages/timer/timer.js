@@ -23,6 +23,7 @@ Page({
       { value: 15, text: "15 分钟" },
       { value: 20, text: "20 分钟" },
       { value: 30, text: "30 分钟" },
+      { value: 60, text: "60 分钟" },
       { value: "custom", text: "自定义" }
     ],
     

@@ -382,8 +382,11 @@ Page({
     console.log('保存基础用户信息，openid:', openid);
     
     // 保存到本地缓存
+    const oldUserOpenId = wx.getStorageSync('userOpenId');
     wx.setStorageSync('userOpenId', openid);
     wx.setStorageSync('userNickname', '微信用户');
+    // 登录/换绑：将本地(local_)期间已解锁的勋章迁移到新 openid 缓存（修复风险③）
+    require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, openid);
     
     // 保存到云数据库（只有openid）
     this.saveBasicUserToCloud(openid);
@@ -396,9 +399,12 @@ Page({
     console.log('保存用户信息，openid:', openid);
     
     // 保存用户信息到本地缓存
+    const oldUserOpenId = wx.getStorageSync('userOpenId');
     wx.setStorageSync('userInfo', userInfo);
     wx.setStorageSync('userNickname', userInfo.nickName);
     wx.setStorageSync('userOpenId', openid);
+    // 登录/换绑：将本地(local_)期间已解锁的勋章迁移到新 openid 缓存（修复风险③）
+    require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, openid);
     
     // 保存用户数据到本地
     const userData = {

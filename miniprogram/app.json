@@ -52,7 +52,7 @@
       },
       {
         "pagePath": "pages/team/team",
-        "text": "空间",
+        "text": "团队",
         "iconPath": "/images/icons/team.png",
         "selectedIconPath": "/images/icons/team-active.png"
       },

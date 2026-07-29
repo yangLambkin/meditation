@@ -12,13 +12,23 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+// 业务日期工具：按东八区（中国时区 UTC+8）生成 YYYY-MM-DD，与云端 cleanupTestData 统一基准（根因③）
+function getBusinessDate(date) {
+  const d = date ? new Date(date) : new Date();
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const y = utc8.getUTCFullYear();
+  const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(utc8.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // 配置
 const CONFIG = {
   cloudFunctionName: 'cleanupTestData',
   // 测试期间日期范围（默认：2026年1月1日到今天）
   testPeriod: {
     startDate: '2026-01-01',
-    endDate: new Date().toISOString().split('T')[0]  // 今天，包括今天的数据
+    endDate: getBusinessDate(new Date())  // 今天（东八区），包括今天的数据
   }
 };
 

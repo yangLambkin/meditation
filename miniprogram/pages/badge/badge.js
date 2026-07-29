@@ -12,6 +12,9 @@ Page({
     hasBadges: false // 是否有勋章
   },
 
+  // 加载去重锁：避免 onLoad 与 onShow 并发两次云端调用
+  _loadingBadge: false,
+
   /**
    * 生命周期函数--监听页面加载
    */
@@ -30,6 +33,9 @@ Page({
    * 加载勋章数据
    */
   async loadBadgeData() {
+    // 去重：onLoad 与 onShow 都会触发，避免并发两次云端调用
+    if (this._loadingBadge) return;
+    this._loadingBadge = true;
     try {
       // 尝试从云端同步勋章数据
       await badgeManager.loadBadgesFromCloud();
@@ -51,6 +57,8 @@ Page({
       console.error('加载勋章数据失败:', error);
       // 降级处理：只使用本地数据
       this.updateBadgeDisplay();
+    } finally {
+      this._loadingBadge = false;
     }
   },
 
@@ -76,7 +84,7 @@ Page({
         const stats = result.result.data;
         return {
           currentStreak: stats.currentStreak || 0,
-          totalCheckinDays: stats.totalCheckinDays || 0,
+          totalCheckinDays: stats.totalDays || 0, // 云端字段名为 totalDays（累计打卡天数）
           lastDuration: stats.lastCheckinDuration || 0,
           totalDuration: stats.totalDuration || 0
         };

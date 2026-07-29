@@ -37,7 +37,7 @@
             <text class="mt-14 font_4">当月总分钟</text>
           </view>
           <view class="flex-col items-center group_3">
-            <text class="font_3">{{consecutiveDays}}</text>
+            <text class="font_3">{{longestCheckInDays}}</text>
             <text class="mt-14 font_4">最长连续天数</text>
           </view>
         </view>
@@ -54,7 +54,7 @@
             <image
               class="shrink-0 image"
             />
-            <text class="font_2 text_7 ml-17">打卡记录</text>
+            <text class="font_2 text_7 ml-17">觉察日记</text>
           </view>
           <image
             class="image_3"
@@ -77,7 +77,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 ml-17">收藏的引导语</text>
+          <text class="font_2 ml-17">我的收藏</text>
         </view>
         <image
           class="image_3"
@@ -101,7 +101,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.0</text>
+          <text class="font_2 text_9 ml-17">版本 V2.2</text>
         </view>
         <image
           class="image_3"

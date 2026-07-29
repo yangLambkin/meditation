@@ -2,45 +2,35 @@ const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
 const imageConfig = require('../../config/images.js');
 const badgeManager = require('../../utils/badgeManager.js');
+const dateUtil = require('../../utils/dateUtil.js');
 
 Page({
   data: {
-    year: 2026, // 年份
-    month: 1, // 月份
-    day: 23, // 日期
-    weekDay: '星期五', // 星期
-    lunarDate: '农历腊月初五', // 农历日期
-    userName: '静心者', // 用户名
-    userAvatar: '/images/avatar.png', // 用户头像，默认使用项目头像
-    userLevel: 'Lv.3 修行中', // 用户等级
-    totalMinutes: 0, // 本次打卡静坐分钟数
-    totalCount: 43, // 累计打卡次数
-    wisdomQuote: '', // 金句内容，初始为空
-    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1透明gif占位，避免闪烁
-    highestLevelBadge: null // 最高等级勋章
+    // 唯一必要的占位：displayImage 由云存储异步加载，加载完成前用 1x1 透明 gif 占位，避免裂图/闪烁
+    // 其余字段（日期/用户/统计/勋章）均在 onLoad 中同步填充，无需占位初值
+    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
   },
 
   onLoad(options) {
-    // 优化：预加载图片，避免闪烁
-    
-    // 1. 先预加载随机图片
+    // 1. 立即同步设置当前日期，避免首屏闪现默认日期 23（日期设置不应依赖异步图片预加载）
+    this.setCurrentDateInfo();
+
+    // 2. 预加载随机图片（仅影响 displayImage，不阻塞日期）
     this.preloadRandomImage().then(() => {
-      // 图片预加载完成后，设置基本数据
-      this.setCurrentDateInfo();
+      // 图片预加载成功，displayImage 已在 preloadRandomImage 内设置
     }).catch(error => {
-      // 如果预加载失败，降级到默认图片并继续
+      // 如果预加载失败，降级到默认图片
       console.warn('图片预加载失败，使用默认图片:', error);
       this.setData({
         displayImage: '/images/p1.png'
       });
-      this.setCurrentDateInfo();
     });
-    
-    // 2. 异步加载金句（不影响图片显示）
+
+    // 3. 异步加载金句（不影响图片显示）
     setTimeout(() => {
       this.getRandomWisdom();
     }, 100);
-    
+
     console.log('开始预加载图片，避免闪烁');
   },
 
@@ -52,6 +42,8 @@ Page({
     
     // 重新获取用户数据，确保显示最新的登录状态
     this.getUserData();
+    // 返回页面时刷新日期（跨天场景）
+    this.setCurrentDateInfo();
     
     console.log('=== daily1页面onShow函数结束 ===');
   },
@@ -373,7 +365,7 @@ Page({
     try {
       // 获取当前日期
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
+      const todayStr = dateUtil.getBusinessDate(today);
       
       // 1. 直接从本地缓存获取今日打卡数据
       const todayCheckinCount = this.getTodayCheckinCountFromLocal(todayStr);

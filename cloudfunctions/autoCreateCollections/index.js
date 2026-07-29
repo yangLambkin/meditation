@@ -100,51 +100,64 @@ const COLLECTION_SCHEMAS = {
     }
   },
   
-  // invites 表结构（邀请记录表）
+  // invites 表结构（邀请记录表）—— 字段以 teamManager 运行时为准（camelCase）
   invites: {
     description: '团队邀请记录表',
     sampleData: {
       _id: 'invite_123456789',              // 邀请ID
-      team_id: 'team_123456789',            // 团队ID
-      inviter_openid: 'user_openid_123',    // 邀请人openid
-      invitee_openid: '',                   // 被邀请人openid（为空表示未加入）
-      invite_code: 'TEAM123456789',         // 邀请码
-      invite_url: 'pages/joinTeam/joinTeam?invite_code=TEAM123456789', // 邀请链接
+      teamId: 'team_123456789',             // 团队ID
+      teamName: '示例团队',                  // 团队名称
+      inviterId: 'user_openid_123',         // 邀请人openid
+      inviterName: '微信用户',               // 邀请人昵称
+      inviteToken: 'token_123456789',       // 邀请凭证
+      sharePath: 'pages/joinTeam/joinTeam?teamId=team_123456789&inviterId=user_openid_123&inviteId=invite_123456789', // 分享路径
       status: 'pending',                    // 邀请状态：pending/accepted/expired
-      expire_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7天后过期
-      created_at: new Date(),               // 创建时间
-      updated_at: new Date()                // 更新时间
+      inviteeId: '',                        // 被邀请人openid（为空表示未加入）
+      inviteTime: new Date(),               // 邀请时间
+      acceptTime: null,                     // 接受时间
+      expireTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7天后过期
+      createdAt: new Date(),                // 创建时间
+      updatedAt: new Date()                 // 更新时间
     }
   },
-  
-  // team_members 表结构（团队成员关系表）
+
+  // team_members 表结构（团队成员关系表）—— 字段以 teamManager 运行时为准（camelCase）
   team_members: {
     description: '团队成员关系表',
     sampleData: {
-      _id: 'member_123456789',              // 成员关系ID
-      team_id: 'team_123456789',            // 团队ID
-      user_openid: 'user_openid_123',       // 成员openid
+      _id: 'team_123456789_user_openid_123',// 成员关系ID（团队ID_用户openid）
+      teamId: 'team_123456789',             // 团队ID
+      openid: 'user_openid_123',            // 成员openid
+      nickname: '微信用户',                  // 成员昵称
       role: 'member',                       // 角色：creator/admin/member
-      joined_at: new Date(),                // 加入时间
-      created_at: new Date(),               // 创建时间
-      updated_at: new Date()                // 更新时间
+      joinedAt: new Date(),                 // 加入时间
+      invitedBy: '',                        // 邀请人openid（可为空）
+      inviteId: 'invite_123456789',         // 邀请记录ID（可为空）
+      status: 'active',                     // 成员状态：active/inactive
+      lastActive: new Date(),               // 最后活跃时间
+      checkInCount: 0,                      // 打卡次数
+      createdAt: new Date(),                // 创建时间
+      updatedAt: new Date()                 // 更新时间
     }
   },
-  
-  // invite_actions 表结构（邀请行为记录表）
+
+  // invite_actions 表结构（邀请行为记录表）—— 字段以 teamManager 运行时为准（camelCase）
   invite_actions: {
     description: '邀请行为记录表',
     sampleData: {
       _id: 'action_123456789',              // 行为ID
-      invite_id: 'invite_123456789',        // 邀请ID
-      action_type: 'accept',                // 行为类型：create/invite/accept
-      user_openid: 'user_openid_123',       // 执行人openid
-      action_data: {                        // 行为数据
-        timestamp: 1643625600000,
-        device_info: 'iPhone 12'
+      teamId: 'team_123456789',             // 团队ID
+      inviterId: 'user_openid_123',         // 邀请人openid
+      inviteeId: 'user_openid_456',         // 被邀请人openid（可为空）
+      inviteId: 'invite_123456789',         // 邀请记录ID
+      actionType: 'generate',               // 行为类型：generate/accept/decline
+      actionTime: new Date(),               // 行为时间
+      inviteTime: new Date(),               // 邀请时间（关系记录用）
+      status: 'accepted',                   // 状态（关系记录用）
+      details: {                            // 行为详情
+        inviteTime: 1643625600000
       },
-      created_at: new Date(),               // 创建时间
-      updated_at: new Date()                // 更新时间
+      createdAt: new Date()                 // 创建时间
     }
   }
   

@@ -309,6 +309,48 @@ class BadgeManager {
   }
 
   /**
+   * 登录/换绑时迁移本地勋章缓存（修复风险③）
+   * 未登录（local_xxx）期间解锁的勋章原本存于 userBadges_${localId}，
+   * 登录后 userOpenId 切换为微信 openid，缓存 key 随之改变，导致勋章（尤其 single_duration 类，
+   * 因登录时 lastDuration 为 0 无法重新满足条件）丢失。
+   * 本方法将旧 key 中已解锁的勋章合并到新 openid 缓存，并保留原始 unlockTime。
+   * @param {string} fromOpenid 迁移前的 userOpenId（可能为 local_xxx 或空）
+   * @param {string} toOpenid   迁移后的 userOpenId（真实 openid）
+   */
+  migrateBadges(fromOpenid, toOpenid) {
+    try {
+      if (!toOpenid || fromOpenid === toOpenid) return;
+
+      const fromKey = fromOpenid ? `userBadges_${fromOpenid}` : 'userBadges_guest';
+      const toKey = `userBadges_${toOpenid}`;
+      const fromBadges = wx.getStorageSync(fromKey);
+      if (!fromBadges || Object.keys(fromBadges).length === 0) return;
+
+      const toBadges = wx.getStorageSync(toKey) || {};
+      let changed = false;
+
+      Object.keys(fromBadges).forEach(badgeId => {
+        const fb = fromBadges[badgeId];
+        if (fb && fb.isUnlocked && (!toBadges[badgeId] || !toBadges[badgeId].isUnlocked)) {
+          toBadges[badgeId] = { isUnlocked: true, unlockTime: fb.unlockTime };
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        wx.setStorageSync(toKey, toBadges);
+        console.log(`✅ 勋章缓存已迁移: ${fromKey} → ${toKey}`);
+        // 重新加载内存中的勋章状态，使其指向新 openid 缓存
+        this.badges = this.loadBadgesFromStorage();
+        // 新 openid 为真实用户，触发一次云端同步，补齐迁移来的勋章
+        this.syncBadgesToCloud();
+      }
+    } catch (e) {
+      console.warn('⚠️ 勋章缓存迁移失败（不影响登录）:', e.message);
+    }
+  }
+
+  /**
    * 检查用户是否满足勋章获取条件
    * @param {Object} userStats - 用户统计数据
    */
@@ -333,6 +375,8 @@ class BadgeManager {
           break;
           
         case 'total_checkin':
+          // ⚠️ 累计打卡天数类勋章：必须以云端/本地的 totalDays 作为判定源。
+          // 调用方必须传入 totalCheckinDays: stats.totalDays（不要传错字段），否则该分支永远取 0（历史 bug）。
           if (totalCheckinDays >= badge.condition.days) {
             this.unlockBadge(badgeId);
             hasNewUnlock = true;
