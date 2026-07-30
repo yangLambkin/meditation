@@ -44,9 +44,9 @@ Page({
       const userStats = await this.getUserStatistics();
       
       // 检查用户数据是否符合勋章解锁条件
-      const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
+      const unlockResult = badgeManager.checkBadgeUnlock(userStats);
       
-      if (hasUnlocked) {
+      if (unlockResult.hasNewUnlock) {
         console.log('🎉 检测到新勋章解锁');
       }
       
@@ -69,7 +69,7 @@ Page({
     try {
       const openid = wx.getStorageSync('userOpenId');
       if (!openid) {
-        return { currentStreak: 0, totalCheckinDays: 0, lastDuration: 0, totalDuration: 0 };
+        return { longestStreak: 0, totalCheckinDays: 0, lastDuration: 0, totalDuration: 0 };
       }
 
       const result = await wx.cloud.callFunction({
@@ -83,7 +83,8 @@ Page({
       if (result.result && result.result.success) {
         const stats = result.result.data;
         return {
-          currentStreak: stats.currentStreak || 0,
+          // 连续勋章判定源：历史最长连续天数（取两个同义字段的较大值，兼容历史数据）
+          longestStreak: Math.max(stats.longestStreak || 0, stats.longestCheckInDays || 0),
           totalCheckinDays: stats.totalDays || 0, // 云端字段名为 totalDays（累计打卡天数）
           lastDuration: stats.lastCheckinDuration || 0,
           totalDuration: stats.totalDuration || 0
@@ -93,7 +94,7 @@ Page({
       console.error('获取用户统计数据失败:', error);
     }
     
-    return { currentStreak: 0, totalCheckinDays: 0, lastDuration: 0, totalDuration: 0 };
+    return { longestStreak: 0, totalCheckinDays: 0, lastDuration: 0, totalDuration: 0 };
   },
 
   /**

@@ -48,6 +48,9 @@
       </view>
       <text class="text_11">{{item.time}}</text>
     </view>
+    <view class="flex-row self-end emotion-tags" wx:if="{{item.emotion.length > 0}}">
+      <text class="emotion-tag" wx:for="{{item.emotion}}" wx:for-item="emo" wx:key="*this">{{emo}}</text>
+    </view>
     <view class="flex-col justify-start items-start self-end text-wrapper_2" wx:for="{{item.experienceTexts}}" wx:key="index">
       <text class="font_3 text_12">{{item}}</text>
     </view>

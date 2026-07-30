@@ -43,7 +43,7 @@
       
       <!-- 停止按钮 - 使用占位方式确保布局对称 -->
       <view class="stop-btn-wrapper">
-        <view class="weui-btn-circle stop-btn warn-btn" bindtap="stopTimer" wx:if="{{showStopButton}}">
+        <view class="weui-btn-circle stop-btn warn-btn" bindtap="handleStop" wx:if="{{showStopButton}}">
           <image class="stop-btn-icon" src="{{stopIcon}}" />
           <text class="stop-btn-text">停止</text>
         </view>
@@ -64,7 +64,7 @@
           </view>
           <switch checked="{{isCountdown}}" bindchange="toggleMode" />
         </view>
-        <view class="flex-row justify-between items-center section_4" bindtap="showTimePicker">
+        <view class="flex-row justify-between items-center section_4" bindtap="showTimePicker" wx:if="{{isCountdown}}">
           <view class="flex-col items-start">
             <text class="font_2 text_5 text_6">时长</text>
             <text class="mt-8 font text_7">{{durationText}}</text>

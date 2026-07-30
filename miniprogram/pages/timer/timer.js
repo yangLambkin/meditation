@@ -225,8 +225,8 @@ Page({
     
     this.updateDisplay();
     
-    // 检查是否完成
-    if (elapsed >= this.data.totalTime) {
+    // 检查是否完成（仅倒计时模式：到达设定时长才自动结束）
+    if (this.data.isCountdown && elapsed >= this.data.totalTime) {
       this.handleTimerFinished();
     }
   },
@@ -345,6 +345,29 @@ Page({
     console.log('⏹️ 计时器已停止');
   },
 
+  // 停止（用户点击「停止」按钮）
+  // 正计时模式：按实际已用时长跳转记录页；倒计时模式：放弃本次计时、不跳转
+  handleStop() {
+    // 倒计时模式：停止即放弃本次计时
+    if (this.data.isCountdown) {
+      this.stopTimer();
+      return;
+    }
+
+    // 正计时模式：按实际已用秒数四舍五入为分钟（至少 1 分钟）
+    const elapsedSeconds = this.calculateElapsedTime();
+    const elapsedMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
+
+    // 先清理计时资源（停定时器/音乐/亮度），再跳转
+    this.stopTimer();
+
+    console.log('⏹️ 正计时停止，实际时长:', elapsedMinutes + '分钟');
+
+    wx.navigateTo({
+      url: '/pages/recorder/recorder?duration=' + elapsedMinutes
+    });
+  },
+
   // 停止所有计时器
   cleanupTimers() {
     if (this.data.timerInterval) {
@@ -373,12 +396,13 @@ Page({
     const seconds = displaySeconds % 60;
     const displayTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-    let progress = this.data.isCountdown ? 
-      ((this.data.totalTime - this.data.remainingTime) / this.data.totalTime) * 100 :
-      (this.data.elapsedTime / this.data.totalTime) * 100;
-
-    let progressAngle = this.data.isCountdown ? 
-      360 - (progress * 3.6) : progress * 3.6;
+    // 正计时无目标时长，进度环保持空（不误导填充）
+    let progress = 0;
+    let progressAngle = 0;
+    if (this.data.isCountdown) {
+      progress = ((this.data.totalTime - this.data.remainingTime) / this.data.totalTime) * 100;
+      progressAngle = 360 - (progress * 3.6);
+    }
 
     this.setData({
       displayTime: displayTime,

@@ -34,7 +34,7 @@ const COLLECTION_SCHEMAS = {
       date: '2026-01-31',                   // 打卡日期 YYYY-MM-DD
       timestamp: 1643625600000,             // 打卡时间戳
       duration: 25,                         // 静坐时长（分钟）
-      rating: 4,                            // 体验评分（1-5星）
+      emotion: ['不悲不喜'],                 // 情绪标签数组（字符串数组）
       experience: ['exp_123456789'],        // 关联的体验记录ID数组（可能为空数组）
       createdAt: new Date(),                // 创建时间
       updatedAt: new Date()                 // 更新时间

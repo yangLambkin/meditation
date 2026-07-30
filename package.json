@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "cleanup:stats": "node scripts/runCleanup.js stats",
     "cleanup:safe": "node scripts/runCleanup.js safe",
-    "cleanup:full": "node scripts/runCleanup.js full"
+    "cleanup:full": "node scripts/runCleanup.js full",
+    "recompute:badges": "node scripts/runRecomputeBadges.js"
   },
   "repository": {
     "type": "git",

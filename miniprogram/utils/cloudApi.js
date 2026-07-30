@@ -13,7 +13,7 @@ const cloudApi = {
   },
 
   // 记录冥想打卡
-  recordMeditation: async function(duration, rating, experience = "") {
+  recordMeditation: async function(duration, emotion, experience = "") {
     try {
       // 处理experience参数格式（确保与云函数接口兼容）
       let experienceToSend = experience;
@@ -29,7 +29,7 @@ const cloudApi = {
         type: 'recordMeditation',
         data: {
           duration: duration,
-          rating: rating,
+          emotion: emotion,
           experience: experienceToSend
         }
       });
@@ -106,34 +106,6 @@ const cloudApi = {
       }
     } catch (error) {
       console.error('获取用户统计失败:', error);
-      return {
-        success: false,
-        error: '网络错误，请重试'
-      };
-    }
-  },
-
-  // 获取排行榜
-  getRankings: async function(period = 'total') {
-    try {
-      const result = await this.callCloudFunction('meditationManager', {
-        type: 'getRankings',
-        period: period
-      });
-
-      if (result.result.success) {
-        return {
-          success: true,
-          data: result.result.data
-        };
-      } else {
-        return {
-          success: false,
-          error: result.result.error || '获取排行榜失败'
-        };
-      }
-    } catch (error) {
-      console.error('获取排行榜失败:', error);
       return {
         success: false,
         error: '网络错误，请重试'

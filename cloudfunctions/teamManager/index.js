@@ -756,7 +756,7 @@ async function getMemberWeekCheckin(data) {
     const records = result.data.map(record => ({
       timestamp: record.date ? new Date(record.date).getTime() : record.timestamp || Date.now(),
       duration: record.duration || 0,
-      rating: record.rating || 0,
+      emotion: record.emotion || [],
       experience: record.experience || [],
       textCount: record.textCount || 0,
       textPreview: record.textPreview || ''

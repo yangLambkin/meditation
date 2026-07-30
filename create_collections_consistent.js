@@ -18,7 +18,7 @@ const COLLECTION_SCHEMAS = {
       date: 'string',              // 打卡日期 YYYY-MM-DD
       timestamp: 'number',         // 打卡时间戳
       duration: 'number',          // 静坐时长（分钟）
-      rating: 'number',            // 体验评分（1-5星）
+      emotion: 'array',            // 情绪标签数组（字符串数组）
       experience: 'string',        // 体验记录文字
       createdAt: 'date',           // 创建时间
       updatedAt: 'date'            // 更新时间
@@ -65,7 +65,6 @@ const COLLECTION_SCHEMAS = {
       _openid: 'string',           // 用户唯一标识
       text: 'string',              // 体验内容
       timestamp: 'number',         // 记录时间戳
-      rating: 'number',            // 评分
       duration: 'string',          // 时长文本
       created_at: 'date',          // 创建时间
       updated_at: 'date'           // 更新时间
@@ -153,7 +152,7 @@ async function addSampleData(collectionName) {
       sampleData.date = '2026-01-31';
       sampleData.timestamp = Date.now();
       sampleData.duration = 25;
-      sampleData.rating = 4;
+      sampleData.emotion = ['不悲不喜'];
       sampleData.experience = '示例体验记录';
     } else if (collectionName === 'user_stats') {
       sampleData.totalDays = 1;
@@ -177,7 +176,6 @@ async function addSampleData(collectionName) {
     } else if (collectionName === 'experience_records') {
       sampleData.text = '示例体验记录内容';
       sampleData.timestamp = Date.now();
-      sampleData.rating = 4;
       sampleData.duration = '25分钟';
     }
     

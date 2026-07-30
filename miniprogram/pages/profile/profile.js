@@ -1,4 +1,5 @@
 // pages/profile/profile.js
+const contentSec = require('../../utils/contentSec.js')
 Page({
   /**
    * 页面的初始数据
@@ -107,26 +108,42 @@ Page({
 
   /**
    * 选择头像
+   * ⚠️ chooseAvatar 返回 http://tmp/ 短命临时路径，渲染层无法显示，因此：
+   *   1) 立即上传云存储固化为 cloud:// FileID；
+   *   2) 用该稳定文件走腾讯云 IMS 同步安全检测（一次调用即返回 Pass/Block）；
+   *   3) 命中违规 或 检测异常（无法确认安全）→ 一律拦截（fail-closed）。
    */
-  onChooseAvatar(e) {
-    console.log('选择头像:', e.detail);
-    
+  async onChooseAvatar(e) {
     const { avatarUrl } = e.detail;
-    
-    // 微信已处理安全检测，直接使用
-    this.setData({ 
-      avatarUrl,
-      isAvatarSelected: true 
+    console.log('选择头像:', e.detail);
+    if (!avatarUrl) {
+      console.error('chooseAvatar 未返回图片路径');
+      return;
+    }
+
+    // 🔍 内容安全检测 + 固化一步到位：
+    //   chooseAvatar 返回 http://tmp/ 短命临时路径，checkImage 内部会压缩上传到 avatar/ 目录
+    //   并走腾讯云 IMS 同步检测（一次调用返回 Pass/Block）。returnFileID 命中时直接复用
+    //   已上传副本的 cloud:// fileID 作为头像预览与最终存储，省去二次上传。
+    //   命中违规或检测异常（无法确认安全）→ 一律拦截（fail-closed）。
+    const fileID = await contentSec.checkImage(avatarUrl, {
+      scene: 1,
+      bizType: 'avatar',
+      returnFileID: true,
+      cloudPrefix: 'avatar'
     });
-    
-    // 更新表单验证状态
+
+    if (!fileID) {
+      // 拦截（违规或检测不可用）：回滚预览到默认头像
+      this.setData({ avatarUrl: '/images/userLogin.png', isAvatarSelected: false });
+      this.checkFormValidity();
+      return;
+    }
+
+    // 通过：用永久 cloud:// fileID 作为头像预览与最终存储
+    this.setData({ avatarUrl: fileID, isAvatarSelected: true });
     this.checkFormValidity();
-    
-    wx.showToast({
-      title: '头像选择成功',
-      icon: 'success',
-      duration: 1500
-    });
+    wx.showToast({ title: '头像选择成功', icon: 'success', duration: 1500 });
   },
 
   /**
@@ -238,22 +255,16 @@ Page({
   async saveUserInfo() {
     const { avatarUrl, nickname, userType, loginCode } = this.data;
     
-    // 将本地临时文件头像转换为永久网络URL
-    let finalAvatarUrl = avatarUrl;
-    if (avatarUrl && avatarUrl.startsWith('wxfile://tmp_')) {
-      console.log('检测到本地临时文件头像，尝试转换为永久链接');
-      
-      try {
-        // 使用云存储上传文件获取永久URL
-        const cloudFileUrl = await this.uploadAvatarToCloud(avatarUrl);
-        finalAvatarUrl = cloudFileUrl;
-        console.log('✅ 头像已上传到云存储:', finalAvatarUrl);
-      } catch (error) {
-        console.warn('⚠️ 头像上传失败，使用默认头像:', error);
-        finalAvatarUrl = '/images/avatar.png';
-      }
+    // 昵称文本发布前内容安全检测（资料场景 scene=1）。
+    // 头像图片的检测已在 onChooseAvatar 选图时完成，此处不再重复。
+    const nickSafe = await contentSec.checkText(nickname, 1);
+    if (!nickSafe) {
+      return;
     }
     
+    // 头像已在 onChooseAvatar 检测时固化为 cloud:// 永久链接，直接使用，无需再次上传
+    const finalAvatarUrl = avatarUrl;
+
     // 构建新的用户信息结构
     const userInfo = {
       nickName: nickname.trim(),
@@ -333,37 +344,6 @@ Page({
           this.showSuccessAndNavigate();
         });
     }
-  },
-
-  /**
-   * 上传头像到云存储，获取永久URL
-   */
-  uploadAvatarToCloud(localFilePath) {
-    return new Promise((resolve, reject) => {
-      // 生成唯一的文件名
-      const timestamp = new Date().getTime();
-      const randomStr = Math.random().toString(36).substring(2, 8);
-      const cloudPath = `avatars/${timestamp}_${randomStr}.jpg`;
-      
-      console.log('开始上传头像到云存储:', {
-        localPath: localFilePath,
-        cloudPath: cloudPath
-      });
-      
-      wx.cloud.uploadFile({
-        cloudPath: cloudPath,
-        filePath: localFilePath,
-        success: (res) => {
-          console.log('头像上传成功:', res);
-          // 返回文件的FileID，这是永久有效的URL
-          resolve(res.fileID);
-        },
-        fail: (err) => {
-          console.error('头像上传失败:', err);
-          reject(err);
-        }
-      });
-    });
   },
 
   /**
@@ -722,25 +702,21 @@ Page({
         
         console.log('📊 登录后检查勋章条件，用户统计:', localStats);
         
-        // 检查勋章解锁条件
+        // 检查勋章解锁条件（连续勋章判定源为 longestStreak，历史最长连续）
         const userStats = {
-          currentStreak: localStats.currentStreak || 0,
+          longestStreak: localStats.longestStreak || 0,
           totalCheckinDays: localStats.totalDays || 0,
           lastDuration: localStats.lastDuration || 0,
           totalDuration: localStats.totalDuration || 0
         };
         
-        const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
+        const unlockResult = badgeManager.checkBadgeUnlock(userStats);
         
-        if (hasUnlocked) {
+        if (unlockResult.hasNewUnlock) {
           console.log('🎉 登录后检测到新勋章解锁！');
           
-          // 显示勋章解锁提示
-          wx.showToast({
-            title: '恭喜解锁新勋章！',
-            icon: 'success',
-            duration: 3000
-          });
+          // 复用统一的勋章解锁提示（优先展示等级升级），与打卡路径一致
+          checkinManager.showBadgeUnlockToast(unlockResult.newlyUnlocked);
         }
       }, 1000); // 延迟1秒确保登录流程完成
       

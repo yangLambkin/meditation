@@ -1170,41 +1170,23 @@ Page({
       if (rankingData.success && rankingData.data) {
         // 使用实时排名数据
         const rankingInfo = rankingData.data;
-        
+
         console.log('实时排名数据:', {
           currentUserOpenId: rankingInfo.currentUserOpenId,
           currentUserRank: rankingInfo.currentUserRank,
-          currentUserInTop100: rankingInfo.currentUserInTop100,
+          hasRanking: rankingInfo.hasRanking,
           totalUsers: rankingInfo.totalUsers
         });
-        
-        // 设置排名显示
-        let displayRank = rankingInfo.currentUserRank;
-        let showRankUnit = true;
-        
-        // 处理"未上排行榜"和"暂无排名"状态
-        if (rankingInfo.currentUserRank === "未上排行榜" || 
-            rankingInfo.currentUserRank === "暂无排名" ||
-            rankingInfo.currentUserRank === "暂无排名数据" ||
-            (typeof rankingInfo.currentUserRank === 'number' && rankingInfo.currentUserRank > 100)) {
-          displayRank = rankingInfo.currentUserRank;
-          showRankUnit = false;
-        }
-        
-        // 确保"未上排行榜"状态统一显示
-        if ((typeof rankingInfo.currentUserRank === 'number' && rankingInfo.currentUserRank > 100) ||
-            rankingInfo.currentUserRank === "未上排行榜") {
-          displayRank = "未上排行榜";
-          showRankUnit = false;
-        }
-        
+
+        // 根据 hasRanking 决定展示：有名次则显示数字 + "名"单位，否则显示"暂无排名"
+        const hasRanking = rankingInfo.hasRanking === true;
         this.setData({
-          currentUserRank: displayRank,
+          currentUserRank: hasRanking ? rankingInfo.currentUserRank : "暂无排名",
           totalUsers: rankingInfo.totalUsers,
-          showRankUnit: showRankUnit
+          showRankUnit: hasRanking
         });
-        
-        console.log(`实时排名加载完成：用户排名 ${displayRank}，总用户数：${rankingInfo.totalUsers}`);
+
+        console.log(`实时排名加载完成：用户排名 ${hasRanking ? rankingInfo.currentUserRank : '暂无'}, 总用户数：${rankingInfo.totalUsers}`);
       } else {
         // 排名数据获取失败，提供更详细的错误信息
         const errorMessage = rankingData.message || '排名数据获取失败';
@@ -1244,17 +1226,18 @@ Page({
   getCachedCloudRanking: function() {
     return new Promise((resolve, reject) => {
       const CACHE_KEY = 'cloud_ranking_cache';
-      const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6小时缓存
-      
-      // 临时禁用缓存，强制调用云函数进行测试
-      // 检查缓存
+      // 缓存 2 分钟：既挡住高频 onShow 的重复请求，
+      // 又保证打卡后能在较短时间内刷新到最新名次（当日时长频繁变化）
+      const CACHE_DURATION = 2 * 60 * 1000;
+
+      // 命中缓存且未过期时直接返回，避免重复调用云函数
       const cache = wx.getStorageSync(CACHE_KEY);
       if (cache && Date.now() - cache.timestamp < CACHE_DURATION) {
-        console.log('缓存存在但强制刷新，跳过缓存');
-        // resolve(cache.data);
-        // return;
+        console.log('命中排名缓存，直接返回');
+        resolve(cache.data);
+        return;
       }
-      
+
       // 缓存过期，调用云函数
       wx.cloud.callFunction({
         name: 'meditationManager',
@@ -1264,7 +1247,7 @@ Page({
         },
         success: (res) => {
           console.log('云端排名数据获取成功，详细数据:', JSON.stringify(res.result, null, 2));
-          
+
           // 更新缓存
           wx.setStorageSync(CACHE_KEY, {
             data: res.result,

@@ -41,6 +41,10 @@ const checkinManager = {
         monthlyStats: {},
         experienceRecords: {}
       };
+      // 兼容旧缓存：确保 experienceRecords 对象存在
+      if (!userData.experienceRecords) {
+        userData.experienceRecords = {};
+      }
       
       // 保存体验记录
       userData.experienceRecords[uniqueId] = {
@@ -432,7 +436,7 @@ const checkinManager = {
       _id: cloudRecord._id,
       timestamp: cloudRecord.timestamp,
       duration: cloudRecord.duration,
-      rating: cloudRecord.rating,
+      emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
       created_at: cloudRecord.created_at
     };
@@ -560,7 +564,7 @@ const checkinManager = {
       _id: cloudRecord._id,
       timestamp: cloudRecord.timestamp,
       duration: cloudRecord.duration,
-      rating: cloudRecord.rating,
+      emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
       created_at: cloudRecord.created_at
     };
@@ -638,7 +642,7 @@ const checkinManager = {
       localData.checkinRecords.dailyRecords[dateStr].records.push({
         timestamp: record.timestamp,
         duration: record.duration || 0,
-        rating: record.rating || 0,
+        emotion: record.emotion || [],
         experience: record.experience || [],
         textCount: Array.isArray(record.experience) ? record.experience.length : 0,
         textPreview: Array.isArray(record.experience) && record.experience.length > 0 ? 
@@ -654,7 +658,6 @@ const checkinManager = {
               _id: exp._id,
               timestamp: exp.timestamp || record.timestamp,
               text: exp.text || '',
-              rating: exp.rating || 0,
               duration: exp.duration || 0
             };
           }
@@ -679,16 +682,16 @@ const checkinManager = {
   // === 核心数据操作（本地优先） ===
   
   // 记录打卡（本地优先，异步云端备份）
-  recordCheckin: function(duration, rating, experience = "") {
+  recordCheckin: function(duration, emotion, experience = "") {
     const today = new Date();
     const dateStr = dateUtil.getBusinessDate(today);
     
     // 1. 立即写入本地存储（保证响应速度）
-    const localResult = this.recordToLocal(duration, rating, experience);
+    const localResult = this.recordToLocal(duration, emotion, experience);
     
     // 2. 异步备份到云端（如果已登录）
     if (this.isUserLoggedIn()) {
-      this.asyncBackupToCloud(duration, rating, experience);
+      this.asyncBackupToCloud(duration, emotion, experience);
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
@@ -698,7 +701,7 @@ const checkinManager = {
   },
   
   // 本地存储记录
-  recordToLocal: function(duration, rating, experience = "") {
+  recordToLocal: function(duration, emotion, experience = "") {
     const today = new Date();
     const dateStr = dateUtil.getBusinessDate(today);
     const monthStr = dateStr.substring(0, 7);
@@ -740,7 +743,7 @@ const checkinManager = {
     const newRecord = {
       timestamp: today.getTime(),
       duration: duration,
-      rating: rating,
+      emotion: emotion,
       experience: experienceArray, // 存储为数组，与云端一致
       textCount: textCount,
       textPreview: textPreview
@@ -768,7 +771,7 @@ const checkinManager = {
   },
   
   // 异步备份到云端
-  asyncBackupToCloud: async function(duration, rating, experience = "") {
+  asyncBackupToCloud: async function(duration, emotion, experience = "") {
     try {
       // 处理experience参数格式（确保与云端接口兼容）
       let experienceToSend = experience;
@@ -780,7 +783,7 @@ const checkinManager = {
         experienceToSend = experience ? [experience] : [];
       }
       
-      const result = await cloudApi.recordMeditation(duration, rating, experienceToSend);
+      const result = await cloudApi.recordMeditation(duration, emotion, experienceToSend);
       if (result.success) {
         console.log('☁️ 云端备份成功');
       } else {
@@ -803,8 +806,9 @@ const checkinManager = {
         const lastDuration = duration;
         
         // 准备勋章检查需要的用户数据
+        // 连续勋章判定源为 longestStreak（历史最长连续，终身生效），与 badgeManager/云端重算工具一致
         const userStats = {
-          currentStreak: localStats.currentStreak || 0,
+          longestStreak: localStats.longestStreak || 0,
           totalCheckinDays: localStats.totalDays || 0,
           lastDuration: lastDuration,
           totalDuration: localStats.totalDuration || 0
@@ -816,13 +820,13 @@ const checkinManager = {
         const badgeManager = require('./badgeManager.js');
         
         // 检查勋章解锁条件
-        const hasUnlocked = badgeManager.checkBadgeUnlock(userStats);
+        const result = badgeManager.checkBadgeUnlock(userStats);
         
-        if (hasUnlocked) {
+        if (result.hasNewUnlock) {
           console.log('🎉 打卡后检测到新勋章解锁！');
           
-          // 触发勋章解锁通知
-          this.triggerBadgeUnlockNotification();
+          // 触发勋章解锁通知（基于本次新解锁集合）
+          this.showBadgeUnlockToast(result.newlyUnlocked);
         }
         
       }, 100); // 延迟100ms确保本地数据保存完成
@@ -832,26 +836,25 @@ const checkinManager = {
     }
   },
 
-  // 触发勋章解锁通知
-  triggerBadgeUnlockNotification: function() {
+  // 统一的勋章/等级解锁提示（打卡与登录两条路径共用）
+  // newlyUnlocked: 本次新解锁的勋章对象数组（来自 badgeManager.checkBadgeUnlock）
+  showBadgeUnlockToast: function(newlyUnlocked) {
     try {
-      // 获取最新解锁的勋章
-      const badgeManager = require('./badgeManager.js');
-      const unlockedBadges = badgeManager.getUnlockedBadges();
-      
-      if (unlockedBadges.length > 0) {
-        // 显示勋章解锁通知
-        wx.showToast({
-          title: `解锁新勋章: ${unlockedBadges[unlockedBadges.length - 1].name}`,
-          icon: 'success',
-          duration: 3000
-        });
-        
-        // 设置全局标记，在me页面显示解锁提示
-        wx.setStorageSync('showBadgeUnlockHint', true);
-        
-        console.log('✅ 勋章解锁通知已触发');
-      }
+      if (!newlyUnlocked || newlyUnlocked.length === 0) return;
+
+      // 优先展示等级升级（category === 'level'），保证等级提升这一"值得庆祝"的事件不被覆盖丢弃
+      const levelBadge = newlyUnlocked.find(b => b.category === 'level');
+      const toastTitle = levelBadge
+        ? `恭喜升级到 ${levelBadge.name}`
+        : `解锁新勋章: ${newlyUnlocked[0].name}`;
+
+      wx.showToast({
+        title: toastTitle,
+        icon: 'success',
+        duration: 3000
+      });
+
+      console.log(`✅ 勋章解锁通知已触发: ${toastTitle}`);
     } catch (error) {
       console.warn('⚠️ 勋章解锁通知失败:', error.message);
     }
@@ -948,23 +951,33 @@ const checkinManager = {
     
     if (dates.length > 0) {
       // 计算连续打卡天数
-      let currentStreakCalc = 0;
+      // ⚠️ 修复：旧逻辑只按「有记录的日期个数」累加，没有校验日期是否真正相邻（相差1天），
+      // 导致断签也被算作连续，currentStreak/longestStreak 被虚高（勋章误发的根因）。
+      const dayNumber = (dateStr) => {
+        const parts = String(dateStr).split('-').map(Number);
+        return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+      };
+      
+      // 仅保留有打卡记录的日期（升序）
+      const activeDates = dates.filter(dateStr => userData.dailyRecords[dateStr].count > 0);
+      
+      let run = 0;
       let longestStreakCalc = 0;
+      let prevDayNum = null;
       
-      for (let i = dates.length - 1; i >= 0; i--) {
-        const dateStr = dates[i];
-        if (userData.dailyRecords[dateStr].count > 0) {
-          currentStreakCalc++;
-          longestStreakCalc = Math.max(longestStreakCalc, currentStreakCalc);
-          totalDuration += userData.dailyRecords[dateStr].records.reduce((sum, record) => sum + record.duration, 0);
-        } else {
-          currentStreakCalc = 0;
-        }
-      }
+      activeDates.forEach(dateStr => {
+        const dayNum = dayNumber(dateStr);
+        // 仅当与上一打卡日恰好相差1天才算连续，否则重新起算
+        run = (prevDayNum !== null && dayNum === prevDayNum + 1) ? run + 1 : 1;
+        longestStreakCalc = Math.max(longestStreakCalc, run);
+        prevDayNum = dayNum;
+        totalDuration += userData.dailyRecords[dateStr].records.reduce((sum, record) => sum + record.duration, 0);
+      });
       
-      currentStreak = currentStreakCalc;
+      // currentStreak = 以最后一个打卡日结尾的连续段长度
+      currentStreak = run;
       longestStreak = longestStreakCalc;
-      totalDays = dates.filter(dateStr => userData.dailyRecords[dateStr].count > 0).length;
+      totalDays = activeDates.length;
       totalCount = dates.reduce((sum, dateStr) => sum + (userData.dailyRecords[dateStr].count || 0), 0);
     }
     
@@ -1071,7 +1084,7 @@ const checkinManager = {
           // 异步记录到云端（失败不影响本地使用）
           cloudApi.recordMeditation(
             localRecord.duration, 
-            localRecord.rating, 
+            localRecord.emotion || [], 
             localRecord.experience
           ).then(() => {
             console.log(`✅ 记录同步成功: ${dateStr}`);

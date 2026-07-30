@@ -1,5 +1,6 @@
 // pages/createTeam/createTeam.js
 const teamManager = require('../../../../utils/teamManager.js');
+const contentSec = require('../../../../utils/contentSec.js');
 
 Page({
 
@@ -60,22 +61,38 @@ Page({
           sourceType: sourceType, // 来源类型：拍照或相册
           maxDuration: 30, // 最大时长30秒（主要用于视频）
           camera: 'back', // 后置摄像头
-          success: (res) => {
+          success: async (res) => {
             if (res.tempFiles && res.tempFiles.length > 0) {
               const tempFilePath = res.tempFiles[0].tempFilePath;
               console.log('选择的图片路径:', tempFilePath);
               
-              // 更新图标显示为选择的图片
+              // 🔍 内容安全检测：团队图标发布前必须过腾讯云 IMS 同步检测，
+              // 命中违规则不采用（同步返回，立即拦截）。returnFileID 让检测通过时
+              // 直接复用已上传副本的 cloud:// fileID，省去二次上传，且保证
+              // "被检测的文件 == 最终保存的文件"。
+              const iconFileID = await contentSec.checkImage(tempFilePath, {
+                scene: 1,
+                // 复用已在 IMS 控制台配置好的 avatar 审核策略（团队图标本质是同一类图片内容审核，
+                // 无需单独策略；之前传 'teamIcon' 因该策略未配置导致一律被拦截）
+                bizType: 'avatar',
+                returnFileID: true,
+                cloudPrefix: 'team_icons'
+              });
+              if (!iconFileID) {
+                return;
+              }
+
+              // 预览用本地临时图；保存用检测通过的 cloud:// fileID（后续 createTeam 直接复用，不再上传）
               const teamIcons = this.data.teamIcons.map(icon => ({
                 ...icon,
                 path: tempFilePath,
                 selected: true
               }));
-              
+
               this.setData({
                 teamIcons: teamIcons,
                 selectedIcon: 1,
-                customIconPath: tempFilePath // 保存自定义图片路径
+                customIconPath: iconFileID
               });
               
               wx.showToast({
@@ -179,21 +196,21 @@ Page({
       // 确定使用的图标路径
       let iconPath = '';
       if (this.data.customIconPath) {
-        // 如果是临时文件路径，需要上传到云存储获取永久链接
-        if (this.data.customIconPath.startsWith('wxfile://tmp_')) {
-          console.log('🔄 上传临时头像到云存储...');
-          iconPath = await this.uploadImageToCloud(this.data.customIconPath);
-          console.log('✅ 头像上传成功，永久链接:', iconPath);
-        } else {
-          // 已经是永久链接
-          iconPath = this.data.customIconPath;
-        }
+        // 自定义图标已在 chooseImageFromAlbum 检测时固化为 cloud:// 永久链接，直接使用
+        iconPath = this.data.customIconPath;
       } else {
         // 使用预设图标
         const selectedIcon = this.data.teamIcons.find(icon => icon.id === this.data.selectedIcon);
         iconPath = selectedIcon.path;
       }
       
+      // 名称/介绍文本发布前内容安全检测（评论场景 scene=2），
+      // 命中违规由 contentSec 统一提示「所发布内容含违规信息」后中止创建
+      const nameSafe = await contentSec.checkText(this.data.teamName, 2);
+      if (!nameSafe) return;
+      const descSafe = await contentSec.checkText(this.data.teamDescription, 2);
+      if (!descSafe) return;
+
       // 创建团队信息
       const teamInfo = {
         name: this.data.teamName.trim(),
@@ -324,39 +341,4 @@ Page({
 
   },
 
-  /**
-   * 上传图片到云存储，获取永久链接
-   */
-  async uploadImageToCloud(tempFilePath) {
-    try {
-      // 生成唯一的文件名
-      const timestamp = new Date().getTime();
-      const randomStr = Math.random().toString(36).substring(2, 8);
-      const cloudPath = `team_icons/${timestamp}_${randomStr}.png`;
-      
-      // 上传到云存储
-      const uploadResult = await wx.cloud.uploadFile({
-        cloudPath: cloudPath,
-        filePath: tempFilePath
-      });
-      
-      console.log('✅ 图片上传成功:', uploadResult);
-      
-      // 返回云存储文件ID，可以构建永久链接
-      // 云存储文件ID格式：cloud://cloud-name/file-id
-      return uploadResult.fileID;
-      
-    } catch (error) {
-      console.error('❌ 图片上传失败:', error);
-      
-      // 上传失败时降级使用临时路径，但给出警告
-      wx.showToast({
-        title: '头像上传失败，使用临时路径',
-        icon: 'none',
-        duration: 2000
-      });
-      
-      return tempFilePath;
-    }
-  }
 })

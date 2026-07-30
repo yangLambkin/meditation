@@ -166,11 +166,7 @@ Page({
           const time = new Date(record.timestamp);
           const timeStr = `${time.getFullYear()}-${(time.getMonth() + 1).toString().padStart(2, '0')}-${time.getDate().toString().padStart(2, '0')} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}:${time.getSeconds().toString().padStart(2, '0')}`;
           
-          // 创建星星数据
-          const stars = Array.from({ length: 5 }, (_, i) => ({
-            active: i < (record.rating || 0)
-          }));
-          
+
           // 处理体验记录 - 支持多种数据格式
           let experienceTexts = [];
           let hasExperience = false;
@@ -222,8 +218,7 @@ Page({
           return {
             time: timeStr,
             duration: record.duration || 0,
-            rating: record.rating || 0,
-            stars: stars,
+            emotion: record.emotion || [],
             experienceTexts: experienceTexts,
             hasExperience: hasExperience
           };
@@ -319,7 +314,6 @@ Page({
               _id: record.uniqueId, // 使用uniqueId作为ID
               timestamp: record.uniqueId, // 时间戳
               text: record.text || '', // 体验文本
-              rating: record.rating || 0, // 评分
               duration: record.duration || '0分钟' // 时长
             });
           }

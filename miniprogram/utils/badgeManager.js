@@ -355,8 +355,10 @@ class BadgeManager {
    * @param {Object} userStats - 用户统计数据
    */
   checkBadgeUnlock(userStats) {
-    const { currentStreak = 0, totalCheckinDays = 0, lastDuration = 0, totalDuration = 0 } = userStats;
+    const { longestStreak = 0, totalCheckinDays = 0, lastDuration = 0, totalDuration = 0 } = userStats;
     let hasNewUnlock = false;
+    // 收集本次新解锁的勋章对象，供上层提示使用（而非事后从全量已解锁列表取末尾项，避免显示错误勋章）
+    const newlyUnlocked = [];
 
     Object.keys(this.badges).forEach(badgeId => {
       const badge = this.badges[badgeId];
@@ -367,9 +369,13 @@ class BadgeManager {
       // 根据勋章类型检查条件
       switch (badge.condition.type) {
         case 'continuous_checkin':
-          if (currentStreak >= badge.condition.days) {
+          // ⚠️ 判定源必须是「历史最长连续天数」longestStreak（终身生效语义，
+          // 与云端重算工具 recomputeUserBadges 的 longestRun 同源），
+          // 不能用 currentStreak：它曾被旧 bug 虚高，且断签后会导致已达成勋章无法恢复。
+          if (longestStreak >= badge.condition.days) {
             this.unlockBadge(badgeId);
             hasNewUnlock = true;
+            newlyUnlocked.push(badge);
             console.log(`🎉 解锁勋章: ${badge.name}`);
           }
           break;
@@ -380,6 +386,7 @@ class BadgeManager {
           if (totalCheckinDays >= badge.condition.days) {
             this.unlockBadge(badgeId);
             hasNewUnlock = true;
+            newlyUnlocked.push(badge);
             console.log(`🎉 解锁勋章: ${badge.name}`);
           }
           break;
@@ -389,6 +396,7 @@ class BadgeManager {
           if (lastDuration >= badge.condition.minutes) {
             this.unlockBadge(badgeId);
             hasNewUnlock = true;
+            newlyUnlocked.push(badge);
             console.log(`🎉 解锁勋章: ${badge.name}`);
           }
           break;
@@ -398,6 +406,7 @@ class BadgeManager {
           if (totalDuration >= badge.condition.minutes) {
             this.unlockBadge(badgeId);
             hasNewUnlock = true;
+            newlyUnlocked.push(badge);
             console.log(`🎉 解锁等级勋章: ${badge.name}`);
           }
           break;
@@ -409,7 +418,8 @@ class BadgeManager {
       this.syncBadgesToCloud();
     }
 
-    return hasNewUnlock;
+    // 向后兼容：返回对象同时携带 hasNewUnlock（布尔）与 newlyUnlocked（本次新解锁集合）
+    return { hasNewUnlock, newlyUnlocked };
   }
 
   /**
@@ -488,23 +498,35 @@ class BadgeManager {
       });
 
       if (result.result && result.result.success) {
-        const cloudBadges = result.result.data;
+        const cloudBadges = result.result.data || {};
         let hasUpdate = false;
 
-        // 合并云端数据
-        Object.keys(cloudBadges).forEach(badgeId => {
-          if (this.badges[badgeId] && cloudBadges[badgeId].isUnlocked) {
-            if (!this.badges[badgeId].isUnlocked) {
-              this.badges[badgeId].isUnlocked = true;
-              this.badges[badgeId].unlockTime = cloudBadges[badgeId].unlockTime;
-              hasUpdate = true;
-            }
+        // 以云端为准（双向同步）：云端 user_stats.badges 是权威数据源。
+        // 1) 云端已解锁 → 本地补齐；
+        // 2) 云端没有 → 撤销本地解锁。否则勋章重算工具（recomputeUserBadges）纠错后，
+        //    本地旧缓存会通过 syncBadgesToCloud 的「只增合并」把脏勋章回灌云端（4个变回8个的根因之一）。
+        // 注意：云端存储格式为 {name, unlockTime}（无 isUnlocked 字段），
+        // 旧代码判断 cloudBadges[badgeId].isUnlocked 永远为 false，云端→本地同步从未生效，此处一并修复。
+        Object.keys(this.badges).forEach(badgeId => {
+          const cb = cloudBadges[badgeId];
+          const cloudUnlocked = !!(cb && (cb.unlockTime || cb.isUnlocked));
+          const localUnlocked = !!this.badges[badgeId].isUnlocked;
+
+          if (cloudUnlocked && !localUnlocked) {
+            this.badges[badgeId].isUnlocked = true;
+            this.badges[badgeId].unlockTime = cb.unlockTime || null;
+            hasUpdate = true;
+          } else if (!cloudUnlocked && localUnlocked) {
+            this.badges[badgeId].isUnlocked = false;
+            this.badges[badgeId].unlockTime = null;
+            hasUpdate = true;
+            console.log(`🧹 云端无此勋章，撤销本地缓存: ${this.badges[badgeId].name}`);
           }
         });
 
         if (hasUpdate) {
           this.saveBadgesToStorage();
-          console.log('从云端加载勋章数据成功');
+          console.log('✅ 已按云端权威数据同步本地勋章缓存');
         }
       }
     } catch (error) {

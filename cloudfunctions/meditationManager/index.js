@@ -24,12 +24,6 @@ function getBusinessMonth(date) {
 
 // 云函数入口函数
 exports.main = async (event, context) => {
-  // 处理定时触发器
-  if (event.Type === 'timer') {
-    console.log('定时触发器执行，生成排名快照');
-    return await generateRankingSnapshot({ type: 'daily' });
-  }
-  
   // 添加调试日志
   console.log('云函数接收到的参数:', JSON.stringify(event));
   
@@ -48,8 +42,6 @@ exports.main = async (event, context) => {
       return await getUserRecords(openid, event.date);
     case "getUserStats":
       return await getUserStats(openid);
-    case "getRankings":
-      return await getRankings(event.period);
     case "getMonthlyStats":
       return await getMonthlyStats(openid, event.month);
     case "getAllRecords":
@@ -72,14 +64,12 @@ exports.main = async (event, context) => {
       return await migrateUserProfile(openid, event.oldUserInfo);
     case "getRankingSnapshot":
       return await getRankingSnapshot(event, context);
-    case "generateRankingSnapshot":
-      return await generateRankingSnapshot(event);
-    case "initRankingSnapshot":
-      return await initRankingSnapshot();
     case "updateUserBadges":
       return await updateUserBadges(openid, event.badges);
     case "getUserBadges":
       return await getUserBadges(openid);
+    case "recomputeUserBadges":
+      return await recomputeUserBadges(event);
     default:
       return { success: false, error: "未知的操作类型" };
   }
@@ -97,7 +87,7 @@ async function recordMeditation(openid, data, localUserId = null) {
       date: dateStr,
       timestamp: now.getTime(),
       duration: data.duration || 0,
-      rating: data.rating || 0,
+      emotion: Array.isArray(data.emotion) ? data.emotion : [], // 情绪标签数组
       experience: Array.isArray(data.experience) ? data.experience : (data.experience ? [data.experience] : []), // 体验记录ID数组，可能为空数组
       createdAt: now,
       updatedAt: now
@@ -115,9 +105,6 @@ async function recordMeditation(openid, data, localUserId = null) {
     
     // 更新用户统计
     await updateUserStats(openid, dateStr, data.duration);
-    
-    // 更新排行榜
-    await updateRankings(openid, dateStr, data.duration);
     
     return {
       success: true,
@@ -285,121 +272,6 @@ async function updateUserStats(openid, dateStr, duration) {
   }
 }
 
-// 更新排行榜（字段与数据库完全一致）
-async function updateRankings(openid, dateStr, duration) {
-  try {
-    const monthStr = dateStr.substring(0, 7);
-    
-    // 更新日榜
-    await updateDailyRanking(openid, dateStr, duration);
-    
-    // 更新月榜
-    await updateMonthlyRanking(openid, monthStr, duration);
-    
-    // 更新总榜
-    await updateTotalRanking(openid, duration);
-    
-  } catch (error) {
-    console.error("更新排行榜失败:", error);
-  }
-}
-
-// 更新日榜
-async function updateDailyRanking(openid, dateStr, duration) {
-  const rankingRef = db.collection("rankings").where({
-    type: "daily",
-    period: dateStr,
-    _openid: openid
-  });
-  
-  const ranking = await rankingRef.get();
-  
-  if (ranking.data.length === 0) {
-    await db.collection("rankings").add({
-      data: {
-        _openid: openid,
-        type: "daily",
-        period: dateStr,
-        duration: duration,
-        count: 1,
-        updatedAt: new Date()
-      }
-    });
-  } else {
-    await rankingRef.update({
-      data: {
-        duration: db.command.inc(duration),
-        count: db.command.inc(1),
-        updatedAt: new Date()
-      }
-    });
-  }
-}
-
-// 更新月榜
-async function updateMonthlyRanking(openid, monthStr, duration) {
-  const rankingRef = db.collection("rankings").where({
-    type: "monthly",
-    period: monthStr,
-    _openid: openid
-  });
-  
-  const ranking = await rankingRef.get();
-  
-  if (ranking.data.length === 0) {
-    await db.collection("rankings").add({
-      data: {
-        _openid: openid,
-        type: "monthly",
-        period: monthStr,
-        duration: duration,
-        count: 1,
-        updatedAt: new Date()
-      }
-    });
-  } else {
-    await rankingRef.update({
-      data: {
-        duration: db.command.inc(duration),
-        count: db.command.inc(1),
-        updatedAt: new Date()
-      }
-    });
-  }
-}
-
-// 更新总榜
-async function updateTotalRanking(openid, duration) {
-  const rankingRef = db.collection("rankings").where({
-    type: "total",
-    period: "all",
-    _openid: openid
-  });
-  
-  const ranking = await rankingRef.get();
-  
-  if (ranking.data.length === 0) {
-    await db.collection("rankings").add({
-      data: {
-        _openid: openid,
-        type: "total",
-        period: "all",
-        duration: duration,
-        count: 1,
-        updatedAt: new Date()
-      }
-    });
-  } else {
-    await rankingRef.update({
-      data: {
-        duration: db.command.inc(duration),
-        count: db.command.inc(1),
-        updatedAt: new Date()
-      }
-    });
-  }
-}
-
 // 获取用户某天的打卡记录
 async function getUserRecords(openid, date) {
   try {
@@ -472,95 +344,65 @@ async function getUserStats(openid) {
   }
 }
 
-// 获取实时排行榜（基于user_stats，仅显示前100名）
+// 获取用户排名（仅计算当前用户在打卡用户中的名次与总人数，无榜单/无前100限制/不取昵称）
+// 性能模型：固定 3 次 DB 调用（1 次 get + 2 次 count），不再 orderBy 全表、不再 N+1 昵称查询
 async function getRankings(period) {
   try {
     const wxContext = cloud.getWXContext();
     const currentUserOpenId = wxContext.OPENID;
     
-    console.log(`获取实时排名，用户: ${currentUserOpenId}, 周期: ${period}`);
+    console.log(`🔍 获取用户排名，用户: ${currentUserOpenId}`);
     
-    // 直接查询user_stats表，按当日总时长降序排列，获取前100名
-    const userStats = await db.collection("user_stats")
-      .orderBy("dailyTotalDuration", "desc")
-      .limit(100) // 仅显示前100名用户
+    // 1. 查询当前用户的当日总时长（仅取必要字段）
+    const userStatRes = await db.collection("user_stats")
+      .where({ _openid: currentUserOpenId })
+      .field({ dailyTotalDuration: true })
       .get();
     
-    console.log(`查询到 ${userStats.data.length} 名用户统计信息`);
-    
-    // 构建排名数据，使用更完善的昵称获取逻辑
-    const rankings = await Promise.all(userStats.data.map(async (user, index) => {
-      let userNickname = "用户" + user._openid.substring(0, 6);
-      
-      // 1. 首先尝试从user_stats表中获取昵称
-      if (user.nickname && user.nickname.trim() !== "") {
-        userNickname = user.nickname;
-      } else {
-        // 2. 尝试从user_profiles表中获取昵称
-        try {
-          const userProfile = await db.collection("user_profiles")
-            .where({ _openid: user._openid })
-            .get();
-          
-          if (userProfile.data.length > 0 && userProfile.data[0].nickname && userProfile.data[0].nickname.trim() !== "") {
-            userNickname = userProfile.data[0].nickname;
-          }
-        } catch (error) {
-          console.log(`获取用户 ${user._openid} 档案失败，使用默认昵称`);
-        }
-      }
-      
-      // 3. 如果是当前用户，显示"当前用户"标识
-      if (user._openid === currentUserOpenId) {
-        userNickname = "当前用户";
-      }
-      
+    // 当前用户无任何打卡统计，视为暂无排名
+    if (userStatRes.data.length === 0) {
+      const total = await db.collection("user_stats").count();
+      console.log(`⚠️ 当前用户暂无打卡记录，总打卡用户数: ${total.total}`);
       return {
-        openid: user._openid,
-        nickname: userNickname,
-        duration: user.dailyTotalDuration || 0, // 使用当日总时长
-        rank: index + 1
+        success: true,
+        data: {
+          type: period,
+          period: getBusinessDate(),
+          currentUserOpenId: currentUserOpenId,
+          currentUserRank: 0,
+          hasRanking: false,
+          totalUsers: total.total
+        }
       };
-    }));
-    
-    // 检查当前用户是否在前100名内
-    const currentUserRank = rankings.find(r => r.openid === currentUserOpenId);
-    const currentUserInTop100 = !!currentUserRank;
-    
-    // 如果用户不在前100名，获取其真实排名
-    let userTotalRank = 0;
-    if (!currentUserInTop100) {
-      const userStat = await db.collection("user_stats")
-        .where({ _openid: currentUserOpenId })
-        .get();
-      
-      if (userStat.data.length > 0) {
-        // 计算用户在所有用户中的排名（按当日总时长）
-        const allUsers = await db.collection("user_stats")
-          .orderBy("dailyTotalDuration", "desc")
-          .get();
-        
-        userTotalRank = allUsers.data.findIndex(user => 
-          user._openid === currentUserOpenId
-        ) + 1;
-      }
     }
+    
+    const userDuration = userStatRes.data[0].dailyTotalDuration || 0;
+    
+    // 2. 名次 = 当日总时长严格大于当前用户的人数 + 1
+    //    count 聚合不受 get() 单次 1000 条限制，任意用户量下名次准确；
+    //    并列时长者获得相同名次（均为"大于者数 + 1"），语义合理。
+    const higherCount = await db.collection("user_stats")
+      .where({ dailyTotalDuration: db.command.gt(userDuration) })
+      .count();
+    
+    // 3. 真实总打卡用户数（count 返回完整总数，不受前 100 限制）
+    const totalCount = await db.collection("user_stats").count();
+    
+    console.log(`✅ 用户排名计算完成：名次 ${higherCount.total + 1}，总用户数 ${totalCount.total}`);
     
     return {
       success: true,
       data: {
         type: period,
         period: getBusinessDate(),
-        snapshotTime: new Date(),
-        rankings: rankings,
-        totalUsers: userStats.data.length,
         currentUserOpenId: currentUserOpenId,
-        currentUserRank: currentUserRank ? currentUserRank.rank : userTotalRank,
-        currentUserInTop100: currentUserInTop100
+        currentUserRank: higherCount.total + 1,
+        hasRanking: true,
+        totalUsers: totalCount.total
       }
     };
   } catch (error) {
-    console.error("获取实时排行榜失败:", error);
+    console.error("❌ 获取用户排名失败:", error);
     return { success: false, error: error.message };
   }
 }
@@ -1011,157 +853,34 @@ async function migrateUserProfile(openid, oldUserInfo) {
   }
 }
 
-// 获取排名快照
+// 获取排名快照（首页入口：直接复用实时排名聚合逻辑）
 async function getRankingSnapshot(event, context) {
   try {
     const { rankingType = 'daily' } = event;
     
-    // 获取当前用户的微信真实openid
     const wxContext = cloud.getWXContext();
     const currentUserOpenId = wxContext.OPENID;
+    console.log('🔍 获取用户排名快照，当前用户openid:', currentUserOpenId, '排名类型:', rankingType);
     
-    console.log('获取实时排名快照，当前用户openid:', currentUserOpenId, '排名类型:', rankingType);
-    
-    // 直接使用实时排名逻辑，不再使用弃用的rankings集合
-    const realTimeRankings = await getRankings(rankingType);
-    
-    if (!realTimeRankings.success) {
-      throw new Error(realTimeRankings.error);
+    // 复用实时排名聚合逻辑（3 次固定查询，无榜单、无前100限制、不取昵称）
+    const result = await getRankings(rankingType);
+    if (!result.success) {
+      throw new Error(result.error);
     }
     
-    const rankingData = realTimeRankings.data;
-    
-    console.log('当前用户openid:', currentUserOpenId);
-    console.log('排名数据中的openid列表:', rankingData.rankings.map(r => r.openid));
-    
-    // 检查当前用户是否在前100名内
-    const currentUserInTop100 = rankingData.currentUserInTop100;
-    console.log('当前用户是否在前100名内:', currentUserInTop100);
-    console.log('当前用户排名:', rankingData.currentUserRank);
-    
-    // 如果用户不在前100名，显示"未上排行榜"
-    if (!currentUserInTop100 && rankingData.currentUserRank > 100) {
-      console.log('当前用户排名超过100名，显示"未上排行榜"');
-      rankingData.currentUserRank = "未上排行榜";
-    }
-    
+    console.log('✅ 排名快照获取成功:', JSON.stringify(result.data));
     return {
       success: true,
-      data: rankingData
+      data: result.data
     };
   } catch (error) {
-    console.error('获取排名快照失败:', error);
+    console.error('❌ 获取排名快照失败:', error);
     console.error('错误详情:', error.stack);
     return {
       success: false,
       message: "排名数据加载失败",
       error: error.message,
       errorCode: error.errCode || 'UNKNOWN_ERROR'
-    };
-  }
-}
-
-// 生成排名快照
-async function generateRankingSnapshot(event) {
-  try {
-    const { type = 'daily' } = event;
-    const today = getBusinessDate();
-    
-    // 查询当前所有登录用户数据（按当日总时长降序）
-    const users = await db.collection("user_stats")
-      .orderBy("dailyTotalDuration", "desc")
-      .limit(1000) // 限制返回数量，避免性能问题
-      .get();
-    
-    // 生成排名快照
-    const snapshot = {
-      type: type,
-      period: today,
-      snapshotTime: new Date(),
-      rankings: users.data.map((user, index) => ({
-        openid: user._openid,
-        nickname: user.nickname || "匿名用户",
-        duration: user.dailyTotalDuration || 0,
-        rank: index + 1
-      })),
-      totalUsers: users.data.length
-    };
-    
-    // 存储快照，覆盖旧数据
-    await db.collection("ranking_snapshots")
-      .where({ type: type, period: today })
-      .remove();
-      
-    await db.collection("ranking_snapshots").add({
-      data: snapshot
-    });
-    
-    console.log(`✅ 排名快照生成成功: type=${type}, period=${today}, users=${users.data.length}`);
-    
-    return {
-      success: true,
-      data: snapshot
-    };
-  } catch (error) {
-    console.error('生成排名快照失败:', error);
-    return {
-      success: false,
-      message: "排名快照生成失败"
-    };
-  }
-}
-
-// 初始化排名快照集合（创建集合和索引）
-async function initRankingSnapshot() {
-  try {
-    const today = getBusinessDate();
-    
-    console.log('开始初始化排名快照集合...');
-    
-    // 创建一个空的排名快照作为测试数据
-    const testSnapshot = {
-      type: 'daily',
-      period: today,
-      snapshotTime: new Date(),
-      rankings: [
-        {
-          openid: 'test_user_1',
-          nickname: '测试用户1',
-          duration: 3600,
-          rank: 1
-        },
-        {
-          openid: 'test_user_2', 
-          nickname: '测试用户2',
-          duration: 1800,
-          rank: 2
-        }
-      ],
-      totalUsers: 2
-    };
-    
-    // 尝试插入测试数据（如果集合不存在会自动创建）
-    const result = await db.collection("ranking_snapshots").add({
-      data: testSnapshot
-    });
-    
-    console.log('排名快照集合初始化成功，插入测试数据ID:', result._id);
-    
-    return {
-      success: true,
-      message: "排名快照集合初始化成功",
-      data: {
-        snapshotId: result._id,
-        testData: testSnapshot
-      }
-    };
-    
-  } catch (error) {
-    console.error('初始化排名快照集合失败:', error);
-    return {
-      success: false,
-      message: "初始化排名快照集合失败",
-      error: error.message
     };
   }
 }
@@ -1199,11 +918,22 @@ async function updateUserBadges(openid, badges) {
       });
     } else {
       // 更新现有用户的勋章信息
+      // ⚠️ 必须做合并（只增不减），不能整字段覆盖：
+      // 前端 syncBadgesToCloud 只发送「当前本地已解锁」子集，若此处用 badges 整体覆盖，
+      // 会丢失其他设备/历史已颁发的勋章（如 single_duration 类无法靠统计重算），违反「颁发后终身生效」。
+      // 合并策略：以云端已有 badges 为基准，叠加本次上报的已解锁项（已解锁状态不会被撤销）。
+      const existingBadges = userStats.data[0].badges || {};
+      const mergedBadges = { ...existingBadges, ...badges };
       await userStatsRef.update({
         data: {
-          badges: badges,
+          badges: mergedBadges,
           updatedAt: new Date()
         }
+      });
+      console.log('✅ 勋章信息已合并更新（保留历史已解锁勋章）:', {
+        existing: Object.keys(existingBadges).length,
+        incoming: Object.keys(badges).length,
+        merged: Object.keys(mergedBadges).length
       });
     }
     
@@ -1255,6 +985,233 @@ async function getUserBadges(openid) {
       error: error.message
     };
   }
+}
+
+// 重新计算并重新颁发用户勋章（数据纠错工具，2026-07 新增）
+// 设计目标：按「正确逻辑」从 meditation_records 真实打卡数据推导出应得勋章，
+// 用于纠正旧 bug（如连续打卡被虚高、single_duration 按末次时长误判）导致的错误颁发。
+//
+// 语义（与 §3.4「连续打卡无中断 + 终身生效」及 badgeManager.js 判定保持一致）：
+//   - continuous_checkin：以「历史最长连续无中断天数」(longestRun) 为判定源，>= days 即颁发。
+//     使用历史最长连续而非当前 running streak，等价于「曾经达成过」，符合终身生效语义；
+//     同时也纠正了连续天数被虚高的旧数据。
+//   - total_duration（等级勋章）：以「累计时长」(sum duration) 为判定源，>= minutes 颁发。
+//   - single_duration：强制保留现有已颁发（终身生效、不撤销）；若记录中存在达标单次则补发。
+//
+// mode:
+//   'report' 只读，输出「现有勋章 vs 应得勋章」差异报告，不写库（推荐先跑）。
+//   'apply'  按推导结果覆盖式写回 user_stats.badges（仅针对有变化的用户）。
+//
+// 入参：
+//   event.mode         'report' | 'apply'
+//   event.openid       指定单个用户（优先）
+//   event.nickName     按昵称解析 openid（如 '亘心'）
+//   两者皆缺省 → 遍历全部用户
+async function recomputeUserBadges(event) {
+  const mode = event.mode || 'report';
+  const targetOpenid = event.openid || null;
+  const targetNickName = event.nickName || null;
+
+  // 勋章定义镜像（与 miniprogram/utils/badgeManager.js 保持一致；仅保留判定所需字段）
+  const BADGES = [
+    { id: 'continuous-7',   name: '连续打卡7天',    type: 'continuous_checkin', days: 7 },
+    { id: 'continuous-14',  name: '连续打卡14天',   type: 'continuous_checkin', days: 14 },
+    { id: 'continuous-30',  name: '连续打卡30天',   type: 'continuous_checkin', days: 30 },
+    { id: 'continuous-60',  name: '连续打卡60天',   type: 'continuous_checkin', days: 60 },
+    { id: 'continuous-100', name: '连续打卡100天',  type: 'continuous_checkin', days: 100 },
+    { id: 'continuous-365', name: '连续打卡365天',  type: 'continuous_checkin', days: 365 },
+    { id: 'meditation-20',  name: '单次觉察20分钟', type: 'single_duration', minutes: 20 },
+    { id: 'level-1',  name: 'LV1.新手',     type: 'total_duration', minutes: 10 },
+    { id: 'level-2',  name: 'LV2.入门者',   type: 'total_duration', minutes: 100 },
+    { id: 'level-3',  name: 'LV3.修行中',   type: 'total_duration', minutes: 300 },
+    { id: 'level-4',  name: 'LV4.初学者',   type: 'total_duration', minutes: 600 },
+    { id: 'level-5',  name: 'LV5.探索者',   type: 'total_duration', minutes: 1000 },
+    { id: 'level-6',  name: 'LV6.坚持者',   type: 'total_duration', minutes: 2000 },
+    { id: 'level-7',  name: 'LV7.精进者',   type: 'total_duration', minutes: 4000 },
+    { id: 'level-8',  name: 'LV8.修行达人', type: 'total_duration', minutes: 8000 },
+    { id: 'level-9',  name: 'LV9.静心高手', type: 'total_duration', minutes: 15000 },
+    { id: 'level-10', name: '禅定大师',     type: 'total_duration', minutes: 30000 },
+  ];
+
+  // 解析目标 openid
+  let targetOpenids = null;
+  if (targetOpenid) {
+    targetOpenids = [targetOpenid];
+  } else if (targetNickName) {
+    const uRes = await db.collection('users').where({ nickName: targetNickName }).limit(100).get();
+    targetOpenids = uRes.data.map(u => u._openid);
+    console.log(`🔍 按昵称「${targetNickName}」解析到 ${targetOpenids.length} 个 openid:`, targetOpenids);
+  }
+
+  // 拉取冥想记录（分页，避免单次超限）
+  const recordsByUser = {};
+  let skip = 0;
+  const BATCH = 1000;
+  while (true) {
+    let q = db.collection('meditation_records');
+    if (targetOpenids && targetOpenids.length) {
+      q = q.where({ _openid: db.command.in(targetOpenids) });
+    }
+    const res = await q.skip(skip).limit(BATCH).get();
+    res.data.forEach(r => {
+      const oid = r._openid;
+      if (!recordsByUser[oid]) recordsByUser[oid] = [];
+      recordsByUser[oid].push({ date: r.date, duration: Number(r.duration) || 0 });
+    });
+    if (res.data.length < BATCH) break;
+    skip += BATCH;
+  }
+  const openids = Object.keys(recordsByUser);
+  if (openids.length === 0) {
+    console.log('⚠️ 未读取到任何冥想记录，结束。');
+    return { success: true, data: { mode, changedUsers: 0, totalAdded: 0, totalRemoved: 0, details: [] } };
+  }
+  console.log(`📊 共读取 ${openids.length} 个用户的冥想记录`);
+
+  // 加载现有勋章
+  const statsRes = await db.collection('user_stats')
+    .where({ _openid: db.command.in(openids) })
+    .get();
+  const existingBadgesByUser = {};
+  const existingStatsByUser = {};
+  statsRes.data.forEach(s => {
+    existingBadgesByUser[s._openid] = s.badges || {};
+    existingStatsByUser[s._openid] = s;
+  });
+
+  const nowISO = new Date().toISOString();
+  const dayNumber = (dateStr) => {
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+  };
+
+  const changed = [];
+  let totalAdded = 0, totalRemoved = 0, applyCount = 0;
+
+  for (const oid of openids) {
+    const recs = recordsByUser[oid];
+    const distinctDays = [...new Set(recs.map(r => r.date))].map(dayNumber).sort((a, b) => a - b);
+    // 历史最长连续无中断天数
+    let longest = 0, cur = 0, prev = null;
+    for (const dd of distinctDays) {
+      if (prev === null) cur = 1;
+      else if (dd === prev + 1) cur += 1;
+      else cur = 1;
+      if (cur > longest) longest = cur;
+      prev = dd;
+    }
+    const totalDuration = recs.reduce((s, r) => s + r.duration, 0);
+    const maxSingleDuration = recs.reduce((m, r) => r.duration > m ? r.duration : m, 0);
+
+    // 当前连续天数（以最后一个打卡日结尾的连续段；若最后打卡日早于昨天则已断签，归 0）
+    // 用于 apply 时校准 user_stats 中被旧 bug 虚高的 currentStreak / longestStreak / longestCheckInDays，
+    // 避免前端 checkBadgeUnlock 读到脏「连续天数」后把已纠正的勋章重新发回（脏数据回灌）。
+    let trailingRun = 0;
+    {
+      let run = 0, p = null;
+      for (const dd of distinctDays) {
+        run = (p !== null && dd === p + 1) ? run + 1 : 1;
+        p = dd;
+      }
+      const lastDay = distinctDays.length ? distinctDays[distinctDays.length - 1] : null;
+      const todayNum = Math.floor((Date.now() + 8 * 3600 * 1000) / 86400000); // 东八区业务日期
+      trailingRun = (lastDay !== null && lastDay >= todayNum - 1) ? run : 0;
+    }
+
+    const existing = existingBadgesByUser[oid] || {};
+    const existingIds = Object.keys(existing).filter(id => existing[id] && existing[id].unlockTime);
+
+    // 计算应得勋章
+    const computed = {};
+    for (const b of BADGES) {
+      let earned = false;
+      if (b.type === 'continuous_checkin') earned = longest >= b.days;
+      else if (b.type === 'total_duration') earned = totalDuration >= b.minutes;
+      // single_duration 不在此处直接判定（见下方）
+      if (earned) computed[b.id] = { name: b.name, unlockTime: nowISO };
+    }
+    // single_duration 类：保留现有（不撤销）+ 记录达标则补发
+    for (const b of BADGES) {
+      if (b.type !== 'single_duration') continue;
+      const fromRecords = maxSingleDuration >= b.minutes;
+      if (fromRecords || existing[b.id]) {
+        computed[b.id] = existing[b.id] || { name: b.name, unlockTime: nowISO };
+      }
+    }
+
+    const newIds = Object.keys(computed);
+    const added = newIds.filter(id => !existingIds.includes(id));
+    const removed = existingIds.filter(id => !newIds.includes(id));
+
+    if (added.length || removed.length) {
+      changed.push({
+        openid: oid,
+        longestRun: longest,
+        totalDuration,
+        maxSingleDuration,
+        existing: existingIds,
+        computed: newIds,
+        added,
+        removed
+      });
+      totalAdded += added.length;
+      totalRemoved += removed.length;
+
+      if (mode === 'apply') {
+        const ref = db.collection('user_stats').where({ _openid: oid });
+        // 同步校准连续天数字段（从真实记录推导），根治 currentStreak/longestStreak 虚高的脏数据
+        const upd = await ref.update({ data: {
+          badges: computed,
+          longestCheckInDays: longest,
+          longestStreak: longest,
+          currentStreak: trailingRun,
+          updatedAt: new Date()
+        } });
+        if (!upd.stats || upd.stats.updated === 0) {
+          // 无 user_stats 记录则创建（带 badges，其余字段给默认值）
+          await db.collection('user_stats').add({
+            data: {
+              _openid: oid, badges: computed,
+              totalDays: 0, totalCount: 0, totalDuration: 0,
+              dailyTotalDuration: 0, monthlyTotalDuration: 0,
+              longestCheckInDays: longest, currentStreak: trailingRun, longestStreak: longest,
+              lastCheckinDate: '', lastCheckinDuration: 0, lastCheckin: '',
+              monthlyStats: {}, createdAt: new Date(), updatedAt: new Date()
+            }
+          });
+        }
+        applyCount++;
+      }
+    } else if (mode === 'apply') {
+      // 勋章无变化，但连续天数字段可能仍是脏值（虚高）——单独校准，
+      // 否则前端以 longestStreak/longestCheckInDays 为判定源时仍会误发勋章。
+      const s = existingStatsByUser[oid];
+      if (s && ((s.longestCheckInDays || 0) !== longest ||
+                (s.longestStreak || 0) !== longest ||
+                (s.currentStreak || 0) !== trailingRun)) {
+        await db.collection('user_stats').where({ _openid: oid }).update({ data: {
+          longestCheckInDays: longest,
+          longestStreak: longest,
+          currentStreak: trailingRun,
+          updatedAt: new Date()
+        } });
+        console.log(`🧹 校准连续天数字段: ${oid} → longest=${longest}, current=${trailingRun}`);
+      }
+    }
+  }
+
+  const result = {
+    mode,
+    target: targetOpenids ? (targetOpenid || targetNickName) : 'ALL',
+    totalUsers: openids.length,
+    changedUsers: changed.length,
+    totalAdded,
+    totalRemoved,
+    applied: mode === 'apply' ? applyCount : 0,
+    details: changed
+  };
+  console.log('✅ 勋章重算完成:', { mode, changedUsers: changed.length, totalAdded, totalRemoved });
+  return { success: true, data: result };
 }
 
 // 处理微信登录

@@ -1,0 +1,15 @@
+{
+  "name": "contentSecCheck",
+  "version": "1.0.0",
+  "description": "内容安全检测（文本 msgSecCheck + 图片腾讯云 IMS 同步）",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "tencentcloud-sdk-nodejs-ims": "^4.0.0"
+  }
+}

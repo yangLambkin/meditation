@@ -2,6 +2,7 @@
 const badgeManager = require('../../utils/badgeManager');
 const checkinManager = require('../../utils/checkin.js');
 const dateUtil = require('../../utils/dateUtil.js');
+const contentSec = require('../../utils/contentSec.js');
 
 Page({
   data: {
@@ -135,8 +136,9 @@ Page({
         await badgeManager.loadBadgesFromCloud();
         
         // 检查用户是否满足新勋章解锁条件（提供完整统计数据）
+        // 连续勋章判定源：历史最长连续天数（与云端重算工具同源），不再用 currentStreak
         badgeManager.checkBadgeUnlock({
-          currentStreak: stats.currentStreak || 0,
+          longestStreak: Math.max(stats.longestStreak || 0, stats.longestCheckInDays || 0),
           totalCheckinDays: stats.totalDays || 0, // 云端字段名为 totalDays（累计打卡天数）
           lastDuration: stats.lastCheckinDuration || 0,
           totalDuration: stats.totalDuration || 0
@@ -214,6 +216,9 @@ Page({
   changeAvatar: function() {
     console.log('修改头像');
     
+    // 记录原头像，便于检测不通过时回滚预览
+    const originalAvatar = this.data.userAvatar;
+    
     wx.showActionSheet({
       itemList: ['拍照', '从相册选择'],
       success: (res) => {
@@ -223,17 +228,32 @@ Page({
           count: 1,
           mediaType: ['image'],
           sourceType: sourceType,
-          success: (res) => {
+          success: async (res) => {
             const tempFilePath = res.tempFiles[0].tempFilePath;
             
-            // 更新头像显示
-            this.setData({
-              userAvatar: tempFilePath
+            // 🔍 内容安全检测：头像图片发布前必须过腾讯云 IMS 同步检测，
+            // 命中违规则回滚预览、不写存储，仅提示含违规信息。
+            // returnFileID 让检测通过时直接复用检测副本的 cloud:// fileID，
+            // 避免把短命临时路径写入存储，也省去二次上传；cloudPrefix 指定落盘到 avatar/。
+            const avatarFileID = await contentSec.checkImage(tempFilePath, {
+              scene: 1,
+              bizType: 'avatar',
+              returnFileID: true,
+              cloudPrefix: 'avatar'
             });
-            
-            // 保存到本地存储
-            this.saveAvatarToStorage(tempFilePath);
-            
+            if (!avatarFileID) {
+              this.setData({ userAvatar: originalAvatar });
+              return;
+            }
+
+            // 用永久 cloud:// fileID 作为头像预览与存储
+            this.setData({
+              userAvatar: avatarFileID
+            });
+
+            // 保存（已是永久链接，无需再次上传）
+            this.saveAvatarToStorage(avatarFileID);
+
             wx.showToast({
               title: '头像修改成功',
               icon: 'success',
