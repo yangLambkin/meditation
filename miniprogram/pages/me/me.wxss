@@ -188,3 +188,64 @@
   margin-top: 4rpx;
   display: block;
 }
+
+/* 必经之路绑定区块（在"坚持静坐第 X 天"下方，左对齐到文字起点） */
+.bijing-inline {
+  margin-top: 36rpx;
+  background-color: #ffffff;
+}
+.bijing-row {
+  display: flex;
+  align-items: center;
+}
+.bijing-bound-tip {
+  display: block;
+  font-size: 20rpx;
+  color: #b29764;
+  margin-top: 12rpx;
+}
+.bijing-last {
+  display: block;
+  font-size: 20rpx;
+  color: #99a1ae;
+  line-height: 28rpx;
+  margin-top: 8rpx;
+}
+.bijing-input-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.bijing-input {
+  width: 280rpx;
+  height: 45rpx;
+  border: solid 2rpx #e3e7ec;
+  border-radius: 8rpx;
+  padding: 0 20rpx;
+  font-size: 23rpx;
+  background-color: #f8fafc;
+}
+.bijing-btn-sm {
+  display: inline-block;
+  background-color: #b29764;
+  color: #ffffff;
+  font-size: 23rpx;
+  font-weight: 600;
+  padding: 13rpx 20rpx;
+  border-radius: 8rpx;
+  line-height: 1;
+}
+.bijing-btn-sm:active {
+  background-color: #8c7345;
+}
+.bijing-btn-sm.cancel {
+  background-color: #c0c6cf;
+}
+.bijing-card-inline {
+  padding: 8rpx 48rpx 28rpx;
+  background-color: #ffffff;
+}
+.bijing-card {
+  padding: 16rpx 48rpx 36rpx;
+  background-color: #ffffff;
+}

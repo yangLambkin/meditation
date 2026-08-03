@@ -19,17 +19,40 @@
           <view class="flex-col items-start ml-17">
             <!-- 未设置个人信息时显示 -->
             <view wx:if="{{!hasUserInfo}}" bindtap="goToProfilePage">
-              <text class="font text">点击设置个人信息</text>
+              <text class="font text">点击登录</text>
             </view>
             <!-- 已设置个人信息时显示昵称，点击可修改 -->
             <view wx:else bindtap="goToProfilePage">
               <text class="font text">{{userNickname}}</text>
               <text class="edit-hint">点击修改</text>
             </view>
-            <text class="mt-8 font_2 text_3">坚持静坐第 {{currentStreak}} 天</text>
+            <!-- 必经之路绑定区块（紧跟"坚持静坐第 X 天"下方，左对齐） -->
+            <view class="bijing-inline">
+              <view class="bijing-row">
+                <block wx:if="{{!bijingBound}}">
+                  <view wx:if="{{!bijingShowBindInput}}" class="bijing-btn-sm" bindtap="toggleBindInput">绑定学号</view>
+                  <view wx:else class="bijing-input-row">
+                    <input
+                      class="bijing-input"
+                      placeholder="请输入必经之路学号"
+                      value="{{bijingInputValue}}"
+                      bindinput="onBijingInput"
+                    />
+                    <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认</view>
+                    <view class="bijing-btn-sm cancel" bindtap="cancelBindBijing">取消</view>
+                  </view>
+                </block>
+                <block wx:else>
+                  <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '立即同步'}}</view>
+                </block>
+              </view>
+              <text wx:if="{{bijingBound}}" class="bijing-bound-tip">已绑定：{{bijingStudentNumber}}</text>
+              <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
+            </view>
           </view>
         </view>
       </view>
+
       <view class="flex-row justify-between group_2">
         <view class="flex-row self-center">
           <view class="flex-col items-center group_3">
@@ -101,7 +124,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.2</text>
+          <text class="font_2 text_9 ml-17">版本 V2.3</text>
         </view>
         <image
           class="image_3"

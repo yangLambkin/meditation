@@ -3,6 +3,8 @@ const badgeManager = require('../../utils/badgeManager');
 const checkinManager = require('../../utils/checkin.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const contentSec = require('../../utils/contentSec.js');
+const bijingApi = require('../../utils/bijingApi.js');
+const cloudApi = require('../../utils/cloudApi.js');
 
 Page({
   data: {
@@ -12,7 +14,14 @@ Page({
     longestCheckInDays: 0, // 最长连续天数
     currentStreak: 0, // 当前连续天数
     medals: 0, // 勋章数量
-    hasUserInfo: false // 是否已获取用户信息
+    hasUserInfo: false, // 是否已获取用户信息
+    // 必经之路绑定相关
+    bijingBound: false, // 是否已绑定学号
+    bijingStudentNumber: '', // 已绑定的学号
+    bijingShowBindInput: false, // 是否展示绑定输入框
+    bijingInputValue: '', // 绑定输入框当前值
+    bijingSyncing: false, // 同步中状态（防重复点击）
+    bijingLastSync: '' // 最近一次同步结果文案
   },
 
   // 统计加载去重锁：避免 onLoad 与 onShow 并发两次云端调用（修复 4.6）
@@ -35,7 +44,10 @@ Page({
     // 获取用户昵称和头像
     this.getUserNickname();
     this.getUserAvatar();
-    
+
+    // 加载必经之路绑定状态
+    this.loadBijingStatus();
+
     // 获取用户统计信息
     this.calculateUserStatistics();
   },
@@ -51,6 +63,29 @@ Page({
         userNickname: cachedNickname,
         hasUserInfo: true
       });
+    }
+  },
+
+  /**
+   * 加载必经之路绑定状态（来自云端 users 文档）
+   */
+  async loadBijingStatus() {
+    if (!checkinManager.isUserLoggedIn()) return;
+    const openid = wx.getStorageSync('userOpenId');
+    try {
+      const result = await cloudApi.callCloudFunction('meditationManager', {
+        type: 'getUserProfile',
+        openid: openid
+      });
+      const profile = result && result.result && result.result.data;
+      if (profile) {
+        this.setData({
+          bijingBound: !!profile.bijingBound,
+          bijingStudentNumber: profile.bijingStudentNumber || ''
+        });
+      }
+    } catch (e) {
+      console.error('加载必经之路状态失败:', e);
     }
   },
 
@@ -322,6 +357,86 @@ Page({
         console.error('用户信息同步到云端失败:', err);
       }
     });
+  },
+
+  // ===== 必经之路绑定与同步 =====
+
+  // 展示/收起绑定输入框
+  toggleBindInput() {
+    this.setData({ bijingShowBindInput: !this.data.bijingShowBindInput });
+  },
+
+  // 绑定输入框变化
+  onBijingInput(e) {
+    this.setData({ bijingInputValue: e.detail.value });
+  },
+
+  // 确认绑定
+  async confirmBindBijing() {
+    const sn = (this.data.bijingInputValue || '').trim();
+    if (!sn) {
+      wx.showToast({ title: '请输入学号', icon: 'none' });
+      return;
+    }
+    if (!checkinManager.isUserLoggedIn()) {
+      wx.showToast({ title: '请先登录', icon: 'none' });
+      return;
+    }
+    wx.showLoading({ title: '绑定中...', mask: true });
+    const res = await bijingApi.bindBijing(sn);
+    wx.hideLoading();
+    if (!res.success) {
+      wx.showToast({ title: res.error || '绑定失败', icon: 'none' });
+      return;
+    }
+    // 绑定成功：更新绑定状态，并覆盖昵称（若对端返回昵称）
+    const newData = {
+      bijingBound: true,
+      bijingStudentNumber: res.data.studentNumber,
+      bijingShowBindInput: false,
+      bijingInputValue: ''
+    };
+    if (res.data.nicknameOverridden && res.data.nickname) {
+      // 覆盖本地昵称缓存 + 即时展示
+      wx.setStorageSync('userNickname', res.data.nickname);
+      newData.userNickname = res.data.nickname;
+      wx.showToast({ title: '已绑定并同步昵称', icon: 'success' });
+    } else {
+      wx.showToast({ title: '绑定成功', icon: 'success' });
+    }
+    this.setData(newData);
+  },
+
+  // 取消绑定输入框
+  cancelBindBijing() {
+    this.setData({ bijingShowBindInput: false, bijingInputValue: '' });
+  },
+
+  // 立即同步（手动兜底）
+  async syncBijingNow() {
+    if (this.data.bijingSyncing) return;
+    if (!this.data.bijingBound) {
+      wx.showToast({ title: '请先绑定学号', icon: 'none' });
+      return;
+    }
+    this.setData({ bijingSyncing: true });
+    wx.showLoading({ title: '同步中...', mask: true });
+    const res = await bijingApi.syncBijingPending();
+    wx.hideLoading();
+    this.setData({ bijingSyncing: false });
+    if (!res.success) {
+      this.setData({ bijingLastSync: '同步失败：' + (res.error || '') });
+      wx.showToast({ title: res.error || '同步失败', icon: 'none' });
+      return;
+    }
+    const d = res.data || {};
+    // 提示：成功 X 条，失败 X 条（不显示"跳过"，未真正同步的归为"待同步"）
+    let msg = `成功 ${d.synced || 0} 条，失败 ${d.failed || 0} 条`;
+    if (d.pendingCount > 0) {
+      msg += `，${d.pendingCount} 天待同步`;
+    }
+    this.setData({ bijingLastSync: msg });
+    wx.showToast({ title: '同步完成', icon: 'success' });
   },
 
   onReady() {
