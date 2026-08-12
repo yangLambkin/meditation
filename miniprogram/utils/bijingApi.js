@@ -22,6 +22,12 @@ async function bindBijing(studentNumber) {
   return callBijingSync({ type: 'bindStudentNumber', studentNumber });
 }
 
+// 仅校验学号（不绑定），用于绑定前确认弹窗
+// 返回 { success, data: { studentNumber, nickname }, error }
+async function checkBijing(studentNumber) {
+  return callBijingSync({ type: 'checkStudentNumber', studentNumber });
+}
+
 // 手动兜底同步（绑定日 -> 昨天 区间里所有未标记日期）
 // force=true 时清除目标区间历史标记重新核算（纠正误标）
 // 返回 { success, data: { pending, synced, skipped, failed, pendingCount, results }, error }
@@ -31,5 +37,6 @@ async function syncBijingPending(force = false) {
 
 module.exports = {
   bindBijing,
+  checkBijing,
   syncBijingPending,
 };

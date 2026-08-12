@@ -22,12 +22,18 @@ function getBusinessDate(date) {
 }
 
 // ===== 外部系统配置（全部走环境变量，前端不持有） =====
+// 环境变量在云开发控制台 → 云函数 bijingSync → 配置 → 环境变量 中设置
+// 测试环境: BIJING_API_BASE=https://data.bjzl.net.cn
+// 生产环境: BIJING_API_BASE=https://data.bijing.life
 function getApiBase() {
-  // 测试: data.bjzl.net.cn  生产: data.bijing.life
-  return process.env.BIJING_API_BASE || 'https://data.bjzl.net.cn';
+  const base = process.env.BIJING_API_BASE;
+  if (!base) throw new Error('缺少环境变量 BIJING_API_BASE，请在云函数配置中设置');
+  return base;
 }
 function getAccessToken() {
-  return process.env.BIJING_ACCESS_TOKEN || 'JINGZUO_XIAOCHENGXU';
+  const token = process.env.BIJING_ACCESS_TOKEN;
+  if (!token) throw new Error('缺少环境变量 BIJING_ACCESS_TOKEN，请在云函数配置中设置');
+  return token;
 }
 
 // 调外部系统：GET /api/openapi/users/{studentNumber}
@@ -82,6 +88,10 @@ async function bindStudentNumber(openid, studentNumber) {
   if (!studentNumber) return { success: false, error: '学号不能为空' };
 
   // 1. 校验学号存在性
+  // 重新绑定不同学号时，重置同步标记，避免旧学号标记残留导致新学号漏同步
+  const existing = await getUserDoc(openid);
+  const isRebind = !!(existing && existing.bijingBound &&
+    existing.bijingStudentNumber && existing.bijingStudentNumber !== studentNumber);
   let userData;
   try {
     const resp = await checkStudentExists(studentNumber);
@@ -104,7 +114,8 @@ async function bindStudentNumber(openid, studentNumber) {
     bijingStudentNumber: studentNumber,
     bijingBound: true,
     bijingBoundAt: new Date(),
-    bijingSyncedDates: (userDoc && userDoc.bijingSyncedDates) || {},
+    // 重新绑定不同学号：清空同步标记，旧学号的历史同步记录不继承
+    bijingSyncedDates: isRebind ? {} : ((userDoc && userDoc.bijingSyncedDates) || {}),
     lastUpdateTime: new Date(),
   };
 
@@ -140,6 +151,32 @@ async function bindStudentNumber(openid, studentNumber) {
   };
 }
 
+// ===== 仅校验学号（不绑定，用于绑定前确认弹窗） =====
+// 返回 { success, data: { studentNumber, nickname }, error }
+async function checkStudentNumber(studentNumber) {
+  if (!studentNumber) return { success: false, error: '学号不能为空' };
+  try {
+    const resp = await checkStudentExists(studentNumber);
+    if (!resp || !resp.success) {
+      return { success: false, error: '学号不存在' };
+    }
+    const userData = resp.data || {};
+    return {
+      success: true,
+      data: {
+        studentNumber,
+        nickname: (userData.nickname && String(userData.nickname).trim()) || '',
+      },
+    };
+  } catch (e) {
+    if (e.response && e.response.status === 404) {
+      return { success: false, error: '学号不存在' };
+    }
+    console.error('❌ 校验学号异常:', e.message);
+    return { success: false, error: '校验学号失败: ' + e.message };
+  }
+}
+
 // ===== 核心：同步某用户某一天 =====
 async function syncDate(openid, dateStr) {
   const userDoc = await getUserDoc(openid);
@@ -160,18 +197,29 @@ async function syncDate(openid, dateStr) {
     return { openid, date: dateStr, skipped: true, reason: '无打卡数据(未标记待复查)', duration: 0 };
   }
 
+  // 对端规则：recordDate 须早于北京时间当天，当天数据无法手动上报。
+  // 命中今天时直接判为失败并给出明确原因，避免请求对端拿到 400 让用户困惑。
+  const today = getBusinessDate(new Date());
+  if (dateStr === today) {
+    console.warn(`⚠️ 当天数据无法手动上报 date=${dateStr}（对端要求 recordDate 早于当天）`);
+    return { openid, date: dateStr, success: false, error: '不支持同步当天数据', duration };
+  }
+
   try {
     const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration);
     if (resp && resp.success) {
       await markSynced(openid, dateStr);
       return { openid, date: dateStr, success: true, duration };
     }
-    // 对端返回失败
+    // 对端返回失败；若为 400（通常因尝试上报当天数据）统一提示
     console.error(`❌ 上报失败 date=${dateStr}:`, resp && resp.message);
-    return { openid, date: dateStr, success: false, error: (resp && resp.message) || '未知错误', duration };
+    const is400 = (resp && resp.message && String(resp.message).indexOf('400') >= 0);
+    return { openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : ((resp && resp.message) || '未知错误'), duration };
   } catch (e) {
     console.error(`❌ 上报异常 date=${dateStr}:`, e.message);
-    return { openid, date: dateStr, success: false, error: e.message, duration };
+    // 请求异常且为 400（如手动同步恰为当天触发对端拦截）统一提示
+    const is400 = e.message && String(e.message).indexOf('400') >= 0;
+    return { openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : e.message, duration };
   }
 }
 
@@ -311,20 +359,27 @@ async function manualSyncPending(openid, force = false) {
 exports.main = async (event, context) => {
   // 启动日志：区分触发来源（timer 定时 / 手动），便于验证触发器是否生效
   const wxContext = cloud.getWXContext();
-  const isTimer = !wxContext.OPENID && event.type === 'cronSyncAll';
+  // 微信定时触发器：context.source === 'timer'，且 event 不含自定义 type 字段
+  const isTimer = (context.source === 'timer') || (!wxContext.OPENID && !event.type);
   console.log('📥 bijingSync 触发, source=', isTimer ? 'TIMER(定时)' : 'MANUAL(手动)',
     ', openid=', wxContext.OPENID || 'none',
     ', type=', event.type,
     ', time=', new Date().toISOString());
   const openid = wxContext.OPENID;
 
+  // 定时触发：自动走全量同步（兼容 event 不带 type 的情况）
+  if (isTimer) {
+    return await cronSyncAll();
+  }
+
   switch (event.type) {
     case 'bindStudentNumber':
       return await bindStudentNumber(openid, event.studentNumber);
+    case 'checkStudentNumber':
+      return await checkStudentNumber(event.studentNumber);
     case 'syncPending':
       return await manualSyncPending(openid, event.force === true);
     case 'cronSyncAll':
-      // 定时触发（无 OPENID）
       return await cronSyncAll();
     default:
       return { success: false, error: '未知操作: ' + event.type };

@@ -43,11 +43,36 @@
                   </view>
                 </block>
                 <block wx:else>
-                  <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '立即同步'}}</view>
+                  <view wx:if="{{!bijingShowBindInput}}">
+                    <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '立即同步'}}</view>
+                    <view class="bijing-btn-sm rebind" bindtap="toggleBindInput">重新绑定</view>
+                  </view>
+                  <view wx:else class="bijing-input-row">
+                    <input
+                      class="bijing-input"
+                      placeholder="请输入必经之路学号"
+                      value="{{bijingInputValue}}"
+                      bindinput="onBijingInput"
+                    />
+                    <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认</view>
+                    <view class="bijing-btn-sm cancel" bindtap="cancelBindBijing">取消</view>
+                  </view>
                 </block>
               </view>
-              <text wx:if="{{bijingBound}}" class="bijing-bound-tip">已绑定：{{bijingStudentNumber}}</text>
-              <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
+              <text wx:if="{{bijingBound && !bijingShowBindInput}}" class="bijing-bound-tip">已绑定：{{bijingStudentNumber}}</text>
+            </view>
+
+            <!-- 绑定确认弹窗 -->
+            <view wx:if="{{bijingShowConfirm}}" class="bijing-modal-mask" bindtap="cancelBindConfirm">
+              <view class="bijing-modal" catchtap="noop">
+                <view class="bijing-modal-title">确认绑定</view>
+                <view class="bijing-modal-row"><text class="bijing-modal-label">学号：</text><text class="bijing-modal-value">{{bijingConfirmSn}}</text></view>
+                <view class="bijing-modal-row"><text class="bijing-modal-label">昵称：</text><text class="bijing-modal-value">{{bijingConfirmNickname}}</text></view>
+                <view class="bijing-modal-btns">
+                  <view class="bijing-modal-btn cancel" bindtap="cancelBindConfirm">取消</view>
+                  <view class="bijing-modal-btn confirm" bindtap="confirmBindConfirm">确定</view>
+                </view>
+              </view>
             </view>
           </view>
         </view>
@@ -124,7 +149,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.3</text>
+          <text class="font_2 text_9 ml-17">版本 V2.4</text>
         </view>
         <image
           class="image_3"

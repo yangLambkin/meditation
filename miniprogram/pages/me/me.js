@@ -21,7 +21,10 @@ Page({
     bijingShowBindInput: false, // 是否展示绑定输入框
     bijingInputValue: '', // 绑定输入框当前值
     bijingSyncing: false, // 同步中状态（防重复点击）
-    bijingLastSync: '' // 最近一次同步结果文案
+    bijingShowConfirm: false, // 是否显示绑定确认弹窗
+    bijingConfirmSn: '', // 弹窗展示的学号
+    bijingConfirmNickname: '', // 弹窗展示的昵称
+    bijingPendingSn: '' // 待确认绑定的学号（弹窗确定后真正绑定用）
   },
 
   // 统计加载去重锁：避免 onLoad 与 onShow 并发两次云端调用（修复 4.6）
@@ -371,7 +374,8 @@ Page({
     this.setData({ bijingInputValue: e.detail.value });
   },
 
-  // 确认绑定
+  // 确认绑定（首次绑定或重新绑定共用）
+  // 流程：先校验学号 → 不存在则 toast「学号不存在」→ 存在则弹窗展示学号+昵称 → 用户「确定」才执行绑定
   async confirmBindBijing() {
     const sn = (this.data.bijingInputValue || '').trim();
     if (!sn) {
@@ -382,7 +386,45 @@ Page({
       wx.showToast({ title: '请先登录', icon: 'none' });
       return;
     }
-    wx.showLoading({ title: '绑定中...', mask: true });
+    // 第一步：校验学号是否存在
+    wx.showLoading({ title: '校验中...', mask: true });
+    const checkRes = await bijingApi.checkBijing(sn);
+    wx.hideLoading();
+    if (!checkRes.success) {
+      wx.showToast({ title: '学号不存在', icon: 'none' });
+      return;
+    }
+    // 第二步：学号存在，弹出自定义确认弹窗展示学号+昵称，由用户确认后才绑定
+    const nickname = checkRes.data.nickname || '未获取昵称';
+    this.setData({
+      bijingShowConfirm: true,
+      bijingConfirmSn: sn,
+      bijingConfirmNickname: nickname,
+      bijingPendingSn: sn
+    });
+  },
+
+  // 弹窗「取消」：关闭弹窗，不绑定（保留输入框，方便修改）
+  cancelBindConfirm() {
+    this.setData({ bijingShowConfirm: false });
+  },
+
+  // 弹窗「确定」：执行真正的绑定
+  async confirmBindConfirm() {
+    const sn = this.data.bijingPendingSn;
+    this.setData({ bijingShowConfirm: false });
+    await this.doBindBijing(sn);
+  },
+
+  // 阻止弹窗内容区点击冒泡到遮罩（避免误关）
+  noop() {},
+
+  // 执行真正的绑定（弹窗确认后调用）
+  async doBindBijing(sn) {
+    // 判断是否为重新绑定（原已绑定的学号与新学号不同）
+    const wasBound = this.data.bijingBound;
+    const isRebind = wasBound && sn !== this.data.bijingStudentNumber;
+    wx.showLoading({ title: isRebind ? '重新绑定中...' : '绑定中...', mask: true });
     const res = await bijingApi.bindBijing(sn);
     wx.hideLoading();
     if (!res.success) {
@@ -394,15 +436,22 @@ Page({
       bijingBound: true,
       bijingStudentNumber: res.data.studentNumber,
       bijingShowBindInput: false,
-      bijingInputValue: ''
+      bijingInputValue: '',
+      bijingPendingSn: '',
+      bijingConfirmSn: '',
+      bijingConfirmNickname: ''
     };
+    if (isRebind) {
+      // 重新绑定不同学号：清空同步标记，避免旧学号标记残留导致新学号漏同步
+      newData.bijingSyncedDates = {};
+    }
     if (res.data.nicknameOverridden && res.data.nickname) {
       // 覆盖本地昵称缓存 + 即时展示
       wx.setStorageSync('userNickname', res.data.nickname);
       newData.userNickname = res.data.nickname;
-      wx.showToast({ title: '已绑定并同步昵称', icon: 'success' });
+      wx.showToast({ title: (isRebind ? '已重新绑定并' : '已绑定并') + '同步昵称', icon: 'success' });
     } else {
-      wx.showToast({ title: '绑定成功', icon: 'success' });
+      wx.showToast({ title: isRebind ? '重新绑定成功' : '绑定成功', icon: 'success' });
     }
     this.setData(newData);
   },
@@ -432,11 +481,18 @@ Page({
     const d = res.data || {};
     // 提示：成功 X 条，失败 X 条（不显示"跳过"，未真正同步的归为"待同步"）
     let msg = `成功 ${d.synced || 0} 条，失败 ${d.failed || 0} 条`;
+    if (d.failed > 0 && d.results && d.results.length) {
+      // 失败原因：取首个失败项的 error（如"无法手动同步当天数据"）
+      const firstFail = d.results.find(r => r.success === false);
+      if (firstFail && firstFail.error) {
+        msg += `，失败原因：${firstFail.error}`;
+      }
+    }
     if (d.pendingCount > 0) {
       msg += `，${d.pendingCount} 天待同步`;
     }
-    this.setData({ bijingLastSync: msg });
-    wx.showToast({ title: '同步完成', icon: 'success' });
+    // 以 toast 形式展示同步结果（含失败原因）
+    wx.showToast({ title: msg, icon: 'none', duration: 2500 });
   },
 
   onReady() {

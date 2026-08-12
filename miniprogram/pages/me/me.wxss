@@ -241,6 +241,76 @@
 .bijing-btn-sm.cancel {
   background-color: #c0c6cf;
 }
+.bijing-btn-sm.rebind {
+  background-color: #f2f3f5;
+  color: #8a8f99;
+  margin-left: 20rpx;
+}
+.bijing-btn-sm.rebind:active {
+  background-color: #e8eaed;
+}
+
+/* 绑定确认弹窗 */
+.bijing-modal-mask {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  background-color: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.bijing-modal {
+  width: 560rpx;
+  background-color: #ffffff;
+  border-radius: 16rpx;
+  padding: 40rpx 36rpx 28rpx;
+  box-sizing: border-box;
+}
+.bijing-modal-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+  text-align: center;
+  margin-bottom: 28rpx;
+}
+.bijing-modal-row {
+  display: flex;
+  align-items: flex-start;
+  font-size: 28rpx;
+  line-height: 1.6;
+  margin-bottom: 14rpx;
+  text-align: left;
+}
+.bijing-modal-label {
+  color: #888888;
+  flex-shrink: 0;
+}
+.bijing-modal-value {
+  color: #333333;
+  word-break: break-all;
+}
+.bijing-modal-btns {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 32rpx;
+}
+.bijing-modal-btn {
+  flex: 1;
+  text-align: center;
+  font-size: 30rpx;
+  padding: 18rpx 0;
+  border-radius: 8rpx;
+}
+.bijing-modal-btn.cancel {
+  background-color: #f2f3f5;
+  color: #666666;
+  margin-right: 20rpx;
+}
+.bijing-modal-btn.confirm {
+  background-color: #b29764;
+  color: #ffffff;
+}
 .bijing-card-inline {
   padding: 8rpx 48rpx 28rpx;
   background-color: #ffffff;
