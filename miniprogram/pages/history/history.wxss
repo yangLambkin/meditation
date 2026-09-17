@@ -282,3 +282,40 @@
   font-size: 22rpx;
   line-height: 30rpx;
 }
+.record-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 603.88rpx;
+  padding-top: 12rpx;
+}
+.delete-record-button {
+  margin: 0;
+  padding: 4rpx 18rpx;
+  background-color: transparent;
+  border-radius: 12rpx;
+  color: #9b5555;
+  font-size: 24rpx;
+  line-height: 48rpx;
+}
+.delete-record-button::after {
+  border: none;
+}
+.delete-record-button[disabled] {
+  color: #b8a1a1;
+  background-color: transparent;
+}
+.empty-records {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 80rpx 36rpx;
+}
+.empty-records-title {
+  color: #495565;
+  font-size: 30rpx;
+}
+.empty-records-description {
+  margin-top: 16rpx;
+  color: #99a1ae;
+  font-size: 24rpx;
+}

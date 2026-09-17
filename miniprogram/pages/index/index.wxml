@@ -122,7 +122,10 @@
               <text class="checkin-record-date">{{item.date}}</text>
               <text class="checkin-record-time">{{item.time}}</text>
             </view>
-            <text class="checkin-record-duration">{{item.duration}} 分钟</text>
+            <view class="checkin-record-actions">
+              <text class="checkin-record-duration">{{item.duration}} 分钟</text>
+              <button class="checkin-delete" catchtap="deleteCheckinRecord" data-id="{{item.id}}" disabled="{{checkinDeleting}}" loading="{{deletingCheckinId === item.id}}" aria-label="删除 {{item.date}} {{item.time}} 的静坐记录" hover-class="checkin-delete-active">{{deletingCheckinId === item.id ? '删除中' : '删除'}}</button>
+            </view>
           </view>
           <view wx:if="{{item.emotion.length}}" class="checkin-record-emotions">
             <text class="checkin-emotion" wx:for="{{item.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>

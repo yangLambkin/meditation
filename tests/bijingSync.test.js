@@ -131,6 +131,7 @@ function createHarness(options = {}) {
   return {
     calls,
     users,
+    records,
     async run(event, context = {}) { return clone(await exports.main(event, context)); },
     async select(recordDate) { return this.run({ type: 'syncSelectedDate', recordDate }); },
     async details(recordDate) { return this.run({ type: 'getSyncDateDetails', recordDate }); },
@@ -213,16 +214,58 @@ test('manual selection requires an existing complete binding', async t => {
   }
 });
 
-test('selecting an already synchronized date preserves every flag and does not post again', async () => {
+test('repeated manual sync posts every time, recalculates changed totals and preserves sync history', async () => {
   const app = createHarness({ records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] });
   app.users[0].bijingSyncedDates = { '2026-09-10': true };
-  await app.select('2026-09-16');
-  const result = await app.run({ type: 'syncSelectedDate', recordDate: '2026-09-16', force: true });
-  assert.deepEqual(result, { success: true, data: { openid: 'user-a', date: '2026-09-16', skipped: true, reason: '已同步' } });
-  assert.equal(app.calls.posts.length, 1);
-  assert.equal(app.calls.reads.filter(call => call.name === 'meditation_records').length, 1);
-  assert.equal(app.calls.updates.length, 1);
+  for (const duration of [20, 20, 35, 15]) {
+    app.records[0].duration = duration;
+    assert.deepEqual(await app.select('2026-09-16'), {
+      success: true, data: { openid: 'user-a', date: '2026-09-16', success: true, duration },
+    });
+  }
+  assert.deepEqual(app.calls.posts.map(call => call.body), [20, 20, 35, 15].map(durationMinutes => ({
+    studentNumber: '123456', recordDate: '2026-09-16', durationMinutes,
+  })));
+  assert.equal(app.calls.reads.filter(call => call.name === 'meditation_records').length, 4);
+  assert.equal(app.calls.updates.length, 4);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-10': true, '2026-09-16': true });
+});
+
+test('automatic and manual sync can repeat in either order and include late-arriving records', async t => {
+  for (const first of ['automatic', 'manual']) {
+    await t.test(first, async () => {
+      const app = createHarness({ records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] });
+      const automatic = () => app.run({}, { source: 'timer' });
+      const manual = () => app.select('2026-09-16');
+      const initial = first === 'automatic' ? automatic : manual;
+      const following = first === 'automatic' ? manual : automatic;
+      await initial();
+      assert.equal((await app.details('2026-09-16')).data.alreadySynced, true);
+      app.records.push({ _openid: 'user-a', date: '2026-09-17',
+        timestamp: Date.parse('2026-09-17T03:30:00+08:00'), duration: 10 });
+      await following();
+      await automatic();
+      assert.deepEqual(app.calls.posts.map(call => call.body), [20, 30, 30].map(durationMinutes => ({
+        studentNumber: '123456', recordDate: '2026-09-16', durationMinutes,
+      })));
+      assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-16': true });
+    });
+  }
+});
+
+test('failed resync reports the failure despite a previous success and remains retryable', async () => {
+  const options = { records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] };
+  const app = createHarness(options);
+  assert.equal((await app.select('2026-09-16')).data.success, true);
+  options.postError = '请求超时';
+  assert.deepEqual(await app.select('2026-09-16'), { success: false, error: '请求超时' });
+  assert.equal(app.calls.posts.length, 2);
+  assert.equal(app.calls.updates.length, 1);
+  assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-16': true });
+  delete options.postError;
+  assert.equal((await app.select('2026-09-16')).data.success, true);
+  assert.equal(app.calls.posts.length, 3);
+  assert.equal(app.calls.updates.length, 2);
 });
 
 test('a date with no records is skipped without a synchronization flag', async () => {
@@ -256,18 +299,20 @@ test('database failure becomes a top-level failure', async () => {
   assert.equal(app.calls.posts.length, 0);
 });
 
-test('legacy syncPending covers only three completed dates and ignores force while preserving its summary shape', async () => {
+test('legacy syncPending repeats all three completed dates with or without force and preserves its summary shape', async () => {
   const app = createHarness({ records: ['2026-09-01', '2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17'].map(date => ({ _openid: 'user-a', date, duration: 20 })) });
   app.users[0].bijingBoundAt = '2026-09-01T03:00:00Z';
   app.users[0].bijingSyncedDates = { '2026-09-01': true, '2026-09-15': true };
   const result = await app.run({ type: 'syncPending', force: true });
   assert.equal(result.success, true);
-  assert.deepEqual({ ...result.data, results: undefined }, { pending: 2, synced: 2, skipped: 0, failed: 0, pendingCount: 0, forced: false, results: undefined });
-  assert.deepEqual(result.data.results.map(value => value.date), ['2026-09-14', '2026-09-16']);
-  assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), ['2026-09-14', '2026-09-16']);
-  assert.equal(app.calls.updates.length, 2);
+  assert.deepEqual({ ...result.data, results: undefined }, { pending: 3, synced: 3, skipped: 0, failed: 0, pendingCount: 0, forced: false, results: undefined });
+  assert.deepEqual(result.data.results.map(value => value.date), ['2026-09-14', '2026-09-15', '2026-09-16']);
+  assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), ['2026-09-14', '2026-09-15', '2026-09-16']);
+  assert.equal(app.calls.updates.length, 3);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-01': true, '2026-09-14': true, '2026-09-15': true, '2026-09-16': true });
   assert.equal(app.calls.now, 1);
+  assert.deepEqual(await app.run({ type: 'syncPending' }), result);
+  assert.deepEqual(app.calls.posts.slice(3).map(value => value.body.recordDate), ['2026-09-14', '2026-09-15', '2026-09-16']);
 });
 
 test('legacy syncPending can backfill recent dates for a newly bound user', async () => {

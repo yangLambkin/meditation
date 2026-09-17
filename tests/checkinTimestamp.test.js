@@ -150,7 +150,7 @@ test('local check-in uses the selected Beijing date/month and identical backup t
   assert.deepEqual(data.dailyRecords['2026-09-01'].records[0].experience, experience);
   assert.equal(data.monthlyStats['2026-09'].total, 1);
   assert.equal(storage.get('meditation_monthly_stats_local-test').totalMinutes, 20);
-  assert.deepEqual(backups, [[20, ['平静'], experience, timestamp]]);
+  assert.deepEqual(backups, [[20, ['平静'], experience, timestamp, result.localId]]);
 });
 
 test('legacy calls default to now; earlier same-day and previous-month records do not regress latest time/current-month cache', () => {

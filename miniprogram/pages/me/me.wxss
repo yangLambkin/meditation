@@ -16,7 +16,7 @@
   background-color: #ffffff;
 }
 .group {
-  padding: 60rpx 0;
+  padding: 36rpx 0;
 }
 .text-wrapper {
   padding: 48rpx 0;
@@ -189,65 +189,140 @@
   display: block;
 }
 
-/* 必经之路绑定区块（在"坚持静坐第 X 天"下方，左对齐到文字起点） */
-.bijing-inline {
-  margin-top: 36rpx;
-  background-color: #ffffff;
+/* 必经之路同步：突出默认自动同步，手动操作保持次要层级 */
+.bijing-sync-card {
+  margin-bottom: 32rpx;
+  padding: 28rpx;
+  border: 2rpx solid #eee7da;
+  border-radius: 20rpx;
+  background-color: #faf8f3;
 }
-.bijing-row {
+.bijing-card-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+.bijing-card-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #514a3e;
+}
+.bijing-auto-badge {
+  padding: 6rpx 14rpx;
+  border-radius: 100rpx;
+  background-color: #eee8da;
+  font-size: 20rpx;
+  line-height: 1.4;
+  color: #826b40;
+}
+.bijing-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  column-gap: 16rpx;
+  margin-top: 8rpx;
 }
 .bijing-bound-tip {
   display: block;
-  font-size: 20rpx;
-  color: #b29764;
+  flex: 1;
+  min-width: 0;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #7c7569;
+  word-break: break-all;
+}
+.bijing-actions {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin-top: 20rpx;
+}
+.bijing-auto-note {
+  margin-top: 20rpx;
+}
+.bijing-auto-note-title {
+  display: block;
+  font-size: 24rpx;
+  font-weight: 500;
+  line-height: 1.6;
+  color: #62594a;
+}
+.bijing-auto-note-detail,
+.bijing-bind-description {
+  display: block;
+  font-size: 22rpx;
+  line-height: 1.7;
+  color: #857d70;
+}
+.bijing-auto-note-detail {
+  margin-top: 4rpx;
+}
+.bijing-bind-description {
   margin-top: 12rpx;
 }
 .bijing-last {
   display: block;
-  font-size: 20rpx;
-  color: #99a1ae;
-  line-height: 28rpx;
-  margin-top: 8rpx;
+  margin-top: 20rpx;
+  padding-top: 16rpx;
+  border-top: 2rpx solid #eee7da;
+  font-size: 22rpx;
+  color: #7c7569;
+  line-height: 1.6;
+  word-break: break-word;
 }
 .bijing-input-row {
   display: flex;
   align-items: center;
-  gap: 12rpx;
+  margin-top: 20rpx;
 }
 .bijing-input {
-  width: 280rpx;
-  height: 45rpx;
+  flex: 1;
+  min-width: 0;
+  height: 76rpx;
+  box-sizing: border-box;
   border: solid 2rpx #e3e7ec;
-  border-radius: 8rpx;
+  border-radius: 12rpx;
   padding: 0 20rpx;
-  font-size: 23rpx;
-  background-color: #f8fafc;
+  font-size: 24rpx;
+  background-color: #ffffff;
 }
 .bijing-btn-sm {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72rpx;
   background-color: #b29764;
   color: #ffffff;
-  font-size: 23rpx;
-  font-weight: 600;
-  padding: 13rpx 20rpx;
-  border-radius: 8rpx;
-  line-height: 1;
+  font-size: 24rpx;
+  font-weight: 500;
+  padding: 16rpx 28rpx;
+  border-radius: 12rpx;
+  line-height: 1.4;
 }
 .bijing-btn-sm:active {
   background-color: #8c7345;
 }
-.bijing-btn-sm.cancel {
-  background-color: #c0c6cf;
+.bijing-manual-btn {
+  border: 2rpx solid #c9b68f;
+  background-color: #ffffff;
+  color: #8c7345;
 }
-.bijing-btn-sm.rebind {
-  background-color: #f2f3f5;
-  color: #8a8f99;
-  margin-left: 20rpx;
+.bijing-manual-btn:active {
+  background-color: #f0eadd;
 }
-.bijing-btn-sm.rebind:active {
-  background-color: #e8eaed;
+.bijing-manual-btn.is-syncing {
+  opacity: 0.6;
+}
+.bijing-text-action {
+  padding: 16rpx 0;
+  color: #8a8173;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+.bijing-text-action:active {
+  color: #8c7345;
 }
 
 /* 绑定确认与同步日期弹窗 */

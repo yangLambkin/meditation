@@ -926,8 +926,8 @@
 }
 
 .checkin-record {
-  margin-bottom: 20rpx;
-  padding: 28rpx;
+  margin-bottom: 12rpx;
+  padding: 12rpx 20rpx;
   border: 2rpx solid #f2f4f6;
   border-radius: 20rpx;
   background-color: #ffffff;
@@ -950,38 +950,41 @@
 
 .checkin-record-datetime {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   align-items: baseline;
   min-width: 0;
 }
 
 .checkin-record-date {
+  margin-right: 12rpx;
   color: #354152;
-  font-size: 28rpx;
+  font-size: 26rpx;
   font-weight: 600;
   line-height: 1.5;
+  white-space: nowrap;
 }
 
 .checkin-record-time {
-  margin-left: 16rpx;
   color: #99a1ae;
   font-size: 24rpx;
   line-height: 1.5;
+  white-space: nowrap;
 }
 
 .checkin-record-duration {
   flex-shrink: 0;
-  margin-left: 16rpx;
   color: #b29764;
-  font-size: 28rpx;
+  font-size: 26rpx;
   font-weight: 600;
   line-height: 1.5;
+  white-space: nowrap;
 }
 
 .checkin-record-emotions {
   display: flex;
   flex-wrap: wrap;
-  margin-top: 16rpx;
+  margin-top: 8rpx;
 }
 
 .checkin-emotion {
@@ -996,7 +999,8 @@
 }
 
 .checkin-record-experience {
-  margin-top: 16rpx;
+  margin-top: 8rpx;
+  padding-bottom: 8rpx;
 }
 
 .checkin-record-experience-text {
@@ -1007,6 +1011,41 @@
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.checkin-record-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 16rpx;
+}
+
+.checkin-record .checkin-delete {
+  width: auto;
+  min-width: 72rpx;
+  flex-shrink: 0;
+  margin: 0 0 0 12rpx;
+  padding: 0 8rpx;
+  border-radius: 8rpx;
+  background-color: transparent;
+  color: #99a1ae;
+  font-size: 22rpx;
+  font-weight: 400;
+  line-height: 72rpx;
+}
+
+.checkin-record .checkin-delete::after {
+  border: none;
+}
+
+.checkin-record .checkin-delete.checkin-delete-active {
+  background-color: #f2f4f6;
+  color: #7a8493;
+}
+
+.checkin-record .checkin-delete[disabled] {
+  color: #c0c6cf;
+  background-color: transparent;
 }
 
 .checkin-list-footer {

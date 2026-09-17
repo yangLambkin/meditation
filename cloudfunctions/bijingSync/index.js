@@ -130,7 +130,7 @@ async function bindStudentNumber(openid, studentNumber) {
   if (!studentNumber) return { success: false, error: '学号不能为空' };
 
   // 1. 校验学号存在性
-  // 重新绑定不同学号时，重置同步标记，避免旧学号标记残留导致新学号漏同步
+  // 重新绑定不同学号时，重置同步状态，避免显示旧学号的同步历史
   const existing = await getUserDoc(openid);
   const isRebind = !!(existing && existing.bijingBound &&
     existing.bijingStudentNumber && existing.bijingStudentNumber !== studentNumber);
@@ -225,21 +225,17 @@ async function syncDate(openid, dateStr) {
   if (!userDoc || !userDoc.bijingBound) {
     return { openid, date: dateStr, skipped: true, reason: '未绑定' };
   }
-  // 去重：已标记则跳过
-  const synced = userDoc.bijingSyncedDates || {};
-  if (synced[dateStr]) {
-    return { openid, date: dateStr, skipped: true, reason: '已同步' };
-  }
-
+  // 同号同日由对端幂等覆盖；自动、手动同步都重新汇总最新记录。
+  // bijingSyncedDates 仅表示曾同步成功，不用于拦截再次上报。
   const duration = await getDayDuration(openid, dateStr);
   if (duration <= 0) {
     // 当天云端查不到打卡数据：不标记 synced。
     // 可能是备份异步未完成（暂时性），留待下次同步复查，
-    // 避免把"查不到"误标为"已同步"而永久跳过（修复 8.1 漏同步）。
+    // 避免把"查不到"误显示为"已同步"。
     return { openid, date: dateStr, skipped: true, reason: '无打卡数据(未标记待复查)', duration: 0 };
   }
 
-  // 必须等次日 04:00 窗口结束后上报，避免凌晨提前标记后漏掉后续记录。
+  // 必须等次日 04:00 窗口结束后上报，保证同步日已完整结束。
   if (getSyncDateWindow(dateStr).end > new Date().getTime()) {
     return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨4点后同步', duration };
   }
@@ -262,7 +258,7 @@ async function syncDate(openid, dateStr) {
   }
 }
 
-// 写入同步标记（不覆盖其它日期）
+// 记录曾同步成功的日期，仅供状态展示（不覆盖其它日期）
 async function markSynced(openid, dateStr) {
   try {
     const userDoc = await getUserDoc(openid);
@@ -377,7 +373,7 @@ async function manualSyncSelectedDate(openid, recordDate) {
     }
 
     // 不受绑定时间限制，刚绑定的用户也可以补同步最近三天。
-    // 复用 syncDate 的去重与无数据处理，不清除已有同步标记。
+    // 复用 syncDate 的幂等上报与无数据处理，不清除已有同步状态。
     const result = await syncDate(openid, recordDate);
     if (result.success === false) {
       return { success: false, error: result.error || '同步失败' };
@@ -389,8 +385,8 @@ async function manualSyncSelectedDate(openid, recordDate) {
   }
 }
 
-// ===== 兼容旧版手动同步：只补最近三个已结束日期中的未同步数据 =====
-// 旧版传入的 force 不再清除标记，防止绕过日期限制或重复上报。
+// ===== 兼容旧版手动同步：重新上报最近三个已结束日期的数据 =====
+// 无需 force 即可重复同步；旧版传入的 force 不清除状态，也不扩大日期范围。
 async function manualSyncPending(openid) {
   if (!openid) return { success: false, error: '用户未登录' };
   const dates = getRecentSyncDates().reverse();
@@ -399,12 +395,9 @@ async function manualSyncPending(openid) {
     return { success: false, error: '尚未绑定学号' };
   }
 
-  const synced = userDoc.bijingSyncedDates || {};
-  const pending = dates.filter(d => !synced[d]);
-
-  console.log(`🚀 手动同步开始: openid=${openid}, pending=${pending.length}`);
+  console.log(`🚀 手动同步开始: openid=${openid}, dates=${dates.length}`);
   const results = [];
-  for (const d of pending) {
+  for (const d of dates) {
     try {
       results.push(await syncDate(openid, d));
     } catch (e) {
@@ -421,7 +414,7 @@ async function manualSyncPending(openid) {
   return {
     success: true,
     data: {
-      pending: pending.length,
+      pending: dates.length,
       synced: successCount,
       skipped: skipCount,
       failed: failCount,

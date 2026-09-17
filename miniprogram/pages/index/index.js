@@ -27,6 +27,8 @@ Page({
     checkinExperience: '',
     showCheckinModal: false,
     checkinSubmitting: false,
+    checkinDeleting: false,
+    deletingCheckinId: '',
     checkinRecords: [],
     checkinTotal: 0,
     hasMoreCheckins: false
@@ -164,6 +166,49 @@ Page({
   openCheckinHistory(e) {
     const date = e.currentTarget.dataset.date;
     if (date) wx.navigateTo({ url: `/pages/history/history?date=${date}` });
+  },
+
+  async deleteCheckinRecord(e) {
+    if (this.data.checkinDeleting) return;
+    const record = this.data.checkinRecords.find(item => item.id === e.currentTarget.dataset.id);
+    if (!record) return;
+
+    this.setData({ checkinDeleting: true });
+    try {
+      const confirmation = await new Promise((resolve, reject) => {
+        const modal = wx.showModal({
+          title: '删除静坐记录',
+          content: `确定删除 ${record.date} ${record.time} 的 ${record.duration} 分钟静坐记录吗？\n删除后无法恢复。`,
+          confirmText: '删除',
+          confirmColor: '#b45245',
+          cancelText: '取消',
+          success: resolve,
+          fail: reject
+        });
+        if (modal && typeof modal.then === 'function') modal.then(resolve, reject);
+      });
+      if (!confirmation.confirm) return;
+
+      this.setData({ deletingCheckinId: record.id });
+      const result = await checkinManager.deleteCheckin(record.date, {
+        recordId: record._id,
+        localId: record.localId,
+        timestamp: record.timestamp
+      });
+      if (!result || !result.success) {
+        wx.showToast({ title: (result && result.error) || '删除失败，请重试', icon: 'none' });
+        return;
+      }
+
+      this.refreshCalendarData();
+      this.loadRanking();
+      wx.showToast({ title: '记录已删除', icon: 'success' });
+    } catch (error) {
+      console.error('首页删除静坐记录失败:', error);
+      wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+    } finally {
+      this.setData({ checkinDeleting: false, deletingCheckinId: '' });
+    }
   },
 
   /**

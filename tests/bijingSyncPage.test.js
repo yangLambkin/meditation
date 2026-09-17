@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const dateUtil = require('../miniprogram/utils/dateUtil');
 
 const pageSource = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/me/me.js'), 'utf8');
+const pageTemplate = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/me/me.wxml'), 'utf8');
 const apiSource = fs.readFileSync(path.join(__dirname, '../miniprogram/utils/bijingApi.js'), 'utf8');
 
 function previewResult(date, overrides = {}) {
@@ -201,10 +202,10 @@ test('an in-flight sync blocks duplicate confirmation and reopening, then releas
   assert.equal(page.data.bijingShowSyncDatePicker, true);
 });
 
-test('success, already synced, no records and failures report the selected date and clear loading', async () => {
+test('success, skipped responses, no records and failures report the selected date and clear loading', async () => {
   const cases = [
     [{ success: true, data: { success: true, duration: 35 } }, /已同步 35 分钟/],
-    [{ success: true, data: { skipped: true, reason: '已同步' } }, /已同步，无需重复同步/],
+    [{ success: true, data: { skipped: true, reason: '已同步' } }, /此前已同步，本次未更新/],
     [{ success: true, data: { skipped: true, duration: 0 } }, /暂无打卡记录/],
     [{ success: false, error: '服务不可用' }, /同步失败：服务不可用/],
     [{ success: true, data: { error: '上传失败' } }, /同步失败：上传失败/],
@@ -405,11 +406,10 @@ test('retry after Beijing 04:00 replaces an expired date and loads the refreshed
   assert.equal(calls.sync.length, 0);
 });
 
-test('empty, zero-minute and already-synced previews prevent unnecessary sync requests', async () => {
+test('empty and zero-minute previews prevent sync requests', async () => {
   for (const [details, message] of [
     [{ records: [], count: 0, totalDuration: 0, syncDuration: 0 }, /暂无可同步/],
-    [{ totalDuration: 0.4, syncDuration: 0 }, /暂无可同步/],
-    [{ alreadySynced: true }, /已同步，无需重复同步/]
+    [{ totalDuration: 0.4, syncDuration: 0 }, /暂无可同步/]
   ]) {
     const { page, calls } = createPage({ preview: date => previewResult(date, details) });
     await page.syncBijingNow();
@@ -419,6 +419,22 @@ test('empty, zero-minute and already-synced previews prevent unnecessary sync re
     assert.equal(calls.loading.length, 0);
     assert.equal(page.data.bijingShowSyncDatePicker, true);
   }
+});
+
+test('already-synced dates keep the submit button enabled and can be submitted repeatedly', async () => {
+  const { page, calls } = createPage({ preview: date => previewResult(date, { alreadySynced: true }) });
+  const button = pageTemplate.match(/<button\b[^>]*bindtap="confirmBijingSyncDate"[^>]*>/)[0];
+  const disabledExpression = button.match(/disabled="\{\{([\s\S]*?)\}\}"/)[1];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.syncBijingNow();
+    assert.equal(page.data.bijingSyncAlreadySynced, true);
+    assert.equal(vm.runInNewContext(disabledExpression, { ...page.data }), false);
+    await page.confirmBijingSyncDate();
+    assert.equal(page.data.bijingSyncing, false);
+    assert.match(calls.toast.at(-1).title, /2026-09-16 已同步 20 分钟/);
+  }
+  assert.deepEqual(calls.sync, [['2026-09-16'], ['2026-09-16']]);
+  assert.equal(calls.hideLoading, 2);
 });
 
 test('malformed or mismatched preview dates cannot authorize a sync', async () => {

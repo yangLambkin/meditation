@@ -32,7 +32,10 @@ function buildCheckinRecords(userData, experienceRecords = []) {
     const day = dailyRecords[date] || {};
     (Array.isArray(day.records) ? day.records : []).forEach((record, index) => {
       if (!record) return;
-      const timestamp = Number(record.timestamp);
+      const numericTimestamp = Number(record.timestamp);
+      const timestamp = Number.isFinite(numericTimestamp)
+        ? numericTimestamp
+        : Date.parse(record.timestamp);
       const hasTime = Number.isFinite(timestamp) && timestamp > 0;
       const experiences = Array.isArray(record.experience) ? record.experience : [record.experience];
       const experienceTexts = experiences.map(experience => {
@@ -40,10 +43,13 @@ function buildCheckinRecords(userData, experienceRecords = []) {
         return experienceMap.get(String(experience)) || '';
       }).filter(Boolean);
       records.push({
-        id: `${date}-${record._id || `${record.timestamp || 'record'}-${index}`}`,
+        id: `${date}-${record._id || record.localId || `${record.timestamp || 'record'}-${index}`}`,
+        _id: record._id || null,
+        localId: record.localId || null,
         date,
         time: hasTime ? getDateTime(timestamp).time : '时间未记录',
-        timestamp: hasTime ? timestamp : 0,
+        timestamp: record.timestamp == null ? null : record.timestamp,
+        sortTimestamp: hasTime ? timestamp : 0,
         duration: Number(record.duration) || 0,
         emotion: Array.isArray(record.emotion) ? record.emotion : [],
         experienceTexts,
@@ -51,7 +57,7 @@ function buildCheckinRecords(userData, experienceRecords = []) {
       });
     });
   });
-  return records.sort((a, b) => b.date.localeCompare(a.date) || b.timestamp - a.timestamp || b.order - a.order);
+  return records.sort((a, b) => b.date.localeCompare(a.date) || b.sortTimestamp - a.sortTimestamp || b.order - a.order);
 }
 
 module.exports = { getDateTime, parseDateTime, buildCheckinRecords };

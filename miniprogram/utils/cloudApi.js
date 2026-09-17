@@ -13,7 +13,7 @@ const cloudApi = {
   },
 
   // 记录冥想打卡
-  recordMeditation: async function(duration, emotion, experience = "", timestamp) {
+  recordMeditation: async function(duration, emotion, experience = "", timestamp, localId) {
     try {
       const now = Date.now();
       const recordTimestamp = timestamp === undefined ? now : timestamp;
@@ -36,6 +36,7 @@ const cloudApi = {
           duration: duration,
           emotion: emotion,
           experience: experienceToSend,
+          ...(localId ? { localId } : {}),
           timestamp: recordTimestamp
         }
       });
@@ -57,6 +58,20 @@ const cloudApi = {
         success: false,
         error: '网络错误，请重试'
       };
+    }
+  },
+
+  // 删除静坐打卡；保留错误码以区分未备份的本地记录与网络失败。
+  deleteMeditationRecord: async function(record) {
+    try {
+      const response = await this.callCloudFunction('meditationManager', {
+        type: 'deleteMeditationRecord',
+        data: record
+      });
+      return response.result || { success: false, error: '删除记录失败，请重试' };
+    } catch (error) {
+      console.error('删除静坐记录失败:', error);
+      return { success: false, error: '网络错误，请重试' };
     }
   },
 

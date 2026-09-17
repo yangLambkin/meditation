@@ -1,6 +1,43 @@
 // 云存储API（仅在需要时使用）
 const cloudApi = require('./cloudApi.js');
 const dateUtil = require('./dateUtil.js');
+const pendingBackups = new Map();
+const pendingDeletions = new Set();
+const userStorageRevisions = new Map();
+
+function getUserStorageRevision(userId) {
+  return userStorageRevisions.get(userId) || 0;
+}
+
+function bumpUserStorageRevision(userId) {
+  userStorageRevisions.set(userId, getUserStorageRevision(userId) + 1);
+}
+
+function canCommitRecovery(userId, revision) {
+  if (getUserStorageRevision(userId) !== revision) return false;
+  const prefix = `${userId}:`;
+  return !Array.from(pendingDeletions).some(key => key.startsWith(prefix));
+}
+
+function recordTime(timestamp) {
+  return typeof timestamp === 'number' || /^\d+$/.test(String(timestamp))
+    ? Number(timestamp) : Date.parse(timestamp);
+}
+
+function findRecordIndex(records, identity) {
+  const matches = records.map((record, index) => ({ record, index })).filter(({ record }) => {
+    if (identity.localId) return record.localId === identity.localId;
+    if (identity.recordId) return record._id === identity.recordId;
+    const timestamp = recordTime(identity.timestamp);
+    return Number.isFinite(timestamp) && timestamp > 0 && recordTime(record.timestamp) === timestamp;
+  });
+  if (matches.length > 1) throw new Error('存在相同时间的记录，暂时无法确定要删除的记录');
+  return matches.length ? matches[0].index : -1;
+}
+
+function backupKey(userId, timestamp, localId) {
+  return `${userId}:${localId || recordTime(timestamp)}`;
+}
 
 function resolveCheckinTimestamp(timestamp) {
   const now = Date.now();
@@ -64,6 +101,7 @@ const checkinManager = {
       };
       
       wx.setStorageSync(storageKey, userData);
+      bumpUserStorageRevision(userId);
       console.log(`✅ 体验记录保存到统一本地缓存: ${uniqueId}`);
       return true;
     } catch (error) {
@@ -155,6 +193,7 @@ const checkinManager = {
     
     // 直接保存打卡数据（无需嵌套结构）
     wx.setStorageSync(storageKey, data);
+    bumpUserStorageRevision(userId);
     
     return true;
   },
@@ -309,6 +348,7 @@ const checkinManager = {
   // 安全的云端数据恢复（含去重保护）
   async safeRecoverFromCloud(userId) {
     try {
+      const storageRevision = getUserStorageRevision(userId);
       console.log('🛡️ 开始安全数据恢复...');
       
       // 1. 获取当前本地数据快照（用于去重检查）
@@ -340,8 +380,10 @@ const checkinManager = {
       }
       
       // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
+      if (!canCommitRecovery(userId, storageRevision)) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
+      bumpUserStorageRevision(userId);
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -454,6 +496,7 @@ const checkinManager = {
   // 安全的云端数据恢复（含去重保护）
   async safeRecoverFromCloud(userId) {
     try {
+      const storageRevision = getUserStorageRevision(userId);
       console.log('🛡️ 开始安全数据恢复...');
       
       // 1. 获取当前本地数据快照（用于去重检查）
@@ -485,8 +528,10 @@ const checkinManager = {
       }
       
       // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
+      if (!canCommitRecovery(userId, storageRevision)) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
+      bumpUserStorageRevision(userId);
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -582,6 +627,7 @@ const checkinManager = {
   // 从云端恢复用户数据
   async recoverUserDataFromCloud(userId) {
     try {
+      const storageRevision = getUserStorageRevision(userId);
       const cloudApi = require('./cloudApi.js');
       
       console.log('📡 开始从云端恢复用户数据...');
@@ -603,8 +649,10 @@ const checkinManager = {
       }
       
       // 4. 保存到本地缓存
+      if (!canCommitRecovery(userId, storageRevision)) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, recoveredData);
+      bumpUserStorageRevision(userId);
       
       console.log('✅ 云端数据恢复完成，共恢复:', {
         checkinRecords: Object.keys(recoveredData.checkinRecords.dailyRecords || {}).length,
@@ -649,6 +697,8 @@ const checkinManager = {
       
       // 添加详细记录（格式与本地打卡记录一致）
       localData.checkinRecords.dailyRecords[dateStr].records.push({
+        _id: record._id,
+        localId: record.localId,
         timestamp: record.timestamp,
         duration: record.duration || 0,
         emotion: record.emotion || [],
@@ -702,7 +752,7 @@ const checkinManager = {
     
     // 2. 异步备份到云端（如果已登录）
     if (this.isUserLoggedIn()) {
-      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp);
+      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId);
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
@@ -755,6 +805,7 @@ const checkinManager = {
     
     // 添加打卡记录详情（与云端数据结构保持一致）
     const newRecord = {
+      localId: `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       timestamp: recordTimestamp,
       duration: duration,
       emotion: emotion,
@@ -780,6 +831,7 @@ const checkinManager = {
     
     return {
       success: true,
+      localId: newRecord.localId,
       date: dateStr,
       dailyCount: userData.dailyRecords[dateStr].count,
       monthlyTotal: userData.monthlyStats[monthStr] ? userData.monthlyStats[monthStr].total : 0
@@ -787,7 +839,18 @@ const checkinManager = {
   },
   
   // 异步备份到云端
-  asyncBackupToCloud: async function(duration, emotion, experience = "", timestamp) {
+  asyncBackupToCloud: function(duration, emotion, experience = "", timestamp, localId) {
+    const userId = this.getUserId();
+    const key = backupKey(userId, timestamp, localId);
+    if (pendingDeletions.has(key)) return Promise.resolve({ success: false });
+    if (pendingBackups.has(key)) return pendingBackups.get(key);
+    const backup = this.backupRecordToCloud(userId, duration, emotion, experience, timestamp, localId);
+    pendingBackups.set(key, backup);
+    backup.finally(() => pendingBackups.delete(key));
+    return backup;
+  },
+
+  backupRecordToCloud: async function(userId, duration, emotion, experience, timestamp, localId) {
     try {
       // 处理experience参数格式（确保与云端接口兼容）
       let experienceToSend = experience;
@@ -799,14 +862,113 @@ const checkinManager = {
         experienceToSend = experience ? [experience] : [];
       }
       
-      const result = await cloudApi.recordMeditation(duration, emotion, experienceToSend, timestamp);
+      const args = [duration, emotion, experienceToSend, timestamp];
+      if (localId) args.push(localId);
+      const result = await cloudApi.recordMeditation(...args);
       if (result.success) {
+        // 保存云端身份，允许精确删除同一时间的多次补记。
+        if (result.data && result.data.recordId) {
+          const stored = this.getUserCheckinDataByUserId(userId);
+          const data = stored.checkinRecords || stored;
+          const date = dateUtil.getBusinessDate(timestamp);
+          const records = (data.dailyRecords[date] || {}).records || [];
+          const index = findRecordIndex(records, { localId, timestamp });
+          if (index !== -1) {
+            records[index]._id = result.data.recordId;
+            wx.setStorageSync(`meditation_checkin_${userId}`, stored);
+            bumpUserStorageRevision(userId);
+          }
+        }
         console.log('☁️ 云端备份成功');
       } else {
         console.warn('⚠️ 云端备份失败（不影响本地使用）:', result.error);
       }
+      return result;
     } catch (error) {
       console.warn('⚠️ 云端备份异常（不影响本地使用）:', error.message);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // 云端确认后再删除本地记录；失败保留列表，重试不会重复扣减统计。
+  deleteCheckin: async function(dateStr, identity = {}) {
+    const userId = this.getUserId();
+    const storageKey = `meditation_checkin_${userId}`;
+    let key;
+    let locked = false;
+    try {
+      const initial = this.getUserCheckinDataByUserId(userId);
+      const initialData = initial.checkinRecords || initial;
+      const records = (initialData.dailyRecords[dateStr] || {}).records || [];
+      const index = findRecordIndex(records, identity);
+      if (index === -1) return { success: false, error: '记录不存在，请刷新后重试' };
+      const target = records[index];
+      key = backupKey(userId, target.timestamp, target.localId);
+      if (pendingDeletions.has(key)) return { success: false, error: '正在删除，请稍候' };
+      pendingDeletions.add(key);
+      locked = true;
+      const targetIdentity = { localId: target.localId, recordId: target._id, timestamp: target.timestamp };
+
+      // 等待已提交的备份，避免删除后尚未完成的上传又把记录写回云端。
+      if (pendingBackups.has(key)) await pendingBackups.get(key);
+      const latest = this.getUserCheckinDataByUserId(userId);
+      const latestData = latest.checkinRecords || latest;
+      const latestRecords = (latestData.dailyRecords[dateStr] || {}).records || [];
+      const latestIndex = findRecordIndex(latestRecords, targetIdentity);
+      if (latestIndex === -1) return { success: false, error: '记录已变更，请刷新后重试' };
+      const record = latestRecords[latestIndex];
+      let cloudResult;
+      if (this.isUserLoggedIn()) {
+        cloudResult = await cloudApi.deleteMeditationRecord({
+          recordId: record._id,
+          ...(record.localId ? { localId: record.localId } : {}),
+          timestamp: record.timestamp,
+          date: dateStr
+        });
+        if (!cloudResult.success && cloudResult.code !== 'RECORD_NOT_FOUND') {
+          return { success: false, error: cloudResult.error || '删除记录失败，请重试' };
+        }
+      } else if (record._id) {
+        return { success: false, error: '请登录后删除已同步的记录' };
+      }
+
+      // 网络请求期间可能新增记录，始终在最新缓存上只移除目标记录。
+      const stored = this.getUserCheckinDataByUserId(userId);
+      const data = stored.checkinRecords || stored;
+      const day = data.dailyRecords[dateStr];
+      const deleteIndex = findRecordIndex(day ? day.records : [], targetIdentity);
+      if (deleteIndex !== -1) {
+        day.records.splice(deleteIndex, 1);
+        if (day.records.length) {
+          day.count = day.records.length;
+          day.lastCheckin = day.records.reduce((latestRecord, item) =>
+            recordTime(item.timestamp) > recordTime(latestRecord.timestamp) ? item : latestRecord
+          ).timestamp;
+        } else {
+          delete data.dailyRecords[dateStr];
+        }
+      }
+      const month = dateStr.substring(0, 7);
+      data.monthlyStats = data.monthlyStats || {};
+      this.updateMonthlyStats(data, month);
+      const monthRecords = Object.keys(data.dailyRecords).filter(date => date.startsWith(month))
+        .flatMap(date => data.dailyRecords[date].records || []);
+      data.monthlyStats[month].count = monthRecords.length;
+      data.monthlyStats[month].totalDuration = monthRecords.reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
+      data.userStats = {
+        ...(data.userStats || {}),
+        ...this.getUserStats(data)
+      };
+      wx.setStorageSync(storageKey, stored);
+      bumpUserStorageRevision(userId);
+      this.updateMonthlyStatsCache(data, 0, month);
+      wx.removeStorageSync('cloud_ranking_cache');
+      return { success: true };
+    } catch (error) {
+      console.error('删除静坐记录失败:', error);
+      return { success: false, error: error.message || '删除记录失败，请重试' };
+    } finally {
+      if (locked) pendingDeletions.delete(key);
     }
   },
 
@@ -919,6 +1081,7 @@ const checkinManager = {
     
     try {
       wx.setStorageSync(userKey, data);
+      bumpUserStorageRevision(userId);
       return true;
     } catch (error) {
       console.error('保存打卡数据失败:', error);
@@ -954,8 +1117,7 @@ const checkinManager = {
   },
   
   // 获取用户统计信息（直接从本地）
-  getUserStats: function() {
-    const userData = this.getUserCheckinData();
+  getUserStats: function(userData = this.getUserCheckinData()) {
     
     let totalDays = 0;
     let totalCount = 0;
@@ -1098,12 +1260,14 @@ const checkinManager = {
       if (recordDate >= sevenDaysAgo) {
         const dayData = localData.dailyRecords[dateStr];
         for (const localRecord of dayData.records) {
+          if (localRecord._id) continue;
           // 异步记录到云端（失败不影响本地使用）
-          cloudApi.recordMeditation(
+          this.asyncBackupToCloud(
             localRecord.duration, 
             localRecord.emotion || [], 
             localRecord.experience,
-            localRecord.timestamp
+            localRecord.timestamp,
+            localRecord.localId
           ).then(() => {
             console.log(`✅ 记录同步成功: ${dateStr}`);
           }).catch(error => {

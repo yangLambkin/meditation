@@ -6,9 +6,13 @@ const dateUtil = require('../../utils/dateUtil.js');
 Page({
   data: {
     selectedDate: '', // 选择的日期
+    selectedDateKey: '', // 用于读取、删除记录的原始日期
     recordList: [],   // 打卡记录列表
     recordCount: 0,   // 打卡次数
     totalDuration: 0, // 合计时长（分钟）
+    loadingRecords: true,
+    deleteBusy: false,
+    deletingRecordKey: '',
     year: '',         // 年
     month: '',        // 月
     day: '',          // 日
@@ -18,7 +22,7 @@ Page({
   /**
    * 生命周期函数--监听页面加载
    */
-  onLoad(options) {
+  onLoad(options = {}) {
     // 从URL参数获取日期
     const date = options.date || '';
     
@@ -35,14 +39,13 @@ Page({
       const formattedDate = this.formatDateForDisplay(date);
       this.setData({
         selectedDate: formattedDate,
+        selectedDateKey: date,
         year: year,
         month: monthNames[parseInt(month) - 1],
         day: day,
         lunarDate: lunarDate
       });
       
-      // 加载该日期的打卡记录
-      this.loadHistoryRecords(date);
     } else {
       // 如果没有日期参数，默认显示今天
       const today = dateUtil.getBusinessDate();
@@ -53,12 +56,12 @@ Page({
       const formattedToday = this.formatDateForDisplay(today);
       this.setData({
         selectedDate: formattedToday,
+        selectedDateKey: today,
         year: year,
         month: monthNames[parseInt(month) - 1],
         day: day,
         lunarDate: lunarDate
       });
-      this.loadHistoryRecords(today);
     }
   },
 
@@ -66,12 +69,18 @@ Page({
    * 加载历史记录数据（支持云存储）
    */
   async loadHistoryRecords(dateStr) {
+    const loadRequest = (this._historyLoadRequest || 0) + 1;
+    this._historyLoadRequest = loadRequest;
+    this.setData({ loadingRecords: true });
     try {
       // 获取该日期的打卡次数（异步）
       const checkinCount = await checkinManager.getDailyCheckinCount(dateStr);
       
       // 获取该日期的详细打卡记录（异步）
       const dailyRecords = await checkinManager.getDailyCheckinRecords(dateStr);
+
+      // 新的加载（如删除后的刷新）已经开始时，不使用旧请求的结果。
+      if (loadRequest !== this._historyLoadRequest) return false;
       
       if (checkinCount === 0) {
         console.warn('该日期暂无打卡记录');
@@ -80,7 +89,7 @@ Page({
           recordCount: 0,
           totalDuration: 0
         });
-        return;
+        return true;
       }
 
       // 格式化记录数据
@@ -216,6 +225,10 @@ Page({
           }
           
           return {
+            _id: record._id || '',
+            localId: record.localId || '',
+            timestamp: record.timestamp,
+            recordKey: record._id ? `cloud_${record._id}` : record.localId ? `local_${record.localId}` : `time_${record.timestamp}_${index}`,
             time: timeStr,
             duration: record.duration || 0,
             emotion: record.emotion || [],
@@ -240,14 +253,64 @@ Page({
       });
 
       console.log(`加载 ${dateStr} 的打卡记录成功，打卡次数: ${checkinCount}, 合计时长: ${totalDuration}分钟`);
+      return true;
       
     } catch (error) {
+      if (loadRequest !== this._historyLoadRequest) return false;
       console.error('加载历史记录失败:', error);
-      this.setData({
-        recordList: [],
-        recordCount: 0,
-        totalDuration: 0
+      wx.showToast({ title: '加载记录失败，请重试', icon: 'none' });
+      return false;
+    } finally {
+      if (loadRequest === this._historyLoadRequest) {
+        this.setData({ loadingRecords: false });
+      }
+    }
+  },
+
+  /**
+   * 确认后删除指定记录，成功后重新读取当日统计。
+   */
+  async deleteRecord(event) {
+    if (this.data.deleteBusy) return;
+
+    const recordKey = event.currentTarget.dataset.recordKey;
+    const record = this.data.recordList.find(item => item.recordKey === recordKey);
+    const dateStr = this.data.selectedDateKey;
+    if (!record || !dateStr) return;
+
+    this.setData({ deleteBusy: true });
+    try {
+      const confirmation = await new Promise((resolve, reject) => {
+        wx.showModal({
+          title: '删除静坐记录',
+          content: `确定删除 ${record.time} 的 ${record.duration} 分钟静坐记录吗？删除后不可恢复。`,
+          confirmText: '删除',
+          confirmColor: '#b54747',
+          cancelText: '保留',
+          success: resolve,
+          fail: reject
+        });
       });
+      if (!confirmation.confirm) return;
+
+      this.setData({ deletingRecordKey: recordKey });
+      const result = await checkinManager.deleteCheckin(dateStr, {
+        recordId: record._id,
+        timestamp: record.timestamp,
+        localId: record.localId
+      });
+      if (!result || !result.success) {
+        wx.showToast({ title: (result && result.error) || '删除失败，请重试', icon: 'none' });
+        return;
+      }
+
+      const refreshed = await this.loadHistoryRecords(dateStr);
+      wx.showToast({ title: refreshed ? '记录已删除' : '已删除，请重新打开页面刷新', icon: refreshed ? 'success' : 'none' });
+    } catch (error) {
+      console.error('删除静坐记录失败:', error);
+      wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+    } finally {
+      this.setData({ deleteBusy: false, deletingRecordKey: '' });
     }
   },
 
@@ -271,12 +334,8 @@ Page({
    */
   onShow() {
     // 页面显示时重新加载数据，确保数据最新
-    if (this.data.year && this.data.day) {
-      // 重新构建数据库需要的日期格式：YYYY-MM-DD
-      const monthNum = this.getMonthNumber(this.data.month);
-      const dateStr = `${this.data.year}-${monthNum.toString().padStart(2, '0')}-${this.data.day.padStart(2, '0')}`;
-      console.log('onShow重新加载数据，日期:', dateStr);
-      this.loadHistoryRecords(dateStr);
+    if (this.data.selectedDateKey && !this.data.deleteBusy) {
+      return this.loadHistoryRecords(this.data.selectedDateKey);
     }
   },
 

@@ -604,10 +604,6 @@ Page({
       wx.showToast({ title: '当天暂无可同步的时长', icon: 'none' });
       return;
     }
-    if (this.data.bijingSyncAlreadySynced) {
-      wx.showToast({ title: '这一天已同步，无需重复同步', icon: 'none' });
-      return;
-    }
     this.setData({ bijingSyncing: true, bijingShowSyncDatePicker: false });
     wx.showLoading({ title: '同步中...', mask: true });
     let message;
@@ -620,7 +616,8 @@ Page({
       if (result.success) {
         message = `${recordDate} 已同步 ${result.duration} 分钟`;
       } else if (result.skipped && result.reason === '已同步') {
-        message = `${recordDate} 已同步，无需重复同步`;
+        // 兼容尚未更新的云函数：这次被跳过，不能误报失败或已重新同步成功。
+        message = `${recordDate} 此前已同步，本次未更新`;
       } else if (result.skipped && result.duration === 0) {
         message = `${recordDate} 暂无打卡记录`;
       } else {

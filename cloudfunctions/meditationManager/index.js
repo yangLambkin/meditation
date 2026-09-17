@@ -38,6 +38,8 @@ exports.main = async (event, context) => {
       return await handleLogin(wxContext, event.code);
     case "recordMeditation":
       return await recordMeditation(openid, event.data, event.localUserId);
+    case "deleteMeditationRecord":
+      return await deleteMeditationRecord(openid, event.data);
     case "getUserRecords":
       return await getUserRecords(openid, event.date);
     case "getUserStats":
@@ -83,6 +85,9 @@ async function recordMeditation(openid, data, localUserId = null) {
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > now.getTime()) {
       return { success: false, error: '打卡时间无效或晚于当前时间' };
     }
+    if (data.localId !== undefined && (typeof data.localId !== 'string' || !data.localId.trim())) {
+      return { success: false, code: 'INVALID_RECORD', error: '本地记录标识无效' };
+    }
     const dateStr = getBusinessDate(timestamp);
     
     // 创建打卡记录 - 支持本地用户标识映射
@@ -96,6 +101,7 @@ async function recordMeditation(openid, data, localUserId = null) {
       createdAt: now,
       updatedAt: now
     };
+    if (data.localId !== undefined) record.localId = data.localId;
     
     // 如果提供了本地用户ID，创建用户映射
     if (localUserId) {
@@ -122,6 +128,152 @@ async function recordMeditation(openid, data, localUserId = null) {
   } catch (error) {
     console.error("记录冥想打卡失败:", error);
     return { success: false, error: error.message };
+  }
+}
+
+function meditationTimestamp(value) {
+  const timestamp = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? (/^\d+$/.test(value) ? Number(value) : Date.parse(value))
+      : NaN;
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : NaN;
+}
+
+function deletionError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+// 在同一个事务快照中分页读取，避免默认查询条数上限造成累计统计被截断。
+async function getMeditationDeletionRows(transaction, collection, openid) {
+  const rows = [];
+  const pageSize = 100;
+  while (true) {
+    const result = await transaction.collection(collection)
+      .where({ _openid: openid }).orderBy('_id', 'asc')
+      .skip(rows.length).limit(pageSize).get();
+    rows.push(...result.data);
+    if (result.data.length < pageSize) return rows;
+  }
+}
+
+function rebuildMeditationStats(records) {
+  const days = new Map();
+  const monthlyStats = {};
+  let totalDuration = 0;
+  let latestRecord;
+  let latestDate = '';
+  let latestTimestamp = -Infinity;
+  for (const record of records) {
+    const timestamp = meditationTimestamp(record.timestamp);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(record.date || '')
+      ? record.date : Number.isFinite(timestamp) ? getBusinessDate(timestamp) : '';
+    if (!date) throw deletionError('INVALID_STORED_RECORD', '历史记录日期异常，暂时无法删除');
+    const rawDuration = Number(record.duration);
+    const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+    const month = date.substring(0, 7);
+    totalDuration += duration;
+    days.set(date, (days.get(date) || 0) + duration);
+    if (!monthlyStats[month]) monthlyStats[month] = { days: [], count: 0, totalDuration: 0 };
+    monthlyStats[month].count++;
+    monthlyStats[month].totalDuration += duration;
+    if (!monthlyStats[month].days.includes(date)) monthlyStats[month].days.push(date);
+    const comparableTimestamp = Number.isFinite(timestamp) ? timestamp : 0;
+    if (date > latestDate || (date === latestDate && comparableTimestamp >= latestTimestamp)) {
+      latestDate = date;
+      latestTimestamp = comparableTimestamp;
+      latestRecord = { duration };
+    }
+  }
+  const dates = Array.from(days.keys()).sort();
+  let currentStreak = 0;
+  let longestStreak = 0;
+  let previousDay;
+  for (const date of dates) {
+    const day = Date.parse(`${date}T00:00:00Z`) / 86400000;
+    currentStreak = previousDay !== undefined && day - previousDay === 1 ? currentStreak + 1 : 1;
+    longestStreak = Math.max(longestStreak, currentStreak);
+    previousDay = day;
+  }
+  Object.values(monthlyStats).forEach(month => month.days.sort());
+  return {
+    totalDays: dates.length,
+    totalCount: records.length,
+    totalDuration,
+    // 与写入和排名逻辑一致：日/月累计对应最近一次打卡所在日/月。
+    dailyTotalDuration: days.get(latestDate) || 0,
+    monthlyTotalDuration: monthlyStats[latestDate.substring(0, 7)]?.totalDuration || 0,
+    longestCheckInDays: longestStreak,
+    currentStreak,
+    longestStreak,
+    lastCheckinDate: latestDate,
+    lastCheckinDuration: latestRecord ? latestRecord.duration : 0,
+    lastCheckin: latestDate,
+    monthlyStats,
+    updatedAt: new Date()
+  };
+}
+
+// 删除记录和重算统计共同提交；统计写入失败时，原记录仍然保留。
+async function deleteMeditationRecord(openid, data = {}) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再删除记录' };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { success: false, code: 'INVALID_RECORD', error: '删除记录参数无效' };
+  }
+  const recordId = data.recordId;
+  if (recordId !== undefined && recordId !== null && recordId !== '' &&
+      (typeof recordId !== 'string' || !recordId.trim())) {
+    return { success: false, code: 'INVALID_RECORD', error: '记录标识无效' };
+  }
+  const localId = data.localId;
+  if (!recordId && localId !== undefined && (typeof localId !== 'string' || !localId.trim())) {
+    return { success: false, code: 'INVALID_RECORD', error: '本地记录标识无效' };
+  }
+  const timestamp = meditationTimestamp(data.timestamp);
+  if (!recordId && !localId && (!Number.isFinite(timestamp) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date || ''))) {
+    return { success: false, code: 'INVALID_RECORD', error: '缺少记录标识或打卡日期、时间' };
+  }
+  try {
+    const result = await db.runTransaction(async transaction => {
+      const records = await getMeditationDeletionRows(transaction, 'meditation_records', openid);
+      // 新本地记录的备份可能失败，此时 localId 未命中不能降级为时间匹配，
+      // 否则会误删云端恰好同一时间的另一条记录。仅旧缓存使用时间定位。
+      const matches = records.filter(record => recordId
+        ? record._id === recordId
+        : localId ? record.localId === localId
+          : record.date === data.date && meditationTimestamp(record.timestamp) === timestamp);
+      if (!matches.length) throw deletionError('RECORD_NOT_FOUND', '记录不存在或已被删除');
+      if (matches.length !== 1) throw deletionError('AMBIGUOUS_RECORD', '存在多条匹配记录，请刷新记录后重试');
+      const target = matches[0];
+      const statsRows = await getMeditationDeletionRows(transaction, 'user_stats', openid);
+      const stats = rebuildMeditationStats(records.filter(record => record._id !== target._id));
+
+      const removed = await transaction.collection('meditation_records').doc(target._id).remove();
+      if (!removed.stats || removed.stats.removed !== 1) {
+        throw deletionError('RECORD_NOT_FOUND', '记录不存在或已被删除');
+      }
+      if (statsRows.length) {
+        for (const row of statsRows) {
+          const updated = await transaction.collection('user_stats').doc(row._id).update({
+            data: { ...stats, monthlyStats: db.command.set(stats.monthlyStats) }
+          });
+          if (!updated.stats || updated.stats.updated !== 1) {
+            throw deletionError('STATS_UPDATE_FAILED', '更新统计失败，请重试');
+          }
+        }
+      } else {
+        await transaction.collection('user_stats').add({
+          data: { _openid: openid, ...stats, createdAt: new Date() }
+        });
+      }
+      return { recordId: target._id, date: target.date, timestamp: target.timestamp, stats };
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('删除冥想记录失败:', error);
+    return { success: false, code: error.code || 'DELETE_FAILED', error: error.message || '删除失败，请重试' };
   }
 }
 
