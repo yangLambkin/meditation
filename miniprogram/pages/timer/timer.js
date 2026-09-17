@@ -7,13 +7,13 @@ Page({
     isCountdown: true,
     
     // 时间设置
-    totalTime: 420,
+    totalTime: 1800,
     elapsedTime: 0,
-    remainingTime: 420,
+    remainingTime: 1800,
     
     // 时长选择
-    duration: 7,
-    durationText: "7 分钟",
+    duration: 30,
+    durationText: "30 分钟",
     showTimePicker: false,
     showCustomTimePicker: false,
     customTimeInput: "",
@@ -35,7 +35,7 @@ Page({
     // 进度显示
     progress: 0,
     progressAngle: 0,
-    displayTime: "07:00",
+    displayTime: "30:00",
     
     // 按钮状态
     showStartButton: true,
@@ -54,8 +54,8 @@ Page({
     
     // 背景音乐相关
     showMusicPicker: false,
-    backgroundMusic: 'default',
-    musicText: '引导音频',
+    backgroundMusic: 'none',
+    musicText: '无音乐',
     musicOptions: [
       { value: 'default', text: '引导音频' },
       { value: 'none', text: '无音乐' }

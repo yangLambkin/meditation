@@ -26,40 +26,45 @@
               <text class="font text">{{userNickname}}</text>
               <text class="edit-hint">点击修改</text>
             </view>
-            <!-- 必经之路绑定区块（紧跟"坚持静坐第 X 天"下方，左对齐） -->
-            <view class="bijing-inline">
-              <view class="bijing-row">
-                <block wx:if="{{!bijingBound}}">
-                  <view wx:if="{{!bijingShowBindInput}}" class="bijing-btn-sm" bindtap="toggleBindInput">绑定学号</view>
-                  <view wx:else class="bijing-input-row">
-                    <input
-                      class="bijing-input"
-                      placeholder="请输入必经之路学号"
-                      value="{{bijingInputValue}}"
-                      bindinput="onBijingInput"
-                    />
-                    <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认</view>
-                    <view class="bijing-btn-sm cancel" bindtap="cancelBindBijing">取消</view>
+            <!-- 同步日为北京时间 04:00 至次日 04:00，只提供最近三个已结束的同步日 -->
+            <view wx:if="{{bijingShowSyncDatePicker}}" class="bijing-modal-mask" bindtap="cancelBijingSyncDate" catchtouchmove="noop">
+              <view class="bijing-modal bijing-sync-modal" catchtap="noop">
+                <view class="bijing-modal-title">选择同步日期</view>
+                <view class="bijing-sync-hint">每天按北京时间 04:00 至次日 04:00 统计，可同步最近三个已结束的同步日</view>
+                <radio-group bindchange="onBijingSyncDateChange">
+                  <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
+                    <view class="bijing-date-text"><text>{{item.date}}</text><text class="bijing-date-label">{{item.label}}</text></view>
+                    <radio value="{{item.date}}" checked="{{bijingSyncDate === item.date}}" color="#b29764" />
+                  </label>
+                </radio-group>
+                <view class="bijing-sync-details">
+                  <view class="bijing-details-title">{{bijingSyncDate}} 打卡明细</view>
+                  <view class="bijing-details-note">{{bijingSyncDate}} 04:00 至次日 04:00 前（北京时间）</view>
+                  <view wx:if="{{bijingSyncDetailsLoading}}" class="bijing-details-state">正在加载当天记录…</view>
+                  <view wx:elif="{{bijingSyncDetailsError}}" class="bijing-details-state">
+                    <text class="bijing-details-error">{{bijingSyncDetailsError}}</text>
+                    <view class="bijing-details-retry" bindtap="retryBijingSyncDetails">重新加载</view>
                   </view>
-                </block>
-                <block wx:else>
-                  <view wx:if="{{!bijingShowBindInput}}">
-                    <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '立即同步'}}</view>
-                    <view class="bijing-btn-sm rebind" bindtap="toggleBindInput">重新绑定</view>
-                  </view>
-                  <view wx:else class="bijing-input-row">
-                    <input
-                      class="bijing-input"
-                      placeholder="请输入必经之路学号"
-                      value="{{bijingInputValue}}"
-                      bindinput="onBijingInput"
-                    />
-                    <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认</view>
-                    <view class="bijing-btn-sm cancel" bindtap="cancelBindBijing">取消</view>
-                  </view>
-                </block>
+                  <block wx:else>
+                    <view class="bijing-details-total">共 {{bijingSyncRecordCount}} 次，合计 {{bijingSyncTotalDuration}} 分钟</view>
+                    <view wx:if="{{bijingSyncTotalDuration !== bijingSyncDuration}}" class="bijing-details-note">同步时按 {{bijingSyncDuration}} 分钟上报</view>
+                    <view wx:if="{{bijingSyncAlreadySynced}}" class="bijing-details-note">这一天已同步，可再次同步更新记录</view>
+                    <view wx:if="{{!bijingSyncRecordCount}}" class="bijing-details-state">当天暂无打卡记录</view>
+                    <block wx:else>
+                      <view class="bijing-record-heading"><text>打卡时间（北京时间）</text><text>静坐时长</text></view>
+                      <scroll-view class="bijing-sync-records" scroll-y="{{true}}">
+                        <view wx:for="{{bijingSyncRecords}}" wx:key="id" class="bijing-record-row">
+                          <text>{{item.timeLabel}}</text><text>{{item.durationText}} 分钟</text>
+                        </view>
+                      </scroll-view>
+                    </block>
+                  </block>
+                </view>
+                <view class="bijing-modal-btns">
+                  <view class="bijing-modal-btn cancel" bindtap="cancelBijingSyncDate">取消</view>
+                  <button class="bijing-modal-btn confirm bijing-sync-submit" disabled="{{bijingSyncDetailsLoading || bijingSyncDetailsError || bijingSyncDetailsDate !== bijingSyncDate || !bijingSyncRecordCount || bijingSyncDuration <= 0}}" bindtap="confirmBijingSyncDate">同步这一天</button>
+                </view>
               </view>
-              <text wx:if="{{bijingBound && !bijingShowBindInput}}" class="bijing-bound-tip">已绑定：{{bijingStudentNumber}}</text>
             </view>
 
             <!-- 绑定确认弹窗 -->
@@ -76,6 +81,49 @@
             </view>
           </view>
         </view>
+      </view>
+
+      <!-- 同步独立成卡片，自动同步为默认方式，手动入口用于补录与重试 -->
+      <view class="bijing-sync-card">
+        <view class="bijing-card-header">
+          <text class="bijing-card-title">必经之路同步</text>
+          <text wx:if="{{bijingBound}}" class="bijing-auto-badge">自动同步</text>
+        </view>
+        <view wx:if="{{bijingShowBindInput}}" class="bijing-binding-form">
+          <text class="bijing-bind-description">{{bijingBound ? '输入新学号，确认后更换绑定' : '绑定学号后，静坐记录将每天自动同步'}}</text>
+          <view class="bijing-input-row">
+            <input
+              class="bijing-input"
+              placeholder="请输入必经之路学号"
+              value="{{bijingInputValue}}"
+              bindinput="onBijingInput"
+            />
+          </view>
+          <view class="bijing-actions">
+            <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认绑定</view>
+            <view class="bijing-text-action" bindtap="cancelBindBijing">取消</view>
+          </view>
+        </view>
+        <block wx:elif="{{bijingBound}}">
+          <view class="bijing-account-row">
+            <text class="bijing-bound-tip">已绑定学号：{{bijingStudentNumber}}</text>
+            <view class="bijing-text-action" bindtap="toggleBindInput">重新绑定</view>
+          </view>
+          <view class="bijing-actions">
+            <view class="bijing-btn-sm bijing-manual-btn {{bijingSyncing ? 'is-syncing' : ''}}" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
+          </view>
+          <view class="bijing-auto-note">
+            <text class="bijing-auto-note-title">日常无需手动同步</text>
+            <text class="bijing-auto-note-detail">每天北京时间 04:00 自动同步；补录或重试时，再使用手动同步。</text>
+          </view>
+          <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
+        </block>
+        <block wx:else>
+          <text class="bijing-bind-description">绑定学号后，静坐记录将每天自动同步到必经之路。</text>
+          <view class="bijing-actions">
+            <view class="bijing-btn-sm" bindtap="toggleBindInput">绑定学号</view>
+          </view>
+        </block>
       </view>
 
       <view class="flex-row justify-between group_2">
