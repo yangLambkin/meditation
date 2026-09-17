@@ -105,6 +105,91 @@
       <text class="font_6 text_29">每日金句</text>
       <text class="font text_30 mt-11">{{wisdomQuote}}</text>
     </view>
+
+    <view class="checkin-history">
+      <view class="checkin-history-heading">
+        <view class="checkin-history-title">
+          <text class="checkin-title">打卡明细</text>
+          <text class="checkin-total">共 {{checkinTotal}} 条</text>
+        </view>
+        <button class="checkin-open" bindtap="openCheckinModal" hover-class="checkin-submit-active">记录静坐</button>
+      </view>
+      <view wx:if="{{!checkinRecords.length}}" class="checkin-empty">尚无打卡记录</view>
+      <view wx:else>
+        <view class="checkin-record" wx:for="{{checkinRecords}}" wx:key="id" bindtap="openCheckinHistory" data-date="{{item.date}}" hover-class="checkin-record-active">
+          <view class="checkin-record-heading">
+            <view class="checkin-record-datetime">
+              <text class="checkin-record-date">{{item.date}}</text>
+              <text class="checkin-record-time">{{item.time}}</text>
+            </view>
+            <text class="checkin-record-duration">{{item.duration}} 分钟</text>
+          </view>
+          <view wx:if="{{item.emotion.length}}" class="checkin-record-emotions">
+            <text class="checkin-emotion" wx:for="{{item.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
+          </view>
+          <view wx:if="{{item.experienceTexts.length}}" class="checkin-record-experience">
+            <text class="checkin-record-experience-text" wx:for="{{item.experienceTexts}}" wx:for-item="experience" wx:key="*this">{{experience}}</text>
+          </view>
+        </view>
+        <view wx:if="{{hasMoreCheckins}}" class="checkin-list-footer">
+          <text class="checkin-load-hint">继续下滑加载更多</text>
+          <button class="checkin-load-more" bindtap="loadMoreCheckins" hover-class="checkin-record-active">加载更多</button>
+        </view>
+        <view wx:else class="checkin-list-footer">
+          <text class="checkin-load-hint">已显示全部记录</text>
+        </view>
+      </view>
+    </view>
   </view>
-    
+
+  <!-- 独立遮罩拦截背景滚动，表单内容仍可在弹窗内滚动 -->
+  <view wx:if="{{showCheckinModal}}" class="checkin-modal">
+    <view class="checkin-modal-mask" bindtap="closeCheckinModal" catchtouchmove="preventCheckinModalTouchMove"></view>
+    <view class="checkin-dialog" catchtap="preventCheckinModalTouchMove">
+      <view class="checkin-dialog-header">
+        <text class="checkin-title">记录静坐</text>
+        <button class="checkin-close" bindtap="closeCheckinModal" disabled="{{checkinSubmitting}}" aria-label="关闭记录静坐弹窗" hover-class="checkin-record-active">×</button>
+      </view>
+      <scroll-view class="checkin-dialog-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
+        <view class="checkin-dialog-body">
+          <text class="checkin-subtitle">日期和时间默认当前，可修改补记</text>
+          <view class="checkin-fields-row">
+            <view class="checkin-field checkin-date-field">
+              <text class="checkin-label">日期</text>
+              <picker mode="date" value="{{checkinDate}}" end="{{maxCheckinDate}}" bindchange="onCheckinDateChange" disabled="{{checkinSubmitting}}">
+                <view class="checkin-picker">
+                  <text>{{checkinDate}}</text>
+                  <text class="checkin-picker-arrow">⌄</text>
+                </view>
+              </picker>
+            </view>
+            <view class="checkin-field checkin-time-field">
+              <text class="checkin-label">时间</text>
+              <picker mode="time" value="{{checkinTime}}" bindchange="onCheckinTimeChange" disabled="{{checkinSubmitting}}">
+                <view class="checkin-picker">
+                  <text>{{checkinTime}}</text>
+                  <text class="checkin-picker-arrow">⌄</text>
+                </view>
+              </picker>
+            </view>
+          </view>
+          <view class="checkin-field">
+            <text class="checkin-label">静坐时长</text>
+            <view class="checkin-duration-field">
+              <input class="checkin-duration-input" type="number" value="{{checkinDuration}}" bindinput="onCheckinDurationInput" maxlength="4" disabled="{{checkinSubmitting}}" cursor-spacing="20" placeholder="请输入静坐时长" placeholder-class="checkin-placeholder" />
+              <text class="checkin-unit">分钟</text>
+            </view>
+          </view>
+          <view class="checkin-field">
+            <text class="checkin-label">静坐体验 <text class="checkin-optional">（选填）</text></text>
+            <textarea class="checkin-experience" value="{{checkinExperience}}" bindinput="onCheckinExperienceInput" maxlength="500" disabled="{{checkinSubmitting}}" cursor-spacing="20" placeholder="记录此刻的感受（选填）" placeholder-class="checkin-placeholder" />
+          </view>
+        </view>
+      </scroll-view>
+      <view class="checkin-dialog-actions">
+        <button class="checkin-cancel" bindtap="closeCheckinModal" disabled="{{checkinSubmitting}}" hover-class="checkin-record-active">取消</button>
+        <button class="checkin-submit" bindtap="submitCheckin" loading="{{checkinSubmitting}}" disabled="{{checkinSubmitting}}" hover-class="checkin-submit-active">打卡记录</button>
+      </view>
+    </view>
+  </view>
 </view>

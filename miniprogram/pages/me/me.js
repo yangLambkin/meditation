@@ -21,6 +21,18 @@ Page({
     bijingShowBindInput: false, // 是否展示绑定输入框
     bijingInputValue: '', // 绑定输入框当前值
     bijingSyncing: false, // 同步中状态（防重复点击）
+    bijingShowSyncDatePicker: false,
+    bijingSyncDateOptions: [],
+    bijingSyncDate: '',
+    bijingSyncDetailsLoading: false,
+    bijingSyncDetailsError: '',
+    bijingSyncDetailsDate: '',
+    bijingSyncRecords: [],
+    bijingSyncRecordCount: 0,
+    bijingSyncTotalDuration: 0,
+    bijingSyncDuration: 0,
+    bijingSyncAlreadySynced: false,
+    bijingLastSync: '',
     bijingShowConfirm: false, // 是否显示绑定确认弹窗
     bijingConfirmSn: '', // 弹窗展示的学号
     bijingConfirmNickname: '', // 弹窗展示的昵称
@@ -29,6 +41,7 @@ Page({
 
   // 统计加载去重锁：避免 onLoad 与 onShow 并发两次云端调用（修复 4.6）
   _loadingStats: false,
+  _bijingSyncDetailsRequestId: 0,
 
   onLoad(options) {
     // 获取用户数据
@@ -461,38 +474,166 @@ Page({
     this.setData({ bijingShowBindInput: false, bijingInputValue: '' });
   },
 
-  // 立即同步（手动兜底）
-  async syncBijingNow() {
+  // 同步日按北京时间 04:00 至次日 04:00 划分，只提供最近三个已结束的同步日
+  getBijingSyncDateOptions() {
+    const now = Date.now();
+    const syncNow = now - 4 * 3600 * 1000;
+    const beforeCutoff = dateUtil.getBusinessDate(new Date(syncNow)) !== dateUtil.getBusinessDate(new Date(now));
+    const labels = ['昨天', '前天', '大前天', '4天前'];
+    return [1, 2, 3].map((daysAgo, index) => ({
+      label: labels[index + (beforeCutoff ? 1 : 0)],
+      date: dateUtil.getBusinessDate(new Date(syncNow - daysAgo * 24 * 3600 * 1000))
+    }));
+  },
+
+  // 先选择日期，确认后才发起同步
+  syncBijingNow() {
     if (this.data.bijingSyncing) return;
+    if (!checkinManager.isUserLoggedIn()) {
+      wx.showToast({ title: '请先登录', icon: 'none' });
+      return;
+    }
     if (!this.data.bijingBound) {
       wx.showToast({ title: '请先绑定学号', icon: 'none' });
       return;
     }
-    this.setData({ bijingSyncing: true });
-    wx.showLoading({ title: '同步中...', mask: true });
-    const res = await bijingApi.syncBijingPending();
-    wx.hideLoading();
-    this.setData({ bijingSyncing: false });
-    if (!res.success) {
-      this.setData({ bijingLastSync: '同步失败：' + (res.error || '') });
-      wx.showToast({ title: res.error || '同步失败', icon: 'none' });
+    const options = this.getBijingSyncDateOptions();
+    this.setData({
+      bijingShowSyncDatePicker: true,
+      bijingSyncDateOptions: options,
+      bijingSyncDate: options[0].date
+    });
+    return this.loadBijingSyncDetails(options[0].date);
+  },
+
+  onBijingSyncDateChange(e) {
+    const date = e.detail.value;
+    if (date !== this.data.bijingSyncDate && this.data.bijingSyncDateOptions.some(option => option.date === date)) {
+      this.setData({ bijingSyncDate: date });
+      return this.loadBijingSyncDetails(date);
+    }
+  },
+
+  cancelBijingSyncDate() {
+    this._bijingSyncDetailsRequestId++;
+    this.setData({ bijingShowSyncDatePicker: false, bijingSyncDetailsLoading: false });
+  },
+
+  formatBijingSyncTime(timestamp, recordDate) {
+    if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp <= 0) return '时间未记录';
+    const date = new Date(timestamp + 8 * 3600 * 1000);
+    if (Number.isNaN(date.getTime())) return '时间未记录';
+    const isNextDay = recordDate && dateUtil.getBusinessDate(new Date(timestamp - 24 * 3600 * 1000)) === recordDate;
+    return `${isNextDay ? '次日 ' : ''}${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+  },
+
+  async loadBijingSyncDetails(recordDate) {
+    const requestId = ++this._bijingSyncDetailsRequestId;
+    const isCurrent = () => requestId === this._bijingSyncDetailsRequestId &&
+      this.data.bijingShowSyncDatePicker && this.data.bijingSyncDate === recordDate;
+    this.setData({
+      bijingSyncDetailsLoading: true,
+      bijingSyncDetailsError: '',
+      bijingSyncDetailsDate: '',
+      bijingSyncRecords: [],
+      bijingSyncRecordCount: 0,
+      bijingSyncTotalDuration: 0,
+      bijingSyncDuration: 0,
+      bijingSyncAlreadySynced: false
+    });
+    try {
+      const res = await bijingApi.getBijingSyncDateDetails(recordDate);
+      if (!isCurrent()) return;
+      if (!res.success) throw new Error(res.error || '获取明细失败');
+      const details = res.data;
+      if (!details || details.date !== recordDate || !Array.isArray(details.records)) {
+        throw new Error('获取明细失败，请重试');
+      }
+      this.setData({
+        bijingSyncDetailsDate: recordDate,
+        bijingSyncRecords: details.records.map(record => ({
+          ...record,
+          timeLabel: this.formatBijingSyncTime(record.timestamp, recordDate),
+          durationText: Number(Number(record.duration).toFixed(2))
+        })),
+        bijingSyncRecordCount: details.count,
+        bijingSyncTotalDuration: Number(Number(details.totalDuration).toFixed(2)),
+        bijingSyncDuration: details.syncDuration,
+        bijingSyncAlreadySynced: !!details.alreadySynced
+      });
+    } catch (e) {
+      if (isCurrent()) this.setData({ bijingSyncDetailsError: e.message || '获取明细失败，请重试' });
+    } finally {
+      if (isCurrent()) this.setData({ bijingSyncDetailsLoading: false });
+    }
+  },
+
+  retryBijingSyncDetails() {
+    if (this.data.bijingSyncDetailsLoading || !this.data.bijingShowSyncDatePicker) return;
+    const options = this.getBijingSyncDateOptions();
+    const recordDate = options.some(option => option.date === this.data.bijingSyncDate)
+      ? this.data.bijingSyncDate : options[0].date;
+    this.setData({ bijingSyncDateOptions: options, bijingSyncDate: recordDate });
+    return this.loadBijingSyncDetails(recordDate);
+  },
+
+  async confirmBijingSyncDate() {
+    if (this.data.bijingSyncing) return;
+    if (!checkinManager.isUserLoggedIn() || !this.data.bijingBound) {
+      wx.showToast({ title: '请先登录并绑定学号', icon: 'none' });
       return;
     }
-    const d = res.data || {};
-    // 提示：成功 X 条，失败 X 条（不显示"跳过"，未真正同步的归为"待同步"）
-    let msg = `成功 ${d.synced || 0} 条，失败 ${d.failed || 0} 条`;
-    if (d.failed > 0 && d.results && d.results.length) {
-      // 失败原因：取首个失败项的 error（如"无法手动同步当天数据"）
-      const firstFail = d.results.find(r => r.success === false);
-      if (firstFail && firstFail.error) {
-        msg += `，失败原因：${firstFail.error}`;
+    const recordDate = this.data.bijingSyncDate;
+    // 弹窗跨过北京时间 04:00 时重新校验，不能提交已经超出最近三个同步日的日期
+    const options = this.getBijingSyncDateOptions();
+    if (!options.some(option => option.date === recordDate)) {
+      this.setData({ bijingSyncDateOptions: options, bijingSyncDate: options[0].date });
+      this.loadBijingSyncDetails(options[0].date);
+      wx.showToast({ title: '可选日期已更新，请重新选择', icon: 'none' });
+      return;
+    }
+    if (this.data.bijingSyncDetailsLoading) {
+      wx.showToast({ title: '明细加载中，请稍候', icon: 'none' });
+      return;
+    }
+    if (this.data.bijingSyncDetailsError || this.data.bijingSyncDetailsDate !== recordDate) {
+      wx.showToast({ title: '请先重试加载当天明细', icon: 'none' });
+      return;
+    }
+    if (!this.data.bijingSyncRecordCount || this.data.bijingSyncDuration <= 0) {
+      wx.showToast({ title: '当天暂无可同步的时长', icon: 'none' });
+      return;
+    }
+    if (this.data.bijingSyncAlreadySynced) {
+      wx.showToast({ title: '这一天已同步，无需重复同步', icon: 'none' });
+      return;
+    }
+    this.setData({ bijingSyncing: true, bijingShowSyncDatePicker: false });
+    wx.showLoading({ title: '同步中...', mask: true });
+    let message;
+    try {
+      const res = await bijingApi.syncBijingDate(recordDate);
+      if (!res.success) {
+        throw new Error(res.error || '请稍后重试');
       }
+      const result = res.data || {};
+      if (result.success) {
+        message = `${recordDate} 已同步 ${result.duration} 分钟`;
+      } else if (result.skipped && result.reason === '已同步') {
+        message = `${recordDate} 已同步，无需重复同步`;
+      } else if (result.skipped && result.duration === 0) {
+        message = `${recordDate} 暂无打卡记录`;
+      } else {
+        throw new Error(result.error || result.reason || '请稍后重试');
+      }
+    } catch (e) {
+      message = `${recordDate} 同步失败：${e.message || '请稍后重试'}`;
+    } finally {
+      wx.hideLoading();
+      this.setData({ bijingSyncing: false });
     }
-    if (d.pendingCount > 0) {
-      msg += `，${d.pendingCount} 天待同步`;
-    }
-    // 以 toast 形式展示同步结果（含失败原因）
-    wx.showToast({ title: msg, icon: 'none', duration: 2500 });
+    this.setData({ bijingLastSync: message });
+    wx.showToast({ title: message, icon: 'none', duration: 3000 });
   },
 
   onReady() {
@@ -500,11 +641,11 @@ Page({
   },
 
   onHide() {
-
+    this.cancelBijingSyncDate();
   },
 
   onUnload() {
-
+    this._bijingSyncDetailsRequestId++;
   },
 
   onPullDownRefresh() {

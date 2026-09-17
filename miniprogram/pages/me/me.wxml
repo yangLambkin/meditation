@@ -44,7 +44,7 @@
                 </block>
                 <block wx:else>
                   <view wx:if="{{!bijingShowBindInput}}">
-                    <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '立即同步'}}</view>
+                    <view class="bijing-btn-sm" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
                     <view class="bijing-btn-sm rebind" bindtap="toggleBindInput">重新绑定</view>
                   </view>
                   <view wx:else class="bijing-input-row">
@@ -60,6 +60,47 @@
                 </block>
               </view>
               <text wx:if="{{bijingBound && !bijingShowBindInput}}" class="bijing-bound-tip">已绑定：{{bijingStudentNumber}}</text>
+              <text wx:if="{{bijingBound && bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
+            </view>
+            <!-- 同步日为北京时间 04:00 至次日 04:00，只提供最近三个已结束的同步日 -->
+            <view wx:if="{{bijingShowSyncDatePicker}}" class="bijing-modal-mask" bindtap="cancelBijingSyncDate" catchtouchmove="noop">
+              <view class="bijing-modal bijing-sync-modal" catchtap="noop">
+                <view class="bijing-modal-title">选择同步日期</view>
+                <view class="bijing-sync-hint">每天按北京时间 04:00 至次日 04:00 统计，可同步最近三个已结束的同步日</view>
+                <radio-group bindchange="onBijingSyncDateChange">
+                  <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
+                    <view class="bijing-date-text"><text>{{item.date}}</text><text class="bijing-date-label">{{item.label}}</text></view>
+                    <radio value="{{item.date}}" checked="{{bijingSyncDate === item.date}}" color="#b29764" />
+                  </label>
+                </radio-group>
+                <view class="bijing-sync-details">
+                  <view class="bijing-details-title">{{bijingSyncDate}} 打卡明细</view>
+                  <view class="bijing-details-note">{{bijingSyncDate}} 04:00 至次日 04:00 前（北京时间）</view>
+                  <view wx:if="{{bijingSyncDetailsLoading}}" class="bijing-details-state">正在加载当天记录…</view>
+                  <view wx:elif="{{bijingSyncDetailsError}}" class="bijing-details-state">
+                    <text class="bijing-details-error">{{bijingSyncDetailsError}}</text>
+                    <view class="bijing-details-retry" bindtap="retryBijingSyncDetails">重新加载</view>
+                  </view>
+                  <block wx:else>
+                    <view class="bijing-details-total">共 {{bijingSyncRecordCount}} 次，合计 {{bijingSyncTotalDuration}} 分钟</view>
+                    <view wx:if="{{bijingSyncTotalDuration !== bijingSyncDuration}}" class="bijing-details-note">同步时按 {{bijingSyncDuration}} 分钟上报</view>
+                    <view wx:if="{{bijingSyncAlreadySynced}}" class="bijing-details-note">这一天已同步，无需重复同步</view>
+                    <view wx:if="{{!bijingSyncRecordCount}}" class="bijing-details-state">当天暂无打卡记录</view>
+                    <block wx:else>
+                      <view class="bijing-record-heading"><text>打卡时间（北京时间）</text><text>静坐时长</text></view>
+                      <scroll-view class="bijing-sync-records" scroll-y="{{true}}">
+                        <view wx:for="{{bijingSyncRecords}}" wx:key="id" class="bijing-record-row">
+                          <text>{{item.timeLabel}}</text><text>{{item.durationText}} 分钟</text>
+                        </view>
+                      </scroll-view>
+                    </block>
+                  </block>
+                </view>
+                <view class="bijing-modal-btns">
+                  <view class="bijing-modal-btn cancel" bindtap="cancelBijingSyncDate">取消</view>
+                  <button class="bijing-modal-btn confirm bijing-sync-submit" disabled="{{bijingSyncDetailsLoading || bijingSyncDetailsError || bijingSyncDetailsDate !== bijingSyncDate || !bijingSyncRecordCount || bijingSyncDuration <= 0 || bijingSyncAlreadySynced}}" bindtap="confirmBijingSyncDate">同步这一天</button>
+                </view>
+              </view>
             </view>
 
             <!-- 绑定确认弹窗 -->

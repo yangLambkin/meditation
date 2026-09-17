@@ -28,15 +28,20 @@ async function checkBijing(studentNumber) {
   return callBijingSync({ type: 'checkStudentNumber', studentNumber });
 }
 
-// 手动兜底同步（绑定日 -> 昨天 区间里所有未标记日期）
-// force=true 时清除目标区间历史标记重新核算（纠正误标）
-// 返回 { success, data: { pending, synced, skipped, failed, pendingCount, results }, error }
-async function syncBijingPending(force = false) {
-  return callBijingSync({ type: 'syncPending', force: !!force });
+// 同步选中的一天；云端限制为北京时间 04:00 切日后的最近三个已结束同步日
+// 使用独立操作名，避免旧版云函数忽略日期参数后执行批量同步
+async function syncBijingDate(recordDate) {
+  return callBijingSync({ type: 'syncSelectedDate', recordDate });
+}
+
+// 只读取所选日期的同步明细与合计，不上报、不写入同步标记
+async function getBijingSyncDateDetails(recordDate) {
+  return callBijingSync({ type: 'getSyncDateDetails', recordDate });
 }
 
 module.exports = {
   bindBijing,
   checkBijing,
-  syncBijingPending,
+  syncBijingDate,
+  getBijingSyncDateDetails,
 };

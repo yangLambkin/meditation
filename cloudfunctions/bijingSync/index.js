@@ -7,7 +7,6 @@ cloud.init({
 
 const db = cloud.database();
 const _ = db.command;
-const $ = db.command.aggregate;
 
 // ===== 业务日期工具：与 meditationManager / dateUtil 完全一致 =====
 // 采用"时间 +8h 后读 UTC 分量"技巧，使结果不受运行环境本地时区影响，
@@ -19,6 +18,24 @@ function getBusinessDate(date) {
   const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
   const day = String(utc8.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SYNC_CUTOFF_MS = 4 * 60 * 60 * 1000;
+
+// 必经同步单独按北京时间 04:00 切日；原始打卡 date 仍保留自然日。
+function getSyncBusinessDate(timestamp) {
+  return getBusinessDate(new Date(timestamp - SYNC_CUTOFF_MS));
+}
+
+function getSyncDateWindow(dateStr) {
+  const start = Date.parse(`${dateStr}T04:00:00+08:00`);
+  return { start, end: start + DAY_MS };
+}
+
+function hasRecordTimestamp(timestamp) {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 &&
+    !Number.isNaN(new Date(timestamp).getTime());
 }
 
 // ===== 外部系统配置（全部走环境变量，前端不持有） =====
@@ -63,17 +80,42 @@ async function postMeditationRecord(studentNumber, recordDate, durationMinutes) 
   return res.data; // { success, data } 或 { success:false, message }
 }
 
-// 仅云端聚合：某用户某天 sum(duration)
-async function getDayDuration(openid, dateStr) {
-  const result = await db.collection('meditation_records')
-    .aggregate()
-    .match({ _openid: openid, date: dateStr })
-    .group({ _id: null, total: $.sum('$duration') })
-    .end();
-  if (result.list && result.list.length > 0) {
-    return Math.round(result.list[0].total || 0);
+// 预览和上报共用同一批云端记录，避免原自然日 date 丢掉次日凌晨的打卡。
+async function getDayRecords(openid, dateStr) {
+  const { start, end } = getSyncDateWindow(dateStr);
+  const filter = _.or([
+    { _openid: openid, timestamp: _.gte(start).and(_.lt(end)) },
+    { _openid: openid, date: dateStr },
+  ]);
+  const records = [];
+  const limit = 100;
+  for (let skip = 0; ; skip += limit) {
+    const result = await db.collection('meditation_records')
+      .where(filter)
+      .field({ _id: true, date: true, timestamp: true, duration: true })
+      .orderBy('_id', 'asc')
+      .skip(skip)
+      .limit(limit)
+      .get();
+    for (const record of result.data) {
+      const hasTime = hasRecordTimestamp(record.timestamp);
+      // 旧记录缺少有效时间戳时，只能沿用原日期；不能用上传时间推测打卡时间。
+      if (hasTime ? record.timestamp < start || record.timestamp >= end : record.date !== dateStr) continue;
+      records.push({
+        id: record._id,
+        timestamp: hasTime ? record.timestamp : null,
+        duration: typeof record.duration === 'number' && Number.isFinite(record.duration) ? record.duration : 0,
+      });
+    }
+    if (result.data.length < limit) break;
   }
-  return 0;
+  records.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0) || String(a.id).localeCompare(String(b.id)));
+  return records;
+}
+
+async function getDayDuration(openid, dateStr) {
+  const records = await getDayRecords(openid, dateStr);
+  return Math.round(records.reduce((total, record) => total + record.duration, 0));
 }
 
 // 读取用户文档
@@ -197,12 +239,9 @@ async function syncDate(openid, dateStr) {
     return { openid, date: dateStr, skipped: true, reason: '无打卡数据(未标记待复查)', duration: 0 };
   }
 
-  // 对端规则：recordDate 须早于北京时间当天，当天数据无法手动上报。
-  // 命中今天时直接判为失败并给出明确原因，避免请求对端拿到 400 让用户困惑。
-  const today = getBusinessDate(new Date());
-  if (dateStr === today) {
-    console.warn(`⚠️ 当天数据无法手动上报 date=${dateStr}（对端要求 recordDate 早于当天）`);
-    return { openid, date: dateStr, success: false, error: '不支持同步当天数据', duration };
+  // 必须等次日 04:00 窗口结束后上报，避免凌晨提前标记后漏掉后续记录。
+  if (getSyncDateWindow(dateStr).end > new Date().getTime()) {
+    return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨4点后同步', duration };
   }
 
   try {
@@ -238,9 +277,9 @@ async function markSynced(openid, dateStr) {
   }
 }
 
-// ===== 凌晨 4 点自动：同步所有绑定用户各自"昨天" =====
+// ===== 凌晨 4 点自动：同步所有绑定用户最近一个已结束的同步日 =====
 async function cronSyncAll() {
-  const yesterday = getBusinessDate(new Date(Date.now() - 24 * 3600 * 1000));
+  const yesterday = getSyncBusinessDate(Date.now() - DAY_MS);
   console.log(`🚀 定时同步开始, 昨天=${yesterday}`);
 
   let skip = 0;
@@ -280,52 +319,90 @@ async function cronSyncAll() {
   return { success: true, data: { date: yesterday, total, success, failed } };
 }
 
-// ===== 手动兜底：补"绑定日 → 今天"区间里所有未标记日期 =====
-// force=true 时：先清空目标区间内的同步标记，再重新核算上报（用于纠正历史误标）
-async function manualSyncPending(openid, force = false) {
+// 手动同步仅允许最近三个已在次日 04:00 结束的同步日。
+// 每次请求只取一次当前时间，避免跨 04:00 时生成不一致的日期范围。
+function getRecentSyncDates(now = Date.now()) {
+  return [1, 2, 3].map(daysAgo => getSyncBusinessDate(now - daysAgo * DAY_MS));
+}
+
+function validateManualSyncDate(openid, recordDate) {
+  if (!openid) return '用户未登录';
+  const allowedDates = getRecentSyncDates();
+  if (typeof recordDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || !allowedDates.includes(recordDate)) {
+    return '仅支持同步最近三天已结束的数据（北京时间次日凌晨4点结束）';
+  }
+  return null;
+}
+
+// ===== 同步预览：读取所选日期的明细与按天合计，不上报、不修改数据 =====
+async function getSyncDateDetails(openid, recordDate) {
+  const validationError = validateManualSyncDate(openid, recordDate);
+  if (validationError) return { success: false, error: validationError };
+
+  try {
+    const userDoc = await getUserDoc(openid);
+    if (!userDoc || !userDoc.bijingBound || !userDoc.bijingStudentNumber) {
+      return { success: false, error: '尚未绑定学号' };
+    }
+
+    const records = await getDayRecords(openid, recordDate);
+    const totalDuration = records.reduce((total, record) => total + record.duration, 0);
+
+    return {
+      success: true,
+      data: {
+        date: recordDate,
+        records,
+        count: records.length,
+        totalDuration,
+        syncDuration: Math.round(totalDuration),
+        alreadySynced: !!(userDoc.bijingSyncedDates && userDoc.bijingSyncedDates[recordDate]),
+      },
+    };
+  } catch (e) {
+    console.error(`❌ 读取同步明细异常 date=${recordDate}:`, e.message);
+    return { success: false, error: e.message || '读取同步明细失败' };
+  }
+}
+
+// ===== 手动同步：只同步用户选择的一天 =====
+async function manualSyncSelectedDate(openid, recordDate) {
+  const validationError = validateManualSyncDate(openid, recordDate);
+  if (validationError) return { success: false, error: validationError };
+
+  try {
+    const userDoc = await getUserDoc(openid);
+    if (!userDoc || !userDoc.bijingBound || !userDoc.bijingStudentNumber) {
+      return { success: false, error: '尚未绑定学号' };
+    }
+
+    // 不受绑定时间限制，刚绑定的用户也可以补同步最近三天。
+    // 复用 syncDate 的去重与无数据处理，不清除已有同步标记。
+    const result = await syncDate(openid, recordDate);
+    if (result.success === false) {
+      return { success: false, error: result.error || '同步失败' };
+    }
+    return { success: true, data: { date: recordDate, ...result } };
+  } catch (e) {
+    console.error(`❌ 手动同步异常 date=${recordDate}:`, e.message);
+    return { success: false, error: e.message || '同步失败' };
+  }
+}
+
+// ===== 兼容旧版手动同步：只补最近三个已结束日期中的未同步数据 =====
+// 旧版传入的 force 不再清除标记，防止绕过日期限制或重复上报。
+async function manualSyncPending(openid) {
   if (!openid) return { success: false, error: '用户未登录' };
+  const dates = getRecentSyncDates().reverse();
   const userDoc = await getUserDoc(openid);
-  if (!userDoc || !userDoc.bijingBound) {
+  if (!userDoc || !userDoc.bijingBound || !userDoc.bijingStudentNumber) {
     return { success: false, error: '尚未绑定学号' };
   }
 
-  const today = getBusinessDate(new Date());
-  // 起始日期：绑定日（bijingBoundAt 当天）
-  const boundDate = userDoc.bijingBoundAt
-    ? getBusinessDate(new Date(userDoc.bijingBoundAt))
-    : today;
-
-  // 生成 [boundDate, 今天] 区间所有日期（含今天，同步"绑定日 → 当前时间"的全部未标记数据）
-  const dates = [];
-  let cursor = new Date(boundDate + 'T00:00:00+08:00');
-  const end = new Date(today + 'T00:00:00+08:00');
-  while (cursor <= end) {
-    dates.push(getBusinessDate(cursor));
-    cursor = new Date(cursor.getTime() + 24 * 3600 * 1000);
-  }
-
   const synced = userDoc.bijingSyncedDates || {};
-  let pending = dates.filter(d => !synced[d]);
+  const pending = dates.filter(d => !synced[d]);
 
-  // 强制重同步：清除目标区间内标记，使这些日期重新进入 pending 被复查
-  if (force) {
-    const cleared = dates.filter(d => synced[d]);
-    if (cleared.length > 0) {
-      const newSynced = { ...synced };
-      cleared.forEach(d => { delete newSynced[d]; });
-      try {
-        await db.collection('users').doc(userDoc._id).update({
-          data: { bijingSyncedDates: newSynced },
-        });
-        console.log(`🧹 强制重同步: 已清除 ${cleared.length} 个历史标记, dates=${cleared.join(',')}`);
-      } catch (e) {
-        console.error('❌ 清除同步标记失败:', e.message);
-      }
-    }
-    pending = dates.slice(); // 全部重新核算
-  }
-
-  console.log(`🚀 手动同步开始: openid=${openid}, force=${!!force}, pending=${pending.length}`);
+  console.log(`🚀 手动同步开始: openid=${openid}, pending=${pending.length}`);
   const results = [];
   for (const d of pending) {
     try {
@@ -349,7 +426,7 @@ async function manualSyncPending(openid, force = false) {
       skipped: skipCount,
       failed: failCount,
       pendingCount,
-      forced: !!force,
+      forced: false,
       results,
     },
   };
@@ -377,8 +454,12 @@ exports.main = async (event, context) => {
       return await bindStudentNumber(openid, event.studentNumber);
     case 'checkStudentNumber':
       return await checkStudentNumber(event.studentNumber);
+    case 'getSyncDateDetails':
+      return await getSyncDateDetails(openid, event.recordDate);
+    case 'syncSelectedDate':
+      return await manualSyncSelectedDate(openid, event.recordDate);
     case 'syncPending':
-      return await manualSyncPending(openid, event.force === true);
+      return await manualSyncPending(openid);
     case 'cronSyncAll':
       return await cronSyncAll();
     default:

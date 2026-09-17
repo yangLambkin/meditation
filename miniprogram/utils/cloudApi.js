@@ -13,8 +13,13 @@ const cloudApi = {
   },
 
   // 记录冥想打卡
-  recordMeditation: async function(duration, emotion, experience = "") {
+  recordMeditation: async function(duration, emotion, experience = "", timestamp) {
     try {
+      const now = Date.now();
+      const recordTimestamp = timestamp === undefined ? now : timestamp;
+      if (!Number.isSafeInteger(recordTimestamp) || recordTimestamp <= 0 || recordTimestamp > now) {
+        return { success: false, error: '打卡时间无效或晚于当前时间' };
+      }
       // 处理experience参数格式（确保与云函数接口兼容）
       let experienceToSend = experience;
       if (Array.isArray(experience)) {
@@ -30,7 +35,8 @@ const cloudApi = {
         data: {
           duration: duration,
           emotion: emotion,
-          experience: experienceToSend
+          experience: experienceToSend,
+          timestamp: recordTimestamp
         }
       });
 

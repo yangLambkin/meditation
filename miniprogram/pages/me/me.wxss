@@ -250,7 +250,7 @@
   background-color: #e8eaed;
 }
 
-/* 绑定确认弹窗 */
+/* 绑定确认与同步日期弹窗 */
 .bijing-modal-mask {
   position: fixed;
   left: 0; top: 0; right: 0; bottom: 0;
@@ -310,6 +310,118 @@
 .bijing-modal-btn.confirm {
   background-color: #b29764;
   color: #ffffff;
+}
+.bijing-sync-hint {
+  color: #888888;
+  font-size: 24rpx;
+  line-height: 1.6;
+  margin: -8rpx 0 24rpx;
+}
+.bijing-date-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 20rpx;
+  margin-bottom: 16rpx;
+  border: 2rpx solid #e3e7ec;
+  border-radius: 12rpx;
+  color: #333333;
+  font-size: 28rpx;
+}
+.bijing-date-option.selected {
+  border-color: #b29764;
+  background-color: #faf7f0;
+}
+.bijing-date-text {
+  display: flex;
+  align-items: center;
+}
+.bijing-date-label {
+  margin-left: 20rpx;
+  color: #888888;
+  font-size: 24rpx;
+}
+.bijing-sync-modal {
+  width: 650rpx;
+  padding: 28rpx 32rpx;
+}
+.bijing-sync-modal .bijing-date-option {
+  padding: 12rpx 20rpx;
+  margin-bottom: 12rpx;
+}
+.bijing-sync-details {
+  margin-top: 24rpx;
+  color: #333333;
+  text-align: left;
+}
+.bijing-details-title {
+  font-size: 26rpx;
+  font-weight: 600;
+}
+.bijing-details-total {
+  margin: 12rpx 0;
+  color: #8c7345;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+.bijing-details-note {
+  margin-bottom: 10rpx;
+  color: #888888;
+  font-size: 22rpx;
+}
+.bijing-record-heading,
+.bijing-record-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  line-height: 1.5;
+}
+.bijing-record-heading {
+  color: #888888;
+  background-color: #faf7f0;
+  padding: 10rpx 12rpx;
+  font-size: 22rpx;
+}
+.bijing-sync-records {
+  height: 180rpx;
+}
+.bijing-record-row {
+  padding: 14rpx 12rpx;
+  border-bottom: 1rpx solid #f2f3f5;
+  font-size: 26rpx;
+}
+.bijing-details-state {
+  padding: 28rpx 0;
+  color: #888888;
+  font-size: 24rpx;
+  line-height: 1.6;
+  text-align: center;
+}
+.bijing-details-error {
+  display: block;
+  overflow-wrap: break-word;
+}
+.bijing-details-retry {
+  display: inline-block;
+  margin-top: 12rpx;
+  padding: 8rpx 24rpx;
+  color: #8c7345;
+  background-color: #faf7f0;
+  border-radius: 8rpx;
+}
+.bijing-sync-modal .bijing-modal-btn {
+  line-height: 1.4;
+}
+.bijing-sync-submit {
+  margin: 0;
+  font-weight: normal;
+}
+.bijing-sync-submit::after {
+  border: none;
+}
+.bijing-sync-submit[disabled] {
+  background-color: #e6e1d7;
+  color: #aaa296;
 }
 .bijing-card-inline {
   padding: 8rpx 48rpx 28rpx;

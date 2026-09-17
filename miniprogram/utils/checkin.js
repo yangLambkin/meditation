@@ -2,6 +2,15 @@
 const cloudApi = require('./cloudApi.js');
 const dateUtil = require('./dateUtil.js');
 
+function resolveCheckinTimestamp(timestamp) {
+  const now = Date.now();
+  const value = timestamp === undefined ? now : timestamp;
+  if (!Number.isSafeInteger(value) || value <= 0 || value > now) {
+    throw new Error('打卡时间无效或晚于当前时间');
+  }
+  return value;
+}
+
 // 打卡管理系统 - 本地优先架构
 const checkinManager = {
   
@@ -682,16 +691,18 @@ const checkinManager = {
   // === 核心数据操作（本地优先） ===
   
   // 记录打卡（本地优先，异步云端备份）
-  recordCheckin: function(duration, emotion, experience = "") {
-    const today = new Date();
-    const dateStr = dateUtil.getBusinessDate(today);
+  recordCheckin: function(duration, emotion, experience = "", timestamp) {
+    const recordTimestamp = resolveCheckinTimestamp(timestamp);
     
     // 1. 立即写入本地存储（保证响应速度）
-    const localResult = this.recordToLocal(duration, emotion, experience);
+    const localResult = this.recordToLocal(duration, emotion, experience, recordTimestamp);
+    if (!localResult || !localResult.success) {
+      throw new Error('本地打卡记录保存失败');
+    }
     
     // 2. 异步备份到云端（如果已登录）
     if (this.isUserLoggedIn()) {
-      this.asyncBackupToCloud(duration, emotion, experience);
+      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp);
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
@@ -701,9 +712,9 @@ const checkinManager = {
   },
   
   // 本地存储记录
-  recordToLocal: function(duration, emotion, experience = "") {
-    const today = new Date();
-    const dateStr = dateUtil.getBusinessDate(today);
+  recordToLocal: function(duration, emotion, experience = "", timestamp) {
+    const recordTimestamp = resolveCheckinTimestamp(timestamp);
+    const dateStr = dateUtil.getBusinessDate(recordTimestamp);
     const monthStr = dateStr.substring(0, 7);
     
     // 获取本地数据
@@ -713,14 +724,17 @@ const checkinManager = {
     if (!userData.dailyRecords[dateStr]) {
       userData.dailyRecords[dateStr] = {
         count: 0,
-        lastCheckin: today.getTime(),
+        lastCheckin: recordTimestamp,
         records: []
       };
     }
     
     // 增加打卡次数
     userData.dailyRecords[dateStr].count += 1;
-    userData.dailyRecords[dateStr].lastCheckin = today.getTime();
+    userData.dailyRecords[dateStr].lastCheckin = Math.max(
+      Number(userData.dailyRecords[dateStr].lastCheckin) || 0,
+      recordTimestamp
+    );
     
     // 处理体验记录参数（支持字符串或数组）
     let experienceArray = [];
@@ -741,7 +755,7 @@ const checkinManager = {
     
     // 添加打卡记录详情（与云端数据结构保持一致）
     const newRecord = {
-      timestamp: today.getTime(),
+      timestamp: recordTimestamp,
       duration: duration,
       emotion: emotion,
       experience: experienceArray, // 存储为数组，与云端一致
@@ -754,11 +768,13 @@ const checkinManager = {
     // 更新月度统计
     this.updateMonthlyStats(userData, monthStr);
     
-    // 更新月度统计缓存
-    this.updateMonthlyStatsCache(userData, duration, monthStr);
-    
     // 保存数据
-    this.saveUserCheckinData(userData);
+    if (!this.saveUserCheckinData(userData)) {
+      throw new Error('本地打卡记录保存失败');
+    }
+
+    // 保存成功后再从存储刷新当前月缓存，避免漏计本次记录或缓存未保存的数据。
+    this.updateMonthlyStatsCache(userData, duration, monthStr);
     
     console.log('✅ 本地记录成功:', { date: dateStr, count: userData.dailyRecords[dateStr].count });
     
@@ -771,7 +787,7 @@ const checkinManager = {
   },
   
   // 异步备份到云端
-  asyncBackupToCloud: async function(duration, emotion, experience = "") {
+  asyncBackupToCloud: async function(duration, emotion, experience = "", timestamp) {
     try {
       // 处理experience参数格式（确保与云端接口兼容）
       let experienceToSend = experience;
@@ -783,7 +799,7 @@ const checkinManager = {
         experienceToSend = experience ? [experience] : [];
       }
       
-      const result = await cloudApi.recordMeditation(duration, emotion, experienceToSend);
+      const result = await cloudApi.recordMeditation(duration, emotion, experienceToSend, timestamp);
       if (result.success) {
         console.log('☁️ 云端备份成功');
       } else {
@@ -1060,7 +1076,8 @@ const checkinManager = {
     console.log('📤 同步本地数据到云端...');
     
     // 获取本地数据
-    const localData = this.getUserCheckinDataByUserId(localUserId);
+    const storedData = this.getUserCheckinDataByUserId(localUserId);
+    const localData = storedData.checkinRecords || storedData;
     
     if (!localData || Object.keys(localData.dailyRecords).length === 0) {
       console.log('✅ 本地没有数据，无需同步');
@@ -1085,7 +1102,8 @@ const checkinManager = {
           cloudApi.recordMeditation(
             localRecord.duration, 
             localRecord.emotion || [], 
-            localRecord.experience
+            localRecord.experience,
+            localRecord.timestamp
           ).then(() => {
             console.log(`✅ 记录同步成功: ${dateStr}`);
           }).catch(error => {

@@ -54,8 +54,8 @@ Page({
     
     // 背景音乐相关
     showMusicPicker: false,
-    backgroundMusic: 'default',
-    musicText: '引导音频',
+    backgroundMusic: 'none',
+    musicText: '无音乐',
     musicOptions: [
       { value: 'default', text: '引导音频' },
       { value: 'none', text: '无音乐' }

@@ -1,4 +1,10 @@
 // pages/index/index.js
+const checkinManager = require('../../utils/checkin.js');
+const dateUtil = require('../../utils/dateUtil.js');
+const contentSec = require('../../utils/contentSec.js');
+const homeCheckin = require('../../utils/homeCheckin.js');
+const CHECKIN_PAGE_SIZE = 20;
+
 Page({
   data: {
     currentYear: 2026,
@@ -13,7 +19,151 @@ Page({
     currentUserRank: "加载中...", // 当前用户排名，默认为加载中
     totalUsers: 0, // 总用户数
     showRankUnit: false, // 是否显示排名单位
-    hasUserInfo: false // 是否已获取用户信息
+    hasUserInfo: false, // 是否已获取用户信息
+    checkinDate: '',
+    checkinTime: '',
+    maxCheckinDate: '',
+    checkinDuration: '7',
+    checkinExperience: '',
+    showCheckinModal: false,
+    checkinSubmitting: false,
+    checkinRecords: [],
+    checkinTotal: 0,
+    hasMoreCheckins: false
+  },
+
+  openCheckinModal() {
+    if (this.data.checkinSubmitting) return;
+    this._checkinDateEdited = false;
+    this._checkinTimeEdited = false;
+    this.refreshCheckinDefaults();
+    this.setData({
+      showCheckinModal: true,
+      checkinDuration: '7',
+      checkinExperience: ''
+    });
+  },
+
+  closeCheckinModal() {
+    if (this.data.checkinSubmitting) return;
+    this.setData({ showCheckinModal: false });
+  },
+
+  preventCheckinModalTouchMove() {},
+
+  refreshCheckinDefaults() {
+    const current = homeCheckin.getDateTime();
+    this.setData({
+      maxCheckinDate: current.date,
+      checkinDate: this._checkinDateEdited ? this.data.checkinDate : current.date,
+      checkinTime: this._checkinTimeEdited ? this.data.checkinTime : current.time
+    });
+  },
+
+  onCheckinDateChange(e) {
+    this._checkinDateEdited = true;
+    this.setData({ checkinDate: e.detail.value });
+  },
+
+  onCheckinTimeChange(e) {
+    this._checkinTimeEdited = true;
+    this.setData({ checkinTime: e.detail.value });
+  },
+
+  onCheckinDurationInput(e) {
+    this.setData({ checkinDuration: e.detail.value });
+  },
+
+  onCheckinExperienceInput(e) {
+    this.setData({ checkinExperience: e.detail.value });
+  },
+
+  async submitCheckin() {
+    if (this.data.checkinSubmitting || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
+    this.refreshCheckinDefaults();
+    const durationText = String(this.data.checkinDuration).trim();
+    const duration = Number(durationText);
+    if (!/^\d+$/.test(durationText) || !Number.isInteger(duration) || duration < 1 || duration > 1440) {
+      wx.showToast({ title: '请输入1至1440分钟的整数时长', icon: 'none' });
+      return;
+    }
+
+    const selectedTimestamp = homeCheckin.parseDateTime(this.data.checkinDate, this.data.checkinTime);
+    if (!Number.isFinite(selectedTimestamp) || selectedTimestamp > Date.now()) {
+      wx.showToast({ title: '请选择有效且不晚于当前的时间', icon: 'none' });
+      return;
+    }
+    // 未修改日期时间时保留实际秒数，避免同一分钟内的正常打卡被同步去重。
+    const timestamp = this._checkinDateEdited || this._checkinTimeEdited ? selectedTimestamp : Date.now();
+    const text = this.data.checkinExperience.trim();
+    this.setData({ checkinSubmitting: true });
+    try {
+      if (text && !(await contentSec.checkText(text, 2))) return;
+      const selected = homeCheckin.getDateTime(timestamp);
+      const experience = text ? [{
+        text,
+        uniqueId: String(Date.now()),
+        timestamp: `${selected.date} ${selected.time}:00`,
+        duration: `${duration}分钟`,
+        emotion: []
+      }] : [];
+      const result = checkinManager.recordCheckin(duration, [], experience, timestamp);
+      if (!result || !result.success) throw new Error('本地保存失败');
+      this._lastCheckinSubmittedAt = Date.now();
+
+      this._checkinDateEdited = false;
+      this._checkinTimeEdited = false;
+      this.setData({ checkinExperience: '', showCheckinModal: false });
+      this.refreshCheckinDefaults();
+      this.refreshPageData();
+      wx.showToast({ title: '打卡成功', icon: 'success' });
+    } catch (error) {
+      console.error('首页打卡保存失败:', error);
+      wx.showToast({ title: '打卡保存失败，请重试', icon: 'none' });
+    } finally {
+      this.setData({ checkinSubmitting: false });
+    }
+  },
+
+  refreshCheckinRecords(reset = true) {
+    const userData = checkinManager.getUserCheckinData();
+    const experienceIds = new Set();
+    Object.keys(userData.dailyRecords || {}).forEach(date => {
+      const day = userData.dailyRecords[date] || {};
+      (Array.isArray(day.records) ? day.records : []).forEach(record => {
+        if (!record) return;
+        const experiences = Array.isArray(record.experience) ? record.experience : [record.experience];
+        experiences.forEach(experience => {
+          if (typeof experience === 'string' && experience) experienceIds.add(experience);
+        });
+      });
+    });
+    const legacyRecords = wx.getStorageSync('meditationTextRecords') || [];
+    const experiences = (Array.isArray(legacyRecords) ? legacyRecords : []).concat(
+      experienceIds.size ? checkinManager.getExperienceRecordsFromLocal(Array.from(experienceIds)) : []
+    );
+    this._allCheckinRecords = homeCheckin.buildCheckinRecords(userData, experiences);
+    const limit = reset ? CHECKIN_PAGE_SIZE : Math.max(CHECKIN_PAGE_SIZE, this.data.checkinRecords.length);
+    this.setData({
+      checkinRecords: this._allCheckinRecords.slice(0, limit),
+      checkinTotal: this._allCheckinRecords.length,
+      hasMoreCheckins: limit < this._allCheckinRecords.length
+    });
+  },
+
+  loadMoreCheckins() {
+    if (!this.data.hasMoreCheckins) return;
+    const records = this._allCheckinRecords || [];
+    const limit = this.data.checkinRecords.length + CHECKIN_PAGE_SIZE;
+    this.setData({
+      checkinRecords: records.slice(0, limit),
+      hasMoreCheckins: limit < records.length
+    });
+  },
+
+  openCheckinHistory(e) {
+    const date = e.currentTarget.dataset.date;
+    if (date) wx.navigateTo({ url: `/pages/history/history?date=${date}` });
   },
 
   /**
@@ -694,6 +844,7 @@ Page({
     this.updateMonthlyCount();
     this.getUserNickname();
     this.loadRanking();
+    this.refreshCheckinRecords();
   },
 
   /**
@@ -702,6 +853,7 @@ Page({
   refreshCalendarData: function() {
     this.generateCalendar();
     this.updateMonthlyCount();
+    this.refreshCheckinRecords(false);
   },
 
   /**
@@ -953,8 +1105,7 @@ Page({
     }
     
     // 添加当前月的日期
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+    const todayStr = dateUtil.getBusinessDate();
     
     for (let day = 1; day <= daysInMonth; day++) {
       const fullDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
@@ -1052,11 +1203,12 @@ Page({
     console.log('=== index页面onLoad函数开始 ===');
     console.log('页面参数:', options);
     
-    const today = new Date();
+    const [year, month] = dateUtil.getBusinessDate().split('-').map(Number);
     this.setData({
-      currentYear: today.getFullYear(),
-      currentMonth: today.getMonth() + 1
+      currentYear: year,
+      currentMonth: month
     });
+    this.refreshCheckinDefaults();
     
     console.log('初始化页面数据完成');
     
@@ -1092,6 +1244,12 @@ Page({
    */
   onShow() {
     console.log('=== index页面onShow函数开始 ===');
+    this.refreshCheckinDefaults();
+    this.refreshCheckinRecords();
+    clearInterval(this._checkinClock);
+    this._checkinClock = setInterval(() => {
+      if (!this.data.checkinSubmitting) this.refreshCheckinDefaults();
+    }, 30000);
     
     // 检查用户信息状态（不跳转，只更新显示）
     // 每次显示页面时都检查用户状态，确保显示正确的登录状态
@@ -1118,21 +1276,27 @@ Page({
    * 生命周期函数--监听页面隐藏
    */
   onHide() {
-
+    clearInterval(this._checkinClock);
   },
 
   /**
    * 生命周期函数--监听页面卸载
    */
   onUnload() {
-
+    clearInterval(this._checkinClock);
   },
 
   /**
    * 页面相关事件处理函数--监听用户下拉动作
    */
   onPullDownRefresh() {
-
+    try {
+      this.refreshCheckinDefaults();
+      this.refreshCalendarData();
+      this.loadMoreCheckins();
+    } finally {
+      wx.stopPullDownRefresh();
+    }
   },
 
   /**
@@ -1268,7 +1432,7 @@ Page({
    * 页面上拉触底事件的处理函数
    */
   onReachBottom() {
-
+    this.loadMoreCheckins();
   },
 
   /**

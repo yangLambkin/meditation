@@ -18,41 +18,8 @@
     "bigPackageSizeSupport": false,
     "useIsolateContext": true
   },
-  "condition": {
-    "miniprogram": {
-      "list": [
-        {
-          "name": "pages/recorder/recorder",
-          "pathName": "pages/recorder/recorder",
-          "query": "",
-          "scene": null,
-          "launchMode": "default"
-        },
-        {
-          "name": "/subpackages/team/pages/testJoinTeam/testJoinTeam",
-          "pathName": "/subpackages/team/pages/testJoinTeam/testJoinTeam",
-          "query": "",
-          "launchMode": "default",
-          "scene": null
-        },
-        {
-          "name": "subpackages/team/pages/joinTeam/joinTeam",
-          "pathName": "subpackages/team/pages/joinTeam/joinTeam",
-          "query": "teamId=3bef321d69ca6cb5023b3f3a4184ac8a&teamName=亘心的团队&inviterId=invite_1775136483661_nqtjr4srs&teamIcon=cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/team-icons/1774873779200_vdv19wfdv.png",
-          "launchMode": "default",
-          "scene": null
-        },
-        {
-          "name": "pages/index/index",
-          "pathName": "pages/index/index",
-          "query": "",
-          "launchMode": "default",
-          "scene": null
-        }
-      ]
-    }
-  },
+  "condition": {},
   "description": "项目私有配置文件。此文件中的内容将覆盖 project.config.json 中的相同字段。项目的改动优先同步到此文件中。详见文档：https://developers.weixin.qq.com/miniprogram/dev/devtools/projectconfig.html",
   "projectname": "meditation",
-  "libVersion": "3.13.2"
+  "libVersion": "3.17.3"
 }

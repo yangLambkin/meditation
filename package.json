@@ -5,6 +5,8 @@
   "main": "create_collections_consistent.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:bijing-sync": "node --test tests/bijingSync.test.js tests/bijingSyncPage.test.js",
+    "test:home-checkin": "node --test tests/checkinTimestamp.test.js tests/homeCheckinPage.test.js",
     "cleanup:stats": "node scripts/runCleanup.js stats",
     "cleanup:safe": "node scripts/runCleanup.js safe",
     "cleanup:full": "node scripts/runCleanup.js full",

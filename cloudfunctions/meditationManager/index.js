@@ -79,13 +79,17 @@ exports.main = async (event, context) => {
 async function recordMeditation(openid, data, localUserId = null) {
   try {
     const now = new Date();
-    const dateStr = getBusinessDate(now);
+    const timestamp = data.timestamp === undefined ? now.getTime() : data.timestamp;
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > now.getTime()) {
+      return { success: false, error: '打卡时间无效或晚于当前时间' };
+    }
+    const dateStr = getBusinessDate(timestamp);
     
     // 创建打卡记录 - 支持本地用户标识映射
     const record = {
       _openid: openid,
       date: dateStr,
-      timestamp: now.getTime(),
+      timestamp: timestamp,
       duration: data.duration || 0,
       emotion: Array.isArray(data.emotion) ? data.emotion : [], // 情绪标签数组
       experience: Array.isArray(data.experience) ? data.experience : (data.experience ? [data.experience] : []), // 体验记录ID数组，可能为空数组
@@ -111,7 +115,7 @@ async function recordMeditation(openid, data, localUserId = null) {
       data: {
         recordId: result._id,
         date: dateStr,
-        timestamp: now.getTime()
+        timestamp: timestamp
       }
     };
     
@@ -163,11 +167,16 @@ async function updateUserStats(openid, dateStr, duration) {
     } else {
       // 更新现有用户统计
       const stats = userStats.data[0];
-      const isNewDay = !stats.lastCheckin || stats.lastCheckin !== dateStr;
+      const latestDate = [stats.lastCheckinDate, stats.lastCheckin].filter(Boolean).sort().pop() || '';
+      const knownDates = new Set(Object.values(stats.monthlyStats || {})
+        .flatMap(month => Array.isArray(month.days) ? month.days : []));
+      if (latestDate) knownDates.add(latestDate);
+      const isNewDay = !knownDates.has(dateStr);
+      const isBackdated = !!latestDate && dateStr < latestDate;
       
       // 判断是否是同一天（当日总时长需要累加）
       // 使用lastCheckinDate字段来判断同一天，因为lastCheckin可能被其他逻辑更新
-      const isSameDay = stats.lastCheckinDate === dateStr;
+      const isSameDay = latestDate === dateStr;
       
       console.log(`更新用户统计: openid=${openid}, dateStr=${dateStr}, lastCheckinDate=${stats.lastCheckinDate}, dailyTotalDuration=${stats.dailyTotalDuration || 0}, isSameDay=${isSameDay}, isNewDay=${isNewDay}`);
       
@@ -183,7 +192,7 @@ async function updateUserStats(openid, dateStr, duration) {
         const currentDailyTotal = stats.dailyTotalDuration || 0;
         updateData.dailyTotalDuration = db.command.inc(duration);
         console.log(`同一天打卡，累加时长: ${currentDailyTotal} + ${duration} = ${currentDailyTotal + duration}`);
-      } else {
+      } else if (!isBackdated) {
         // 新的一天，重置当日总时长
         updateData.dailyTotalDuration = duration;
         updateData.lastCheckinDate = dateStr;
@@ -193,13 +202,12 @@ async function updateUserStats(openid, dateStr, duration) {
       
       // 更新当月总分钟数：跨月时清零重置为当月值，避免 monthlyTotalDuration 沦为累计值（修复 4.2）
       const currentMonthlyTotal = stats.monthlyTotalDuration || 0;
-      const lastMonthStr = (stats.lastCheckinDate || '').substring(0, 7);
-      const isNewMonth = lastMonthStr !== monthStr;
-      if (isNewMonth) {
+      const lastMonthStr = latestDate.substring(0, 7);
+      if (monthStr > lastMonthStr) {
         // 跨月首次打卡：重置为当月当前时长（与 dailyTotalDuration 同口径）
         updateData.monthlyTotalDuration = duration;
         console.log(`跨月重置当月总分钟数: ${currentMonthlyTotal} -> ${duration} (${lastMonthStr} -> ${monthStr})`);
-      } else {
+      } else if (monthStr === lastMonthStr) {
         updateData.monthlyTotalDuration = db.command.inc(duration);
         console.log(`更新当月总分钟数: ${currentMonthlyTotal} + ${duration} = ${currentMonthlyTotal + duration}`);
       }
@@ -227,7 +235,7 @@ async function updateUserStats(openid, dateStr, duration) {
       
       if (isNewDay) {
         updateData.totalDays = db.command.inc(1);
-        updateData.lastCheckin = dateStr;
+        if (!isBackdated) updateData.lastCheckin = dateStr;
         
         // 计算连续打卡
         if (stats.lastCheckin) {
@@ -242,6 +250,25 @@ async function updateUserStats(openid, dateStr, duration) {
             updateData.currentStreak = 1;
           }
         }
+      }
+
+      // 补齐历史缺口时按已知日期重新计算连续天数，且始终以最新打卡日结尾。
+      // 旧统计若缺少完整日期明细，保留既有连续统计，避免因不完整缓存倒退。
+      if (isBackdated && knownDates.size >= (stats.totalDays || 0)) {
+        knownDates.add(dateStr);
+        const orderedDates = Array.from(knownDates).sort();
+        let streak = 0;
+        let longest = 0;
+        let previousDay;
+        orderedDates.forEach(date => {
+          const day = Date.parse(`${date}T00:00:00Z`) / 86400000;
+          streak = previousDay !== undefined && day - previousDay === 1 ? streak + 1 : 1;
+          longest = Math.max(longest, streak);
+          previousDay = day;
+        });
+        updateData.currentStreak = streak;
+        updateData.longestStreak = db.command.max(longest);
+        updateData.longestCheckInDays = db.command.max(longest);
       }
       
       // 更新月度统计
@@ -350,24 +377,27 @@ async function getRankings(period) {
   try {
     const wxContext = cloud.getWXContext();
     const currentUserOpenId = wxContext.OPENID;
+    const today = getBusinessDate();
     
     console.log(`🔍 获取用户排名，用户: ${currentUserOpenId}`);
     
     // 1. 查询当前用户的当日总时长（仅取必要字段）
     const userStatRes = await db.collection("user_stats")
       .where({ _openid: currentUserOpenId })
-      .field({ dailyTotalDuration: true })
+      .field({ dailyTotalDuration: true, lastCheckinDate: true, lastCheckin: true })
       .get();
     
-    // 当前用户无任何打卡统计，视为暂无排名
-    if (userStatRes.data.length === 0) {
+    // 日累计字段保留最近打卡日的值；历史补卡不参与今日排名。
+    const userStat = userStatRes.data[0];
+    const latestDate = userStat && (userStat.lastCheckinDate || userStat.lastCheckin);
+    if (!userStat || latestDate !== today) {
       const total = await db.collection("user_stats").count();
       console.log(`⚠️ 当前用户暂无打卡记录，总打卡用户数: ${total.total}`);
       return {
         success: true,
         data: {
           type: period,
-          period: getBusinessDate(),
+          period: today,
           currentUserOpenId: currentUserOpenId,
           currentUserRank: 0,
           hasRanking: false,
@@ -376,13 +406,21 @@ async function getRankings(period) {
       };
     }
     
-    const userDuration = userStatRes.data[0].dailyTotalDuration || 0;
+    const userDuration = userStat.dailyTotalDuration || 0;
     
     // 2. 名次 = 当日总时长严格大于当前用户的人数 + 1
     //    count 聚合不受 get() 单次 1000 条限制，任意用户量下名次准确；
     //    并列时长者获得相同名次（均为"大于者数 + 1"），语义合理。
     const higherCount = await db.collection("user_stats")
-      .where({ dailyTotalDuration: db.command.gt(userDuration) })
+      .where(db.command.and([
+        { dailyTotalDuration: db.command.gt(userDuration) },
+        db.command.or([
+          { lastCheckinDate: today },
+          { lastCheckinDate: db.command.exists(false), lastCheckin: today },
+          { lastCheckinDate: '', lastCheckin: today },
+          { lastCheckinDate: null, lastCheckin: today }
+        ])
+      ]))
       .count();
     
     // 3. 真实总打卡用户数（count 返回完整总数，不受前 100 限制）
@@ -394,7 +432,7 @@ async function getRankings(period) {
       success: true,
       data: {
         type: period,
-        period: getBusinessDate(),
+        period: today,
         currentUserOpenId: currentUserOpenId,
         currentUserRank: higherCount.total + 1,
         hasRanking: true,
