@@ -644,17 +644,26 @@ async function getMonthlyStats(openid, month) {
 
 // 获取用户所有记录
 async function getAllRecords(openid) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再获取记录' };
   try {
-    const result = await db.collection("meditation_records")
-      .where({
-        _openid: openid
-      })
-      .orderBy('timestamp', 'desc')
-      .get();
+    const records = [];
+    const pageSize = 100;
+    while (true) {
+      // 显式分页绕过默认查询上限；同时间戳以记录 ID 排序，保持分页顺序稳定。
+      const result = await db.collection("meditation_records")
+        .where({ _openid: openid })
+        .orderBy('timestamp', 'desc')
+        .orderBy('_id', 'asc')
+        .skip(records.length)
+        .limit(pageSize)
+        .get();
+      records.push(...result.data);
+      if (result.data.length < pageSize) break;
+    }
     
     return {
       success: true,
-      data: result.data
+      data: records
     };
   } catch (error) {
     console.error("获取所有记录失败:", error);

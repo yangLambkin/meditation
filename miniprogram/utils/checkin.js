@@ -4,6 +4,7 @@ const dateUtil = require('./dateUtil.js');
 const pendingBackups = new Map();
 const pendingDeletions = new Set();
 const userStorageRevisions = new Map();
+const pendingRefreshes = new Map();
 
 function getUserStorageRevision(userId) {
   return userStorageRevisions.get(userId) || 0;
@@ -22,6 +23,24 @@ function canCommitRecovery(userId, revision) {
 function recordTime(timestamp) {
   return typeof timestamp === 'number' || /^\d+$/.test(String(timestamp))
     ? Number(timestamp) : Date.parse(timestamp);
+}
+
+function mergeCheckinExperiences(local, remote) {
+  const asArray = value => Array.isArray(value) ? value : value ? [value] : [];
+  const identifiers = value => value && typeof value === 'object'
+    ? [value._id, value.uniqueId].filter(Boolean).map(String) : [String(value)];
+  const merged = asArray(local).slice();
+  asArray(remote).forEach(experience => {
+    const ids = identifiers(experience);
+    const index = merged.findIndex(existing => identifiers(existing).some(id => ids.includes(id)) ||
+      JSON.stringify(existing) === JSON.stringify(experience));
+    if (index === -1) merged.push(experience);
+    else if (experience && typeof experience === 'object' && typeof merged[index] !== 'object') {
+      // 旧缓存只有体验 ID 时，补上云端返回的正文。
+      merged[index] = experience;
+    }
+  });
+  return merged;
 }
 
 function findRecordIndex(records, identity) {
@@ -345,6 +364,124 @@ const checkinManager = {
     }
   },
 
+  // 首页主动补齐云端记录，不受「本地已有数据」或登录同步标记限制。
+  refreshFromCloud: function() {
+    if (!this.isUserLoggedIn()) return Promise.resolve(false);
+    const userId = this.getUserId();
+    const openid = wx.getStorageSync('userOpenId');
+    const key = `${userId}:${openid}`;
+    if (pendingRefreshes.has(key)) return pendingRefreshes.get(key);
+
+    const refresh = (async () => {
+      try {
+        // 打卡备份或其他恢复可能在读取期间落盘，重新读取一次以补齐最新数据。
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const revision = getUserStorageRevision(userId);
+          if (!canCommitRecovery(userId, revision)) return false;
+          const result = await cloudApi.getAllRecords();
+          if (!result.success || !Array.isArray(result.data)) return false;
+          if (wx.getStorageSync('localUserId') !== userId || wx.getStorageSync('userOpenId') !== openid) return false;
+          if (!canCommitRecovery(userId, revision)) continue;
+
+          const stored = this.getUserCheckinDataByUserId(userId);
+          const merged = this.mergeCloudRecordsIntoCache(stored, result.data);
+          wx.setStorageSync(`meditation_checkin_${userId}`, merged);
+          bumpUserStorageRevision(userId);
+          this.updateMonthlyStatsCache(merged.checkinRecords, 0, dateUtil.getBusinessMonth());
+          return true;
+        }
+      } catch (error) {
+        console.warn('首页云端记录刷新失败，保留本地记录:', error.message);
+      }
+      return false;
+    })();
+    pendingRefreshes.set(key, refresh);
+    refresh.finally(() => {
+      if (pendingRefreshes.get(key) === refresh) pendingRefreshes.delete(key);
+    });
+    return refresh;
+  },
+
+  // 增量补齐，保留离线打卡和体验；已有云端 ID 优先，旧记录才按时间/时长一对一匹配。
+  mergeCloudRecordsIntoCache: function(stored, cloudRecords) {
+    const local = stored.checkinRecords || stored;
+    const records = [];
+    const byId = new Map();
+    const byLocalId = new Map();
+    const byTime = new Map();
+    Object.keys(local.dailyRecords || {}).forEach(date => {
+      const day = local.dailyRecords[date] || {};
+      (Array.isArray(day.records) ? day.records : []).forEach(record => {
+        if (!record) return;
+        const copy = { ...record, date };
+        records.push(copy);
+        if (copy._id) byId.set(copy._id, copy);
+        if (copy.localId) byLocalId.set(copy.localId, copy);
+        const time = recordTime(copy.timestamp);
+        if (Number.isFinite(time) && time > 0) {
+          const key = `${time}:${Number(copy.duration) || 0}`;
+          if (!byTime.has(key)) byTime.set(key, []);
+          byTime.get(key).push(copy);
+        }
+      });
+    });
+    const matched = new Set();
+    const seenCloudIds = new Set();
+    cloudRecords.forEach(record => {
+      if (record._id && seenCloudIds.has(record._id)) return;
+      if (record._id) seenCloudIds.add(record._id);
+      let existing = record._id && byId.get(record._id);
+      if (!existing && record.localId) {
+        const candidate = byLocalId.get(record.localId);
+        if (candidate && !candidate._id && !matched.has(candidate)) existing = candidate;
+      }
+      if (!existing) {
+        const key = `${recordTime(record.timestamp)}:${Number(record.duration) || 0}`;
+        existing = (byTime.get(key) || []).find(candidate => !candidate._id && !matched.has(candidate) &&
+          !(candidate.localId && record.localId && candidate.localId !== record.localId));
+      }
+      if (existing) {
+        matched.add(existing);
+        // 本地体验可能仍在保存/上传，只补身份和本地缺失的字段。
+        const combined = { ...record, ...existing };
+        if (record._id) combined._id = record._id;
+        if (record.localId) combined.localId = record.localId;
+        combined.experience = mergeCheckinExperiences(existing.experience, record.experience);
+        Object.assign(existing, combined);
+      } else {
+        records.push({ ...record });
+      }
+    });
+    records.forEach(record => {
+      const time = recordTime(record.timestamp);
+      if (Number.isFinite(time) && time > 0 && !Number.isNaN(new Date(time).getTime())) {
+        record.date = dateUtil.getBusinessDate(time);
+      }
+    });
+    const merged = this.rebuildLocalCacheFromCloudRecords(records);
+    merged.experienceRecords = { ...merged.experienceRecords, ...(stored.experienceRecords || {}) };
+    const data = merged.checkinRecords;
+    data.userStats = { ...(local.userStats || {}), ...this.getUserStats(data) };
+    Object.keys(local.monthlyStats || {}).forEach(month => {
+      data.monthlyStats[month] = { ...local.monthlyStats[month] };
+    });
+    Object.keys(data.dailyRecords).forEach(date => {
+      const day = data.dailyRecords[date];
+      day.lastCheckin = day.records.reduce((latest, record) =>
+        recordTime(record.timestamp) > recordTime(latest.timestamp) ? record : latest
+      ).timestamp;
+    });
+    new Set([...Object.keys(data.monthlyStats), ...Object.keys(data.dailyRecords).map(date => date.slice(0, 7))]).forEach(month => {
+      this.updateMonthlyStats(data, month);
+      data.monthlyStats[month].count = data.monthlyStats[month].total;
+      data.monthlyStats[month].totalDuration = Object.keys(data.dailyRecords)
+        .filter(date => date.startsWith(month))
+        .reduce((sum, date) => sum + data.dailyRecords[date].records.reduce((total, record) =>
+          total + (Number(record.duration) || 0), 0), 0);
+    });
+    return merged;
+  },
+
   // 安全的云端数据恢复（含去重保护）
   async safeRecoverFromCloud(userId) {
     try {
@@ -371,7 +508,7 @@ const checkinManager = {
       console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
       
       // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
-      const mergedData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      const mergedData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
       
       // 4. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();
@@ -519,7 +656,7 @@ const checkinManager = {
       console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
       
       // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
-      const mergedData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      const mergedData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
       
       // 4. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();
@@ -640,7 +777,7 @@ const checkinManager = {
       }
       
       // 2. 重建本地缓存结构
-      const recoveredData = this.rebuildLocalCacheFromCloudRecords(allRecordsResult.data);
+      const recoveredData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
       
       // 3. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();

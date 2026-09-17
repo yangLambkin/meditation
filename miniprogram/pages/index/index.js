@@ -902,6 +902,28 @@ Page({
   },
 
   /**
+   * 从云端补齐打卡记录，合并完成后保留当前列表的已加载条数。
+   */
+  refreshCheckinsFromCloud() {
+    if (this._checkinCloudRefresh) return this._checkinCloudRefresh;
+
+    this._checkinCloudRefresh = Promise.resolve()
+      .then(() => checkinManager.refreshFromCloud())
+      .then(refreshed => {
+        if (refreshed) this.refreshCalendarData();
+        return refreshed;
+      })
+      .catch(error => {
+        console.warn('首页云端打卡记录刷新失败:', error);
+        return false;
+      })
+      .finally(() => {
+        this._checkinCloudRefresh = null;
+      });
+    return this._checkinCloudRefresh;
+  },
+
+  /**
    * 判断用户是否已登录（微信openid以'oz'开头）
    */
   isUserLoggedIn() {
@@ -1290,7 +1312,7 @@ Page({
   onShow() {
     console.log('=== index页面onShow函数开始 ===');
     this.refreshCheckinDefaults();
-    this.refreshCheckinRecords();
+    this.refreshCheckinRecords(false);
     clearInterval(this._checkinClock);
     this._checkinClock = setInterval(() => {
       if (!this.data.checkinSubmitting) this.refreshCheckinDefaults();
@@ -1315,6 +1337,7 @@ Page({
       userOpenId: this.data.userOpenId
     });
     console.log('=== index页面onShow函数结束 ===');
+    return this.refreshCheckinsFromCloud();
   },
 
   /**
@@ -1334,10 +1357,11 @@ Page({
   /**
    * 页面相关事件处理函数--监听用户下拉动作
    */
-  onPullDownRefresh() {
+  async onPullDownRefresh() {
     try {
       this.refreshCheckinDefaults();
-      this.refreshCalendarData();
+      const refreshed = await this.refreshCheckinsFromCloud();
+      if (!refreshed) this.refreshCalendarData();
       this.loadMoreCheckins();
     } finally {
       wx.stopPullDownRefresh();

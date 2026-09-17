@@ -7,10 +7,10 @@ const vm = require('node:vm');
 const pagePath = path.join(__dirname, '../miniprogram/pages/index/index.js');
 const utilsPath = path.join(__dirname, '../miniprogram/utils');
 
-function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], record, checkText } = {}) {
+function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], record, checkText, refreshFromCloud } = {}) {
   let currentTime = Date.parse(now);
   let definition;
-  const calls = { record: [], content: [], toast: [], refresh: 0, stopPullDownRefresh: 0 };
+  const calls = { record: [], content: [], toast: [], refresh: 0, cloudRefresh: 0, stopPullDownRefresh: 0 };
   const intervals = new Map();
   let nextInterval = 1;
   class Clock extends Date {
@@ -19,7 +19,12 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
   }
   const checkinManager = {
     getUserCheckinData: () => ({ dailyRecords }),
+    getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
+    refreshFromCloud: () => {
+      calls.cloudRefresh++;
+      return refreshFromCloud ? refreshFromCloud() : false;
+    },
     recordCheckin: (...args) => {
       calls.record.push(args);
       return record ? record(...args) : { success: true };
@@ -306,7 +311,7 @@ test('empty and exact-page data report whether more details exist correctly', ()
   }
 });
 
-test('pulling down rereads storage and adds another twenty without resetting the visible count', () => {
+test('pulling down rereads storage and adds another twenty without resetting the visible count', async () => {
   const dailyRecords = makeRecords(45);
   const { page, calls, setNow } = createPage({ dailyRecords });
   page.generateCalendar = () => {};
@@ -316,7 +321,7 @@ test('pulling down rereads storage and adds another twenty without resetting the
   assert.equal(page.data.checkinRecords.length, 40);
   Object.assign(dailyRecords, makeRecords(65));
   setNow('2026-09-18T09:42:00+08:00');
-  page.onPullDownRefresh();
+  await page.onPullDownRefresh();
   assert.equal(page.data.checkinRecords.length, 60);
   assert.equal(page.data.checkinTotal, 65);
   assert.equal(page.data.checkinRecords[0].duration, 65);
@@ -324,28 +329,29 @@ test('pulling down rereads storage and adds another twenty without resetting the
   assert.equal(page.data.checkinDate, '2026-09-18');
   assert.equal(page.data.checkinTime, '09:42');
   assert.equal(calls.stopPullDownRefresh, 1);
-  page.onPullDownRefresh();
+  await page.onPullDownRefresh();
   assert.equal(page.data.checkinRecords.length, 65);
   assert.equal(page.data.hasMoreCheckins, false);
   assert.equal(calls.stopPullDownRefresh, 2);
+  assert.equal(calls.cloudRefresh, 2);
 });
 
-test('pull-to-refresh releases the spinner when reading page data fails', () => {
+test('pull-to-refresh releases the spinner when reading page data fails', async () => {
   const { page, calls } = createPage();
   page.refreshCalendarData = () => { throw new Error('读取失败'); };
-  assert.throws(() => page.onPullDownRefresh(), /读取失败/);
+  await assert.rejects(page.onPullDownRefresh(), /读取失败/);
   assert.equal(calls.stopPullDownRefresh, 1);
 });
 
-test('showing the page keeps defaults current and hides/unloads release the clock', () => {
+test('showing the page keeps defaults current and hides/unloads release the clock', async () => {
   const { page, intervals, setNow } = createPage();
   for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
     page[method] = () => {};
   }
-  page.onShow();
+  await page.onShow();
   assert.equal(intervals.size, 1);
   assert.equal(Array.from(intervals.values())[0].milliseconds, 30000);
-  page.onShow();
+  await page.onShow();
   assert.equal(intervals.size, 1, 'reopening must not accumulate clocks');
   setNow('2026-09-18T09:42:00+08:00');
   Array.from(intervals.values())[0].callback();
@@ -359,10 +365,136 @@ test('showing the page keeps defaults current and hides/unloads release the cloc
   assert.equal(page.data.checkinTime, '06:32');
   page.onHide();
   assert.equal(intervals.size, 0);
-  page.onShow();
+  await page.onShow();
   assert.equal(intervals.size, 1);
   page.onUnload();
   assert.equal(intervals.size, 0);
+});
+
+test('showing the page restores a missing cloud check-in despite existing local records', async () => {
+  const dailyRecords = {
+    '2026-09-17': {
+      count: 1,
+      records: [{ timestamp: Date.parse('2026-09-17T03:39:00+08:00'), duration: 13 }]
+    }
+  };
+  const { page, calls } = createPage({
+    dailyRecords,
+    refreshFromCloud: () => {
+      dailyRecords['2026-09-16'] = {
+        count: 1,
+        records: [{ timestamp: Date.parse('2026-09-16T20:39:00+08:00'), duration: 7 }]
+      };
+      return true;
+    }
+  });
+  page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: 'local-user' });
+  page.checkUserInfoStatus = () => {};
+  page.loadRanking = () => {};
+  page.refreshCalendarData();
+  assert.equal(page.data.checkinTotal, 1);
+  assert.equal(page.data.monthlyCount, 1);
+  assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, false);
+
+  await page.onShow();
+
+  assert.equal(calls.cloudRefresh, 1);
+  assert.equal(page.data.checkinTotal, 2);
+  assert.equal(page.data.monthlyCount, 2);
+  assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, true);
+  assert.deepEqual(Array.from(page.data.checkinRecords, record => [record.date, record.time, record.duration]), [
+    ['2026-09-17', '03:39', 13],
+    ['2026-09-16', '20:39', 7]
+  ]);
+  page.onUnload();
+});
+
+test('cloud refresh preserves loaded pages and pull-down adds twenty from the refreshed records', async () => {
+  const dailyRecords = makeRecords(45);
+  const { page, calls } = createPage({
+    dailyRecords,
+    refreshFromCloud: () => {
+      Object.assign(dailyRecords, makeRecords(65));
+      return true;
+    }
+  });
+  for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
+    page[method] = () => {};
+  }
+  page.refreshCheckinRecords();
+  page.loadMoreCheckins();
+  assert.equal(page.data.checkinRecords.length, 40);
+
+  await page.onShow();
+  assert.equal(page.data.checkinTotal, 65);
+  assert.equal(page.data.checkinRecords.length, 40);
+  assert.equal(page.data.checkinRecords[0].duration, 65);
+
+  await page.onPullDownRefresh();
+  assert.equal(page.data.checkinRecords.length, 60);
+  assert.equal(page.data.checkinTotal, 65);
+  assert.equal(calls.stopPullDownRefresh, 1);
+  page.onUnload();
+});
+
+test('concurrent page shows and pull-down share one cloud request and allow another after completion', async () => {
+  let completeRefresh;
+  const pendingRefresh = new Promise(resolve => { completeRefresh = resolve; });
+  const { page, calls } = createPage({
+    dailyRecords: makeRecords(45),
+    refreshFromCloud: () => pendingRefresh
+  });
+  for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
+    page[method] = () => {};
+  }
+
+  const firstShow = page.onShow();
+  const secondShow = page.onShow();
+  const pullDown = page.onPullDownRefresh();
+  assert.equal(firstShow, secondShow);
+  await Promise.resolve();
+  assert.equal(calls.cloudRefresh, 1);
+  assert.equal(calls.stopPullDownRefresh, 0);
+  completeRefresh(true);
+  await Promise.all([firstShow, secondShow, pullDown]);
+  assert.equal(calls.stopPullDownRefresh, 1);
+  assert.equal(page.data.checkinRecords.length, 40);
+
+  await page.onShow();
+  assert.equal(calls.cloudRefresh, 2);
+  assert.equal(page.data.checkinRecords.length, 40);
+  page.onUnload();
+});
+
+test('failed cloud refresh retains local records, releases the spinner and permits retry', async () => {
+  for (const failure of [false, new Error('网络不可用')]) {
+    let completeRefresh;
+    let failRefresh;
+    const pendingRefresh = new Promise((resolve, reject) => {
+      completeRefresh = resolve;
+      failRefresh = reject;
+    });
+    const { page, calls } = createPage({
+      dailyRecords: makeRecords(1),
+      refreshFromCloud: () => pendingRefresh
+    });
+    page.setData({ currentYear: 2026, currentMonth: 9 });
+    page.refreshCalendarData();
+    const before = JSON.stringify({ records: page.data.checkinRecords, monthlyCount: page.data.monthlyCount });
+    const pullDown = page.onPullDownRefresh();
+    await Promise.resolve();
+    assert.equal(calls.cloudRefresh, 1);
+    assert.equal(calls.stopPullDownRefresh, 0);
+    if (failure instanceof Error) failRefresh(failure);
+    else completeRefresh(failure);
+
+    await pullDown;
+    assert.equal(JSON.stringify({ records: page.data.checkinRecords, monthlyCount: page.data.monthlyCount }), before);
+    assert.equal(calls.stopPullDownRefresh, 1);
+    await page.onPullDownRefresh();
+    assert.equal(calls.cloudRefresh, 2);
+    assert.equal(calls.stopPullDownRefresh, 2);
+  }
 });
 
 test('details resolve inline experiences and IDs from both local storage formats', () => {
