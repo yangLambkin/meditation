@@ -8,11 +8,15 @@
       <!-- 进度圈容器 -->
       <view class="progress-circle-container">
         <!-- 背景圆环 -->
-        <view class="progress-circle-bg"></view>
-        <!-- 径向进度条 - 使用两个半圆实现 -->
-        <view class="progress-circle-fill">
-          <view class="progress-circle-half progress-circle-left" style="transform: rotate({{progressAngleLeft}}deg);"></view>
-          <view class="progress-circle-half progress-circle-right" style="transform: rotate({{progressAngleRight}}deg);"></view>
+        <view class="progress-circle-bg {{!isCountdown ? 'progress-circle-static' : ''}}"></view>
+        <!-- 两个固定裁剪区分别显示剩余进度，旋转中心均位于圆心 -->
+        <view wx:if="{{isCountdown}}" class="progress-circle-fill {{isRunning ? 'is-animating' : ''}}">
+          <view class="progress-circle-clip progress-circle-clip-left">
+            <view class="progress-circle-half progress-circle-left" style="transform: rotate({{progressAngleLeft}}deg);"></view>
+          </view>
+          <view class="progress-circle-clip progress-circle-clip-right">
+            <view class="progress-circle-half progress-circle-right" style="transform: rotate({{progressAngleRight}}deg);"></view>
+          </view>
         </view>
         <!-- 时间显示 -->
         <view class="time-display">

@@ -82,19 +82,14 @@
   line-height: 33.5rpx;
 }
 .section_2 {
-  padding-bottom: 32rpx;
   background-color: #ffffff;
 }
 .group_5 {
   padding: 32rpx 48rpx;
-  border-bottom: solid 3rpx #f8fafb;
 }
 .image_3 {
   width: 32rpx;
   height: 32rpx;
-}
-.group_6 {
-  padding: 0 48rpx;
 }
 .section_3 {
   background-color: #ffffff;
@@ -105,14 +100,8 @@
   line-height: 25.96rpx;
   color: #354152;
 }
-.text_7 {
-  line-height: 25.82rpx;
-}
 .text_3 {
   color: #697282;
-}
-.text_8 {
-  line-height: 25.82rpx;
 }
 .group_7 {
   padding: 32rpx 48rpx;

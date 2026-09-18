@@ -53,8 +53,10 @@
   line-height: 25rpx;
   color: #354152;
 }
-.text {
+.welcome-row {
   margin-left: 42.35rpx;
+}
+.text {
   color: #fffefecc;
   line-height: 28rpx;
 }

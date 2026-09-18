@@ -144,36 +144,12 @@
       </view>
     </view>
     <view class="mt-16 flex-col section_2">
-      <view class="flex-col">
-        <view class="flex-row justify-between items-center group_5">
-          <view class="flex-row items-center">
-            <image
-              class="shrink-0 image"
-            />
-            <text class="font_2 text_7 ml-17">觉察日记</text>
-          </view>
-          <image
-            class="image_3"
-          />
-        </view>
-        <view class="flex-row justify-between items-center group_5" bindtap="goToBadgePage">
-          <view class="flex-row items-center">
-            <image
-              class="shrink-0 image"
-            />
-            <text class="font_2 ml-17">我的勋章</text>
-          </view>
-          <image
-            class="image_3"
-          />
-        </view>
-      </view>
-      <view class="mt-16 flex-row justify-between items-center group_6">
+      <view class="flex-row justify-between items-center group_5" bindtap="goToBadgePage">
         <view class="flex-row items-center">
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 ml-17">我的收藏</text>
+          <text class="font_2 ml-17">我的勋章</text>
         </view>
         <image
           class="image_3"
@@ -181,23 +157,12 @@
       </view>
     </view>
     <view class="mt-16 flex-col section_3">
-      <view class="flex-row justify-between items-center group_5">
-        <view class="flex-row items-center">
-          <image
-            class="shrink-0 image"
-          />
-          <text class="ml-16 font_2 text_8">个人资料</text>
-        </view>
-        <image
-          class="image_3"
-        />
-      </view>
       <view class="flex-row justify-between items-center group_7">
         <view class="flex-row items-center">
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.4</text>
+          <text class="font_2 text_9 ml-17">版本 V2.5.1</text>
         </view>
         <image
           class="image_3"

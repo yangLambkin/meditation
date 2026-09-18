@@ -1,4 +1,6 @@
 // pages/timer/timer.js - 使用wx.createBackgroundTimer的稳定方案
+const { createScreenBrightnessController } = require('../../utils/screenBrightness');
+
 Page({
   data: {
     // 计时器状态
@@ -33,8 +35,8 @@ Page({
     timerInterval: null,
     
     // 进度显示
-    progress: 0,
-    progressAngle: 0,
+    progressAngleLeft: 0,
+    progressAngleRight: 0,
     displayTime: "30:00",
     
     // 按钮状态
@@ -71,6 +73,11 @@ Page({
   },
 
   onLoad(options) {
+    this.brightnessTimer = null;
+    this.screenBrightness = createScreenBrightnessController(wx);
+    this.isPageVisible = false;
+    this.isUnloaded = false;
+
     this.updateDisplay();
     this.updateButtonStates();
     this.createAudioPlayer();
@@ -78,42 +85,47 @@ Page({
     this.getBackgroundMusicUrl();
     this.setupAppStateListeners();
     this.restoreTimerState();
-    
-    // 设置屏幕常亮，防止熄屏
+  },
+
+  onShow() {
+    this.isPageVisible = true;
     this.setKeepScreenOn();
-    
-    // 保存当前亮度，以便退出时恢复
-    this.saveCurrentBrightness();
-    
-    // 初始化亮度控制变量
-    this.brightnessTimer = null;
-    this.isBrightnessReduced = false;
+    if (this.data.isRunning) {
+      this.syncTimerTime();
+      this.startBrightnessControl();
+    }
+  },
+
+  onHide() {
+    this.isPageVisible = false;
+    this.restoreScreenSettings();
   },
 
   // 设置应用状态监听
   setupAppStateListeners() {
     // 应用进入前台（屏幕打开）
-    wx.onAppShow((res) => {
+    this.appShowHandler = () => {
+      if (this.isUnloaded) return;
       console.log('📱 应用进入前台，同步时间');
       if (this.data.isRunning) {
         this.syncTimerTime();
       }
-      
-      // 重新设置屏幕常亮（亮度设置由系统自动保持）
-      this.setKeepScreenOn();
-    });
+      // 屏幕设置只由计时页 onShow 激活，其他页回前台时不修改。
+    };
     
     // 应用进入后台（屏幕关闭）
-    wx.onAppHide(() => {
+    this.appHideHandler = () => {
+      if (this.isUnloaded) return;
+      this.isPageVisible = false;
+      this.restoreScreenSettings();
       console.log('📱 应用进入后台，保存状态');
       this.saveTimerState();
       
       // 确保后台音频继续播放
       this.ensureBackgroundAudioPlayback();
-      
-      // 恢复屏幕设置（当应用被切到后台时）
-      this.restoreScreenSettings();
-    });
+    };
+    wx.onAppShow(this.appShowHandler);
+    wx.onAppHide(this.appHideHandler);
   },
 
   // 确保后台音频播放
@@ -125,7 +137,7 @@ Page({
       // 重新播放背景音乐（如果被系统暂停）
       setTimeout(() => {
         if (this.backgroundMusicPlayer && this.data.isRunning) {
-          this.backgroundMusicPlayer.play();
+          this.playBackgroundMusic();
         }
       }, 100);
     }
@@ -162,6 +174,9 @@ Page({
 
   // 开始计时器
   startTimer() {
+    if (this.data.isRunning) return;
+    const isResuming = this.data.isPaused;
+
     // 清理之前的计时器
     this.cleanupTimers();
     
@@ -191,8 +206,18 @@ Page({
       isPaused: false
     });
 
-    // 播放背景音乐（仅在选择"默认"时播放）
-    this.playBackgroundMusic();
+    if (!isResuming) {
+      this.stopBackgroundMusic();
+      this.stopSessionSound();
+      this.scheduleStartSound();
+    } else if (this.startSoundRemaining !== null) {
+      this.scheduleStartSound(this.startSoundRemaining);
+    } else if (this.currentSessionSound === 'start') {
+      // 暂停后继续未播完的起坐音频，不从头重播。
+      this.audioPlayer.play();
+    } else {
+      this.playBackgroundMusic();
+    }
 
     // 使用前台计时器（屏幕常亮，无需后台计时器）
     this.createForegroundTimer();
@@ -257,8 +282,8 @@ Page({
     // 停止背景音乐（引导音频）
     this.stopBackgroundMusic();
     
-    // 播放完成铃声
-    this.playBellSound();
+    // 播放收坐音频
+    this.playSessionSound('end');
     
     // 更新状态
     this.setData({
@@ -293,12 +318,8 @@ Page({
     
     this.cleanupTimers();
     
-    // 暂停亮度控制（如果已降低亮度）
-    if (this.isBrightnessReduced) {
-      console.log('💡 计时暂停，恢复屏幕亮度');
-      this.restoreBrightness();
-      this.isBrightnessReduced = false;
-    }
+    // 同时取消尚未触发的调暗，恢复本次实际修改过的亮度。
+    this.stopBrightnessControl();
     
     this.setData({
       isRunning: false,
@@ -308,14 +329,23 @@ Page({
     
     // 暂停背景音乐
     this.pauseBackgroundMusic();
+    if (this.startSoundTimer !== null) {
+      clearTimeout(this.startSoundTimer);
+      this.startSoundTimer = null;
+      this.startSoundRemaining = Math.max(0,
+        this.startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
+    }
+    if (this.currentSessionSound === 'start' && this.audioPlayer) {
+      this.audioPlayer.pause();
+    }
     
     this.updateButtonStates();
     console.log('⏸️ 计时器已暂停');
   },
 
   // 停止计时器
-  stopTimer() {
-    const wasRunning = this.data.isRunning;
+  stopTimer({ playEndSound = true } = {}) {
+    const wasActive = this.data.isRunning || this.data.isPaused;
     
     this.cleanupTimers();
     
@@ -334,10 +364,11 @@ Page({
     
     // 停止背景音乐
     this.stopBackgroundMusic();
+    this.stopSessionSound();
     
-    // 如果正在运行，播放铃声
-    if (wasRunning) {
-      this.playBellSound();
+    // 运行中或暂停后结束，均播放收坐音频。
+    if (wasActive && playEndSound) {
+      this.playSessionSound('end');
     }
     
     this.updateDisplay();
@@ -396,18 +427,17 @@ Page({
     const seconds = displaySeconds % 60;
     const displayTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-    // 正计时无目标时长，进度环保持空（不误导填充）
-    let progress = 0;
-    let progressAngle = 0;
-    if (this.data.isCountdown) {
-      progress = ((this.data.totalTime - this.data.remainingTime) / this.data.totalTime) * 100;
-      progressAngle = 360 - (progress * 3.6);
-    }
+    // 倒计时从完整圆环逐渐缩短；正计时始终保持完整的单色圆环。
+    const remainingRatio = this.data.totalTime > 0
+      ? Math.min(1, Math.max(0, this.data.remainingTime / this.data.totalTime))
+      : 0;
+    const progressAngle = this.data.isCountdown ? remainingRatio * 360 : 360;
 
     this.setData({
       displayTime: displayTime,
-      progress: Math.min(100, Math.max(0, progress)),
-      progressAngle: Math.min(360, Math.max(0, progressAngle))
+      // 每个半圆从 -180°（隐藏）转到 0°（完整显示）。
+      progressAngleLeft: Math.max(0, progressAngle - 180) - 180,
+      progressAngleRight: Math.min(180, progressAngle) - 180
     });
   },
 
@@ -450,17 +480,13 @@ Page({
               startTimestamp: Date.now() - (estimatedElapsed * 1000),
               totalPausedTime: 0
             });
-            // 如果已超过1分钟，立即降低亮度
+            this.startTimer();
+
+            // 开始计时后才允许调暗；确认弹窗的回调也受页面可见性约束。
             if (estimatedElapsed >= 60) {
               console.log('💡 恢复计时，已超过1分钟，立即降低亮度');
-              this.setMinBrightness();
-              this.isBrightnessReduced = true;
-            } else {
-              // 否则设置1分钟后降低亮度
-              this.startBrightnessControl();
+              this.startBrightnessControl(0);
             }
-            
-            this.startTimer();
           } else {
             this.stopTimer();
           }
@@ -473,6 +499,7 @@ Page({
 
   // 设置屏幕常亮
   setKeepScreenOn() {
+    if (!this.isPageVisible || this.isUnloaded) return;
     wx.setKeepScreenOn({
       keepScreenOn: true,
       success: () => {
@@ -484,80 +511,34 @@ Page({
     });
   },
 
-  // 保存当前亮度
-  saveCurrentBrightness() {
-    wx.getScreenBrightness({
-      success: (res) => {
-        this.originalBrightness = res.value;
-        console.log('💡 保存当前亮度:', this.originalBrightness);
-        
-        // 注意：不在这里设置最低亮度，等待计时开始后1分钟再设置
-      },
-      fail: (err) => {
-        console.warn('⚠️ 获取亮度失败，使用默认亮度:', err);
-        this.originalBrightness = 0.5;
-        
-        // 注意：不在这里设置最低亮度，等待计时开始后1分钟再设置
-      }
-    });
-  },
-
   // 设置最低亮度
   setMinBrightness() {
-    wx.setScreenBrightness({
-      value: 0.01, // 最低亮度
-      success: () => {
-        console.log('💡 亮度已设置为最低');
-      },
-      fail: (err) => {
-        console.warn('⚠️ 设置最低亮度失败:', err);
-      }
-    });
-  },
-
-  // 恢复原始亮度
-  restoreBrightness() {
-    if (this.originalBrightness !== undefined) {
-      wx.setScreenBrightness({
-        value: this.originalBrightness,
-        success: () => {
-          console.log('💡 亮度已恢复为:', this.originalBrightness);
-        },
-        fail: (err) => {
-          console.warn('⚠️ 恢复亮度失败:', err);
-        }
-      });
-    }
+    if (!this.isPageVisible || this.isUnloaded || !this.data.isRunning) return;
+    this.screenBrightness.dim();
   },
 
   // 开始亮度控制（1分钟后降低亮度）
-  startBrightnessControl() {
-    // 清理之前的亮度定时器
-    if (this.brightnessTimer) {
+  startBrightnessControl(delay = 60000) {
+    if (this.brightnessTimer !== null) {
       clearTimeout(this.brightnessTimer);
+      this.brightnessTimer = null;
     }
-    
-    // 1分钟后降低亮度
+    if (!this.isPageVisible || this.isUnloaded || !this.data.isRunning) return;
+
     this.brightnessTimer = setTimeout(() => {
-      if (this.data.isRunning && !this.isBrightnessReduced) {
-        console.log('💡 计时1分钟，降低屏幕亮度');
-        this.setMinBrightness();
-        this.isBrightnessReduced = true;
-      }
-    }, 60000); // 1分钟 = 60秒 = 60000毫秒
+      this.brightnessTimer = null;
+      this.setMinBrightness();
+    }, delay);
   },
 
   // 停止亮度控制
   stopBrightnessControl() {
-    if (this.brightnessTimer) {
+    if (this.brightnessTimer !== null) {
       clearTimeout(this.brightnessTimer);
       this.brightnessTimer = null;
     }
     
-    // 无论是否降低过亮度，计时结束时都恢复亮度
-    console.log('💡 计时结束，恢复屏幕亮度');
-    this.restoreBrightness();
-    this.isBrightnessReduced = false;
+    this.screenBrightness.restore();
   },
 
   // 恢复屏幕设置
@@ -565,7 +546,7 @@ Page({
     // 停止亮度控制
     this.stopBrightnessControl();
     
-    // 关闭屏幕常亮
+    // 常亮仅限计时页可见期间；重复关闭也允许上次失败后重试。
     wx.setKeepScreenOn({
       keepScreenOn: false,
       success: () => {
@@ -578,8 +559,17 @@ Page({
   },
 
   onUnload() {
+    this.isUnloaded = true;
+    this.isPageVisible = false;
+    wx.offAppShow(this.appShowHandler);
+    wx.offAppHide(this.appHideHandler);
     this.cleanupTimers();
     this.stopBackgroundMusic();
+    this.stopSessionSound();
+    if (this.audioPlayer) {
+      this.audioPlayer.destroy();
+      this.audioPlayer = null;
+    }
     this.saveTimerState();
     
     // 恢复屏幕设置
@@ -590,14 +580,14 @@ Page({
 
   // 以下为原有UI控制函数（保持不变）
   toggleMode(e) {
-    this.stopTimer();
+    this.stopTimer({ playEndSound: false });
     this.setData({ isCountdown: e.detail.value });
     this.updateDisplay();
     this.updateButtonStates();
   },
 
   resetTimer() {
-    this.stopTimer();
+    this.stopTimer({ playEndSound: false });
     this.updateDisplay();
     this.updateButtonStates();
   },
@@ -630,7 +620,7 @@ Page({
     });
     
     this.updateDisplay();
-    if (this.data.isRunning) this.stopTimer();
+    if (this.data.isRunning || this.data.isPaused) this.stopTimer({ playEndSound: false });
   },
 
   selectDuration(e) {
@@ -647,40 +637,67 @@ Page({
         showTimePicker: false
       });
       this.updateDisplay();
-      if (this.data.isRunning) this.stopTimer();
+      if (this.data.isRunning || this.data.isPaused) this.stopTimer({ playEndSound: false });
     }
   },
 
   createAudioPlayer() {
+    this.currentSessionSound = null;
+    this.startSoundTimer = null;
+    this.startSoundRemaining = null;
+    this.startSoundScheduledAt = 0;
     this.audioPlayer = wx.createInnerAudioContext();
-    this.audioPlayer.src = '/audio/风铃声.mp3';
     this.audioPlayer.loop = false;
     this.audioPlayer.obeyMuteSwitch = false;
-    
-    // 添加后台音频播放支持
+
     this.audioPlayer.onPlay(() => {
-      // 保持后台音频播放
-      console.log('🔔 铃声开始播放（支持后台）');
+      console.log('🔔 打坐提示音开始播放:', this.currentSessionSound);
     });
-    
+
+    this.audioPlayer.onEnded(() => this.handleSessionSoundEnded());
     this.audioPlayer.onError((err) => {
-      console.error('❌ 铃声播放失败:', err);
+      console.error('❌ 打坐提示音播放失败:', err);
+      this.handleSessionSoundEnded();
     });
   },
 
-  playBellSound() {
-    if (this.audioPlayer) {
-      // 确保在后台也能播放铃声
-      this.audioPlayer.play();
-      console.log('🔔 播放提醒铃声（支持后台）');
-      
-      // 添加后台播放保护
-      setTimeout(() => {
-        if (this.audioPlayer && this.audioPlayer.paused) {
-          console.log('🔄 重新触发铃声播放（后台保护）');
-          this.audioPlayer.play();
-        }
-      }, 500);
+  // 开始后留出 5 秒准备时间；暂停时保留剩余等待时间。
+  scheduleStartSound(delay = 5000) {
+    this.startSoundRemaining = delay;
+    this.startSoundScheduledAt = Date.now();
+    this.startSoundTimer = setTimeout(() => {
+      this.startSoundTimer = null;
+      this.startSoundRemaining = null;
+      if (this.data.isRunning && !this.isUnloaded) {
+        this.playSessionSound('start');
+      }
+    }, delay);
+  },
+
+  playSessionSound(type) {
+    if (!this.audioPlayer || this.isUnloaded) return;
+    this.stopSessionSound();
+    this.currentSessionSound = type;
+    this.audioPlayer.src = type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3';
+    this.audioPlayer.play();
+  },
+
+  stopSessionSound() {
+    if (this.startSoundTimer !== null) {
+      clearTimeout(this.startSoundTimer);
+      this.startSoundTimer = null;
+    }
+    this.startSoundRemaining = null;
+    this.currentSessionSound = null;
+    if (this.audioPlayer) this.audioPlayer.stop();
+  },
+
+  handleSessionSoundEnded() {
+    const wasStartSound = this.currentSessionSound === 'start';
+    this.currentSessionSound = null;
+    // 起坐播完后才接着播放引导，避免两段音频同时播放。
+    if (wasStartSound && this.data.isRunning && !this.isUnloaded) {
+      this.playBackgroundMusic();
     }
   },
 
@@ -700,6 +717,7 @@ Page({
   },
 
   playBackgroundMusic() {
+    if (this.startSoundRemaining !== null || this.currentSessionSound === 'start') return;
     if (this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
       console.log('🎵 开始播放背景音乐，URL:', this.data.defaultMusicUrl);
       

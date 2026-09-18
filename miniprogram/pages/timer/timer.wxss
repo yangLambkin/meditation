@@ -378,8 +378,12 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 4rpx solid #f2f4f6;
+  border: 40rpx solid #f2f4f6;
   box-sizing: border-box;
+}
+
+.progress-circle-static {
+  border-color: #b29764;
 }
 
 /* 进度填充圆环容器 */
@@ -393,33 +397,42 @@
   overflow: hidden;
 }
 
-/* 进度圈半圆通用样式 */
-.progress-circle-half {
+/* 固定的左右裁剪区，避免半圆旋转后覆盖另一侧 */
+.progress-circle-clip {
   position: absolute;
+  top: 0;
   width: 50%;
   height: 100%;
-  transform-origin: 100% 50%;
-  transition: transform 0.3s ease-in-out;
+  overflow: hidden;
 }
 
-/* 左半圆 */
-.progress-circle-left {
+.progress-circle-clip-left {
   left: 0;
-  background: linear-gradient(135deg, #B29764, #D4B982);
-  border-radius: 250rpx 0 0 250rpx;
-  border: 6rpx solid transparent;
-  border-right: none;
-  box-sizing: border-box;
 }
 
-/* 右半圆 */
-.progress-circle-right {
+.progress-circle-clip-right {
   left: 50%;
-  background: linear-gradient(135deg, #F0D8A8, #FFE8B8);
+}
+
+/* 半圆按秒线性过渡；暂停、重置时立即停在对应进度 */
+.progress-circle-half {
+  width: 100%;
+  height: 100%;
+  background-color: #b29764;
+}
+
+.is-animating .progress-circle-half {
+  transition: transform 1s linear;
+}
+
+.progress-circle-left {
+  border-radius: 250rpx 0 0 250rpx;
+  transform-origin: 100% 50%;
+}
+
+.progress-circle-right {
   border-radius: 0 250rpx 250rpx 0;
-  border: 6rpx solid transparent;
-  border-left: none;
-  box-sizing: border-box;
+  transform-origin: 0 50%;
 }
 
 /* 时间显示区域 */
@@ -853,4 +866,3 @@
 .music-picker-close:active {
   background-color: #e5e7eb;
 }
-
