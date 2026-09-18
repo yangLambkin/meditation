@@ -18,6 +18,7 @@ function createPage({ withGuide = false, isCountdown = true } = {}) {
   const audioCalls = [];
   const navigations = [];
   const modals = [];
+  const toasts = [];
   const listeners = { show: new Set(), hide: new Set() };
   const storage = new Map();
 
@@ -85,6 +86,7 @@ function createPage({ withGuide = false, isCountdown = true } = {}) {
     offAppHide: callback => listeners.hide.delete(callback),
     setKeepScreenOn: options => options.success?.({}),
     showModal: options => modals.push(options),
+    showToast: options => toasts.push(options),
     navigateTo: options => navigations.push(options.url),
     cloud: {
       init() {},
@@ -141,7 +143,7 @@ function createPage({ withGuide = false, isCountdown = true } = {}) {
   }
 
   return {
-    page, players, audioCalls, navigations, modals, advance,
+    page, players, audioCalls, navigations, modals, toasts, advance,
     plays: () => audioCalls.filter(call => call.action === 'play').map(call => call.src),
     emitApp: event => { for (const callback of [...listeners[event]]) callback(); }
   };
@@ -288,12 +290,87 @@ test('manual stop plays 收坐 in both modes, including paused and still-waiting
         page.handleStop();
         const expected = stopAt < 5000 ? [END_AUDIO] : [START_AUDIO, END_AUDIO];
         assert.deepEqual(plays(), expected, `countdown=${isCountdown}, paused=${pauseFirst}, stopAt=${stopAt}`);
-        assert.equal(navigations.length, isCountdown ? 0 : 1);
+        assert.deepEqual(navigations, []);
         page.stopTimer();
         advance(6000);
         assert.deepEqual(plays(), expected, 'stopping must cancel the pending cue and an idle stop must remain silent');
       }
     }
+  }
+});
+
+test('manual stop under one minute shows a toast without opening a record in either mode', () => {
+  for (const isCountdown of [true, false]) {
+    for (const pauseFirst of [false, true]) {
+      for (const stopAt of [0, 1000, 30000, 59999]) {
+        const { page, navigations, toasts, advance } = createPage({ isCountdown });
+        page.startTimer();
+        advance(stopAt);
+        if (pauseFirst) {
+          page.pauseTimer();
+          advance(120000);
+        }
+        page.handleStop();
+        assert.deepEqual(navigations, []);
+        assert.equal(toasts.length, 1);
+        assert.equal(toasts[0].title, '时间不足1分钟');
+        assert.equal(toasts[0].icon, 'none');
+        assert.equal(page.data.isRunning, false);
+        assert.equal(page.data.isPaused, false);
+        assert.equal(page.data.timerInterval, null);
+        page.handleStop();
+        assert.equal(toasts.length, 1, 'repeated stops must not show another toast');
+      }
+    }
+  }
+});
+
+test('manual stop rounds elapsed minutes down once a full minute has elapsed in either mode', () => {
+  for (const isCountdown of [true, false]) {
+    for (const [seconds, minutes] of [[60, 1], [89, 1], [90, 1], [119, 1], [120, 2], [629, 10], [630, 10]]) {
+      const { page, navigations, toasts, advance } = createPage({ isCountdown });
+      page.startTimer();
+      advance(seconds * 1000);
+      page.handleStop();
+      assert.deepEqual(navigations, [`/pages/recorder/recorder?duration=${minutes}`]);
+      assert.deepEqual(toasts, []);
+      assert.equal(page.data.isRunning, false);
+      assert.equal(page.data.isPaused, false);
+      assert.equal(page.data.timerInterval, null);
+    }
+  }
+});
+
+test('manual stop excludes completed and current pauses from the recorded duration', () => {
+  for (const isCountdown of [true, false]) {
+    for (const stopWhilePaused of [false, true]) {
+      const { page, navigations, advance } = createPage({ isCountdown });
+      page.startTimer();
+      advance(60000);
+      page.pauseTimer();
+      advance(300000);
+      page.startTimer();
+      advance(90000);
+      if (stopWhilePaused) {
+        page.pauseTimer();
+        advance(180000);
+      }
+      page.handleStop();
+      assert.deepEqual(navigations, ['/pages/recorder/recorder?duration=2']);
+    }
+  }
+});
+
+test('idle or repeated manual stops do not open another record', () => {
+  for (const isCountdown of [true, false]) {
+    const { page, navigations, advance } = createPage({ isCountdown });
+    page.handleStop();
+    assert.deepEqual(navigations, []);
+    page.startTimer();
+    advance(120000);
+    page.handleStop();
+    page.handleStop();
+    assert.deepEqual(navigations, ['/pages/recorder/recorder?duration=2']);
   }
 });
 
@@ -358,7 +435,7 @@ test('resetting during the wait gives a new session a full five-second delay', (
 test('navigating to the recorder allows 收坐 to finish while the timer page is hidden', () => {
   const { page, players, plays, navigations, advance } = createPage({ isCountdown: false });
   page.startTimer();
-  advance(5000);
+  advance(60000);
   page.handleStop();
   page.onHide();
   assert.equal(navigations.length, 1);

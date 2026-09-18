@@ -377,22 +377,26 @@ Page({
   },
 
   // 停止（用户点击「停止」按钮）
-  // 正计时模式：按实际已用时长跳转记录页；倒计时模式：放弃本次计时、不跳转
+  // 两种模式均按实际已用时长处理，满 1 分钟才进入记录页
   handleStop() {
-    // 倒计时模式：停止即放弃本次计时
-    if (this.data.isCountdown) {
-      this.stopTimer();
+    if (!this.data.isRunning && !this.data.isPaused) return;
+
+    // 按实际已用秒数向下取整为分钟，不计入暂停时间
+    const elapsedSeconds = this.calculateElapsedTime();
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+
+    // 先清理计时资源（停定时器/音乐/亮度），再提示或跳转
+    this.stopTimer();
+
+    if (elapsedMinutes < 1) {
+      wx.showToast({
+        title: '时间不足1分钟',
+        icon: 'none'
+      });
       return;
     }
 
-    // 正计时模式：按实际已用秒数四舍五入为分钟（至少 1 分钟）
-    const elapsedSeconds = this.calculateElapsedTime();
-    const elapsedMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
-
-    // 先清理计时资源（停定时器/音乐/亮度），再跳转
-    this.stopTimer();
-
-    console.log('⏹️ 正计时停止，实际时长:', elapsedMinutes + '分钟');
+    console.log('⏹️ 计时停止，实际时长:', elapsedMinutes + '分钟');
 
     wx.navigateTo({
       url: '/pages/recorder/recorder?duration=' + elapsedMinutes
