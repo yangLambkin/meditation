@@ -364,7 +364,7 @@ const checkinManager = {
     }
   },
 
-  // 首页主动补齐云端记录，不受「本地已有数据」或登录同步标记限制。
+  // 首页主动校准云端记录，不受「本地已有数据」或登录同步标记限制。
   refreshFromCloud: function() {
     if (!this.isUserLoggedIn()) return Promise.resolve(false);
     const userId = this.getUserId();
@@ -374,6 +374,15 @@ const checkinManager = {
 
     const refresh = (async () => {
       try {
+        // 本轮只清理请求前已同步的记录；请求/重试期间刚备份成功的记录，留待下轮确认。
+        const storedAtStart = this.getUserCheckinDataByUserId(userId);
+        const localAtStart = storedAtStart.checkinRecords || storedAtStart;
+        const removableCloudIds = new Set();
+        Object.values(localAtStart.dailyRecords || {}).forEach(day => {
+          (Array.isArray(day.records) ? day.records : []).forEach(record => {
+            if (record && record._id) removableCloudIds.add(record._id);
+          });
+        });
         // 打卡备份或其他恢复可能在读取期间落盘，重新读取一次以补齐最新数据。
         for (let attempt = 0; attempt < 2; attempt++) {
           const revision = getUserStorageRevision(userId);
@@ -384,7 +393,7 @@ const checkinManager = {
           if (!canCommitRecovery(userId, revision)) continue;
 
           const stored = this.getUserCheckinDataByUserId(userId);
-          const merged = this.mergeCloudRecordsIntoCache(stored, result.data);
+          const merged = this.mergeCloudRecordsIntoCache(stored, result.data, removableCloudIds);
           wx.setStorageSync(`meditation_checkin_${userId}`, merged);
           bumpUserStorageRevision(userId);
           this.updateMonthlyStatsCache(merged.checkinRecords, 0, dateUtil.getBusinessMonth());
@@ -402,8 +411,8 @@ const checkinManager = {
     return refresh;
   },
 
-  // 增量补齐，保留离线打卡和体验；已有云端 ID 优先，旧记录才按时间/时长一对一匹配。
-  mergeCloudRecordsIntoCache: function(stored, cloudRecords) {
+  // 完整云端快照校准已同步记录，保留离线打卡和体验；旧记录按时间/时长一对一匹配。
+  mergeCloudRecordsIntoCache: function(stored, cloudRecords, removableCloudIds = null) {
     const local = stored.checkinRecords || stored;
     const records = [];
     const byId = new Map();
@@ -430,6 +439,8 @@ const checkinManager = {
     cloudRecords.forEach(record => {
       if (record._id && seenCloudIds.has(record._id)) return;
       if (record._id) seenCloudIds.add(record._id);
+      // 与手动同步的时长读取规则一致，新记录和已缓存记录使用相同的默认值。
+      const duration = typeof record.duration === 'number' && Number.isFinite(record.duration) ? record.duration : 0;
       let existing = record._id && byId.get(record._id);
       if (!existing && record.localId) {
         const candidate = byLocalId.get(record.localId);
@@ -442,23 +453,33 @@ const checkinManager = {
       }
       if (existing) {
         matched.add(existing);
-        // 本地体验可能仍在保存/上传，只补身份和本地缺失的字段。
-        const combined = { ...record, ...existing };
+        // 时长、时间以云端为准；本地体验可能仍在保存/上传，继续单独合并。
+        const combined = {
+          ...existing,
+          ...record,
+          timestamp: record.timestamp,
+          duration
+        };
         if (record._id) combined._id = record._id;
         if (record.localId) combined.localId = record.localId;
         combined.experience = mergeCheckinExperiences(existing.experience, record.experience);
         Object.assign(existing, combined);
       } else {
-        records.push({ ...record });
+        const added = { ...record, duration };
+        records.push(added);
+        matched.add(added);
       }
     });
-    records.forEach(record => {
+    // 云端已不存在的已同步记录应退出缓存，避免每次刷新都累加陈旧记录。
+    const reconciled = records.filter(record => !record._id || matched.has(record) ||
+      (removableCloudIds && !removableCloudIds.has(record._id)));
+    reconciled.forEach(record => {
       const time = recordTime(record.timestamp);
       if (Number.isFinite(time) && time > 0 && !Number.isNaN(new Date(time).getTime())) {
         record.date = dateUtil.getBusinessDate(time);
       }
     });
-    const merged = this.rebuildLocalCacheFromCloudRecords(records);
+    const merged = this.rebuildLocalCacheFromCloudRecords(reconciled);
     merged.experienceRecords = { ...merged.experienceRecords, ...(stored.experienceRecords || {}) };
     const data = merged.checkinRecords;
     data.userStats = { ...(local.userStats || {}), ...this.getUserStats(data) };
@@ -521,6 +542,7 @@ const checkinManager = {
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
       bumpUserStorageRevision(userId);
+      this.updateMonthlyStatsCache(mergedData.checkinRecords, 0, dateUtil.getBusinessMonth());
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -669,6 +691,7 @@ const checkinManager = {
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
       bumpUserStorageRevision(userId);
+      this.updateMonthlyStatsCache(mergedData.checkinRecords, 0, dateUtil.getBusinessMonth());
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -790,6 +813,7 @@ const checkinManager = {
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, recoveredData);
       bumpUserStorageRevision(userId);
+      this.updateMonthlyStatsCache(recoveredData.checkinRecords, 0, dateUtil.getBusinessMonth());
       
       console.log('✅ 云端数据恢复完成，共恢复:', {
         checkinRecords: Object.keys(recoveredData.checkinRecords.dailyRecords || {}).length,

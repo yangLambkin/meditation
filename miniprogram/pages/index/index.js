@@ -902,7 +902,7 @@ Page({
   },
 
   /**
-   * 从云端补齐打卡记录，合并完成后保留当前列表的已加载条数。
+   * 从云端校准打卡记录，完成后保留当前列表的已加载条数。
    */
   refreshCheckinsFromCloud() {
     if (this._checkinCloudRefresh) return this._checkinCloudRefresh;

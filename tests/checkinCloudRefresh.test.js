@@ -216,6 +216,118 @@ test('localId matches an uploaded record and refresh corrects a stale natural da
   assert.deepEqual(Object.keys(app.data().dailyRecords), ['2026-09-16']);
 });
 
+test('cloud values replace stale timestamp, duration and emotion for an already synced record', async () => {
+  const local = saved('same-record', EVENING, 7, {
+    emotion: ['旧情绪'], experience: [{ _id: 'note', text: '本地待上传的体验' }]
+  });
+  const remote = saved('same-record', MORNING, 30, {
+    emotion: ['平静'], experience: [{ _id: 'note', text: '云端旧体验' }]
+  });
+  const app = harness({ local: [local], cloud: [remote] });
+
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  const record = app.records()[0];
+  assert.equal(record.timestamp, MORNING);
+  assert.equal(record.duration, 30);
+  assert.deepEqual(record.emotion, ['平静']);
+  assert.equal(record.experience[0].text, '本地待上传的体验');
+  assert.deepEqual(Object.keys(app.data().dailyRecords), ['2026-09-17']);
+  assert.equal(app.data().monthlyStats['2026-09'].total, 1);
+  assert.equal(app.manager.getCurrentMonthMinutes(), 30);
+});
+
+test('repeated refresh removes synced records absent from the cloud and preserves offline records', async () => {
+  const retained = saved('retained', MORNING, 13);
+  const deleted = saved('deleted-remotely', EVENING, 7);
+  const offline = saved(undefined, EVENING, 5, { localId: 'offline-local' });
+  const app = harness({ local: [retained, deleted, offline], cloud: [retained], nested: true });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal(await app.manager.refreshFromCloud(), true);
+    assert.deepEqual(app.ids(), ['retained']);
+    assert.equal(app.records().length, 2);
+    assert.ok(app.records().some(record => record.localId === 'offline-local' && !record._id));
+    assert.equal(app.data().monthlyStats['2026-09'].total, 2);
+    assert.equal(app.data().monthlyStats['2026-09'].totalDuration, 18);
+    assert.equal(app.manager.getCurrentMonthMinutes(), 18);
+  }
+});
+
+test('an empty cloud snapshot clears synced records and resets existing monthly totals and minute cache', async () => {
+  const app = harness({ local: [saved('evening', EVENING, 7), saved('morning', MORNING, 13)], cloud: [] });
+  app.data().monthlyStats['2026-09'] = {
+    total: 2, count: 2, totalDuration: 20, days: ['2026-09-17', '2026-09-16']
+  };
+  app.manager.updateMonthlyCache(20);
+  assert.equal(app.manager.getCurrentMonthMinutes(), 20);
+
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  assert.deepEqual(app.records(), []);
+  assert.deepEqual(Object.keys(app.data().dailyRecords), []);
+  assert.equal(app.data().monthlyStats['2026-09'].total, 0);
+  assert.equal(app.data().monthlyStats['2026-09'].count, 0);
+  assert.equal(app.data().monthlyStats['2026-09'].totalDuration, 0);
+  assert.deepEqual(app.data().monthlyStats['2026-09'].days, []);
+  assert.equal(app.manager.getCurrentMonthMinutes(), 0);
+});
+
+test('a cloud timestamp correction across months recalculates both old and new monthly statistics', async () => {
+  const august = Date.parse('2026-08-31T20:39:00+08:00');
+  const app = harness({ local: [saved('corrected', august, 7)], cloud: [saved('corrected', EVENING, 30)] });
+  app.data().monthlyStats['2026-08'] = { total: 1, count: 1, totalDuration: 7, days: ['2026-08-31'] };
+
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  assert.deepEqual(Object.keys(app.data().dailyRecords), ['2026-09-16']);
+  assert.equal(app.data().monthlyStats['2026-08'].total, 0);
+  assert.equal(app.data().monthlyStats['2026-08'].count, 0);
+  assert.equal(app.data().monthlyStats['2026-08'].totalDuration, 0);
+  assert.deepEqual(app.data().monthlyStats['2026-08'].days, []);
+  assert.equal(app.data().monthlyStats['2026-09'].total, 1);
+  assert.equal(app.data().monthlyStats['2026-09'].count, 1);
+  assert.equal(app.data().monthlyStats['2026-09'].totalDuration, 30);
+  assert.deepEqual(app.data().monthlyStats['2026-09'].days, ['2026-09-16']);
+  assert.equal(app.manager.getCurrentMonthMinutes(), 30);
+});
+
+test('a legacy cloud record without a timestamp does not inherit an obsolete cached time', async () => {
+  const app = harness({
+    local: [saved('legacy', MORNING, 7)],
+    cloud: [{ _id: 'legacy', date: '2026-09-16', duration: 12 }]
+  });
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  const [record] = homeCheckin.buildCheckinRecords(app.data());
+  assert.equal(record.date, '2026-09-16');
+  assert.equal(record.time, '时间未记录');
+  assert.equal(record.duration, 12);
+});
+
+test('invalid cloud durations use the manual-sync zero fallback consistently on every refresh', async () => {
+  const cloud = [saved('valid', EVENING, 12), saved('legacy-string', MORNING, '7')];
+  const app = harness({ cloud });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal(await app.manager.refreshFromCloud(), true);
+    assert.equal(app.records().find(record => record._id === 'legacy-string').duration, 0);
+    assert.equal(app.data().monthlyStats['2026-09'].totalDuration, 12);
+    assert.equal(app.manager.getCurrentMonthMinutes(), 12);
+  }
+});
+
+for (const method of ['safeRecoverFromCloud', 'recoverUserDataFromCloud']) {
+  test(`${method} also reconciles stale records and refreshes the unexpired minute cache`, async () => {
+    const app = harness({
+      local: [saved('corrected', MORNING, 7), saved('deleted', EVENING, 13)],
+      cloud: [saved('corrected', MORNING, 30)]
+    });
+    app.manager.updateMonthlyCache(20);
+    assert.equal(app.manager.getCurrentMonthMinutes(), 20);
+    assert.equal(await app.manager[method](USER_ID), true);
+    assert.deepEqual(app.ids(), ['corrected']);
+    assert.equal(app.records()[0].duration, 30);
+    assert.equal(app.data().monthlyStats['2026-09'].total, 1);
+    assert.equal(app.manager.getCurrentMonthMinutes(), 30);
+  });
+}
+
 test('concurrent refreshes share one cloud read and a completed request allows another refresh', async () => {
   const response = deferred();
   const app = harness({ read: index => index === 0 ? response.promise : { success: true, data: [] } });
@@ -228,7 +340,7 @@ test('concurrent refreshes share one cloud read and a completed request allows a
   assert.equal(await second, true);
   assert.equal(await app.manager.refreshFromCloud(), true);
   assert.equal(app.calls.reads, 2);
-  assert.deepEqual(app.ids(), ['evening']);
+  assert.deepEqual(app.ids(), []);
 });
 
 for (const failure of ['response', 'exception', 'malformed']) {
