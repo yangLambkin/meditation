@@ -666,8 +666,8 @@ Page({
     });
   },
 
-  // 开始后留出 3 秒准备时间；暂停时保留剩余等待时间。
-  scheduleStartSound(delay = 3000) {
+  // 开始后留出 5 秒准备时间；暂停时保留剩余等待时间。
+  scheduleStartSound(delay = 5000) {
     this.startSoundRemaining = delay;
     this.startSoundScheduledAt = Date.now();
     this.startSoundTimer = setTimeout(() => {

@@ -149,7 +149,7 @@ function createPage({ withGuide = false, isCountdown = true } = {}) {
   };
 }
 
-test('timing starts immediately but 起坐 waits until exactly three seconds in either mode', () => {
+test('timing starts immediately but 起坐 waits until exactly five seconds in either mode', () => {
   for (const isCountdown of [true, false]) {
     const { page, players, plays, advance } = createPage({ isCountdown });
     assert.deepEqual(plays(), []);
@@ -158,10 +158,10 @@ test('timing starts immediately but 起坐 waits until exactly three seconds in 
     assert.deepEqual(plays(), []);
     advance(1000);
     assert.equal(page.data.elapsedTime, 1, 'the initial wait is included in meditation time');
-    advance(1999);
-    assert.deepEqual(plays(), [], 'no cue may play at 2,999 ms');
+    advance(3999);
+    assert.deepEqual(plays(), [], 'no cue may play at 4,999 ms');
     advance(1);
-    assert.equal(page.data.elapsedTime, 3);
+    assert.equal(page.data.elapsedTime, 5);
     assert.deepEqual(plays(), [START_AUDIO]);
     assert.equal(players[0].loop, false);
     assert.equal(players[0].obeyMuteSwitch, false);
@@ -177,7 +177,7 @@ test('the guide waits until 起坐 finishes, including when the app goes into th
   emitApp('hide');
   advance(100);
   assert.deepEqual(plays(), []);
-  advance(2899);
+  advance(4899);
   assert.deepEqual(plays(), [], 'the initial wait must also keep the guide silent');
   advance(1);
   assert.deepEqual(plays(), [START_AUDIO]);
@@ -185,8 +185,8 @@ test('the guide waits until 起坐 finishes, including when the app goes into th
   assert.deepEqual(plays(), [START_AUDIO, GUIDE_AUDIO]);
 });
 
-test('pausing during the three-second wait freezes its remaining time until the timer resumes', () => {
-  for (const pauseAt of [0, 2000, 2999]) {
+test('pausing during the five-second wait freezes its remaining time until the timer resumes', () => {
+  for (const pauseAt of [0, 2000, 4999]) {
     const { page, players, plays, advance } = createPage({ withGuide: true });
     page.startTimer();
     advance(pauseAt);
@@ -195,8 +195,8 @@ test('pausing during the three-second wait freezes its remaining time until the 
     assert.deepEqual(plays(), [], `paused after ${pauseAt} ms`);
     page.startTimer();
     assert.deepEqual(plays(), [], 'resuming a pending cue must not play it immediately');
-    advance(2999 - pauseAt);
-    assert.deepEqual(plays(), [], '2,999 ms of cumulative running time is still silent');
+    advance(4999 - pauseAt);
+    assert.deepEqual(plays(), [], '4,999 ms of cumulative running time is still silent');
     advance(1);
     assert.deepEqual(plays(), [START_AUDIO]);
     players[0].emitEnded();
@@ -204,7 +204,7 @@ test('pausing during the three-second wait freezes its remaining time until the 
   }
 });
 
-test('multiple pauses preserve the cumulative three-second wait without adding another full delay', () => {
+test('multiple pauses preserve the cumulative five-second wait without adding another full delay', () => {
   const { page, plays, advance } = createPage({ withGuide: true });
   page.startTimer();
   advance(1200);
@@ -215,7 +215,7 @@ test('multiple pauses preserve the cumulative three-second wait without adding a
   page.pauseTimer();
   advance(10000);
   page.startTimer();
-  advance(999);
+  advance(2999);
   assert.deepEqual(plays(), []);
   advance(1);
   assert.deepEqual(plays(), [START_AUDIO]);
@@ -224,7 +224,7 @@ test('multiple pauses preserve the cumulative three-second wait without adding a
 test('pausing and resuming 起坐 preserves its playback position and does not start the guide early', () => {
   const { page, players, audioCalls, plays, advance } = createPage({ withGuide: true });
   page.startTimer();
-  advance(3000);
+  advance(5000);
   const cue = players[0];
   cue.currentTime = 12.5;
   page.pauseTimer();
@@ -242,7 +242,7 @@ test('pausing and resuming 起坐 preserves its playback position and does not s
 test('resuming after 起坐 finished resumes the guide without replaying 起坐', () => {
   const { page, players, plays, advance } = createPage({ withGuide: true });
   page.startTimer();
-  advance(3000);
+  advance(5000);
   players[0].emitEnded();
   const guide = players.find(player => player.src === GUIDE_AUDIO);
   guide.currentTime = 7;
@@ -282,13 +282,13 @@ test('countdown completion during the initial wait cancels 起坐 and plays only
 test('manual stop plays 收坐 in both modes, including paused and still-waiting sessions', () => {
   for (const isCountdown of [true, false]) {
     for (const pauseFirst of [false, true]) {
-      for (const stopAt of [1000, 3000]) {
+      for (const stopAt of [1000, 5000]) {
         const { page, plays, navigations, advance } = createPage({ isCountdown });
         page.startTimer();
         advance(stopAt);
         if (pauseFirst) page.pauseTimer();
         page.handleStop();
-        const expected = stopAt < 3000 ? [END_AUDIO] : [START_AUDIO, END_AUDIO];
+        const expected = stopAt < 5000 ? [END_AUDIO] : [START_AUDIO, END_AUDIO];
         assert.deepEqual(plays(), expected, `countdown=${isCountdown}, paused=${pauseFirst}, stopAt=${stopAt}`);
         assert.deepEqual(navigations, []);
         page.stopTimer();
@@ -386,7 +386,7 @@ test('reset, mode changes, and duration changes cancel the cue without playing �
   };
   for (const [name, change] of Object.entries(changes)) {
     for (const pauseFirst of [false, true]) {
-      for (const changeAt of [2000, 3000]) {
+      for (const changeAt of [2000, 5000]) {
         const { page, players, plays, advance } = createPage({ withGuide: true });
         page.startTimer();
         advance(changeAt);
@@ -397,36 +397,36 @@ test('reset, mode changes, and duration changes cancel the cue without playing �
         assert.equal(players[0].paused, true, name);
         players[0].emitEnded();
         advance(6000);
-        assert.deepEqual(plays(), changeAt < 3000 ? [] : [START_AUDIO], `${name}, paused=${pauseFirst}, changeAt=${changeAt}`);
+        assert.deepEqual(plays(), changeAt < 5000 ? [] : [START_AUDIO], `${name}, paused=${pauseFirst}, changeAt=${changeAt}`);
       }
     }
   }
 });
 
-test('a new session interrupts 收坐 and waits its own three seconds before 起坐 starts from the beginning', () => {
+test('a new session interrupts 收坐 and waits its own five seconds before 起坐 starts from the beginning', () => {
   const { page, players, plays, advance } = createPage();
   page.startTimer();
-  advance(3000);
+  advance(5000);
   page.stopTimer();
   players[0].currentTime = 8;
   page.startTimer();
   assert.equal(players[0].paused, true, 'the old closing cue must stop during the new wait');
-  advance(2999);
+  advance(4999);
   assert.deepEqual(plays(), [START_AUDIO, END_AUDIO]);
   advance(1);
   assert.equal(players[0].currentTime, 0);
   assert.deepEqual(plays(), [START_AUDIO, END_AUDIO, START_AUDIO]);
 });
 
-test('resetting during the wait gives a new session a full three-second delay', () => {
+test('resetting during the wait gives a new session a full five-second delay', () => {
   const { page, plays, advance } = createPage({ withGuide: true });
   page.startTimer();
-  advance(2000);
+  advance(4000);
   page.resetTimer();
   page.startTimer();
   advance(1000);
   assert.deepEqual(plays(), [], 'the previous session deadline cannot trigger the new opening cue');
-  advance(1999);
+  advance(3999);
   assert.deepEqual(plays(), []);
   advance(1);
   assert.deepEqual(plays(), [START_AUDIO]);
@@ -449,7 +449,7 @@ test('unloading destroys the cue player and queued callbacks cannot start or res
   for (const cue of ['waiting', 'start', 'end']) {
     const { page, players, plays, advance, emitApp } = createPage({ withGuide: true });
     page.startTimer();
-    advance(cue === 'waiting' ? 2000 : 3000);
+    advance(cue === 'waiting' ? 2000 : 5000);
     if (cue === 'end') page.stopTimer();
     const beforeUnload = plays();
     page.onUnload();
