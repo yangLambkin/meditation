@@ -1,417 +1,226 @@
-// pages/history/history.js
 const checkinManager = require('../../utils/checkin.js');
+const homeCheckin = require('../../utils/homeCheckin.js');
 const lunarUtil = require('../../utils/lunar.js');
-const dateUtil = require('../../utils/dateUtil.js');
+const memberHistory = require('../../utils/memberHistory.js');
 
 Page({
   data: {
-    selectedDate: '', // 选择的日期
-    selectedDateKey: '', // 用于读取、删除记录的原始日期
-    recordList: [],   // 打卡记录列表
-    recordCount: 0,   // 打卡次数
-    totalDuration: 0, // 合计时长（分钟）
+    selectedDate: '',
+    selectedDateKey: '', // 北京时间 04:00 切分后的记录日期。
+    todayDate: '',
+    isToday: false,
+    canGoNext: false,
+    canGoPrevious: true,
+    isMemberHistory: false,
+    lunarDate: '',
+    recordList: [],
+    recordCount: 0,
+    totalDuration: 0,
     loadingRecords: true,
     deleteBusy: false,
-    deletingRecordKey: '',
-    year: '',         // 年
-    month: '',        // 月
-    day: '',          // 日
-    lunarDate: ''     // 农历日期
+    deletingRecordKey: ''
   },
 
-  /**
-   * 生命周期函数--监听页面加载
-   */
   onLoad(options = {}) {
-    // 从URL参数获取日期
-    const date = options.date || '';
-    
-    if (date) {
-      // 解析日期参数，分别设置年、月、日
-      const [year, month, day] = date.split('-');
-      const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
-      
-      // 计算农历日期
-      const solarDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-      const lunarDate = lunarUtil.getLunarDate(solarDate);
-      
-      // 格式化日期显示：YYYY-MM-DD → YYYY年MM月DD日
-      const formattedDate = this.formatDateForDisplay(date);
-      this.setData({
-        selectedDate: formattedDate,
-        selectedDateKey: date,
-        year: year,
-        month: monthNames[parseInt(month) - 1],
-        day: day,
-        lunarDate: lunarDate
-      });
-      
-    } else {
-      // 如果没有日期参数，默认显示今天
-      const today = dateUtil.getBusinessDate();
-      const [year, month, day] = today.split('-');
-      const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
-      const solarDate = new Date();
-      const lunarDate = lunarUtil.getLunarDate(solarDate);
-      const formattedToday = this.formatDateForDisplay(today);
-      this.setData({
-        selectedDate: formattedToday,
-        selectedDateKey: today,
-        year: year,
-        month: monthNames[parseInt(month) - 1],
-        day: day,
-        lunarDate: lunarDate
-      });
-    }
+    this._unloaded = false;
+    this.setData(memberHistory.initialData(options));
+    const today = homeCheckin.getCheckinDay();
+    const date = homeCheckin.isValidDateKey(options.date) && options.date <= today ? options.date : today;
+    this.updateSelectedDate(date);
   },
 
-  /**
-   * 加载历史记录数据（支持云存储）
-   */
-  async loadHistoryRecords(dateStr) {
-    const loadRequest = (this._historyLoadRequest || 0) + 1;
-    this._historyLoadRequest = loadRequest;
-    this.setData({ loadingRecords: true });
+  onShow() {
+    this._unloaded = false;
+    const today = homeCheckin.getCheckinDay();
+    const selected = this.data.selectedDateKey;
+    this.updateSelectedDate(selected && selected <= today ? selected : today);
+    if (this.data.isMemberHistory) return this.refreshCheckinsFromCloud();
+    if (this._deleteBusy) return;
+    this.loadHistoryRecords();
+    return this.refreshCheckinsFromCloud();
+  },
+
+  onUnload() {
+    this._unloaded = true;
+  },
+
+  updateSelectedDate(date) {
+    const today = homeCheckin.getCheckinDay();
+    if (this.data.memberStartDate && date < this.data.memberStartDate) date = this.data.memberStartDate;
+    const [year, month, day] = date.split('-').map(Number);
+    const dateChanged = this.data.selectedDateKey !== date;
+    this.setData({
+      selectedDateKey: date,
+      selectedDate: this.formatDateForDisplay(date),
+      todayDate: today,
+      isToday: date === today,
+      canGoNext: date < today,
+      canGoPrevious: !this.data.memberStartDate || date > this.data.memberStartDate,
+      lunarDate: lunarUtil.getLunarDate(new Date(year, month - 1, day, 12)),
+      ...(dateChanged ? { recordList: [], recordCount: 0, totalDuration: 0, loadingRecords: true } : {})
+    });
+  },
+
+  selectDate(date) {
+    if (!homeCheckin.isValidDateKey(date) || date > homeCheckin.getCheckinDay()) return;
+    if (this.data.memberStartDate && date < this.data.memberStartDate) return;
+    this.updateSelectedDate(date);
+    this.loadHistoryRecords();
+  },
+
+  onDateChange(event) {
+    this.selectDate(event.detail.value);
+  },
+
+  previousDay() {
+    this.selectDate(homeCheckin.shiftCheckinDate(this.data.selectedDateKey, -1));
+  },
+
+  nextDay() {
+    this.selectDate(homeCheckin.shiftCheckinDate(this.data.selectedDateKey, 1));
+  },
+
+  goToday() {
+    this.selectDate(homeCheckin.getCheckinDay());
+  },
+
+  openMonthlyHistory() {
+    const date = this.data.selectedDateKey;
+    wx.redirectTo({ url: `/pages/checkinHistory/checkinHistory?month=${date.slice(0, 7)}&date=${date}${memberHistory.query(this.data)}` });
+  },
+
+  // 使用与首页、月记录相同的完整缓存，跨午夜的记录仍归入正确的逻辑日。
+  loadHistoryRecords(date = this.data.selectedDateKey) {
+    if (this._unloaded || date !== this.data.selectedDateKey) return false;
     try {
-      // 获取该日期的打卡次数（异步）
-      const checkinCount = await checkinManager.getDailyCheckinCount(dateStr);
-      
-      // 获取该日期的详细打卡记录（异步）
-      const dailyRecords = await checkinManager.getDailyCheckinRecords(dateStr);
-
-      // 新的加载（如删除后的刷新）已经开始时，不使用旧请求的结果。
-      if (loadRequest !== this._historyLoadRequest) return false;
-      
-      if (checkinCount === 0) {
-        console.warn('该日期暂无打卡记录');
-        this.setData({
-          recordList: [],
-          recordCount: 0,
-          totalDuration: 0
-        });
-        return true;
-      }
-
-      // 格式化记录数据
-      let formattedRecords = [];
-      let totalDuration = 0;
-      
-      if (dailyRecords && dailyRecords.length > 0) {
-        // 获取所有关联的体验记录
-        const experienceRecords = [];
-        console.log('🔍 分析每日记录中的experience字段:');
-        dailyRecords.forEach((record, index) => {
-          console.log(`  记录${index}: timestamp=${record.timestamp}, experience=`, record.experience, '类型:', typeof record.experience);
-          
-          if (record.experience && Array.isArray(record.experience)) {
-            // 检查数组元素类型
-            const firstElement = record.experience[0];
-            console.log(`    -> 第一个元素类型:`, typeof firstElement, '内容:', firstElement);
-            
-            if (typeof firstElement === 'string') {
-              // 如果是字符串ID数组
-              const validIds = record.experience.filter(id => id && id.length > 0);
-              console.log(`    -> 字符串ID数量: ${validIds.length}`, validIds);
-              experienceRecords.push(...validIds.map(id => ({ type: 'id', value: id })));
-            } else if (typeof firstElement === 'object' && firstElement !== null) {
-              // 如果是对象数组（直接包含体验内容）
-              console.log(`    -> 对象数组数量: ${record.experience.length}`, record.experience);
-              experienceRecords.push(...record.experience.map(exp => ({ type: 'object', value: exp })));
-            }
-          } else if (record.experience && typeof record.experience === 'string') {
-            // 兼容旧数据：单个ID的情况
-            console.log(`    -> 字符串ID: ${record.experience}`);
-            experienceRecords.push({ type: 'id', value: record.experience });
-          } else {
-            console.log(`    -> 无体验记录字段或字段为空`);
-          }
-        });
-        console.log(`📝 总计收集到 ${experienceRecords.length} 个体验记录`);
-        
-        let experienceRecordsMap = new Map();
-        
-        if (experienceRecords.length > 0) {
-          console.log(`开始处理 ${experienceRecords.length} 个体验记录`);
-          
-          // 分别处理不同类型
-          const idRecords = experienceRecords.filter(r => r.type === 'id');
-          const objectRecords = experienceRecords.filter(r => r.type === 'object');
-          
-          console.log(`  - 字符串ID类型: ${idRecords.length} 个`);
-          console.log(`  - 对象类型: ${objectRecords.length} 个`);
-          
-          // 处理字符串ID类型：从本地缓存获取
-          if (idRecords.length > 0) {
-            const uniqueIds = [...new Set(idRecords.map(r => r.value))];
-            console.log(`  开始查询字符串ID体验记录，共 ${uniqueIds.length} 个唯一ID:`, uniqueIds);
-            
-            const cachedRecords = this.getExperienceRecordsFromLocal(uniqueIds);
-            console.log(`  本地缓存查询完成，共 ${cachedRecords.length} 条有效记录`);
-            
-            cachedRecords.forEach(exp => {
-              const key = exp._id || exp.timestamp;
-              console.log(`    缓存记录: key=${key}, text=${exp.text ? exp.text.substring(0, 20) + '...' : '空'}`);
-              experienceRecordsMap.set(key, exp);
-            });
-          }
-          
-          // 处理对象类型：直接使用对象内容
-          if (objectRecords.length > 0) {
-            objectRecords.forEach((recordObj, index) => {
-              const exp = recordObj.value;
-              const key = exp._id || exp.timestamp || `obj_${index}`;
-              console.log(`    对象记录: key=${key}, text=${exp.text ? exp.text.substring(0, 20) + '...' : '空'}`);
-              experienceRecordsMap.set(key, exp);
-            });
-          }
-          
-          console.log(`体验记录映射构建完成，共 ${experienceRecordsMap.size} 条记录`);
-        } else {
-          console.log('⚠️ 没有找到任何体验记录');
-        }
-        
-        formattedRecords = dailyRecords.map((record, index) => {
-          // 格式化完整时间: YYYY-MM-DD HH:MM:SS
-          const time = new Date(record.timestamp);
-          const timeStr = `${time.getFullYear()}-${(time.getMonth() + 1).toString().padStart(2, '0')}-${time.getDate().toString().padStart(2, '0')} ${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}:${time.getSeconds().toString().padStart(2, '0')}`;
-          
-
-          // 处理体验记录 - 支持多种数据格式
-          let experienceTexts = [];
-          let hasExperience = false;
-          
-          if (record.experience) {
-            if (Array.isArray(record.experience)) {
-              // 检查数组元素类型
-              if (record.experience.length > 0) {
-                const firstElement = record.experience[0];
-                
-                if (typeof firstElement === 'string') {
-                  // 字符串ID数组：通过映射查找
-                  record.experience.forEach(expId => {
-                    if (expId && experienceRecordsMap.has(expId)) {
-                      const expRecord = experienceRecordsMap.get(expId);
-                      if (expRecord.text) {
-                        experienceTexts.push(expRecord.text);
-                        hasExperience = true;
-                      }
-                    }
-                  });
-                } else if (typeof firstElement === 'object' && firstElement !== null) {
-                  // 对象数组：直接提取文本内容
-                  record.experience.forEach(expObj => {
-                    if (expObj && expObj.text) {
-                      experienceTexts.push(expObj.text);
-                      hasExperience = true;
-                    }
-                  });
-                }
-              }
-            } else if (typeof record.experience === 'string') {
-              // 兼容旧数据：单个ID的情况
-              if (experienceRecordsMap.has(record.experience)) {
-                const expRecord = experienceRecordsMap.get(record.experience);
-                if (expRecord.text) {
-                  experienceTexts.push(expRecord.text);
-                  hasExperience = true;
-                }
-              }
-            }
-          }
-          
-          // 如果没有体验记录，添加默认提示
-          if (experienceTexts.length === 0) {
-            experienceTexts = ["未记录体验"];
-          }
-          
-          return {
-            _id: record._id || '',
-            localId: record.localId || '',
-            timestamp: record.timestamp,
-            recordKey: record._id ? `cloud_${record._id}` : record.localId ? `local_${record.localId}` : `time_${record.timestamp}_${index}`,
-            time: timeStr,
-            duration: record.duration || 0,
-            emotion: record.emotion || [],
-            experienceTexts: experienceTexts,
-            hasExperience: hasExperience
-          };
-        });
-        
-        // 计算合计时长
-        totalDuration = formattedRecords.reduce((total, record) => {
-          return total + (record.duration || 0);
-        }, 0);
-      } else {
-        // 如果有打卡次数但没有详细记录，设置默认值
-        totalDuration = 0; // 如果没有详细记录，时长设为0
-      }
-
+      const allRecords = this.data.isMemberHistory ? (this._memberRecords || []) : homeCheckin.readCheckinRecords(
+        checkinManager,
+        wx.getStorageSync('meditationTextRecords') || []
+      );
+      const records = allRecords.filter(record => record.dayDate === date).map(record => ({
+        ...record,
+        recordKey: record.id
+      }));
       this.setData({
-        recordList: formattedRecords,
-        recordCount: checkinCount, // 使用打卡次数作为记录数
-        totalDuration: totalDuration
+        recordList: records,
+        recordCount: records.length,
+        totalDuration: records.reduce((sum, record) => sum + record.duration, 0),
+        loadingRecords: this.data.isMemberHistory ? this.data.memberLoading : false
       });
-
-      console.log(`加载 ${dateStr} 的打卡记录成功，打卡次数: ${checkinCount}, 合计时长: ${totalDuration}分钟`);
       return true;
-      
     } catch (error) {
-      if (loadRequest !== this._historyLoadRequest) return false;
-      console.error('加载历史记录失败:', error);
+      console.warn('读取单日打卡记录失败:', error);
+      this.setData({ loadingRecords: false });
       wx.showToast({ title: '加载记录失败，请重试', icon: 'none' });
       return false;
-    } finally {
-      if (loadRequest === this._historyLoadRequest) {
-        this.setData({ loadingRecords: false });
-      }
     }
   },
 
-  /**
-   * 确认后删除指定记录，成功后重新读取当日统计。
-   */
-  async deleteRecord(event) {
-    if (this.data.deleteBusy) return;
+  refreshCheckinsFromCloud() {
+    if (this.data.isMemberHistory) {
+      return memberHistory.load(this, () => {
+        this.updateSelectedDate(this.data.selectedDateKey);
+        this.loadHistoryRecords();
+      });
+    }
+    if (this._checkinCloudRefresh) return this._checkinCloudRefresh;
+    const mutation = this._historyMutation || 0;
+    this._checkinCloudRefresh = Promise.resolve()
+      .then(() => checkinManager.refreshFromCloud())
+      .then(refreshed => {
+        // 网络返回时始终读取当前选择的日期；删除开始前的请求不能覆盖删除后的列表。
+        if (refreshed && !this._unloaded && mutation === (this._historyMutation || 0) && !this._deleteBusy) {
+          this.loadHistoryRecords();
+        }
+        return refreshed;
+      })
+      .catch(error => {
+        console.warn('单日打卡云端刷新失败，保留本地记录:', error);
+        return false;
+      })
+      .finally(() => { this._checkinCloudRefresh = null; });
+    return this._checkinCloudRefresh;
+  },
 
+  async onPullDownRefresh() {
+    try {
+      if (this._deleteBusy) return;
+      this.updateSelectedDate(this.data.selectedDateKey);
+      this.loadHistoryRecords();
+      await this.refreshCheckinsFromCloud();
+    } finally {
+      wx.stopPullDownRefresh();
+    }
+  },
+
+  async showRecordActions(event) {
+    if (this.data.isMemberHistory || this._deleteBusy || this._unloaded) return;
     const recordKey = event.currentTarget.dataset.recordKey;
     const record = this.data.recordList.find(item => item.recordKey === recordKey);
-    const dateStr = this.data.selectedDateKey;
-    if (!record || !dateStr) return;
+    if (!record) return;
 
+    this._deleteBusy = true;
     this.setData({ deleteBusy: true });
     try {
+      const action = await new Promise((resolve, reject) => {
+        const result = wx.showActionSheet({
+          itemList: ['删除记录'],
+          itemColor: '#b45245',
+          success: resolve,
+          fail: error => /cancel/i.test((error && error.errMsg) || '') ? resolve(null) : reject(error)
+        });
+        if (result && typeof result.then === 'function') {
+          result.then(resolve, error => /cancel/i.test((error && error.errMsg) || '') ? resolve(null) : reject(error));
+        }
+      });
+      if (!action || action.tapIndex !== 0 || this._unloaded) return;
+
       const confirmation = await new Promise((resolve, reject) => {
-        wx.showModal({
+        const result = wx.showModal({
           title: '删除静坐记录',
-          content: `确定删除 ${record.time} 的 ${record.duration} 分钟静坐记录吗？删除后不可恢复。`,
+          content: `确定删除 ${record.dayDate} ${record.timeLabel} 的 ${record.duration} 分钟静坐记录吗？删除后不可恢复。`,
           confirmText: '删除',
-          confirmColor: '#b54747',
+          confirmColor: '#b45245',
           cancelText: '保留',
           success: resolve,
           fail: reject
         });
+        if (result && typeof result.then === 'function') result.then(resolve, reject);
       });
-      if (!confirmation.confirm) return;
+      if (!confirmation.confirm || this._unloaded) return;
 
+      this._historyMutation = (this._historyMutation || 0) + 1;
       this.setData({ deletingRecordKey: recordKey });
-      const result = await checkinManager.deleteCheckin(dateStr, {
+      const result = await checkinManager.deleteCheckin(record.date, {
         recordId: record._id,
         timestamp: record.timestamp,
         localId: record.localId
       });
+      if (this._unloaded) return;
       if (!result || !result.success) {
         wx.showToast({ title: (result && result.error) || '删除失败，请重试', icon: 'none' });
         return;
       }
-
-      const refreshed = await this.loadHistoryRecords(dateStr);
-      wx.showToast({ title: refreshed ? '记录已删除' : '已删除，请重新打开页面刷新', icon: refreshed ? 'success' : 'none' });
+      const refreshed = this.loadHistoryRecords();
+      wx.showToast({ title: refreshed ? '记录已删除' : '已删除，请下拉刷新', icon: refreshed ? 'success' : 'none' });
     } catch (error) {
-      console.error('删除静坐记录失败:', error);
-      wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+      console.warn('删除静坐记录失败:', error);
+      if (!this._unloaded) wx.showToast({ title: '删除失败，请重试', icon: 'none' });
     } finally {
-      this.setData({ deleteBusy: false, deletingRecordKey: '' });
+      this._deleteBusy = false;
+      if (!this._unloaded) this.setData({ deleteBusy: false, deletingRecordKey: '' });
     }
   },
 
-  /**
-   * 格式化日期显示
-   */
-  formatDateForDisplay(dateStr) {
-    const [year, month, day] = dateStr.split('-');
-    return `${year}年${month}月${day}日`;
+  formatDateForDisplay(date) {
+    const [year, month, day] = date.split('-');
+    return `${year}年${Number(month)}月${Number(day)}日`;
   },
 
-  /**
-   * 返回上一页
-   */
-  goBack() {
-    wx.navigateBack();
-  },
-
-  /**
-   * 生命周期函数--监听页面显示
-   */
-  onShow() {
-    // 页面显示时重新加载数据，确保数据最新
-    if (this.data.selectedDateKey && !this.data.deleteBusy) {
-      return this.loadHistoryRecords(this.data.selectedDateKey);
-    }
-  },
-
-  /**
-   * 根据月份名称获取月份数字
-   */
-  getMonthNumber(monthName) {
-    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
-    const index = monthNames.indexOf(monthName);
-    return index !== -1 ? index + 1 : new Date().getMonth() + 1;
-  },
-
-  /**
-   * 从本地缓存获取体验记录（使用统一的checkin.js接口）
-   */
-  getExperienceRecordsFromLocal(uniqueIds) {
-    try {
-      // 使用checkin.js的统一接口获取体验记录
-      const result = checkinManager.getExperienceRecordsFromLocal(uniqueIds);
-      console.log(`✅ 从统一本地缓存获取体验记录: 请求${uniqueIds.length}个，找到${result.length}个`);
-      
-      // 如果没找到，说明数据可能不在统一的存储结构中
-      if (result.length === 0 && uniqueIds.length > 0) {
-        console.warn('⚠️ 统一存储中未找到对应体验记录，可能还在旧存储中');
-        
-        // 尝试从旧存储meditationTextRecords中获取（兼容性处理）
-        const meditationTextRecords = wx.getStorageSync('meditationTextRecords') || [];
-        console.log('📄 尝试从meditationTextRecords获取体验记录:', meditationTextRecords.length, '条');
-        
-        // 构建映射：uniqueId -> 体验记录
-        const experienceRecordsMap = new Map();
-        meditationTextRecords.forEach(record => {
-          if (record.uniqueId) {
-            experienceRecordsMap.set(record.uniqueId, {
-              _id: record.uniqueId, // 使用uniqueId作为ID
-              timestamp: record.uniqueId, // 时间戳
-              text: record.text || '', // 体验文本
-              duration: record.duration || '0分钟' // 时长
-            });
-          }
-        });
-        
-        // 根据请求的uniqueIds查找对应的体验记录
-        const oldResult = [];
-        uniqueIds.forEach(id => {
-          if (experienceRecordsMap.has(id)) {
-            oldResult.push(experienceRecordsMap.get(id));
-          }
-        });
-        
-        console.log(`✅ 从meditationTextRecords获取体验记录: 找到${oldResult.length}个`);
-        
-        if (oldResult.length > 0) {
-          // 如果从旧存储找到记录，将其迁移到统一存储中
-          console.log('🔄 将旧存储记录迁移到统一存储中');
-          oldResult.forEach(record => {
-            checkinManager.saveExperienceRecordToLocal(record._id, record);
-          });
-          return oldResult;
-        }
-      }
-      
-      return result;
-    } catch (error) {
-      console.error('从本地获取体验记录失败:', error);
-      return [];
-    }
-  },
-
-  /**
-   * 用户点击右上角分享
-   */
   onShareAppMessage() {
     return {
-      title: `${this.data.selectedDate} 的静坐打卡记录`,
-      path: `/pages/history/history?date=${this.data.selectedDate}`
+      title: `${this.data.isMemberHistory ? this.data.memberName + ' · ' : ''}${this.data.selectedDate} 的静坐打卡记录`,
+      path: `/pages/history/history?date=${this.data.selectedDateKey}${memberHistory.query(this.data)}`
     };
   }
 });

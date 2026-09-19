@@ -377,6 +377,17 @@ Page({
 
   // ===== 必经之路绑定与同步 =====
 
+  openBijingHeatmap() {
+    const studentNumber = (this.data.bijingStudentNumber || '').trim();
+    if (!checkinManager.isUserLoggedIn() || !this.data.bijingBound || !studentNumber) {
+      wx.showToast({ title: '请先登录并绑定学号', icon: 'none' });
+      return;
+    }
+    wx.navigateTo({
+      url: `/pages/bijingHeatmap/bijingHeatmap?studentNumber=${encodeURIComponent(studentNumber)}`
+    });
+  },
+
   // 展示/收起绑定输入框
   toggleBindInput() {
     this.setData({ bijingShowBindInput: !this.data.bijingShowBindInput });
@@ -393,6 +404,10 @@ Page({
     const sn = (this.data.bijingInputValue || '').trim();
     if (!sn) {
       wx.showToast({ title: '请输入学号', icon: 'none' });
+      return;
+    }
+    if (!/^BJ/.test(sn)) {
+      wx.showToast({ title: '学号必须以大写 BJ 开头', icon: 'none' });
       return;
     }
     if (!checkinManager.isUserLoggedIn()) {

@@ -19,6 +19,7 @@
     "checkSiteMap": true,
     "uploadWithSourceMap": true,
     "compileHotReLoad": false,
+    "ignoreDevUnusedFiles": false,
     "useMultiFrameRuntime": true,
     "useApiHook": true,
     "useApiHostProcess": true,
@@ -52,7 +53,7 @@
   },
   "appid": "wx256002217162c2b4",
   "projectname": "quickstart-wx-cloud",
-  "libVersion": "3.13.2",
+  "libVersion": "3.17.3",
   "cloudfunctionTemplateRoot": "cloudfunctionTemplate/",
   "condition": {
     "search": {

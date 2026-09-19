@@ -28,7 +28,7 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   let currentTime = Date.parse(now);
   let isLoggedIn = loggedIn;
   let definition;
-  const calls = { sync: [], preview: [], cloud: [], toast: [], loading: [], hideLoading: 0 };
+  const calls = { check: [], bind: [], sync: [], preview: [], cloud: [], toast: [], loading: [], hideLoading: 0 };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -39,6 +39,14 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
     '../../utils/dateUtil.js': dateUtil,
     '../../utils/contentSec.js': {},
     '../../utils/bijingApi.js': {
+      checkBijing: async studentNumber => {
+        calls.check.push(studentNumber);
+        return { success: true, data: { studentNumber, nickname: '必经学员' } };
+      },
+      bindBijing: async studentNumber => {
+        calls.bind.push(studentNumber);
+        return { success: true, data: { studentNumber } };
+      },
       getBijingSyncDateDetails: async (...args) => {
         calls.preview.push(args);
         return preview ? preview(...args) : previewResult(args[0]);
@@ -75,6 +83,39 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
     setLoggedIn(value) { isLoggedIn = value; }
   };
 }
+
+test('binding rejects lowercase, mixed-case and missing BJ prefixes before validation or confirmation', async () => {
+  for (const bound of [false, true]) {
+    for (const value of ['bj2407159', 'Bj2407159', 'bJ2407159', '2407159', 'ABJ2407159', ' bj2407159 ']) {
+      const { page, calls } = createPage({ bound });
+      page.onBijingInput({ detail: { value } });
+      await page.confirmBindBijing();
+      assert.equal(calls.toast.at(-1).title, '学号必须以大写 BJ 开头');
+      assert.equal(calls.check.length, 0);
+      assert.equal(calls.bind.length, 0);
+      assert.equal(calls.loading.length, 0);
+      assert.equal(page.data.bijingShowConfirm, false);
+      assert.equal(page.data.bijingBound, bound);
+    }
+  }
+});
+
+test('uppercase BJ numbers are trimmed and bound only after confirmation for first binding and rebinding', async () => {
+  for (const bound of [false, true]) {
+    const { page, calls } = createPage({ bound });
+    page.data.bijingStudentNumber = bound ? 'BJ2407000' : '';
+    page.onBijingInput({ detail: { value: ' BJ2407159 ' } });
+    await page.confirmBindBijing();
+    assert.deepEqual(calls.check, ['BJ2407159']);
+    assert.equal(page.data.bijingShowConfirm, true);
+    assert.equal(page.data.bijingConfirmSn, 'BJ2407159');
+    assert.equal(calls.bind.length, 0);
+    await page.confirmBindConfirm();
+    assert.deepEqual(calls.bind, ['BJ2407159']);
+    assert.equal(page.data.bijingStudentNumber, 'BJ2407159');
+    assert.equal(page.data.bijingBound, true);
+  }
+});
 
 test('recent completed sync dates turn over at Beijing 04:00 with accurate calendar-day labels', () => {
   for (const [now, expected, beforeCutoff] of [

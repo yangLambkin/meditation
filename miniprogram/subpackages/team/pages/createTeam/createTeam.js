@@ -2,6 +2,21 @@
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
 
+// 北京时间减去凌晨 4 点分界，等价于 UTC 时间加 4 小时。
+function currentPracticeDay() {
+  return new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.slice(0, 4) === '0000') return false;
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
+function optionalRuleValue(value) {
+  return value == null || (typeof value === 'string' && !value.trim()) ? null : value;
+}
+
 Page({
 
   /**
@@ -18,12 +33,19 @@ Page({
     teamName: '',
     // 团队介绍
     teamDescription: '',
+    // 团队练习规则
+    practiceStartDate: '',
+    maxPracticeStartDate: '',
+    dailyGoalMinutes: '',
+    dailyGoalPresets: [20, 30, 60],
     // 团队名称字符数
     nameCharCount: 0,
     // 团队介绍字符数
     descCharCount: 0,
     // 创建状态
     isCreating: false,
+    isChoosingIcon: false,
+    hasCreatedTeam: false,
     // 用户信息
     userNickname: '匿名用户',
     hasUserInfo: false,
@@ -38,81 +60,77 @@ Page({
   /**
    * 选择团队头像
    */
-  selectTeamIcon: function(e) {
-    const iconId = parseInt(e.currentTarget.dataset.id);
-    
-    // 只有一个上传图标，点击时触发选择图片
+  selectTeamIcon() {
     this.chooseImageFromAlbum();
+  },
+
+  getLoggedInOpenId() {
+    const openid = wx.getStorageSync('userOpenId');
+    return typeof openid === 'string' && openid.trim() && !/^(local|test)[_-]/.test(openid)
+      ? openid : '';
   },
 
   /**
    * 从相册选择图片（使用微信官方API）
    */
   chooseImageFromAlbum() {
+    if (this.data.isCreating || this.data.isChoosingIcon || this.data.hasCreatedTeam) return;
+    if (!this.getLoggedInOpenId()) {
+      wx.showToast({ title: '请先登录后再创建团队', icon: 'none' });
+      return;
+    }
+
+    this.setData({ isChoosingIcon: true });
+    const finish = () => {
+      if (!this._unloaded) this.setData({ isChoosingIcon: false });
+    };
     wx.showActionSheet({
       itemList: ['拍照', '从相册选择'],
       success: (res) => {
-        const sourceType = res.tapIndex === 0 ? ['camera'] : ['album'];
-        
-        // 使用微信官方chooseMedia API
+        if (this._unloaded) return;
         wx.chooseMedia({
-          count: 1, // 只能选择1张图片
-          mediaType: ['image'], // 只选择图片
-          sourceType: sourceType, // 来源类型：拍照或相册
-          maxDuration: 30, // 最大时长30秒（主要用于视频）
-          camera: 'back', // 后置摄像头
+          count: 1,
+          mediaType: ['image'],
+          sourceType: res.tapIndex === 0 ? ['camera'] : ['album'],
+          camera: 'back',
           success: async (res) => {
-            if (res.tempFiles && res.tempFiles.length > 0) {
-              const tempFilePath = res.tempFiles[0].tempFilePath;
-              console.log('选择的图片路径:', tempFilePath);
-              
-              // 🔍 内容安全检测：团队图标发布前必须过腾讯云 IMS 同步检测，
-              // 命中违规则不采用（同步返回，立即拦截）。returnFileID 让检测通过时
-              // 直接复用已上传副本的 cloud:// fileID，省去二次上传，且保证
-              // "被检测的文件 == 最终保存的文件"。
+            try {
+              const tempFilePath = res.tempFiles && res.tempFiles[0] && res.tempFiles[0].tempFilePath;
+              if (!tempFilePath || this._unloaded) return;
+              // 保存审核通过的同一份云文件，避免重复上传或使用会失效的临时路径。
               const iconFileID = await contentSec.checkImage(tempFilePath, {
                 scene: 1,
-                // 复用已在 IMS 控制台配置好的 avatar 审核策略（团队图标本质是同一类图片内容审核，
-                // 无需单独策略；之前传 'teamIcon' 因该策略未配置导致一律被拦截）
                 bizType: 'avatar',
                 returnFileID: true,
                 cloudPrefix: 'team_icons'
               });
-              if (!iconFileID) {
-                return;
+              if (!iconFileID || this._unloaded) return;
+              if (typeof iconFileID !== 'string' || !iconFileID.startsWith('cloud://')) {
+                throw new Error('图片上传失败，请重新选择');
               }
-
-              // 预览用本地临时图；保存用检测通过的 cloud:// fileID（后续 createTeam 直接复用，不再上传）
-              const teamIcons = this.data.teamIcons.map(icon => ({
-                ...icon,
-                path: tempFilePath,
-                selected: true
-              }));
-
               this.setData({
-                teamIcons: teamIcons,
+                teamIcons: this.data.teamIcons.map(icon => ({ ...icon, path: tempFilePath, selected: true })),
                 selectedIcon: 1,
                 customIconPath: iconFileID
               });
-              
-              wx.showToast({
-                title: '图片选择成功',
-                icon: 'success'
-              });
+              wx.showToast({ title: '图片选择成功', icon: 'success' });
+            } catch (error) {
+              if (!this._unloaded) {
+                wx.showToast({ title: error.message || '图片选择失败，请重试', icon: 'none' });
+              }
+            } finally {
+              finish();
             }
           },
-          fail: (err) => {
-            console.error('选择图片失败:', err);
-            wx.showToast({
-              title: '选择图片失败',
-              icon: 'none'
-            });
+          fail: (error) => {
+            if (!this._unloaded && !/cancel/i.test(error.errMsg || '')) {
+              wx.showToast({ title: '选择图片失败', icon: 'none' });
+            }
+            finish();
           }
         });
       },
-      fail: (err) => {
-        console.error('显示操作菜单失败:', err);
-      }
+      fail: finish
     });
   },
 
@@ -120,6 +138,7 @@ Page({
    * 输入团队名称
    */
   onTeamNameInput: function(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
     const value = e.detail.value;
     this.setData({
       teamName: value,
@@ -131,6 +150,7 @@ Page({
    * 输入团队介绍
    */
   onTeamDescriptionInput: function(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
     const value = e.detail.value;
     this.setData({
       teamDescription: value,
@@ -138,124 +158,163 @@ Page({
     });
   },
 
+  onPracticeStartDateChange(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    const value = e.detail.value;
+    const today = currentPracticeDay();
+    this.setData({ maxPracticeStartDate: today });
+    if (!isCalendarDate(value) || value > today) {
+      wx.showToast({ title: '请选择不晚于当前练习日的有效日期', icon: 'none' });
+      return;
+    }
+    this.setData({ practiceStartDate: value });
+  },
+
+  onDailyGoalInput(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    this.setData({ dailyGoalMinutes: e.detail.value });
+  },
+
+  clearPracticeStartDate() {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    this.setData({ practiceStartDate: '' });
+  },
+
+  clearDailyGoal() {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    this.setData({ dailyGoalMinutes: '' });
+  },
+
+  selectDailyGoal(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    const minutes = Number(e.currentTarget.dataset.minutes);
+    if (this.data.dailyGoalPresets.includes(minutes)) this.setData({ dailyGoalMinutes: minutes });
+  },
+
   /**
    * 创建团队
    */
   async createTeam() {
-    // 防止重复提交
-    if (this.data.isCreating) {
+    if (this.data.isCreating || this._unloaded) return;
+    if (this.data.hasCreatedTeam) {
+      this.returnToTeamList();
+      return;
+    }
+    const openid = this.getLoggedInOpenId();
+    if (!openid) {
+      wx.showToast({ title: '请先登录后再创建团队', icon: 'none' });
+      return;
+    }
+    if (this.data.isChoosingIcon) {
+      wx.showToast({ title: '请等待团队图标检测完成', icon: 'none' });
       return;
     }
 
-    // 验证表单 - 检查是否选择了图标（预设或自定义）
-    if (!this.data.selectedIcon && !this.data.customIconPath) {
-      wx.showToast({
-        title: '请选择团队图标',
-        icon: 'none'
-      });
+    // 固定本次发布内容，审核与最终提交必须使用同一份数据。
+    const practiceStartDate = optionalRuleValue(this.data.practiceStartDate);
+    const rawGoal = optionalRuleValue(this.data.dailyGoalMinutes);
+    const teamInfo = {
+      name: this.data.teamName.trim(),
+      description: this.data.teamDescription.trim(),
+      icon: this.data.customIconPath,
+      practiceStartDate,
+      dailyGoalMinutes: rawGoal === null ? null : Number(rawGoal)
+    };
+    if (typeof teamInfo.icon !== 'string' || !teamInfo.icon.startsWith('cloud://')) {
+      wx.showToast({ title: '请选择团队图标', icon: 'none' });
+      return;
+    }
+    if (!teamInfo.name) {
+      wx.showToast({ title: '请输入团队名称', icon: 'none' });
+      return;
+    }
+    if (teamInfo.name.length > 20) {
+      wx.showToast({ title: '团队名称不能超过20个字符', icon: 'none' });
+      return;
+    }
+    if (teamInfo.description.length > 100) {
+      wx.showToast({ title: '团队介绍不能超过100个字符', icon: 'none' });
       return;
     }
 
-    if (!this.data.teamName.trim()) {
-      wx.showToast({
-        title: '请输入团队名称',
-        icon: 'none'
-      });
+    const today = currentPracticeDay();
+    this.setData({ maxPracticeStartDate: today });
+    if (teamInfo.practiceStartDate !== null &&
+        (!isCalendarDate(teamInfo.practiceStartDate) || teamInfo.practiceStartDate > today)) {
+      wx.showToast({ title: '请选择不晚于当前练习日的有效日期', icon: 'none' });
+      return;
+    }
+    if (rawGoal !== null &&
+        ((typeof rawGoal !== 'number' && (typeof rawGoal !== 'string' || !/^\d+$/.test(rawGoal.trim()))) ||
+        !Number.isInteger(teamInfo.dailyGoalMinutes) || teamInfo.dailyGoalMinutes < 1 || teamInfo.dailyGoalMinutes > 1440)) {
+      wx.showToast({ title: '期望分钟须为1至1440的整数', icon: 'none' });
       return;
     }
 
-    if (this.data.teamName.length > 20) {
-      wx.showToast({
-        title: '团队名称不能超过20个字符',
-        icon: 'none'
-      });
-      return;
-    }
-
-    if (this.data.teamDescription.length > 100) {
-      wx.showToast({
-        title: '团队介绍不能超过100个字符',
-        icon: 'none'
-      });
-      return;
-    }
-
-    // 设置创建状态
     this.setData({ isCreating: true });
-
     try {
-      // 验证是否已选择图标（无论是预设还是自定义）
-      if (!this.data.selectedIcon && !this.data.customIconPath) {
-        wx.showToast({
-          title: '请选择团队图标',
-          icon: 'none'
-        });
-        return;
+      if (!await contentSec.checkText(teamInfo.name, 2)) return;
+      if (!await contentSec.checkText(teamInfo.description, 2)) return;
+      if (this._unloaded) return;
+      if (this.getLoggedInOpenId() !== openid) {
+        throw new Error('登录状态已变化，请重新提交');
       }
-      
-      // 确定使用的图标路径
-      let iconPath = '';
-      if (this.data.customIconPath) {
-        // 自定义图标已在 chooseImageFromAlbum 检测时固化为 cloud:// 永久链接，直接使用
-        iconPath = this.data.customIconPath;
-      } else {
-        // 使用预设图标
-        const selectedIcon = this.data.teamIcons.find(icon => icon.id === this.data.selectedIcon);
-        iconPath = selectedIcon.path;
-      }
-      
-      // 名称/介绍文本发布前内容安全检测（评论场景 scene=2），
-      // 命中违规由 contentSec 统一提示「所发布内容含违规信息」后中止创建
-      const nameSafe = await contentSec.checkText(this.data.teamName, 2);
-      if (!nameSafe) return;
-      const descSafe = await contentSec.checkText(this.data.teamDescription, 2);
-      if (!descSafe) return;
 
-      // 创建团队信息
-      const teamInfo = {
-        name: this.data.teamName.trim(),
-        description: this.data.teamDescription.trim(),
-        icon: iconPath
-      };
-
-      // 调用团队管理器创建团队
       const result = await teamManager.createTeam(teamInfo);
-
-      if (result.success) {
-        console.log('✅ 团队创建成功:', result.team);
-        
-        // 使用简单的 toast 提示用户
-        wx.showToast({
-          title: '团队创建成功！',
-          icon: 'success',
-          duration: 2000,
-          success: () => {
-            // 2秒后自动返回上一页
-            setTimeout(() => {
-              wx.navigateBack();
-            }, 2000);
-          }
-        });
-      } else {
-        throw new Error(result.error || '创建团队失败');
+      if (this._unloaded) return;
+      if (!result || !result.success) {
+        throw new Error(result && result.error || '创建团队失败');
       }
-
+      // 成功后保持不可重复创建，即使返回列表失败也不重复发送创建请求。
+      this.setData({ hasCreatedTeam: true });
+      wx.showToast({ title: '团队创建成功！', icon: 'success', duration: 2000 });
+      this.scheduleReturnToTeamList();
     } catch (error) {
-      console.error('❌ 创建团队失败:', error);
-      wx.showToast({
-        title: error.message || '创建团队失败',
-        icon: 'none',
-        duration: 2000
-      });
+      if (!this._unloaded) {
+        wx.showToast({ title: error.message || '创建团队失败', icon: 'none', duration: 2000 });
+      }
     } finally {
-      this.setData({ isCreating: false });
+      if (!this._unloaded) this.setData({ isCreating: false });
     }
+  },
+
+  clearReturnTimer() {
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
+  },
+
+  scheduleReturnToTeamList() {
+    this.clearReturnTimer();
+    if (this._unloaded || this._visible === false) return;
+    this._returnTimer = setTimeout(() => this.returnToTeamList(), 2000);
+  },
+
+  returnToTeamList() {
+    this.clearReturnTimer();
+    if (this._unloaded || this._visible === false || this._returning) return;
+    this._returning = true;
+    wx.navigateBack({
+      fail: () => {
+        if (this._unloaded || this._visible === false) {
+          this._returning = false;
+          return;
+        }
+        wx.switchTab({
+          url: '/pages/team/team',
+          fail: () => { this._returning = false; }
+        });
+      }
+    });
   },
 
   /**
    * 生命周期函数--监听页面加载
    */
   onLoad(options) {
+    this._unloaded = false;
+    this._visible = true;
+    const today = currentPracticeDay();
+    this.setData({ practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '' });
     console.log('=== createTeam页面加载 ===');
     
     // 获取用户信息
@@ -303,21 +362,25 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
-
+    this._visible = true;
+    this.setData({ maxPracticeStartDate: currentPracticeDay() });
+    if (this.data.hasCreatedTeam) this.scheduleReturnToTeamList();
   },
 
   /**
    * 生命周期函数--监听页面隐藏
    */
   onHide() {
-
+    this._visible = false;
+    this.clearReturnTimer();
   },
 
   /**
    * 生命周期函数--监听页面卸载
    */
   onUnload() {
-
+    this._unloaded = true;
+    this.clearReturnTimer();
   },
 
   /**

@@ -7,10 +7,10 @@ const vm = require('node:vm');
 const pagePath = path.join(__dirname, '../miniprogram/pages/index/index.js');
 const utilsPath = path.join(__dirname, '../miniprogram/utils');
 
-function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], record, checkText, refreshFromCloud } = {}) {
+function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], legacyUserRecords = {}, record, checkText, refreshFromCloud } = {}) {
   let currentTime = Date.parse(now);
   let definition;
-  const calls = { record: [], content: [], toast: [], refresh: 0, cloudRefresh: 0, stopPullDownRefresh: 0 };
+  const calls = { record: [], content: [], toast: [], navigation: [], refresh: 0, cloudRefresh: 0, userDataReads: 0, stopPullDownRefresh: 0 };
   const intervals = new Map();
   let nextInterval = 1;
   class Clock extends Date {
@@ -18,7 +18,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     static now() { return currentTime; }
   }
   const checkinManager = {
-    getUserCheckinData: () => ({ dailyRecords }),
+    getUserCheckinData: () => { calls.userDataReads++; return { dailyRecords }; },
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
     refreshFromCloud: () => {
@@ -31,8 +31,10 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     }
   };
   const wx = {
-    getStorageSync: key => key === 'meditationTextRecords' ? legacyExperiences : undefined,
+    getStorageSync: key => key === 'meditationTextRecords' ? legacyExperiences
+      : key === 'meditationUserRecords' ? legacyUserRecords : undefined,
     showToast: value => calls.toast.push(value),
+    navigateTo: value => calls.navigation.push(value),
     showLoading() {},
     hideLoading() {},
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
@@ -86,11 +88,11 @@ function change(page, field, value) {
   page[`onCheckin${field}Change`]({ detail: { value } });
 }
 
-function makeRecords(count) {
+function makeRecords(count, startAt = '2026-09-17T04:10:00+08:00') {
   const dailyRecords = {};
-  const start = Date.parse('2026-09-14T00:10:00+08:00');
+  const start = Date.parse(startAt);
   for (let index = 0; index < count; index++) {
-    const timestamp = start + index * 60 * 60 * 1000;
+    const timestamp = start + index * 60 * 1000;
     const date = new Date(timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
     if (!dailyRecords[date]) dailyRecords[date] = { count: 0, records: [] };
     dailyRecords[date].records.unshift({ timestamp, duration: index + 1, experience: [] });
@@ -108,6 +110,66 @@ test('home form starts with seven minutes and the current Beijing date and time'
   assert.equal(page.data.checkinDuration, '7');
   assert.equal(page.data.checkinExperience, '');
   assert.equal(page.data.checkinSubmitting, false);
+});
+
+test('home calendar and detail navigation agree on the day before 04:00 across a month boundary', () => {
+  const { page, calls } = createPage({ now: '2026-10-01T03:59:59+08:00', dailyRecords: {
+    '2026-10-01': { count: 1, records: [{ timestamp: Date.parse('2026-10-01T00:04:33+08:00'), duration: 15 }] }
+  } });
+  page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: 'local-user' });
+  page.generateCalendar();
+  assert.equal(calls.userDataReads, 1, 'all 42 calendar cells share one standard record read');
+  assert.equal(page.data.todayDate, '2026-09-30');
+  const days = page.data.calendarDays.flat();
+  assert.equal(days.find(day => day.fullDate === '2026-09-30').isToday, true);
+  assert.equal(days.find(day => day.fullDate === '2026-09-30').isChecked, true);
+  assert.equal(days.find(day => day.fullDate === '2026-10-01').isChecked, false);
+  page.selectDate({ currentTarget: { dataset: { date: '2026-09-30' } } });
+  page.refreshCheckinRecords();
+  const record = page.data.checkinRecords[0];
+  const template = fs.readFileSync(pagePath.replace(/\.js$/, '.wxml'), 'utf8');
+  assert.match(template, /bindtap="openCheckinHistory" data-date="\{\{record\.dayDate\}\}"/);
+  page.openCheckinHistory({ currentTarget: { dataset: { date: record.dayDate } } });
+  assert.deepEqual(calls.navigation.map(item => item.url), [
+    '/pages/history/history?date=2026-09-30', '/pages/history/history?date=2026-09-30'
+  ]);
+  assert.equal(record.date, '2026-10-01', 'the original bucket remains available for deletion');
+});
+
+test('calendar retains count-only legacy records without adding a midnight bucket beside real details', () => {
+  const { page } = createPage({
+    dailyRecords: {
+      '2026-09-17': { count: 1, records: [{ timestamp: '2026-09-17T00:04:33+08:00', duration: 15 }] },
+      '2026-09-12': { count: 2 }
+    },
+    legacyUserRecords: {
+      'local-user': { dailyRecords: { '2026-09-17': { count: 1 }, '2026-09-11': { count: 1 } } },
+      migrated: { migrated: true, migratedTo: 'local-user', dailyRecords: {
+        '2026-09-10': { count: 1 },
+        '2026-09-09': { count: 1, records: [{ timestamp: '2026-09-09T03:59:59+08:00', duration: 7 }] }
+      } },
+      unrelated: { dailyRecords: { '2026-09-07': { count: 1 } } }
+    }
+  });
+  page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: 'local-user' });
+  page.generateCalendar();
+  assert.deepEqual(Array.from(page.data.calendarDays.flat().filter(day => day.isChecked), day => day.fullDate), [
+    '2026-09-08', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-16'
+  ]);
+});
+
+test('home clock advances the calendar today marker at 04:00 together with the recent-day window', async () => {
+  const { page, intervals, setNow } = createPage({ now: '2026-10-01T03:59:30+08:00' });
+  page.setData({ currentYear: 2026, currentMonth: 10, userOpenId: 'local-user' });
+  page.checkUserInfoStatus = () => {};
+  await page.onShow();
+  assert.equal(page.data.todayDate, '2026-09-30');
+  assert.equal(page.data.calendarDays.flat().find(day => day.isToday).fullDate, '2026-09-30');
+  setNow('2026-10-01T04:00:00+08:00');
+  Array.from(intervals.values())[0].callback();
+  assert.equal(page.data.todayDate, '2026-10-01');
+  assert.equal(page.data.calendarDays.flat().find(day => day.isToday).fullDate, '2026-10-01');
+  page.onUnload();
 });
 
 test('refresh preserves explicitly edited date and time independently', () => {
@@ -276,62 +338,90 @@ test('rapid taps with an empty experience save once and allow a later check-in',
   assert.equal(calls.record.length, 2);
 });
 
-test('details page in batches of twenty, newest first, without repeats at the end', () => {
-  const { page } = createPage({ dailyRecords: makeRecords(45) });
-  page.refreshCheckinRecords();
-  assert.equal(page.data.checkinTotal, 45);
-  assert.equal(page.data.checkinRecords.length, 20);
-  assert.equal(page.data.hasMoreCheckins, true);
-  assert.deepEqual(Array.from(page.data.checkinRecords, value => value.duration), Array.from({ length: 20 }, (_, index) => 45 - index));
-  page.onReachBottom();
-  assert.equal(page.data.checkinRecords.length, 40);
-  assert.equal(page.data.hasMoreCheckins, true);
-  page.onReachBottom();
-  assert.equal(page.data.checkinRecords.length, 45);
-  assert.equal(page.data.hasMoreCheckins, false);
-  page.onReachBottom();
-  assert.equal(page.data.checkinRecords.length, 45);
-  assert.deepEqual(Array.from(page.data.checkinRecords, value => value.duration), Array.from({ length: 45 }, (_, index) => 45 - index));
-  assert.equal(new Set(page.data.checkinRecords.map(value => value.timestamp)).size, 45);
-  page.refreshCheckinRecords();
-  assert.equal(page.data.checkinRecords.length, 20);
-  assert.equal(page.data.hasMoreCheckins, true);
-});
-
-test('empty and exact-page data report whether more details exist correctly', () => {
-  for (const count of [0, 1, 20, 40]) {
-    const { page } = createPage({ dailyRecords: makeRecords(count) });
-    page.refreshCheckinRecords();
-    assert.equal(page.data.checkinRecords.length, Math.min(count, 20));
-    assert.equal(page.data.checkinTotal, count);
-    assert.equal(page.data.hasMoreCheckins, count > 20);
-    page.loadMoreCheckins();
-    assert.equal(page.data.checkinRecords.length, count);
-    assert.equal(page.data.hasMoreCheckins, false);
-  }
-});
-
-test('pulling down rereads storage and adds another twenty without resetting the visible count', async () => {
+test('details show every record from the latest three 04:00 days, grouped newest first', () => {
   const dailyRecords = makeRecords(45);
+  dailyRecords['2026-09-16'] = { count: 2, records: [
+    { timestamp: Date.parse('2026-09-16T12:00:00+08:00'), duration: 7 },
+    { timestamp: Date.parse('2026-09-16T03:59:00+08:00'), duration: 8 }
+  ] };
+  dailyRecords['2026-09-15'] = { count: 2, records: [
+    { timestamp: Date.parse('2026-09-15T04:00:00+08:00'), duration: 9 },
+    { timestamp: Date.parse('2026-09-15T03:59:59+08:00'), duration: 10 }
+  ] };
+  dailyRecords['2026-09-14'] = { count: 1, records: [
+    { timestamp: Date.parse('2026-09-14T20:00:00+08:00'), duration: 11 }
+  ] };
+  const { page, calls } = createPage({ dailyRecords });
+  page.refreshCheckinRecords();
+
+  assert.equal(page.data.checkinTotal, 50);
+  assert.equal(page.data.hiddenCheckinCount, 2);
+  assert.equal(page.data.checkinRecords.length, 48, 'recent days have no twenty-record limit');
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => [group.date, group.count, group.totalDuration]), [
+    ['2026-09-17', 45, 1035], ['2026-09-16', 1, 7], ['2026-09-15', 2, 17]
+  ]);
+  assert.deepEqual(Array.from(page.data.checkinGroups[0].records, record => record.duration),
+    Array.from({ length: 45 }, (_, index) => 45 - index));
+  const earlyMorning = page.data.checkinGroups[2].records[0];
+  assert.equal(earlyMorning.date, '2026-09-16', 'retain the original storage bucket');
+  assert.equal(earlyMorning.dayDate, '2026-09-15');
+  assert.equal(earlyMorning.time, '03:59');
+  assert.match(earlyMorning.timeLabel, /次日.*03:59/);
+
+  page.onReachBottom();
+  assert.equal(page.data.checkinRecords.length, 48, 'scrolling never expands older records');
+  const beforeNavigation = JSON.stringify(page.data);
+  page.openAllCheckins();
+  assert.deepEqual(calls.navigation.map(value => ({ ...value })), [
+    { url: '/pages/checkinHistory/checkinHistory' }
+  ]);
+  assert.equal(JSON.stringify(page.data), beforeNavigation, 'opening history never expands the homepage');
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date),
+    ['2026-09-17', '2026-09-16', '2026-09-15']);
+  assert.equal(new Set(page.data.checkinRecords.map(record => record.id)).size, 48);
+});
+
+test('empty and older-only data do not pull old dates into the latest three days', () => {
+  const empty = createPage().page;
+  empty.refreshCheckinRecords();
+  assert.equal(empty.data.checkinTotal, 0);
+  assert.equal(empty.data.checkinRecords.length, 0);
+  assert.equal(empty.data.checkinGroups.length, 0);
+  assert.equal(empty.data.hiddenCheckinCount, 0);
+
+  const { page: older, calls } = createPage({ dailyRecords: makeRecords(1, '2026-09-14T12:00:00+08:00') });
+  older.refreshCheckinRecords();
+  assert.equal(older.data.checkinTotal, 1);
+  assert.equal(older.data.checkinRecords.length, 0);
+  assert.equal(older.data.checkinGroups.length, 0);
+  assert.equal(older.data.hiddenCheckinCount, 1);
+  older.openAllCheckins();
+  assert.equal(calls.navigation[0].url, '/pages/checkinHistory/checkinHistory');
+  assert.equal(older.data.checkinRecords.length, 0);
+  assert.equal(older.data.checkinGroups.length, 0);
+  assert.equal(older.data.hiddenCheckinCount, 1);
+});
+
+test('pulling down refreshes records and defaults while keeping only the latest three days', async () => {
+  const dailyRecords = { ...makeRecords(45), ...makeRecords(2, '2026-09-14T12:00:00+08:00') };
   const { page, calls, setNow } = createPage({ dailyRecords });
   page.generateCalendar = () => {};
-  page.updateMonthlyCount = () => {};
   page.refreshCheckinRecords();
-  page.loadMoreCheckins();
-  assert.equal(page.data.checkinRecords.length, 40);
+  page.openAllCheckins();
   Object.assign(dailyRecords, makeRecords(65));
   setNow('2026-09-18T09:42:00+08:00');
   await page.onPullDownRefresh();
-  assert.equal(page.data.checkinRecords.length, 60);
-  assert.equal(page.data.checkinTotal, 65);
+  assert.equal(page.data.checkinRecords.length, 65);
+  assert.equal(page.data.checkinTotal, 67);
+  assert.equal(page.data.hiddenCheckinCount, 2);
   assert.equal(page.data.checkinRecords[0].duration, 65);
-  assert.equal(page.data.hasMoreCheckins, true);
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date), ['2026-09-17']);
   assert.equal(page.data.checkinDate, '2026-09-18');
   assert.equal(page.data.checkinTime, '09:42');
   assert.equal(calls.stopPullDownRefresh, 1);
   await page.onPullDownRefresh();
   assert.equal(page.data.checkinRecords.length, 65);
-  assert.equal(page.data.hasMoreCheckins, false);
+  assert.equal(page.data.hiddenCheckinCount, 2);
   assert.equal(calls.stopPullDownRefresh, 2);
   assert.equal(calls.cloudRefresh, 2);
 });
@@ -345,7 +435,7 @@ test('pull-to-refresh releases the spinner when reading page data fails', async 
 
 test('showing the page keeps defaults current and hides/unloads release the clock', async () => {
   const { page, intervals, setNow } = createPage();
-  for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
+  for (const method of ['checkUserInfoStatus', 'generateCalendar']) {
     page[method] = () => {};
   }
   await page.onShow();
@@ -390,17 +480,16 @@ test('showing the page restores a missing cloud check-in despite existing local 
   });
   page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: 'local-user' });
   page.checkUserInfoStatus = () => {};
-  page.loadRanking = () => {};
+  page.loadRanking = () => assert.fail('the homepage must not load rankings');
   page.refreshCalendarData();
   assert.equal(page.data.checkinTotal, 1);
-  assert.equal(page.data.monthlyCount, 1);
-  assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, false);
+  assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, true);
+  assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-17').isChecked, false);
 
   await page.onShow();
 
   assert.equal(calls.cloudRefresh, 1);
   assert.equal(page.data.checkinTotal, 2);
-  assert.equal(page.data.monthlyCount, 2);
   assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, true);
   assert.deepEqual(Array.from(page.data.checkinRecords, record => [record.date, record.time, record.duration]), [
     ['2026-09-17', '03:39', 13],
@@ -409,8 +498,8 @@ test('showing the page restores a missing cloud check-in despite existing local 
   page.onUnload();
 });
 
-test('cloud refresh preserves loaded pages and pull-down adds twenty from the refreshed records', async () => {
-  const dailyRecords = makeRecords(45);
+test('returning from history and cloud refresh keep the homepage limited to the latest three days', async () => {
+  const dailyRecords = { ...makeRecords(45), ...makeRecords(2, '2026-09-14T12:00:00+08:00') };
   const { page, calls } = createPage({
     dailyRecords,
     refreshFromCloud: () => {
@@ -418,22 +507,53 @@ test('cloud refresh preserves loaded pages and pull-down adds twenty from the re
       return true;
     }
   });
-  for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
-    page[method] = () => {};
-  }
+  page.checkUserInfoStatus = () => {};
+  page.generateCalendar = () => {};
+  page.loadRanking = () => assert.fail('the homepage must not load rankings');
   page.refreshCheckinRecords();
-  page.loadMoreCheckins();
-  assert.equal(page.data.checkinRecords.length, 40);
+  page.openAllCheckins();
+  page.onHide();
 
   await page.onShow();
-  assert.equal(page.data.checkinTotal, 65);
-  assert.equal(page.data.checkinRecords.length, 40);
+  assert.equal(page.data.checkinTotal, 67);
+  assert.equal(page.data.checkinRecords.length, 65);
+  assert.equal(page.data.hiddenCheckinCount, 2);
   assert.equal(page.data.checkinRecords[0].duration, 65);
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date), ['2026-09-17']);
 
+  page.refreshCheckinRecords();
+  assert.equal(page.data.checkinRecords.length, 65);
+  assert.equal(page.data.hiddenCheckinCount, 2);
   await page.onPullDownRefresh();
-  assert.equal(page.data.checkinRecords.length, 60);
-  assert.equal(page.data.checkinTotal, 65);
+  assert.equal(page.data.checkinRecords.length, 65);
+  assert.equal(page.data.hiddenCheckinCount, 2);
   assert.equal(calls.stopPullDownRefresh, 1);
+  assert.equal(calls.navigation.length, 1);
+  page.onUnload();
+});
+
+test('the running clock rolls the recent-day window at 04:00', async () => {
+  const dailyRecords = {
+    ...makeRecords(1, '2026-09-15T04:00:00+08:00'),
+    ...makeRecords(1, '2026-09-16T04:00:00+08:00'),
+    ...makeRecords(1, '2026-09-17T04:00:00+08:00'),
+    ...makeRecords(1, '2026-09-18T03:59:00+08:00')
+  };
+  const { page, intervals, setNow } = createPage({ now: '2026-09-18T03:59:30+08:00', dailyRecords });
+  page.checkUserInfoStatus = () => {};
+  page.generateCalendar = () => {};
+  await page.onShow();
+  assert.equal(page.data.checkinRecords.length, 4);
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date),
+    ['2026-09-17', '2026-09-16', '2026-09-15']);
+
+  setNow('2026-09-18T04:00:00+08:00');
+  Array.from(intervals.values())[0].callback();
+  assert.equal(page.data.checkinRecords.length, 3);
+  assert.equal(page.data.hiddenCheckinCount, 1);
+  assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date),
+    ['2026-09-17', '2026-09-16']);
+  assert.equal(page.data.checkinTime, '04:00');
   page.onUnload();
 });
 
@@ -444,7 +564,7 @@ test('concurrent page shows and pull-down share one cloud request and allow anot
     dailyRecords: makeRecords(45),
     refreshFromCloud: () => pendingRefresh
   });
-  for (const method of ['checkUserInfoStatus', 'generateCalendar', 'updateMonthlyCount', 'loadRanking']) {
+  for (const method of ['checkUserInfoStatus', 'generateCalendar']) {
     page[method] = () => {};
   }
 
@@ -458,11 +578,11 @@ test('concurrent page shows and pull-down share one cloud request and allow anot
   completeRefresh(true);
   await Promise.all([firstShow, secondShow, pullDown]);
   assert.equal(calls.stopPullDownRefresh, 1);
-  assert.equal(page.data.checkinRecords.length, 40);
+  assert.equal(page.data.checkinRecords.length, 45);
 
   await page.onShow();
   assert.equal(calls.cloudRefresh, 2);
-  assert.equal(page.data.checkinRecords.length, 40);
+  assert.equal(page.data.checkinRecords.length, 45);
   page.onUnload();
 });
 
@@ -480,7 +600,7 @@ test('failed cloud refresh retains local records, releases the spinner and permi
     });
     page.setData({ currentYear: 2026, currentMonth: 9 });
     page.refreshCalendarData();
-    const before = JSON.stringify({ records: page.data.checkinRecords, monthlyCount: page.data.monthlyCount });
+    const before = JSON.stringify({ records: page.data.checkinRecords, groups: page.data.checkinGroups, hiddenCount: page.data.hiddenCheckinCount });
     const pullDown = page.onPullDownRefresh();
     await Promise.resolve();
     assert.equal(calls.cloudRefresh, 1);
@@ -489,7 +609,7 @@ test('failed cloud refresh retains local records, releases the spinner and permi
     else completeRefresh(failure);
 
     await pullDown;
-    assert.equal(JSON.stringify({ records: page.data.checkinRecords, monthlyCount: page.data.monthlyCount }), before);
+    assert.equal(JSON.stringify({ records: page.data.checkinRecords, groups: page.data.checkinGroups, hiddenCount: page.data.hiddenCheckinCount }), before);
     assert.equal(calls.stopPullDownRefresh, 1);
     await page.onPullDownRefresh();
     assert.equal(calls.cloudRefresh, 2);

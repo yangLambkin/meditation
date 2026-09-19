@@ -116,7 +116,11 @@ function createHarness(options = {}) {
       }
       if (name === 'axios') {
         return {
-          async get(...args) { calls.gets.push(clone(args)); throw new Error('Unexpected external GET'); },
+          async get(...args) {
+            calls.gets.push(clone(args));
+            if (options.getResponse) return { data: clone(options.getResponse) };
+            throw new Error('Unexpected external GET');
+          },
           async post(url, body, config) {
             calls.posts.push(clone({ url, body, config }));
             if (options.postError) throw new Error(options.postError);
@@ -137,6 +141,57 @@ function createHarness(options = {}) {
     async details(recordDate) { return this.run({ type: 'getSyncDateDetails', recordDate }); },
   };
 }
+
+test('checking and binding reject student numbers without an uppercase BJ prefix before reads, writes or external calls', async t => {
+  for (const type of ['checkStudentNumber', 'bindStudentNumber']) {
+    for (const studentNumber of ['bj123456', 'Bj123456', 'bJ123456', '123456', 'AB123456', 'XBJ123456', ' bj123456 ', 123456, ['BJ123456'], {}]) {
+      await t.test(`${type}: ${JSON.stringify(studentNumber)}`, async () => {
+        const app = createHarness();
+        const originalUsers = clone(app.users);
+        assert.deepEqual(await app.run({ type, studentNumber }), {
+          success: false, error: '学号必须以大写 BJ 开头',
+        });
+        for (const key of ['reads', 'aggregates', 'updates', 'posts', 'gets']) assert.equal(app.calls[key].length, 0);
+        assert.deepEqual(app.users, originalUsers);
+      });
+    }
+  }
+});
+
+test('checking and binding keep the empty student number error, including whitespace-only input', async t => {
+  for (const type of ['checkStudentNumber', 'bindStudentNumber']) {
+    for (const studentNumber of [undefined, null, '', '   ']) {
+      await t.test(`${type}: ${JSON.stringify(studentNumber)}`, async () => {
+        const app = createHarness();
+        assert.deepEqual(await app.run({ type, studentNumber }), { success: false, error: '学号不能为空' });
+        for (const key of ['reads', 'updates', 'posts', 'gets']) assert.equal(app.calls[key].length, 0);
+      });
+    }
+  }
+});
+
+test('checking and binding accept trimmed uppercase BJ prefixes without changing or restricting the suffix', async t => {
+  for (const type of ['checkStudentNumber', 'bindStudentNumber']) {
+    for (const studentNumber of ['BJ123456', '  BJabc-123  ', 'BJ']) {
+      await t.test(`${type}: ${JSON.stringify(studentNumber)}`, async () => {
+        const app = createHarness({ getResponse: { success: true, data: { nickname: '必经用户' } } });
+        const result = await app.run({ type, studentNumber });
+        const normalizedNumber = studentNumber.trim();
+        assert.equal(result.success, true);
+        assert.equal(result.data.studentNumber, normalizedNumber);
+        assert.equal(app.calls.gets.length, 1);
+        assert.equal(app.calls.gets[0][0], `https://example.test/api/openapi/users/${encodeURIComponent(normalizedNumber)}`);
+        if (type === 'bindStudentNumber') {
+          assert.equal(app.calls.updates.length, 1);
+          assert.equal(app.users[0].bijingBound, true);
+          assert.equal(app.users[0].bijingStudentNumber, normalizedNumber);
+        } else {
+          assert.equal(app.calls.updates.length, 0);
+        }
+      });
+    }
+  }
+});
 
 test('selected sync includes legacy records for only the chosen date and current user, including dates before binding', async () => {
   const app = createHarness({ records: [

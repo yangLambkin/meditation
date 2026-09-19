@@ -1,9 +1,7 @@
 // pages/index/index.js
 const checkinManager = require('../../utils/checkin.js');
-const dateUtil = require('../../utils/dateUtil.js');
 const contentSec = require('../../utils/contentSec.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
-const CHECKIN_PAGE_SIZE = 20;
 
 Page({
   data: {
@@ -13,12 +11,8 @@ Page({
     checkedDates: [], // 存储已打卡的日期
     todayDate: "", // 今天的日期
     userOpenId: '', // 当前用户标识
-    monthlyCount: 0, // 本月打卡总次数
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
     wisdomQuote: '"静心即是修心，心安即是归处。"', // 每日一言金句
-    currentUserRank: "加载中...", // 当前用户排名，默认为加载中
-    totalUsers: 0, // 总用户数
-    showRankUnit: false, // 是否显示排名单位
     hasUserInfo: false, // 是否已获取用户信息
     checkinDate: '',
     checkinTime: '',
@@ -28,10 +22,12 @@ Page({
     showCheckinModal: false,
     checkinSubmitting: false,
     checkinDeleting: false,
+    checkinActionsOpen: false,
     deletingCheckinId: '',
     checkinRecords: [],
+    checkinGroups: [],
     checkinTotal: 0,
-    hasMoreCheckins: false
+    hiddenCheckinCount: 0
   },
 
   openCheckinModal() {
@@ -127,45 +123,54 @@ Page({
     }
   },
 
-  refreshCheckinRecords(reset = true) {
-    const userData = checkinManager.getUserCheckinData();
-    const experienceIds = new Set();
-    Object.keys(userData.dailyRecords || {}).forEach(date => {
-      const day = userData.dailyRecords[date] || {};
-      (Array.isArray(day.records) ? day.records : []).forEach(record => {
-        if (!record) return;
-        const experiences = Array.isArray(record.experience) ? record.experience : [record.experience];
-        experiences.forEach(experience => {
-          if (typeof experience === 'string' && experience) experienceIds.add(experience);
-        });
-      });
-    });
-    const legacyRecords = wx.getStorageSync('meditationTextRecords') || [];
-    const experiences = (Array.isArray(legacyRecords) ? legacyRecords : []).concat(
-      experienceIds.size ? checkinManager.getExperienceRecordsFromLocal(Array.from(experienceIds)) : []
+  refreshCheckinRecords() {
+    this._allCheckinRecords = homeCheckin.readCheckinRecords(
+      checkinManager, wx.getStorageSync('meditationTextRecords') || []
     );
-    this._allCheckinRecords = homeCheckin.buildCheckinRecords(userData, experiences);
-    const limit = reset ? CHECKIN_PAGE_SIZE : Math.max(CHECKIN_PAGE_SIZE, this.data.checkinRecords.length);
+    this.updateCheckinGroups();
+  },
+
+  updateCheckinGroups() {
+    const records = this._allCheckinRecords || [];
+    const now = Date.now();
+    const { groups, hiddenCount } = homeCheckin.buildCheckinGroups(records, { now });
+    this._checkinDay = homeCheckin.getCheckinDay(now);
     this.setData({
-      checkinRecords: this._allCheckinRecords.slice(0, limit),
-      checkinTotal: this._allCheckinRecords.length,
-      hasMoreCheckins: limit < this._allCheckinRecords.length
+      checkinRecords: groups.reduce((visible, group) => visible.concat(group.records), []),
+      checkinGroups: groups,
+      checkinTotal: records.length,
+      hiddenCheckinCount: hiddenCount
     });
   },
 
-  loadMoreCheckins() {
-    if (!this.data.hasMoreCheckins) return;
-    const records = this._allCheckinRecords || [];
-    const limit = this.data.checkinRecords.length + CHECKIN_PAGE_SIZE;
-    this.setData({
-      checkinRecords: records.slice(0, limit),
-      hasMoreCheckins: limit < records.length
-    });
+  openAllCheckins() {
+    wx.navigateTo({ url: '/pages/checkinHistory/checkinHistory' });
   },
 
   openCheckinHistory(e) {
     const date = e.currentTarget.dataset.date;
     if (date) wx.navigateTo({ url: `/pages/history/history?date=${date}` });
+  },
+
+  async showCheckinActions(e) {
+    if (this.data.checkinDeleting || this.data.checkinActionsOpen) return;
+    if (!this.data.checkinRecords.some(record => record.id === e.currentTarget.dataset.id)) return;
+    this.setData({ checkinActionsOpen: true });
+    try {
+      const selection = await new Promise(resolve => {
+        const menu = wx.showActionSheet({
+          itemList: ['删除记录'],
+          success: resolve,
+          fail: () => resolve(null)
+        });
+        if (menu && typeof menu.then === 'function') menu.then(resolve, () => resolve(null));
+      });
+      if (selection && selection.tapIndex === 0) await this.deleteCheckinRecord(e);
+    } catch (error) {
+      console.warn('打开记录操作菜单失败:', error);
+    } finally {
+      this.setData({ checkinActionsOpen: false });
+    }
   },
 
   async deleteCheckinRecord(e) {
@@ -201,7 +206,6 @@ Page({
       }
 
       this.refreshCalendarData();
-      this.loadRanking();
       wx.showToast({ title: '记录已删除', icon: 'success' });
     } catch (error) {
       console.error('首页删除静坐记录失败:', error);
@@ -466,7 +470,6 @@ Page({
         this.syncUserCheckinData();
       }
       
-      this.loadRanking();
       
     } else {
       // 未登录或未获取到微信信息：显示"点击登录"
@@ -832,63 +835,11 @@ Page({
 
 
   /**
-   * 更新本月打卡次数（使用统一的本地缓存架构）
-   */
-  updateMonthlyCount: function() {
-    const currentYear = this.data.currentYear;
-    const currentMonth = this.data.currentMonth;
-    
-    let monthlyCount = 0;
-    
-    try {
-      // 使用统一的checkinManager获取用户数据
-      const checkinManager = require('../../utils/checkin.js');
-      const userData = checkinManager.getUserCheckinData();
-      
-      console.log('📊 从统一本地缓存获取用户数据:', {
-        dailyRecordsCount: Object.keys(userData.dailyRecords || {}).length,
-        currentYear: currentYear,
-        currentMonth: currentMonth
-      });
-      
-      if (userData && userData.dailyRecords) {
-        Object.keys(userData.dailyRecords).forEach(dateStr => {
-          const [year, month] = dateStr.split('-').map(Number);
-          if (year === currentYear && month === currentMonth) {
-            const dailyRecord = userData.dailyRecords[dateStr];
-            monthlyCount += dailyRecord.count || 0;
-            console.log(`  📅 ${dateStr}: ${dailyRecord.count || 0} 次打卡`);
-          }
-        });
-      }
-      
-      console.log(`${this.isUserLoggedIn() ? '已登录' : '未登录'}用户计算本月打卡:`, {
-        userOpenId: this.data.userOpenId,
-        isLoggedIn: this.isUserLoggedIn(),
-        monthlyCount: monthlyCount
-      });
-      
-    } catch (error) {
-      console.error('计算本月打卡次数失败:', error);
-      monthlyCount = 0;
-    }
-    
-    // 更新页面上的打卡次数显示
-    this.setData({
-      monthlyCount: monthlyCount
-    });
-    
-    console.log(`本月累计打卡次数: ${monthlyCount}（用户状态: ${this.isUserLoggedIn() ? '已登录' : '未登录'}）`);
-  },
-
-  /**
    * 刷新页面数据
    */
   refreshPageData: function() {
     this.generateCalendar();
-    this.updateMonthlyCount();
     this.getUserNickname();
-    this.loadRanking();
     this.refreshCheckinRecords();
   },
 
@@ -897,12 +848,11 @@ Page({
    */
   refreshCalendarData: function() {
     this.generateCalendar();
-    this.updateMonthlyCount();
-    this.refreshCheckinRecords(false);
+    this.refreshCheckinRecords();
   },
 
   /**
-   * 从云端校准打卡记录，完成后保留当前列表的已加载条数。
+   * 从云端校准打卡记录，完成后刷新最近三天的明细。
    */
   refreshCheckinsFromCloud() {
     if (this._checkinCloudRefresh) return this._checkinCloudRefresh;
@@ -1008,53 +958,51 @@ Page({
   },
 
   /**
-   * 检查某日期当前用户是否已打卡（支持迁移数据和本地存储）
+   * 一次读取日历打卡日期，以明细的 04:00 分日结果为准。
+   */
+  getCalendarCheckedDates() {
+    const userData = checkinManager.getUserCheckinData();
+    const records = homeCheckin.buildCheckinRecords(userData);
+    const dates = new Set(records.map(record => record.dayDate));
+    const standardDetailedDates = new Set(records.filter(record => record.sortTimestamp > 0).map(record => record.date));
+    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
+    const legacySources = userOpenId ? Object.entries(allUserRecords)
+      .filter(([id, data]) => data && (id === userOpenId || (data.migrated && data.migratedTo === userOpenId)))
+      .map(([, data]) => data) : [];
+
+    const sources = [{ data: userData, records }].concat(legacySources.map(data => ({
+      data, records: homeCheckin.buildCheckinRecords(data)
+    })));
+    const detailedDates = new Set();
+    sources.forEach(source => source.records.forEach(record => {
+      if (record.sortTimestamp > 0) detailedDates.add(record.date);
+    }));
+    sources.slice(1).forEach(source => {
+      source.records.forEach(record => {
+        // 同一存储日期已有标准明细时，不再用旧缓存补出午夜日期。
+        if (!standardDetailedDates.has(record.date) &&
+            (record.sortTimestamp > 0 || !detailedDates.has(record.date))) dates.add(record.dayDate);
+      });
+    });
+    sources.forEach(source => {
+      Object.entries(source.data.dailyRecords || {}).forEach(([date, day]) => {
+        // 无明细的老数据只能沿用存储日期；有真实时间戳时不补标。
+        if (day && Number(day.count) > 0 && !detailedDates.has(date) &&
+            !(Array.isArray(day.records) && day.records.some(Boolean))) dates.add(date);
+      });
+    });
+    return dates;
+  },
+
+  /**
+   * 检查日期，日历生成时复用同一个日期集合。
    */
   isDateChecked: function(dateStr) {
-    // 优先使用本地存储的数据检查
-    const checkinManager = require('../../utils/checkin.js');
-    
-    // 获取当前用户ID（已登录或未登录）
-    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
-    
-    if (!userOpenId) {
-      return false;
-    }
-    
-    console.log(`检查日期 ${dateStr} 的打卡状态，用户ID: ${userOpenId}`);
-    
-    // 1. 优先检查本地存储数据（使用checkinManager的本地存储）
-    try {
-      // 使用checkinManager获取指定日期的打卡次数（同步版本）
-      const localCount = checkinManager.getDailyCheckinCountSync(dateStr);
-      if (typeof localCount === 'number' && localCount > 0) {
-        console.log(`✅ 本地存储: 日期 ${dateStr} 已打卡，次数: ${localCount}`);
-        return true;
-      }
-    } catch (error) {
-      console.warn('检查本地存储数据失败:', error);
-    }
-    
-    // 2. 检查旧格式的用户记录（meditationUserRecords）
-    const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
-    const userRecords = allUserRecords[userOpenId];
-    
-    if (userRecords && userRecords.dailyRecords) {
-      const dailyRecord = userRecords.dailyRecords[dateStr];
-      if (dailyRecord && dailyRecord.count > 0) {
-        console.log(`✅ 旧格式记录: 日期 ${dateStr} 已打卡，次数: ${dailyRecord.count}`);
-        return true;
-      }
-    }
-    
-    // 3. 检查是否有迁移数据关联
-    const migratedRecords = this.checkMigratedRecords(dateStr);
-    if (migratedRecords) {
-      console.log(`✅ 迁移记录: 日期 ${dateStr} 有迁移记录`);
-      return true;
-    }
-    
-    // 4. 如果是已登录用户，检查是否需要同步云端数据
+    if (!this._calendarCheckedDates) this._calendarCheckedDates = this.getCalendarCheckedDates();
+    if (this._calendarCheckedDates.has(dateStr)) return true;
+
+    // 保留原有的登录同步入口。
     if (this.isUserLoggedIn()) {
       // 标记需要重新检查日历，避免频繁调用
       if (!this.data.needsCalendarRefresh) {
@@ -1136,6 +1084,8 @@ Page({
   generateCalendar: function() {
     const year = this.data.currentYear;
     const month = this.data.currentMonth;
+    this._calendarCheckedDates = this.getCalendarCheckedDates();
+    const todayStr = homeCheckin.getCheckinDay();
     
     // 获取当月第一天和最后一天
     const firstDay = new Date(year, month - 1, 1);
@@ -1166,14 +1116,12 @@ Page({
         day: day,
         type: 'prev-month',
         fullDate: fullDate,
-        isToday: false,
+        isToday: fullDate === todayStr,
         isChecked: this.isDateChecked(fullDate)
       });
     }
     
     // 添加当前月的日期
-    const todayStr = dateUtil.getBusinessDate();
-    
     for (let day = 1; day <= daysInMonth; day++) {
       const fullDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
       
@@ -1204,7 +1152,7 @@ Page({
         day: nextMonthDay,
         type: 'next-month',
         fullDate: fullDate,
-        isToday: false,
+        isToday: fullDate === todayStr,
         isChecked: this.isDateChecked(fullDate)
       });
       nextMonthDay++;
@@ -1270,7 +1218,7 @@ Page({
     console.log('=== index页面onLoad函数开始 ===');
     console.log('页面参数:', options);
     
-    const [year, month] = dateUtil.getBusinessDate().split('-').map(Number);
+    const [year, month] = homeCheckin.getCheckinDay().split('-').map(Number);
     this.setData({
       currentYear: year,
       currentMonth: month
@@ -1312,10 +1260,14 @@ Page({
   onShow() {
     console.log('=== index页面onShow函数开始 ===');
     this.refreshCheckinDefaults();
-    this.refreshCheckinRecords(false);
+    this.refreshCheckinRecords();
     clearInterval(this._checkinClock);
     this._checkinClock = setInterval(() => {
       if (!this.data.checkinSubmitting) this.refreshCheckinDefaults();
+      if (this._checkinDay !== homeCheckin.getCheckinDay()) {
+        this.updateCheckinGroups();
+        this.generateCalendar();
+      }
     }, 30000);
     
     // 检查用户信息状态（不跳转，只更新显示）
@@ -1324,12 +1276,6 @@ Page({
     
     // 重新生成日历，确保显示最新的打卡状态
     this.generateCalendar();
-    
-    // 更新本月打卡次数显示
-    this.updateMonthlyCount();
-    
-    // 加载云端排名
-    this.loadRanking();
     
     console.log('页面显示完成，当前用户状态:', {
       hasUserInfo: this.data.hasUserInfo,
@@ -1362,146 +1308,15 @@ Page({
       this.refreshCheckinDefaults();
       const refreshed = await this.refreshCheckinsFromCloud();
       if (!refreshed) this.refreshCalendarData();
-      this.loadMoreCheckins();
     } finally {
       wx.stopPullDownRefresh();
     }
   },
 
   /**
-   * 加载云端排名（6小时缓存）
-   */
-  loadRanking: async function() {
-    // 检查用户是否已登录（通过hasUserInfo判断）
-    if (!this.data.hasUserInfo) {
-      // 未登录用户
-      this.setData({
-        currentUserRank: "暂无排名",
-        totalUsers: 0,
-        showRankUnit: false
-      });
-      return;
-    }
-    
-    // 登录用户：获取真实的用户openid
-    const userOpenId = wx.getStorageSync('userOpenId') || this.data.userOpenId;
-    if (!userOpenId) {
-      this.setData({
-        currentUserRank: "加载中...",
-        totalUsers: 0,
-        showRankUnit: false
-      });
-      return;
-    }
-    
-    try {
-      // 获取缓存排名（6小时缓存）
-      const rankingData = await this.getCachedCloudRanking();
-      
-      console.log('云端排名数据返回:', rankingData);
-      
-      if (rankingData.success && rankingData.data) {
-        // 使用实时排名数据
-        const rankingInfo = rankingData.data;
-
-        console.log('实时排名数据:', {
-          currentUserOpenId: rankingInfo.currentUserOpenId,
-          currentUserRank: rankingInfo.currentUserRank,
-          hasRanking: rankingInfo.hasRanking,
-          totalUsers: rankingInfo.totalUsers
-        });
-
-        // 根据 hasRanking 决定展示：有名次则显示数字 + "名"单位，否则显示"暂无排名"
-        const hasRanking = rankingInfo.hasRanking === true;
-        this.setData({
-          currentUserRank: hasRanking ? rankingInfo.currentUserRank : "暂无排名",
-          totalUsers: rankingInfo.totalUsers,
-          showRankUnit: hasRanking
-        });
-
-        console.log(`实时排名加载完成：用户排名 ${hasRanking ? rankingInfo.currentUserRank : '暂无'}, 总用户数：${rankingInfo.totalUsers}`);
-      } else {
-        // 排名数据获取失败，提供更详细的错误信息
-        const errorMessage = rankingData.message || '排名数据获取失败';
-        console.log('云端排名数据获取失败:', errorMessage);
-        
-        // 根据不同的错误类型显示不同的提示
-        if (errorMessage.includes('暂无排名数据')) {
-          // 数据库中没有排名数据，这是正常情况
-          this.setData({
-            currentUserRank: "暂无排名数据",
-            totalUsers: 0,
-            showRankUnit: false
-          });
-        } else {
-          // 其他错误情况
-          this.setData({
-            currentUserRank: "加载失败",
-            totalUsers: 0,
-            showRankUnit: false
-          });
-        }
-      }
-    } catch (error) {
-      // 降级处理
-      console.error('排名加载失败:', error);
-      this.setData({
-        currentUserRank: "加载失败",
-        totalUsers: 0,
-        showRankUnit: false
-      });
-    }
-  },
-
-  /**
-   * 获取缓存排名（调用云函数）
-   */
-  getCachedCloudRanking: function() {
-    return new Promise((resolve, reject) => {
-      const CACHE_KEY = 'cloud_ranking_cache';
-      // 缓存 2 分钟：既挡住高频 onShow 的重复请求，
-      // 又保证打卡后能在较短时间内刷新到最新名次（当日时长频繁变化）
-      const CACHE_DURATION = 2 * 60 * 1000;
-
-      // 命中缓存且未过期时直接返回，避免重复调用云函数
-      const cache = wx.getStorageSync(CACHE_KEY);
-      if (cache && Date.now() - cache.timestamp < CACHE_DURATION) {
-        console.log('命中排名缓存，直接返回');
-        resolve(cache.data);
-        return;
-      }
-
-      // 缓存过期，调用云函数
-      wx.cloud.callFunction({
-        name: 'meditationManager',
-        data: {
-          type: 'getRankingSnapshot',
-          rankingType: 'daily'
-        },
-        success: (res) => {
-          console.log('云端排名数据获取成功，详细数据:', JSON.stringify(res.result, null, 2));
-
-          // 更新缓存
-          wx.setStorageSync(CACHE_KEY, {
-            data: res.result,
-            timestamp: Date.now()
-          });
-          console.log('云端排名数据获取成功，已更新缓存');
-          resolve(res.result);
-        },
-        fail: (err) => {
-          console.error('云端排名数据获取失败:', err);
-          reject(err);
-        }
-      });
-    });
-  },
-
-  /**
    * 页面上拉触底事件的处理函数
    */
   onReachBottom() {
-    this.loadMoreCheckins();
   },
 
   /**

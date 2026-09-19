@@ -1,5 +1,8 @@
 {
   "usingComponents": {},
   "navigationBarTitleText": "加入团队",
-  "navigationStyle": "default"
+  "navigationStyle": "default",
+  "navigationBarBackgroundColor": "#B29764",
+  "navigationBarTextStyle": "white",
+  "backgroundColor": "#F8FAFC"
 }

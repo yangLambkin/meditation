@@ -185,7 +185,8 @@
   padding: 0 60rpx;
 }
 
-/* 停止按钮包装器 - 确保布局对称 */
+/* 两侧按钮包装器 - 确保布局对称 */
+.reset-btn-wrapper,
 .stop-btn-wrapper {
   width: 100rpx;
   height: 100rpx;
@@ -194,7 +195,8 @@
   align-items: center;
 }
 
-/* 停止按钮占位元素 */
+/* 两侧按钮占位元素 */
+.reset-btn-placeholder,
 .stop-btn-placeholder {
   width: 100rpx;
   height: 100rpx;

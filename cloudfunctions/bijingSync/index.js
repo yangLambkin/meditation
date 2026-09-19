@@ -127,7 +127,11 @@ async function getUserDoc(openid) {
 // ===== 绑定学号（含昵称覆盖） =====
 async function bindStudentNumber(openid, studentNumber) {
   if (!openid) return { success: false, error: '用户未登录' };
+  if (typeof studentNumber === 'string') studentNumber = studentNumber.trim();
   if (!studentNumber) return { success: false, error: '学号不能为空' };
+  if (typeof studentNumber !== 'string' || !/^BJ/.test(studentNumber)) {
+    return { success: false, error: '学号必须以大写 BJ 开头' };
+  }
 
   // 1. 校验学号存在性
   // 重新绑定不同学号时，重置同步状态，避免显示旧学号的同步历史
@@ -196,7 +200,11 @@ async function bindStudentNumber(openid, studentNumber) {
 // ===== 仅校验学号（不绑定，用于绑定前确认弹窗） =====
 // 返回 { success, data: { studentNumber, nickname }, error }
 async function checkStudentNumber(studentNumber) {
+  if (typeof studentNumber === 'string') studentNumber = studentNumber.trim();
   if (!studentNumber) return { success: false, error: '学号不能为空' };
+  if (typeof studentNumber !== 'string' || !/^BJ/.test(studentNumber)) {
+    return { success: false, error: '学号必须以大写 BJ 开头' };
+  }
   try {
     const resp = await checkStudentExists(studentNumber);
     if (!resp || !resp.success) {

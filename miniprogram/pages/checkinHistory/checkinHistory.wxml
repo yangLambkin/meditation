@@ -1,0 +1,49 @@
+<import src="../../templates/memberHistory.wxml" />
+<view class="checkin-history-page">
+  <template is="member-history-header" data="{{isMemberHistory, memberName, memberAvatar, memberStartDate}}" />
+  <view class="history-navigation">
+    <view class="history-view-tabs">
+      <button class="history-view-tab" bindtap="openDailyView" disabled="{{checkinDeleting}}" hover-class="none">按日</button>
+      <button class="history-view-tab history-view-tab-active" hover-class="none" aria-label="当前按月查看">按月</button>
+    </view>
+    <view class="history-period-navigation">
+      <button class="history-period-arrow" bindtap="previousMonth" disabled="{{!canGoPrevious || checkinDeleting}}" aria-label="上一月" hover-class="history-control-active">‹</button>
+      <picker class="history-period-picker" mode="date" fields="month" value="{{selectedMonth}}" start="{{memberStartDate}}" end="{{currentDate}}" disabled="{{checkinDeleting}}" bindchange="changeMonth">
+        <view class="history-period-value"><text>{{selectedMonthLabel}}</text><text class="history-picker-chevron">⌄</text></view>
+      </picker>
+      <button class="history-period-arrow" bindtap="nextMonth" disabled="{{!canGoNext || checkinDeleting}}" aria-label="下一月" hover-class="history-control-active">›</button>
+    </view>
+    <button class="history-current-period" bindtap="goToCurrentMonth" disabled="{{selectedMonth === currentMonth || checkinDeleting}}" hover-class="history-control-active">{{selectedMonth === currentMonth ? '本月' : '回到本月'}}</button>
+    <text class="checkin-history-hint">每天 04:00 至次日 04:00 记为同一天</text>
+  </view>
+
+  <template is="member-history-status" data="{{isMemberHistory, memberLoading, memberError}}" />
+  <block wx:if="{{!isMemberHistory || (!memberLoading && !memberError)}}">
+  <view class="checkin-overview">
+    <view class="checkin-stat"><text class="checkin-stat-label">当月打卡次数</text><view class="checkin-stat-value">{{monthCount}}<text class="checkin-stat-unit">次</text></view></view>
+    <view class="checkin-stat-divider"></view>
+    <view class="checkin-stat"><text class="checkin-stat-label">当月累计时长</text><view class="checkin-stat-value">{{monthDuration}}<text class="checkin-stat-unit">分钟</text></view></view>
+  </view>
+
+  <view class="checkin-section-heading"><text class="checkin-section-title">当月记录</text><text class="checkin-section-summary">{{monthDayCount}} 天有记录</text></view>
+  <view wx:if="{{!monthCount}}" class="checkin-empty"><text class="checkin-empty-title">本月暂无打卡记录</text><text class="checkin-empty-hint">可以切换月份，回顾其他静坐时光</text></view>
+  <view class="checkin-day-group" wx:for="{{monthDays}}" wx:for-item="day" wx:key="date">
+    <view class="checkin-day-heading" bindtap="openCheckinHistory" data-date="{{day.date}}" hover-class="history-control-active">
+      <text class="checkin-day-date">{{day.date}}</text>
+      <view class="checkin-day-summary"><text>{{day.count}} 次 · {{day.totalDuration}} 分钟</text><text class="checkin-day-chevron">›</text></view>
+    </view>
+    <view class="checkin-record" wx:for="{{day.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" data-date="{{day.date}}" hover-class="checkin-record-active">
+      <view class="checkin-record-heading">
+        <view class="checkin-record-main"><text class="checkin-record-duration">{{record.duration}} 分钟</text><text class="checkin-record-time">{{record.timeLabel}}</text></view>
+        <button wx:if="{{!isMemberHistory}}" class="checkin-record-more" catchtap="deleteCheckinRecord" data-id="{{record.id}}" disabled="{{checkinDeleting}}" loading="{{deletingCheckinId === record.id}}" aria-label="更多记录操作" hover-class="history-control-active">···</button>
+      </view>
+      <view wx:if="{{record.emotion.length}}" class="checkin-record-emotions">
+        <text class="checkin-emotion" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
+      </view>
+      <view wx:if="{{record.experienceTexts.length}}" class="checkin-record-experience">
+        <text class="checkin-record-experience-text" wx:for="{{record.experienceTexts}}" wx:for-item="experience" wx:key="*this">{{experience}}</text>
+      </view>
+    </view>
+  </view>
+  </block>
+</view>

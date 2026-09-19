@@ -1,201 +1,189 @@
-<!--subpackages/team/pages/teamDetails/teamDetails.wxml-->
-<view class="flex-col justify-start page">
-  <!-- 加载状态 -->
-  <view class="loading-container" wx:if="{{isLoading}}">
-    <text class="loading-text">加载中...</text>
-  </view>
-  
-  <!-- 团队信息 -->
-  <view class="flex-col justify-start section" wx:if="{{!isLoading && teamInfo}}">
-    <view class="flex-col group">
-      <view class="flex-col section_3">
-        <!-- 返回首页按钮 -->
-        <view class="back-home-container">
-          <view class="back-home-btn" bindtap="goToHomePage">
-            <image class="home-icon" src="/images/icons/home.png" mode="aspectFit" />
-            <text class="back-home-text">首页</text>
-          </view>
+<view class="team-page">
+  <view wx:if="{{teamInfo}}" class="team-content">
+    <view class="team-overview">
+      <view class="team-identity">
+        <image class="team-icon" src="{{teamInfo.icon || '/images/icons/team.png'}}" mode="aspectFill" />
+        <view class="team-name-row">
+          <text class="team-name">{{teamInfo.name}}</text>
+          <button wx:if="{{isCreator}}" class="hero-edit" size="mini" bindtap="openSettings">编辑</button>
         </view>
-        
-        <view class="flex-col self-stretch group_2">
-          <view class="flex-col justify-start items-end relative group_3">
-            <!-- 团队图标 -->
-            <image class="team-icon" src="{{teamInfo.icon}}" mode="aspectFit" />
-            <!-- 团队名称 -->
-            <text class="font text_2 pos_2">{{teamInfo.name}}</text>
-            <!-- 团队描述 -->
-            <text class="text_3 pos_3">{{teamInfo.description || '暂无团队介绍'}}</text>
-          </view>
-          <!-- 团队统计信息 -->
-          <view class="mt-26 flex-row equal-division">
-            <view class="flex-col items-center section_4 equal-division-item">
-              <image
-                class="image"
-                src="/subpackages/team/images/icons/team.png"
-              />
-              <text class="mt-4 font mt-9">{{members.length}}人</text>
-              <text class="mt-4 font_2 mt-9">成员</text>
-            </view>
-            <view class="ml-12 flex-col items-center section_4 equal-division-item">
-              <image
-                class="image"
-                src="/subpackages/team/images/icons/totalCheckin.png"
-              />
-              <text class="font mt-3 mt-9">{{teamTotalCheckins}}</text>
-              <text class="font_2 mt-3 mt-9">总打卡</text>
-            </view>
-            <view class="ml-12 flex-col items-center section_4 equal-division-item">
-              <image
-                class="image"
-                src="/subpackages/team/images/icons/activity.png"
-              />
-              <text class="font mt-3">{{teamActivityRate}}%</text>
-              <text class="font_2 mt-3">活跃度</text>
-            </view>
-          </view>
-          
-          <!-- 功能按钮区域 -->
-          <view class="flex-col justify-center items-center mt-20 button-group">
-            <view class="flex-row justify-center items-center">
-              <!-- 邀请成员按钮（仅从"我加入的团队"页面进入时可见） -->
-              <button class="flex-row justify-center items-center button-item" open-type="share" wx:if="{{fromTab === 'created'}}">
-                <image
-                  class="image_2"
-                  src="/subpackages/team/images/icons/invite.png"
-                />
-                <text class="font_3 text_4 ml-9">邀请成员</text>
-              </button>
-              <!-- 解散团队按钮（仅创建者可见，且从"我加入的团队"页面进入） -->
-              <view class="flex-row justify-center items-center button-item" wx:if="{{isCreator && fromTab === 'created'}}" bindtap="confirmDeleteTeam">
-                <image
-                  class="image_2"
-                  src="/subpackages/team/images/icons/delete.png"
-                />
-                <text class="font_3 text-danger ml-9">解散团队</text>
-              </view>
-            </view>
-          </view>
-        </view>
+        <text class="team-description">{{teamInfo.description || '暂无团队介绍'}}</text>
       </view>
-      
-      <!-- 标签页切换 -->
-      <view class="tab-container">
-        <view 
-          class="tab-item {{currentTab === 'members' ? 'active' : ''}}" 
-          bindtap="switchTab" 
-          data-tab="members"
-        >
-          <text class="tab-text">团队成员</text>
-          <view class="tab-indicator"></view>
-        </view>
-        <view 
-          class="tab-item {{currentTab === 'activities' ? 'active' : ''}}" 
-          bindtap="switchTab" 
-          data-tab="activities"
-        >
-          <text class="tab-text">练习动态</text>
-          <view class="tab-indicator"></view>
-        </view>
+      <view class="team-stats">
+        <view class="team-stat"><text class="team-stat-value">{{teamMembers.length}}</text><text class="team-stat-label">团队成员</text></view>
+        <view class="team-stat"><text class="team-stat-value">{{overview ? overview.totalPracticeCount : '—'}}</text><text class="team-stat-label">累计练习</text></view>
+        <view class="team-stat"><text class="team-stat-value">{{overview ? overview.activityRate + '%' : '—'}}</text><text class="team-stat-label">今日活跃度</text></view>
       </view>
-
-      <!-- 团队成员列表 -->
-      <view class="flex-col relative group_4" wx:if="{{currentTab === 'members'}}">
-        
-        <view class="flex-col list">
-          <view
-            class="flex-row items-center mt-12 list-item"
-            wx:for="{{members}}"
-            wx:for-item="member"
-            wx:for-index="index"
-            wx:key="id"
-          >
-            <image class="member-avatar" src="{{member.avatar}}" mode="aspectFill" />
-            <view class="ml-12 flex-col flex-1">
-              <view class="flex-row items-center">
-                <view class="flex-col justify-start items-left text-wrapper_4">
-                  <text class="font_5 text_8">{{member.name}}</text>
-                </view>
-                <view class="ml-8 flex-col justify-start items-center text-wrapper_5" wx:if="{{member.role === '团长'}}">
-                  <text class="text_9 leader-tag">{{member.role}}</text>
-                </view>
-              </view>
-              <view class="flex-row items-center mt-5">
-                <image
-                  class="image_3"
-                  src="/subpackages/team/images/icons/checkin.png"
-                />
-                <text class="text_9 ml-4">打卡 {{member.checkInCount}} 次</text>
-              </view>
-            </view>
-          </view>
-        </view>
+      <view wx:if="{{isCreator}}" class="hero-actions">
+        <button wx:if="{{inviteReady}}" class="invite-button" open-type="share" disabled="{{isLoading || isSaving || isDeleting}}">邀请成员</button>
+        <button wx:else class="invite-button" bindtap="prepareInvite" loading="{{isPreparingInvite}}" disabled="{{isPreparingInvite || isLoading || isSaving || isDeleting}}">{{isPreparingInvite ? '准备中…' : (inviteError ? '重试邀请' : '邀请成员')}}</button>
+        <button class="hero-dissolve" bindtap="confirmDeleteTeam" disabled="{{isSaving || isDeleting}}">解散团队</button>
       </view>
-
-      <!-- 练习动态 -->
-      <view class="flex-col relative group_4" wx:if="{{currentTab === 'activities'}}">
-          <view class="flex-col justify-start items-start text-wrapper_2">
-            <text class="font_4 text_7">本周练习动态</text>
-          </view>
-        <view class="flex-col list">
-          <!-- 加载状态 -->
-          <view class="loading-state" wx:if="{{activitiesLoading}}">
-            <view class="loading-spinner"></view>
-            <text class="loading-text">加载中...</text>
-          </view>
-          
-          <!-- 错误状态 -->
-          <view class="error-state" wx:if="{{activitiesError}}">
-            <image class="error-icon" src="/images/icons/error.png" />
-            <text class="error-text">加载失败，请重试</text>
-            <button class="retry-btn" bindtap="loadActivitiesData">重新加载</button>
-          </view>
-          
-          <!-- 正常内容 -->
-          <view wx:if="{{!activitiesLoading && !activitiesError}}">
-            <view 
-              class="flex-col mt-12 activity-item" 
-              wx:for="{{activities}}" 
-              wx:for-item="activity" 
-              wx:for-index="index" 
-              wx:key="id"
-            >
-              <view class="flex-row items-center">
-                <!-- 成员头像 -->
-                <image class="member-avatar" src="{{activity.avatar}}" mode="aspectFill" />
-                <view class="ml-12 flex-col flex-1">
-                  <view class="flex-row items-center">
-                    <view class="flex-col justify-start items-left text-wrapper_4">
-                      <text class="font_5 text_8">{{activity.memberName}}</text>
-                    </view>
-                    <view class="ml-8 flex-col justify-start items-center text-wrapper_5">
-                      <text class="font_7 text_10">{{activity.duration}}</text>
-                    </view>
-                  </view>
-                  <view class="flex-col mt-5">
-                    <view class="flex-row items-center mt-4">
-                      <image
-                        class="image_3"
-                        src="/subpackages/team/images/icons/time.png"
-                      />
-                      <text class="text_9 ml-4">{{activity.originalTime || activity.dateTime || activity.time || formatTime(activity.timestamp)}}</text>
-                    </view>
-                  </view>
-                </view>
-              </view>
-            </view>
-            
-            <!-- 空状态 -->
-            <view class="empty-state" wx:if="{{activities.length === 0}}">
-              <text class="empty-text">暂无练习动态</text>
-            </view>
-          </view>
-        </view>
-      </view>
+      <text wx:if="{{isCreator && inviteReady}}" class="invite-note">邀请已准备好，点击「邀请成员」分享给好友。</text>
+      <text wx:if="{{isCreator && inviteError}}" class="invite-note invite-error">{{inviteError}}</text>
     </view>
+
+    <view class="main-tabs">
+      <view class="main-tab {{currentTab === 'members' ? 'active' : ''}}" data-tab="members" bindtap="switchTab">团队成员</view>
+      <view class="main-tab {{currentTab === 'records' ? 'active' : ''}}" data-tab="records" bindtap="switchTab">查看记录</view>
+    </view>
+
+    <view wx:if="{{currentTab === 'members'}}" class="members-view">
+      <view class="section-heading"><text class="section-title">一起练习的伙伴</text><text class="member-total">{{teamMembers.length}} 位成员</text></view>
+      <view class="roster-card" wx:for="{{teamMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的练习记录">
+        <image class="member-avatar" src="{{item.avatar}}" mode="aspectFill" />
+        <view class="member-identity">
+          <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view>
+          <text wx:if="{{report && item.totalPracticeCount !== undefined}}" class="member-subtitle">练习 {{item.totalPracticeCount}} 次 · {{item.cumulativeMinutesLabel}} 分钟</text>
+          <text wx:if="{{report}}" class="member-last-practice">{{item.lastPracticeLabel ? '最近练习 · ' + item.lastPracticeLabel : (item.totalPracticeCount === 0 ? '还没有练习记录' : '')}}</text>
+        </view>
+        <text class="member-card-chevron" aria-hidden="true">›</text>
+      </view>
+      <view wx:if="{{isLoading}}" class="member-load-note">正在同步成员练习数据…</view>
+      <view wx:elif="{{reportError}}" class="member-load-note"><text>成员已加载，练习数据暂不可用</text><button class="text-button" bindtap="loadTeamData">重新加载</button></view>
+      <text wx:elif="{{report}}" class="page-footnote">练习次数与时长从 {{report.history.startDate}} 起统计</text>
+    </view>
+
+    <block wx:if="{{currentTab === 'records'}}">
+      <view class="record-toolbar"><view class="record-tabs"><view class="record-tab {{recordTab === 'today' ? 'active' : ''}}" data-tab="today" bindtap="switchRecordTab">今日练习</view><view class="record-tab {{recordTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchRecordTab">历史统计</view></view><text class="record-rules" bindtap="openSettings">{{hasGoal ? '期望 ' + teamInfo.dailyGoalMinutes + ' 分钟 / 天' : '未设置期望分钟'}} ›</text></view>
+    <view wx:if="{{isLoading}}" class="state-panel">
+      <view class="loading-dot"></view>
+      <text class="state-title">正在同步练习数据</text>
+      <text class="state-description">请稍候</text>
+    </view>
+    <view wx:elif="{{reportError}}" class="state-panel error-panel">
+      <text class="state-symbol">↻</text>
+      <text class="state-title">暂时无法获取练习数据</text>
+      <text class="state-description">{{reportError}}</text>
+      <button class="secondary-button" bindtap="loadTeamData">重新加载</button>
+    </view>
+
+    <block wx:elif="{{report}}">
+      <view wx:if="{{recordTab === 'today'}}" class="today-view">
+        <view class="section-heading">
+          <view>
+            <text class="section-title">{{dayLabel}}<text class="date-caption"> · 练习日</text></text>
+            <text class="section-caption">04:00 — 次日 04:00 · 当日多次练习累计计算</text>
+          </view>
+          <text class="member-total">{{report.summary.memberCount}} 位成员</text>
+        </view>
+
+        <view class="today-summary">
+          <view class="summary-item {{todayFilter === 'not_practiced' ? 'selected' : ''}}" data-filter="not_practiced" bindtap="changeTodayFilter">
+            <text class="summary-number neutral-number">{{report.summary.notPracticedCount}}</text>
+            <text class="summary-label"><text class="status-dot neutral-dot"></text>尚未练习</text>
+          </view>
+          <view wx:if="{{hasGoal}}" class="summary-item {{todayFilter === 'below_goal' ? 'selected' : ''}}" data-filter="below_goal" bindtap="changeTodayFilter">
+            <text class="summary-number gold-number">{{report.summary.belowGoalCount}}</text>
+            <text class="summary-label"><text class="status-dot gold-dot"></text>时长不足</text>
+          </view>
+          <view wx:if="{{hasGoal}}" class="summary-item {{todayFilter === 'qualified' ? 'selected' : ''}}" data-filter="qualified" bindtap="changeTodayFilter">
+            <text class="summary-number green-number">{{report.summary.qualifiedCount}}</text>
+            <text class="summary-label"><text class="status-dot green-dot"></text>已达标</text>
+          </view>
+          <view wx:if="{{!hasGoal}}" class="summary-item {{todayFilter === 'practiced' ? 'selected' : ''}}" data-filter="practiced" bindtap="changeTodayFilter"><text class="summary-number green-number">{{report.summary.practicedCount}}</text><text class="summary-label"><text class="status-dot green-dot"></text>已练习</text></view>
+        </view>
+
+        <view class="filter-row">
+          <view class="filter-chip {{todayFilter === 'attention' ? 'active' : ''}}" data-filter="attention" bindtap="changeTodayFilter">待关注 <text class="filter-count">{{attentionCount}}</text></view>
+          <view class="filter-chip {{todayFilter === (hasGoal ? 'qualified' : 'practiced') ? 'active' : ''}}" data-filter="{{hasGoal ? 'qualified' : 'practiced'}}" bindtap="changeTodayFilter">{{hasGoal ? '已达标' : '已练习'}}</view>
+          <view class="filter-chip {{todayFilter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeTodayFilter">全部</view>
+        </view>
+        <text class="list-note">{{todayFilter === 'attention' ? (hasGoal ? '先显示尚未练习的成员，再显示时长不足的成员' : '本练习日尚无练习记录的成员') : (todayFilter === 'not_practiced' ? '本练习日尚无练习记录的成员' : (todayFilter === 'below_goal' ? '本练习日累计时长未达目标的成员' : (todayFilter === 'qualified' ? '已完成本练习日目标的成员' : (todayFilter === 'practiced' ? '本练习日已有练习记录的成员' : '全体成员的当日累计练习情况'))))}}</text>
+
+        <view class="member-list" wx:if="{{todayMembers.length}}">
+          <view class="practice-card" wx:for="{{todayMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="day" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}今日的练习记录">
+            <view class="member-row">
+              <image class="member-avatar" src="{{item.avatar}}" mode="aspectFill" />
+              <view class="member-identity">
+                <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view>
+                <text class="member-subtitle">{{item.todayStatus === 'not_practiced' ? '今天的练习，还未开始' : (item.todayStatus === 'below_goal' ? '距离目标还差 ' + item.remainingMinutesLabel + ' 分钟' : (hasGoal ? '今日目标已完成' : '今天已完成练习'))}}</text>
+              </view>
+              <view class="member-card-trailing"><text class="status-badge status-{{item.todayStatus}}">{{item.statusLabel}}</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+            </view>
+            <view class="practice-detail">
+              <view class="minutes-line"><text class="minutes-value">{{item.todayMinutesLabel}}</text><text class="minutes-unit">{{hasGoal ? ' / ' + report.settings.dailyGoalMinutes : ''}} 分钟</text><text wx:if="{{item.todayPracticeCount > 0}}" class="session-count">{{item.todayPracticeCount}} 次练习</text></view>
+              <view wx:if="{{hasGoal}}" class="progress-track"><view class="progress-fill progress-{{item.todayStatus}}" style="width: {{item.progress}}%;"></view></view>
+            </view>
+          </view>
+        </view>
+        <view wx:else class="empty-panel">
+          <text class="empty-mark">{{todayFilter === 'attention' ? '✓' : '—'}}</text>
+          <text class="state-title">{{todayFilter === 'attention' ? (hasGoal ? '今天，大家都已完成目标' : '今天，大家都已练习') : '当前分类暂无成员'}}</text>
+          <text class="state-description">{{todayFilter === 'attention' ? '一起把这份坚持，带到明天。' : '可以切换其他分类，查看团队练习情况。'}}</text>
+        </view>
+        <text class="page-footnote">{{nextDayLabel}} 04:00 更新为下一个练习日 · 北京时间</text>
+      </view>
+
+      <view wx:else class="history-view">
+        <view class="section-heading"><view><text class="section-title">历史练习统计</text><text class="section-caption">从起始日期至昨日，今日不计入历史</text></view></view>
+        <view class="history-overview">
+          <view class="history-overview-top"><text class="history-range">{{report.history.totalDays > 0 ? historyRangeLabel : '今天是统计的第一天'}}</text><text class="history-day-count">{{report.history.totalDays}}<text> 天</text></text></view>
+          <text class="history-rule">{{hasGoal ? '每天累计 ' + report.settings.dailyGoalMinutes + ' 分钟即达标；未达标天数包含未练习。' : '未设置期望分钟，记录实际练习天数与时长。'}}</text><text wx:if="{{!report.settings.practiceStartDate}}" class="history-rule">未设置起始日期，从团队创建日开始统计。</text>
+        </view>
+        <block wx:if="{{report.history.totalDays > 0}}">
+          <view class="history-list-caption"><text>成员练习记录</text><text>{{hasGoal ? '按未达标天数排序' : '按练习天数排序'}}</text></view>
+          <view class="history-card" wx:for="{{historyMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" data-record-scope="history" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的历史练习记录">
+            <view class="member-row">
+              <image class="member-avatar history-avatar" src="{{item.avatar}}" mode="aspectFill" />
+              <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view></view>
+              <view class="member-card-trailing"><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+            </view>
+            <view class="history-metrics">
+              <view class="history-metric"><text class="metric-label">练习天数</text><text class="metric-value">{{item.practiceDays}}<text class="metric-unit"> 天</text></text></view>
+              <view class="metric-divider"></view>
+              <view class="history-metric"><text class="metric-label">{{hasGoal ? '未达标天数' : '练习时长'}}</text><text class="metric-value {{hasGoal && item.unmetDays > 0 ? 'gold-number' : ''}}">{{hasGoal ? item.unmetDays : item.totalMinutesLabel}}<text class="metric-unit"> {{hasGoal ? '天' : '分钟'}}</text></text></view>
+            </view>
+            <view class="history-breakdown"><text>未练习 <text class="breakdown-number">{{item.missedDays}}</text> 天</text><text wx:if="{{hasGoal}}">时长不足 <text class="breakdown-number">{{item.belowGoalDays}}</text> 天</text></view>
+          </view>
+        </block>
+        <view wx:else class="empty-panel"><text class="empty-mark">○</text><text class="state-title">历史，从第一天的练习开始</text><text class="state-description">当前练习日结束后，这里会展示每位成员的积累。</text></view>
+        <text class="page-footnote">全体当前成员使用同一起始日期 · 每日 04:00 结算</text>
+      </view>
+    </block>
+    </block>
   </view>
-  
-  <!-- 错误状态 -->
-  <view class="error-container" wx:if="{{!isLoading && !teamInfo}}">
-    <text class="error-text">团队信息加载失败</text>
+
+  <view wx:else class="state-panel full-page-state">
+    <view wx:if="{{isLoading}}" class="loading-dot"></view>
+    <text class="state-title">{{isLoading ? '正在打开团队' : '暂时无法打开团队'}}</text>
+    <text class="state-description">{{isLoading ? '请稍候' : loadError}}</text>
+    <button wx:if="{{!isLoading && teamId}}" class="secondary-button" bindtap="loadTeamData">重新加载</button>
+    <button wx:if="{{!isLoading}}" class="text-button" bindtap="goToTeamList">返回团队列表</button>
+  </view>
+
+  <view wx:if="{{settingsOpen}}" class="sheet-overlay" style="bottom: {{keyboardHeight}}px;">
+    <view class="sheet-backdrop" catchtap="closeSettings" catchtouchmove="preventSheetClose"></view>
+    <view class="settings-sheet" catchtap="preventSheetClose">
+      <view class="sheet-handle"></view>
+      <view class="sheet-heading"><text class="sheet-title">{{isCreator ? '编辑团队' : '团队练习规则'}}</text><button class="sheet-close" bindtap="closeSettings" disabled="{{isSaving || isDeleting}}">×</button></view>
+      <scroll-view class="settings-scroll" scroll-y="true" scroll-into-view="{{settingsScrollTarget}}" scroll-with-animation="true" enhanced="true" bounces="false">
+        <view class="settings-scroll-content">
+      <text class="sheet-description">{{isCreator ? '完善团队资料，练习设置可以随时调整。' : '查看团队的统计起点和每日期望时长。'}}</text>
+      <block wx:if="{{isCreator}}">
+        <view class="edit-avatar-row"><image class="edit-avatar" src="{{draftIcon}}" mode="aspectFill" /><button class="secondary-button avatar-button" bindtap="chooseTeamIcon" loading="{{isChoosingIcon}}" disabled="{{isSaving || isDeleting || isChoosingIcon}}">{{isChoosingIcon ? '上传中…' : '更换头像'}}</button></view>
+        <view class="setting-field" id="team-name-field"><text class="field-label">团队名称</text><view class="field-control"><input class="team-name-input" value="{{draftName}}" placeholder="请输入团队名称" maxlength="20" bindinput="changeTeamName" bindkeyboardheightchange="onFieldKeyboardHeightChange" data-field="team-name-field" adjust-position="{{false}}" disabled="{{isSaving || isDeleting}}" /></view></view>
+        <view class="setting-field" id="team-description-field"><text class="field-label">团队介绍 <text class="optional-label">选填</text></text><textarea class="description-input" value="{{draftDescription}}" placeholder="写下团队的介绍，邀请伙伴一起练习" maxlength="100" bindinput="changeTeamDescription" bindkeyboardheightchange="onFieldKeyboardHeightChange" data-field="team-description-field" adjust-position="{{false}}" show-confirm-bar="{{false}}" disabled="{{isSaving || isDeleting}}" /></view>
+      </block>
+      <view class="setting-field">
+        <view class="field-label-row"><text class="field-label">统计起始日期 <text class="optional-label">选填</text></text><button wx:if="{{isCreator && draftStartDate}}" class="clear-field" bindtap="clearStartDate" disabled="{{isSaving || isDeleting}}">清空</button></view>
+        <picker wx:if="{{isCreator}}" mode="date" value="{{draftStartDate || dateMax}}" end="{{dateMax}}" bindchange="changeStartDate" disabled="{{isSaving || isDeleting}}"><view class="field-control"><text>{{draftStartDate || '不设置，默认从创建日统计'}}</text><text class="field-chevron">›</text></view></picker>
+        <view wx:else class="readonly-value">{{draftStartDate || '未设置，从团队创建日统计'}}</view>
+        <text class="field-help">全体当前成员从这一天开始统计，不区分加入时间。</text>
+      </view>
+      <view class="setting-field" id="daily-goal-field">
+        <text class="field-label">每日期望分钟 <text class="optional-label">选填</text></text>
+        <view wx:if="{{isCreator}}" class="field-control goal-control"><input class="goal-input" placeholder="不设置" type="number" value="{{draftGoalMinutes}}" bindinput="changeGoalMinutes" bindkeyboardheightchange="onGoalKeyboardHeightChange" adjust-position="{{false}}" cursor-spacing="24" maxlength="4" disabled="{{isSaving || isDeleting}}" /><text class="goal-suffix">分钟 / 天</text></view>
+        <view wx:else class="readonly-value">{{draftGoalMinutes ? draftGoalMinutes + ' 分钟 / 天' : '未设置'}}</view>
+        <view wx:if="{{isCreator}}" class="quick-goals"><view class="quick-goal {{draftGoalMinutes === '' ? 'selected' : ''}}" data-minutes="" bindtap="chooseGoalMinutes">不设置</view><view class="quick-goal {{draftGoalMinutes === '20' ? 'selected' : ''}}" data-minutes="20" bindtap="chooseGoalMinutes">20 分钟</view><view class="quick-goal {{draftGoalMinutes === '30' ? 'selected' : ''}}" data-minutes="30" bindtap="chooseGoalMinutes">30 分钟</view><view class="quick-goal {{draftGoalMinutes === '60' ? 'selected' : ''}}" data-minutes="60" bindtap="chooseGoalMinutes">60 分钟</view></view>
+      </view>
+      <view class="settings-note"><text>练习日为北京时间 04:00 至次日 04:00。</text><text>当日多次练习累计计算；未设置期望分钟时不判断达标。</text><text wx:if="{{isCreator}}">修改规则后，历史统计也会按新规则重新计算。</text></view>
+      <text wx:if="{{settingsError}}" class="settings-error">{{settingsError}}</text>
+      <button wx:if="{{isCreator}}" class="primary-button" bindtap="saveSettings" loading="{{isSaving}}" disabled="{{isSaving || isDeleting || isChoosingIcon}}">{{isSaving ? '保存中…' : '保存修改'}}</button>
+      <button wx:else class="primary-button" bindtap="closeSettings">知道了</button>
+      <button wx:if="{{isCreator}}" class="dissolve-button" bindtap="confirmDeleteTeam" disabled="{{isSaving || isDeleting}}">解散团队</button>
+        </view>
+      </scroll-view>
+    </view>
   </view>
 </view>

@@ -1,0 +1,19 @@
+<template name="member-history-header">
+  <view class="member-history-header" wx:if="{{isMemberHistory}}">
+    <image class="member-history-avatar" src="{{memberAvatar || '/images/avatar.png'}}" mode="aspectFill" />
+    <view class="member-history-identity">
+      <text class="member-history-name">{{memberName}}的练习记录</text>
+      <text class="member-history-caption">{{memberStartDate ? '从 ' + memberStartDate + ' 起统计' : '团队成员练习记录'}}</text>
+    </view>
+  </view>
+</template>
+
+<template name="member-history-status">
+  <view class="member-history-status" wx:if="{{isMemberHistory && (memberLoading || memberError)}}" aria-live="polite">
+    <text class="member-history-status-title">{{memberLoading ? '正在加载成员记录…' : '暂时无法查看成员记录'}}</text>
+    <block wx:if="{{!memberLoading && memberError}}">
+      <text class="member-history-status-description">{{memberError}}</text>
+      <button class="member-history-retry" bindtap="refreshCheckinsFromCloud" hover-class="member-history-retry-hover">重新加载</button>
+    </block>
+  </view>
+</template>

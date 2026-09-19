@@ -43,7 +43,7 @@ Page({
     showStartButton: true,
     showPauseButton: false,
     showStopButton: false,
-    showResetButton: true,
+    showResetButton: false,
     
     // 按钮图标
     startIcon: "/images/icons/start.png",
@@ -420,7 +420,7 @@ Page({
       showStartButton: !isRunning,
       showPauseButton: isRunning,
       showStopButton: hasStarted || isRunning,
-      showResetButton: true
+      showResetButton: isRunning || this.data.isPaused || hasStarted
     });
   },
 

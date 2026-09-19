@@ -1,90 +1,97 @@
-<!--pages/createTeam/createTeam.wxml-->
-<view class="flex-col page">
-  <view class="flex-col items-start relative section">
-    <text class="text">创建团队</text>
-    <text class="font text_2">打造你的觉察团队</text>
+<view class="create-team-page">
+  <view class="page-heading">
+    <text class="page-title">创建团队</text>
+    <text class="page-description">一起觉察，让练习成为日常</text>
   </view>
-  <view class="flex-col group">
-    <view class="flex-col group_2">
-      <view class="flex-row items-center group_2">
-        <image
-          class="image_2"
-          src="/images/icons/team.png"
-        />
-        <text class="font text_3 ml-5">选择图标</text>
-      </view>
-      <view class="mt-12 flex-col group_2">
-        <!-- 团队icon选择区域 - 生产版本 -->
-        <view class="team-icons-container">
-          <!-- 第一行：前6个图标 -->
-          <view class="team-icons-row">
-            <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index" 
-              wx:if="{{index < 6}}"
-              class="team-icon-item {{icon.selected ? 'selected' : ''}}" 
-              bindtap="selectTeamIcon"
-              data-id="{{icon.id}}"
-            >
-              <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
-            </view>
+
+  <view class="form-card">
+    <view class="form-field">
+      <text class="field-label">选择图标</text>
+      <view class="team-icons-container">
+        <view class="team-icons-row">
+          <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index"
+            wx:if="{{index < 6}}"
+            class="team-icon-item {{icon.selected ? 'selected' : ''}} {{isCreating || isChoosingIcon || hasCreatedTeam ? 'disabled' : ''}}"
+            bindtap="selectTeamIcon" data-id="{{icon.id}}">
+            <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
           </view>
-          
-          <!-- 第二行：后6个图标 -->
-          <view class="team-icons-row">
-            <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index" 
-              wx:if="{{index >= 6}}"
-              class="team-icon-item {{icon.selected ? 'selected' : ''}}" 
-              bindtap="selectTeamIcon"
-              data-id="{{icon.id}}"
-            >
-              <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
-            </view>
+        </view>
+        <view class="team-icons-row">
+          <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index"
+            wx:if="{{index >= 6}}"
+            class="team-icon-item {{icon.selected ? 'selected' : ''}} {{isCreating || isChoosingIcon || hasCreatedTeam ? 'disabled' : ''}}"
+            bindtap="selectTeamIcon" data-id="{{icon.id}}">
+            <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
           </view>
         </view>
       </view>
     </view>
-    <view class="flex-col group_2 mt-25">
-      <view class="flex-row items-center self-stretch group_3">
-        <image
-          class="image_2"
-          src="/subpackages/team/images/icons/text.png"
-        />
-        <text class="font text_4 ml-5">团队名称</text>
+
+    <view class="form-field">
+      <view class="field-heading">
+        <text class="field-label">团队名称</text>
+        <text class="field-count">{{nameCharCount}}/20</text>
       </view>
-      <view class="flex-col justify-start items-start self-stretch text-wrapper_3">
-        <input 
-          class="font_3 text_5 input-field" 
-          placeholder="请填写"
-          value="{{teamName}}"
-          bindinput="onTeamNameInput"
-          maxlength="20"
-        />
-      </view>
-      <text class="self-start font_4 text_6">{{nameCharCount}}/20</text>
+      <input class="input-field" placeholder="填写团队名称" placeholder-class="field-placeholder"
+        value="{{teamName}}" bindinput="onTeamNameInput" maxlength="20"
+        disabled="{{isCreating || hasCreatedTeam}}" />
     </view>
-    <view class="flex-col group_2 mt-25">
-      <view class="flex-row items-center self-stretch group_3">
-        <image
-          class="image_2"
-          src="/subpackages/team/images/icons/text.png"
-        />
-        <text class="font ml-5">团队介绍</text>
+
+    <view class="form-field">
+      <view class="field-heading">
+        <text class="field-label">团队介绍</text>
+        <text class="field-count">{{descCharCount}}/100</text>
       </view>
-      <view class="flex-col justify-start items-start self-stretch text-wrapper_4">
-        <textarea 
-          class="font_3 text_7 textarea-field" 
-          placeholder="请填写" 
-          value="{{teamDescription}}"
-          bindinput="onTeamDescriptionInput"
-          maxlength="100"
-          auto-height
-        />
-      </view>
-      <text class="self-start font_4 text_8">{{descCharCount}}/100</text>
+      <textarea class="textarea-field" placeholder="介绍一下你的团队" placeholder-class="field-placeholder"
+        value="{{teamDescription}}" bindinput="onTeamDescriptionInput" maxlength="100"
+        disabled="{{isCreating || hasCreatedTeam}}" auto-height />
     </view>
   </view>
-  <view class="flex-col justify-start group_4">
-    <view class="flex-col justify-start items-center text-wrapper_5" bindtap="createTeam">
-      <text class="font_3 text_9">创建</text>
+
+  <view class="form-card practice-rules">
+    <view class="practice-rules-heading">
+      <text class="practice-rules-title">练习规则</text>
+      <text class="practice-rules-badge">每天累计计算</text>
     </view>
+    <view class="practice-rule-row">
+      <text class="practice-rule-label">开始日期（选填）</text>
+      <view class="practice-date-field">
+        <picker mode="date" value="{{practiceStartDate || maxPracticeStartDate}}" end="{{maxPracticeStartDate}}"
+          bindchange="onPracticeStartDateChange" disabled="{{isCreating || hasCreatedTeam}}">
+          <view class="practice-date-value {{!practiceStartDate ? 'practice-rule-placeholder' : ''}}">
+            <text>{{practiceStartDate || '不设置'}}</text>
+            <text class="practice-date-arrow">›</text>
+          </view>
+        </picker>
+        <button wx:if="{{practiceStartDate}}" class="practice-date-clear" bindtap="clearPracticeStartDate"
+          disabled="{{isCreating || hasCreatedTeam}}">清空</button>
+      </view>
+    </view>
+    <view class="practice-rule-row practice-goal-row">
+      <text class="practice-rule-label">期望分钟（选填）</text>
+      <view class="practice-goal-field">
+        <input class="practice-goal-input" type="number" value="{{dailyGoalMinutes}}"
+          bindinput="onDailyGoalInput" maxlength="4" placeholder="不设置" placeholder-class="field-placeholder"
+          disabled="{{isCreating || hasCreatedTeam}}" />
+        <text class="practice-goal-unit">分钟</text>
+      </view>
+    </view>
+    <view class="practice-goal-presets">
+      <button class="practice-goal-preset {{dailyGoalMinutes === '' ? 'selected' : ''}}"
+        bindtap="clearDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
+      <button wx:for="{{dailyGoalPresets}}" wx:key="*this"
+        class="practice-goal-preset {{dailyGoalMinutes == item ? 'selected' : ''}}"
+        data-minutes="{{item}}" bindtap="selectDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">
+        {{item}} 分钟
+      </button>
+    </view>
+    <text class="practice-rules-note">可稍后设置。设置期望分钟后，每日多次练习时长累加，达到期望即算达标。练习日按北京时间 04:00 至次日 04:00 计算。</text>
+  </view>
+
+  <view class="create-action">
+    <button class="create-button" bindtap="createTeam" hover-class="button-hover"
+      loading="{{isCreating || isChoosingIcon}}" disabled="{{isCreating || isChoosingIcon}}">
+      {{hasCreatedTeam ? '返回团队列表' : isChoosingIcon ? '图标检测中' : isCreating ? '创建中' : '创建团队'}}
+    </button>
   </view>
 </view>

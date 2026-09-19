@@ -1,0 +1,29 @@
+page {
+  background-color: #faf8f3;
+}
+
+.heatmap-error {
+  padding: 96rpx 40rpx;
+  text-align: center;
+}
+
+.heatmap-error-message {
+  font-size: 28rpx;
+  line-height: 1.7;
+  color: #62594a;
+}
+
+.heatmap-error-actions {
+  display: flex;
+  justify-content: center;
+  gap: 24rpx;
+  margin-top: 32rpx;
+}
+
+.heatmap-button {
+  margin: 0;
+  padding: 0 32rpx;
+  background-color: #ffffff;
+  color: #8c7345;
+  font-size: 26rpx;
+}

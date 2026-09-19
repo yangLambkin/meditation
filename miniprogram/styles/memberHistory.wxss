@@ -1,0 +1,79 @@
+.member-history-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding: 24rpx;
+  border-radius: 24rpx;
+  background-color: #ffffff;
+}
+
+.member-history-avatar {
+  flex-shrink: 0;
+  width: 76rpx;
+  height: 76rpx;
+  margin-right: 20rpx;
+  border-radius: 50%;
+}
+
+.member-history-identity {
+  flex: 1;
+  min-width: 0;
+}
+
+.member-history-name {
+  display: block;
+  color: #354152;
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.member-history-caption {
+  display: block;
+  margin-top: 6rpx;
+  color: #99a1ae;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.member-history-status {
+  margin-top: 20rpx;
+  padding: 48rpx 24rpx;
+  border-radius: 24rpx;
+  background-color: #ffffff;
+  text-align: center;
+}
+
+.member-history-status-title {
+  display: block;
+  color: #596273;
+  font-size: 28rpx;
+}
+
+.member-history-status-description {
+  display: block;
+  margin-top: 16rpx;
+  color: #99a1ae;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.member-history-status .member-history-retry {
+  display: inline-block;
+  margin: 24rpx 0 0;
+  padding: 0 32rpx;
+  border-radius: 28rpx;
+  background-color: #f7f3eb;
+  color: #a68a57;
+  font-size: 25rpx;
+  line-height: 60rpx;
+}
+
+.member-history-retry::after {
+  border: none;
+}
+
+.member-history-status .member-history-retry-hover {
+  background-color: #eee7d9;
+}

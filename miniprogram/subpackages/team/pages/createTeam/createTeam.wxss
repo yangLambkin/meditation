@@ -1,313 +1,287 @@
-/* pages/createTeam/createTeam.wxss */
-.mt-25 {
-  margin-top: 50rpx;
-}
-.ml-5 {
-  margin-left: 10rpx;
-}
-.page {
-  background-color: #ffffff;
-  border-radius: 0rpx 0rpx 0rpx 0rpx;
-  width: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  height: 100%;
-}
-.section {
-  padding: 56rpx 48rpx;
-  background-image: linear-gradient(180deg, #b29764 0%, #c9a870 100%);
-}
-.text {
-  color: #ffffff;
-  font-size: 40rpx;
-  font-family: Arimo;
-  font-weight: 700;
-  line-height: 37.8rpx;
-}
-.font {
-  font-size: 28rpx;
-  font-family: Arimo;
-  line-height: 26.4rpx;
-  font-weight: 700;
-  color: #364153;
-}
-.text_2 {
-  margin-top: 24rpx;
-  color: #ffffffcc;
-  line-height: 25.96rpx;
-  font-weight: unset;
-}
-.image {
-  border-radius: 134217792rpx;
-  width: 72rpx;
-  height: 72rpx;
-}
-.pos {
-  position: absolute;
-  right: 32rpx;
-  top: 32rpx;
-}
-.group {
-  padding: 52rpx 44rpx 70rpx;
-  overflow: hidden;
-}
-.image_2 {
-  width: 32rpx;
-  height: 32rpx;
-}
-.text_3 {
-  line-height: 26.6rpx;
-}
-.text-wrapper {
-  padding: 24rpx 0;
-  flex: 1 1 105.6rpx;
-  background-color: #b29764;
-  border-radius: 28rpx;
-  filter: drop-shadow(0rpx 8rpx 6rpx #0000001a, 0rpx 20rpx 15rpx #0000001a);
-  height: 105.6rpx;
-}
-.font_2 {
-  font-size: 48rpx;
-  font-family: Arimo;
-  line-height: 48rpx;
-  color: #1d293d;
-}
-.group_2 {
-  padding: 0 4rpx;
-}
-/* 头像选择容器样式 - 调试版 */
-.text-wrapper_2 {
-  padding: 16rpx;
-  background-color: yellow !important;
-  border-radius: 28rpx;
-  height: 96rpx;
-  width: 96rpx;
-  margin: 4rpx;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  border: 4rpx solid red !important;
-  transition: all 0.3s ease;
-  
-  /* 更明显的调试样式 */
-  box-shadow: 0 0 20rpx rgba(255, 0, 0, 0.8) !important;
-  opacity: 0.9 !important;
-}
-.view_6 {
-  flex: 1 1 96rpx;
-}
-.view_5 {
-  margin: 4rpx 4rpx 4rpx 16rpx;
-  flex: 1 1 105.6rpx;
-}
-.view_4 {
-  margin: 4rpx 0 4rpx 16rpx;
-  flex: 1 1 105.6rpx;
-}
-.view_3 {
-  margin: 4rpx 0 4rpx 16rpx;
-  flex: 1 1 105.6rpx;
-}
-.view_2 {
-  margin: 4rpx 0 4rpx 16rpx;
-  flex: 1 1 105.6rpx;
-}
-.view {
-  margin: 4rpx 0 4rpx 16rpx;
-  flex: 1 1 105.6rpx;
-}
-.view_7 {
-  flex: 1 1 96rpx;
-}
-.view_8 {
-  flex: 1 1 96rpx;
-}
-.view_9 {
-  flex: 1 1 96rpx;
-}
-.view_10 {
-  flex: 1 1 96rpx;
-}
-.view_11 {
-  flex: 1 1 96rpx;
-}
-.group_3 {
-  padding-bottom: 16rpx;
-}
-.text_4 {
-  line-height: 26.48rpx;
-}
-.text-wrapper_3 {
-  padding: 10rpx 0 10rpx;
-  border-radius: 10rpx;
-  overflow: hidden;
-  border-left: solid 4rpx #e5e7eb;
-  border-right: solid 4rpx #e5e7eb;
-  border-top: solid 4rpx #e5e7eb;
-  border-bottom: solid 4rpx #e5e7eb;
-}
-.font_3 {
-  font-size: 28rpx;
-  font-family: Arimo;
-  line-height: 30.24rpx;
-  color: #1d293d80;
-}
-.text_5 {
-  line-height: 29.54rpx;
-}
-.font_4 {
-  font-size: 24rpx;
-  font-family: Arimo;
-  line-height: 17.62rpx;
-  color: #99a1af;
-}
-.text_6 {
-  margin-top: 20rpx;
-}
-.text-wrapper_4 {
-  padding: 30rpx 0 180rpx;
-  border-radius: 10rpx;
-  overflow: hidden;
-  border-left: solid 4rpx #e5e7eb;
-  border-right: solid 4rpx #e5e7eb;
-  border-top: solid 4rpx #e5e7eb;
-  border-bottom: solid 4rpx #e5e7eb;
-}
-.text_7 {
-  line-height: 30rpx;
-}
-.text_8 {
-  margin-top: 20rpx;
-}
-.group_4 {
-  padding: 20rpx 0 44rpx;
-  border-top: solid 4rpx #f3f4f6;
-}
-.text-wrapper_5 {
-  margin: 0 48rpx;
-  padding: 30rpx 0 32rpx;
-  opacity: 0.5;
-  background-image: linear-gradient(180deg, #b29764 0%, #c9a870 100%);
-  border-radius: 28rpx;
-}
-.text_9 {
-  color: #ffffff;
-  font-weight: 700;
+page {
+  background-color: #f8fafc;
 }
 
-
-.text-wrapper_2.selected {
-  border: 4rpx solid #b29764;
-  background-color: #f3f4f6;
-  box-shadow: 0 4rpx 12rpx rgba(178, 151, 100, 0.3);
+.create-team-page {
+  min-height: 100vh;
+  padding: 28rpx 28rpx 48rpx;
+  padding-bottom: calc(48rpx + env(safe-area-inset-bottom));
+  color: #354152;
 }
 
-.icon-image {
-  width: 100rpx;
-  height: 100rpx;
-  border-radius: 25rpx;
+.page-heading {
+  padding: 8rpx 4rpx 28rpx;
+}
+
+.page-title {
   display: block;
-  
-  /* 基本图片属性 */
-  object-fit: contain;
-  background-color: transparent;
+  color: #1d293d;
+  font-size: 36rpx;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
-/* 输入框样式 */
-.input-field {
-  width: 100%;
-  height: auto;
-  min-height: 60rpx;
-  padding-left: 30rpx;
-  border: none;
-  outline: none;
-}
-
-.textarea-field {
-  width: 100%;
-  min-height: 120rpx;
-  padding-left: 30rpx;
-  border: none;
-  outline: none;
+.page-description {
+  display: block;
+  margin-top: 12rpx;
+  color: #697282;
+  font-size: 26rpx;
   line-height: 1.5;
 }
 
-/* 创建按钮激活状态 */
-.text-wrapper_5 {
-  opacity: 1;
-  cursor: pointer;
+.form-card {
+  padding: 28rpx;
+  border: 2rpx solid #f2f4f6;
+  border-radius: 24rpx;
+  background-color: #ffffff;
 }
 
-.text-wrapper_5:active {
-  opacity: 0.8;
+.form-field + .form-field {
+  margin-top: 32rpx;
 }
 
-/* 测试视图样式 */
-.test-debug-view {
-  border: 4rpx solid purple !important;
-  background-color: pink !important;
-  padding: 20rpx;
-  margin: 20rpx 0;
-  border-radius: 10rpx;
+.field-heading,
+.practice-rules-heading,
+.practice-rule-row,
+.practice-date-field,
+.practice-date-value,
+.practice-goal-field,
+.practice-goal-presets {
+  display: flex;
+  align-items: center;
 }
 
-.test-debug-text {
-  color: black !important;
+.field-heading,
+.practice-rules-heading,
+.practice-rule-row {
+  justify-content: space-between;
+}
+
+.field-label {
   font-size: 28rpx;
-  font-weight: bold;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
-.test-debug-box {
-  width: 100rpx;
-  height: 100rpx;
-  background-color: orange !important;
-  border: 3rpx solid green !important;
-  margin-top: 20rpx;
+.field-count {
+  color: #99a1ae;
+  font-size: 23rpx;
 }
 
-/* 调试文本样式 */
-.debug-text {
-  font-size: 20rpx;
-  color: white !important;
-  background-color: black !important;
-  padding: 4rpx 8rpx;
-  border-radius: 4rpx;
-  margin-top: 4rpx;
-  font-weight: bold;
-}
-
-/* 团队icon容器样式 */
 .team-icons-container {
-  width: 100%;
   margin-top: 20rpx;
 }
 
-/* 团队icon行样式 */
 .team-icons-row {
   display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4rpx;
-  width: 100%;
+  gap: 8rpx;
 }
 
-/* 团队icon项目样式 */
+.team-icons-row + .team-icons-row {
+  margin-top: 12rpx;
+}
+
 .team-icon-item {
-  width: 112rpx;
-  height: 112rpx;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  height: 84rpx;
   align-items: center;
-  transition: all 0.3s ease;
+  justify-content: center;
+  border: 2rpx solid transparent;
+  border-radius: 16rpx;
+  background-color: #f8fafc;
 }
 
-/* 选中状态的团队icon */
 .team-icon-item.selected {
-  border: 4rpx solid #b29764;
-  border-radius: 28rpx;
-  background-color: #f3f4f6;
-  box-shadow: 0 4rpx 12rpx rgba(178, 151, 100, 0.3);
+  border-color: #b29764;
+  background-color: #f7f3eb;
 }
 
+.icon-image {
+  display: block;
+  width: 64rpx;
+  height: 64rpx;
+  max-width: 100%;
+  border-radius: 12rpx;
+}
+
+.input-field,
+.textarea-field {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 16rpx;
+  padding: 20rpx 24rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #354152;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+.input-field {
+  height: 88rpx;
+}
+
+.textarea-field {
+  min-height: 168rpx;
+}
+
+.field-placeholder {
+  color: #99a1ae;
+}
+
+.practice-rules {
+  margin-top: 20rpx;
+}
+
+.practice-rules-heading {
+  margin-bottom: 16rpx;
+}
+
+.practice-rules-title {
+  color: #354152;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.practice-rules-badge {
+  padding: 6rpx 12rpx;
+  border-radius: 10rpx;
+  background-color: #f7f3eb;
+  color: #b29764;
+  font-size: 22rpx;
+}
+
+.practice-rule-row {
+  min-height: 96rpx;
+}
+
+.practice-rule-label {
+  color: #697282;
+  font-size: 27rpx;
+}
+
+.practice-date-value {
+  padding: 16rpx 0 16rpx 12rpx;
+  color: #b29764;
+  font-size: 27rpx;
+  white-space: nowrap;
+}
+
+.practice-rule-placeholder {
+  color: #99a1ae;
+}
+
+.practice-date-clear {
+  margin: 0 0 0 12rpx;
+  padding: 8rpx 12rpx;
+  border-radius: 10rpx;
+  background-color: #f8fafc;
+  color: #697282;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.practice-date-arrow {
+  margin-left: 12rpx;
+  color: #99a1ae;
+  font-size: 36rpx;
+}
+
+.practice-goal-row {
+  border-top: 2rpx solid #f2f4f6;
+}
+
+.practice-goal-field {
+  padding: 8rpx 16rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+}
+
+.practice-goal-input {
+  width: 98rpx;
+  height: 48rpx;
+  color: #354152;
+  font-size: 30rpx;
+  text-align: right;
+}
+
+.practice-goal-unit {
+  margin-left: 12rpx;
+  color: #697282;
+  font-size: 25rpx;
+}
+
+.practice-goal-presets {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin: 8rpx 0 24rpx;
+}
+
+.practice-goal-preset {
+  margin: 0;
+  padding: 0 20rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #697282;
+  font-size: 24rpx;
+  font-weight: 400;
+  line-height: 56rpx;
+}
+
+.practice-goal-preset.selected {
+  border-color: #b29764;
+  background-color: #f7f3eb;
+  color: #b29764;
+}
+
+.practice-rules-note {
+  display: block;
+  color: #99a1ae;
+  font-size: 23rpx;
+  line-height: 1.65;
+}
+
+.create-action {
+  margin-top: 28rpx;
+}
+
+.create-button {
+  width: 100%;
+  height: 84rpx;
+  margin: 0;
+  padding: 0;
+  border-radius: 14rpx;
+  background-color: #b29764;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 84rpx;
+}
+
+.create-button::after,
+.practice-date-clear::after,
+.practice-goal-preset::after {
+  border: none;
+}
+
+.create-button[disabled] {
+  background-color: #b29764;
+  color: #ffffff;
+  opacity: 0.5;
+}
+
+.team-icon-item.disabled,
+.practice-date-clear[disabled],
+.practice-goal-preset[disabled] {
+  opacity: 0.5;
+}
+
+.button-hover {
+  opacity: 0.85;
+}

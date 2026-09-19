@@ -1,784 +1,595 @@
 const cloud = require('wx-server-sdk');
+const crypto = require('crypto');
 
-cloud.init({
-  env: cloud.DYNAMIC_CURRENT_ENV
-});
-
+cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
+const MAX_MEMBERS = 50;
+const PAGE_SIZE = 100;
+const DEFAULT_ICON = '/images/icons/team.png';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PRACTICE_BOUNDARY_HOUR = 4;
+const DEFAULT_DAILY_GOAL_MINUTES = 20;
+const MEMBER_BATCH_SIZE = 20;
 
-/**
- * 团队数据管理器云函数
- * 处理团队的创建、查询、更新、删除等操作
- */
-exports.main = async (event, context) => {
-  const { type, data, openid } = event;
-  
+// 身份只信任微信云函数上下文，不能接受客户端传入的 openid。
+exports.main = async (event = {}) => {
   try {
+    const { type, data = {} } = event;
+    const openid = cloud.getWXContext().OPENID;
+    if (type !== 'getAllTeams' && type !== 'getTeamInfo') requireLogin(openid);
     switch (type) {
-      case 'createTeam':
-        return await createTeam(data, openid);
-      case 'getUserTeams':
-        return await getUserTeams(openid);
-      case 'deleteTeam':
-        return await deleteTeam(data.teamId, openid);
-      case 'joinTeam':
-        return await joinTeamWithInvite(data.teamId, data.openid, data.inviterId, data.inviteId);
-      case 'leaveTeam':
-        return await leaveTeam(data.teamId, openid);
-      case 'updateTeam':
-        return await updateTeam(data.teamId, data.teamData, openid);
-      case 'getTeamInfo':
-        return await getTeamInfo(data.teamId);
-      case 'getTeamMembersCheckinData':
-        return await getTeamMembersCheckinData(data.memberOpenids);
-      case 'generateInvite':
-        return await generateInvite(data, openid);
-      case 'recordInviteAction':
-        return await recordInviteAction(data);
-      case 'recordInviteRelation':
-        return await recordInviteRelation(data);
-      case 'getMemberWeekCheckin':
-        return await getMemberWeekCheckin(data);
-      case 'getAllTeams':
-        return await getAllTeams(data);
-      default:
-        return { success: false, error: '未知的操作类型' };
+      case 'createTeam': return await createTeam(data, openid);
+      case 'getUserTeams': return { success: true, data: await userTeams(openid) };
+      case 'deleteTeam': return await deleteTeam(data.teamId, openid);
+      case 'joinTeam': return await joinTeam(data, openid);
+      case 'leaveTeam': return await leaveTeam(data.teamId, openid);
+      case 'updateTeam': return await updateTeam(data.teamId, data.teamData, openid);
+      case 'getTeamInfo': return await getTeamInfo(data.teamId, openid);
+      case 'checkTeamMember': {
+        const team = await activeTeam(db, data.teamId);
+        return { success: true, isMember: isMember(team, openid) };
+      }
+      case 'getTeamMembersCheckinData': return await getTeamMembersCheckinData(data, openid);
+      case 'getMemberWeekCheckin': return await getMemberWeekCheckin(data, openid);
+      case 'getTeamPracticeReport': return await getTeamPracticeReport(data.teamId, openid);
+      case 'getTeamMemberPracticeRecords': return await getTeamMemberPracticeRecords(data, openid);
+      case 'generateInvite': return await generateInvite(data, openid);
+      case 'recordInviteAction': return await recordInviteAction(data, openid);
+      case 'recordInviteRelation': return await recordInviteRelation(data, openid);
+      case 'getAllTeams': return await getAllTeams();
+      default: throw new Error('未知的操作类型');
     }
   } catch (error) {
-    console.error('云函数执行错误:', error);
+    console.error('团队云函数执行错误:', error);
     return { success: false, error: error.message };
   }
 };
 
-/**
- * 创建团队
- */
-async function createTeam(teamData, openid) {
-  // 验证用户权限
-  if (!openid) {
-    throw new Error('用户未登录');
-  }
-  
-  // 检查用户是否已经创建过团队
-  const userTeams = await db.collection('teams')
-    .where({
-      creator: openid,
-      isActive: true
-    })
-    .get();
-  
-  if (userTeams.data.length >= 1) {
-    throw new Error('每个用户最多只能创建1个团队');
-  }
-  
-  // 检查团队名称是否重复
-  const existingTeam = await db.collection('teams')
-    .where({
-      name: teamData.name,
-      isActive: true
-    })
-    .get();
-  
-  if (existingTeam.data.length > 0) {
-    throw new Error('团队名称已存在');
-  }
-  
-  // 处理团队头像：如果是临时路径，使用默认头像
-  let teamIcon = teamData.icon;
-  if (teamIcon && teamIcon.startsWith('http://tmp/')) {
-    console.log('检测到临时头像路径，使用默认头像:', teamIcon);
-    teamIcon = '/images/icons/team.png';
-  }
+function requireLogin(openid) {
+  if (!openid) throw new Error('用户未登录');
+}
 
-  // 创建团队数据
-  const team = {
-    name: teamData.name,
-    description: teamData.description || '',
-    icon: teamIcon,
-    creator: openid,
-    creatorName: teamData.creatorName || '匿名用户',
-    members: [openid], // 创建者自动加入
-    memberCount: 1,
-    createdAt: db.serverDate(),
-    updatedAt: db.serverDate(),
-    isActive: true
-  };
-  
-  // 插入到数据库
-  const result = await db.collection('teams').add({
-    data: team
-  });
-  
-  console.log('团队创建成功:', result._id);
-  
+function requireId(id, label = '团队') {
+  if (typeof id !== 'string' || !id.trim()) throw new Error(`${label}ID无效`);
+  return id;
+}
+
+function memberIds(team) {
+  return [...new Set([team.creator, ...(Array.isArray(team.members) ? team.members : [])]
+    .filter(id => typeof id === 'string' && id))];
+}
+
+function isMember(team, openid) {
+  return Boolean(openid && memberIds(team).includes(openid));
+}
+
+async function activeTeam(database, teamId) {
+  requireId(teamId);
+  const team = await optionalDocument(database, 'teams', teamId);
+  if (!team || !team.isActive) throw new Error('团队不存在或已删除');
+  return team;
+}
+
+async function optionalDocument(database, collection, id) {
+  try { return (await database.collection(collection).doc(id).get()).data; }
+  catch (error) {
+    if (error.code === 'DATABASE_DOCUMENT_NOT_EXIST' ||
+        /document.*(?:not exist|not found)|文档不存在/i.test(error.message || error.errMsg || '')) return null;
+    throw error;
+  }
+}
+
+async function readAll(query) {
+  const rows = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const result = await query.skip(offset).limit(PAGE_SIZE).get();
+    rows.push(...result.data);
+    if (result.data.length < PAGE_SIZE) return rows;
+  }
+}
+
+async function userTeams(openid) {
+  const teams = await readAll(db.collection('teams').where({
+    isActive: true,
+    $or: [{ creator: openid }, { members: openid }]
+  }).orderBy('createdAt', 'desc').orderBy('_id', 'asc'));
+  const now = Date.now();
+  return teams.map(team => ({ ...team, ...practiceSettings(team, now) }));
+}
+
+function validDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
+function timestampValue(value) {
+  let timestamp = NaN;
+  if (typeof value === 'number') timestamp = value;
+  else if (typeof value === 'string' && /^\d+$/.test(value)) timestamp = Number(value);
+  else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) timestamp = Date.parse(value);
+  else if (value && typeof value.getTime === 'function') timestamp = value.getTime();
+  return Number.isSafeInteger(timestamp) && timestamp > 0 &&
+    Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
+}
+
+// 北京时间04:00切日等价于时间戳加4小时后读取UTC日期。
+function practiceDate(timestamp) {
+  return new Date(timestamp + (8 - PRACTICE_BOUNDARY_HOUR) * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function shiftDate(date, days) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+function practiceSettings(team, now = Date.now()) {
+  const today = practiceDate(now);
+  const createdAt = timestampValue(team.createdAt);
+  const defaultStart = Number.isFinite(createdAt) && createdAt <= now ? practiceDate(createdAt) : today;
+  const hasPracticeStartDate = validDate(team.practiceStartDate) && team.practiceStartDate <= today;
+  const effectivePracticeStartDate = hasPracticeStartDate ? team.practiceStartDate : defaultStart;
   return {
-    success: true,
-    data: {
-      teamId: result._id
+    // null明确表示未设置；旧团队缺字段时沿用创建日和20分钟，保留原统计规则。
+    practiceStartDate: team.practiceStartDate === null ? null : effectivePracticeStartDate,
+    effectivePracticeStartDate, hasPracticeStartDate,
+    dailyGoalMinutes: team.dailyGoalMinutes === null ? null :
+      Number.isInteger(team.dailyGoalMinutes) && team.dailyGoalMinutes >= 1 && team.dailyGoalMinutes <= 1440
+        ? team.dailyGoalMinutes : DEFAULT_DAILY_GOAL_MINUTES,
+    dayBoundaryHour: PRACTICE_BOUNDARY_HOUR
+  };
+}
+
+function teamFields(data, creating = false) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('团队信息无效');
+  const fields = {};
+  if (creating || Object.prototype.hasOwnProperty.call(data, 'name')) {
+    if (typeof data.name !== 'string' || !data.name.trim() || data.name.trim().length > 20) {
+      throw new Error('团队名称须为1至20个字符');
     }
-  };
-}
-
-/**
- * 获取用户相关的团队
- */
-async function getUserTeams(openid) {
-  if (!openid) {
-    return { success: true, data: [] };
+    fields.name = data.name.trim();
   }
-  
-  // 查询用户创建或加入的团队
-  const teams = await db.collection('teams')
-    .where({
-      isActive: true,
-      $or: [
-        { creator: openid },
-        { members: openid }
-      ]
-    })
-    .orderBy('createdAt', 'desc')
-    .get();
-  
-  console.log('获取用户团队成功:', teams.data.length);
-  
-  // 调试：检查返回的团队数据是否包含createdAt字段
-  if (teams.data.length > 0) {
-    console.log('团队数据字段检查:', {
-      hasCreatedAt: teams.data[0].createdAt !== undefined,
-      createdAt: teams.data[0].createdAt,
-      fields: Object.keys(teams.data[0])
-    });
-  }
-  
-  return {
-    success: true,
-    data: teams.data
-  };
-}
-
-/**
- * 删除团队（硬删除 - 直接从数据库删除记录）
- */
-async function deleteTeam(teamId, openid) {
-  console.log('开始硬删除团队:', { teamId, openid });
-  
-  // 如果openid为空，尝试从云函数上下文获取
-  if (!openid) {
-    const wxContext = cloud.getWXContext();
-    openid = wxContext.OPENID;
-    console.log('从上下文获取openid:', openid);
-  }
-  
-  if (!openid) {
-    throw new Error('用户未登录');
-  }
-  
-  // 验证团队存在性和用户权限
-  const team = await db.collection('teams').doc(teamId).get();
-  
-  if (!team.data) {
-    throw new Error('团队不存在');
-  }
-  
-  if (team.data.creator !== openid) {
-    console.log('权限检查失败:', {
-      当前用户: openid,
-      团队创建者: team.data.creator,
-      团队ID: teamId
-    });
-    throw new Error('只有团队创建者可以删除团队');
-  }
-  
-  console.log('权限检查通过，开始执行硬删除...');
-  
-  // 硬删除：直接从数据库删除记录
-  await db.collection('teams').doc(teamId).remove();
-  
-  // 同时删除相关的团队成员记录
-  try {
-    await db.collection('team_members')
-      .where({ teamId: teamId })
-      .remove();
-  } catch (error) {
-    console.log('删除团队成员记录失败（可能记录不存在）:', error);
-  }
-  
-  // 同时删除相关的邀请记录
-  try {
-    await db.collection('invites')
-      .where({ teamId: teamId })
-      .remove();
-  } catch (error) {
-    console.log('删除邀请记录失败（可能记录不存在）:', error);
-  }
-  
-  console.log('团队硬删除成功:', teamId);
-  
-  return {
-    success: true,
-    data: { teamId }
-  };
-}
-
-/**
- * 加入团队
- */
-async function joinTeam(teamId, openid) {
-  if (!openid) {
-    throw new Error('用户未登录');
-  }
-  
-  // 验证团队存在性
-  const team = await db.collection('teams').doc(teamId).get();
-  
-  if (!team.data || !team.data.isActive) {
-    throw new Error('团队不存在或已删除');
-  }
-  
-  // 检查用户是否已经是成员
-  if (team.data.members.includes(openid)) {
-    throw new Error('用户已经是团队成员');
-  }
-  
-  // 检查团队人数限制
-  if (team.data.memberCount >= 50) {
-    throw new Error('团队人数已达上限');
-  }
-  
-  // 添加用户到团队成员
-  await db.collection('teams').doc(teamId).update({
-    data: {
-      members: db.command.push(openid),
-      memberCount: db.command.inc(1),
-      updatedAt: db.serverDate()
+  if (Object.prototype.hasOwnProperty.call(data, 'description')) {
+    if (typeof data.description !== 'string' || data.description.length > 100) throw new Error('团队介绍不能超过100个字符');
+    fields.description = data.description;
+  } else if (creating) fields.description = '';
+  if (Object.prototype.hasOwnProperty.call(data, 'icon')) {
+    if (data.icon != null && typeof data.icon !== 'string') throw new Error('团队头像无效');
+    fields.icon = !data.icon || /^(?:http:\/\/tmp\/|wxfile:\/\/tmp)/.test(data.icon) ? DEFAULT_ICON : data.icon;
+  } else if (creating) fields.icon = DEFAULT_ICON;
+  if (Object.prototype.hasOwnProperty.call(data, 'practiceStartDate')) {
+    if (data.practiceStartDate !== null && (!validDate(data.practiceStartDate) || data.practiceStartDate > practiceDate(Date.now()))) {
+      throw new Error('共修开始日期须为不晚于当前共修日的有效日期');
     }
-  });
-  
-  console.log('用户加入团队成功:', { teamId, openid });
-  
-  return {
-    success: true,
-    data: { teamId }
-  };
-}
-
-/**
- * 离开团队
- */
-async function leaveTeam(teamId, openid) {
-  if (!openid) {
-    throw new Error('用户未登录');
-  }
-  
-  // 验证团队存在性
-  const team = await db.collection('teams').doc(teamId).get();
-  
-  if (!team.data || !team.data.isActive) {
-    throw new Error('团队不存在或已删除');
-  }
-  
-  // 检查用户是否是团队成员
-  if (!team.data.members.includes(openid)) {
-    throw new Error('用户不是团队成员');
-  }
-  
-  // 如果是创建者，不能离开团队（只能删除）
-  if (team.data.creator === openid) {
-    throw new Error('团队创建者不能离开团队，请删除团队');
-  }
-  
-  // 从团队成员中移除用户
-  await db.collection('teams').doc(teamId).update({
-    data: {
-      members: db.command.pull(openid),
-      memberCount: db.command.inc(-1),
-      updatedAt: db.serverDate()
+    fields.practiceStartDate = data.practiceStartDate;
+  } else if (creating) fields.practiceStartDate = null;
+  if (Object.prototype.hasOwnProperty.call(data, 'dailyGoalMinutes')) {
+    if (data.dailyGoalMinutes !== null && (!Number.isInteger(data.dailyGoalMinutes) || data.dailyGoalMinutes < 1 || data.dailyGoalMinutes > 1440)) {
+      throw new Error('每日目标须为1至1440之间的整数分钟');
     }
-  });
-  
-  console.log('用户离开团队成功:', { teamId, openid });
-  
-  return {
-    success: true,
-    data: { teamId }
-  };
+    fields.dailyGoalMinutes = data.dailyGoalMinutes;
+  } else if (creating) fields.dailyGoalMinutes = null;
+  // creator、members、memberCount、isActive 等字段只能由专门的服务端操作修改。
+  return fields;
 }
 
-/**
- * 更新团队信息
- */
-async function updateTeam(teamId, teamData, openid) {
-  // 验证团队存在性和用户权限
-  const team = await db.collection('teams').doc(teamId).get();
-  
-  if (!team.data) {
-    throw new Error('团队不存在');
-  }
-  
-  if (team.data.creator !== openid) {
-    throw new Error('只有团队创建者可以更新团队信息');
-  }
-  
-  // 如果修改了团队名称，检查是否重复
-  if (teamData.name && teamData.name !== team.data.name) {
-    const existingTeam = await db.collection('teams')
-      .where({
-        name: teamData.name,
-        isActive: true
-      })
-      .get();
-    
-    if (existingTeam.data.length > 0) {
+async function reserveUniqueField(transaction, field, value, teamId) {
+  // 云数据库事务只使用 doc 操作。确定 ID 的预留文档在读后写时产生版本冲突，
+  // 防止两个请求同时通过事务外的旧数据查询。预留文档不属于活跃团队。
+  const id = `_team_lock_${field}_${crypto.createHash('sha256').update(value).digest('hex')}`;
+  const reservation = await optionalDocument(transaction, 'teams', id);
+  if (reservation && reservation.targetTeamId && reservation.targetTeamId !== teamId) {
+    const reservedTeam = await optionalDocument(transaction, 'teams', reservation.targetTeamId);
+    if (reservedTeam && reservedTeam.isActive && reservedTeam[field] === value) {
       throw new Error('团队名称已存在');
     }
   }
-  
-  // 更新团队信息
-  const updateData = {
-    ...teamData,
-    updatedAt: db.serverDate()
+  await transaction.collection('teams').doc(id).set({ data: {
+    isActive: false, _type: 'team_uniqueness_reservation',
+    targetTeamId: teamId, lockField: field, updatedAt: db.serverDate()
+  } });
+}
+
+async function createTeam(data, openid) {
+  const fields = teamFields(data, true);
+  const team = {
+    ...fields, creator: openid,
+    creatorName: typeof data.creatorName === 'string' ? data.creatorName : '匿名用户',
+    members: [openid], memberCount: 1,
+    createdAt: db.serverDate(), updatedAt: db.serverDate(), isActive: true
   };
-  
-  await db.collection('teams').doc(teamId).update({
-    data: updateData
+  // 兼容尚未拥有预留文档的历史团队；事务内部不能使用 where/add。
+  const named = await db.collection('teams').where({ name: fields.name, isActive: true }).limit(1).get();
+  if (named.data.length) throw new Error('团队名称已存在');
+  const teamId = `team_${crypto.randomBytes(16).toString('hex')}`;
+  await db.runTransaction(async transaction => {
+    await reserveUniqueField(transaction, 'name', fields.name, teamId);
+    await transaction.collection('teams').doc(teamId).set({ data: team });
   });
-  
-  console.log('团队信息更新成功:', teamId);
-  
-  return {
-    success: true,
-    data: { teamId }
-  };
+  return { success: true, data: { teamId, team: {
+    ...team, _id: teamId, createdAt: new Date(), updatedAt: new Date()
+  } } };
 }
 
-/**
- * 获取团队详细信息
- */
-async function getTeamInfo(teamId) {
-  // 获取团队信息
-  const team = await db.collection('teams').doc(teamId).get();
-  
-  if (!team.data || !team.data.isActive) {
-    throw new Error('团队不存在或已删除');
+async function updateTeam(teamId, data, openid) {
+  const fields = teamFields(data);
+  if (fields.name) {
+    const existing = await db.collection('teams').where({ name: fields.name, isActive: true }).limit(2).get();
+    if (existing.data.some(team => team._id !== teamId)) throw new Error('团队名称已存在');
   }
-  
-  // 获取团队成员的用户信息
-  const memberDetails = await Promise.all(
-    team.data.members.map(async (openid) => {
-      try {
-        // 尝试从users表获取用户信息
-        const userResult = await db.collection('users')
-          .where({ _openid: openid })
-          .get();
-        
-        if (userResult.data.length > 0) {
-          const user = userResult.data[0];
-          return {
-            openid: openid,
-            nickname: user.nickName || '匿名用户',
-            avatarUrl: user.avatarUrl || '/images/avatar.png',
-            isCreator: openid === team.data.creator
-          };
-        }
-        
-        // 如果users表中没有，返回基础信息
-        return {
-          openid: openid,
-          nickname: '用户' + openid.substring(0, 6),
-          avatarUrl: '/images/avatar.png',
-          isCreator: openid === team.data.creator
-        };
-      } catch (error) {
-        console.error('获取用户信息失败:', error);
-        return {
-          openid: openid,
-          nickname: '用户' + openid.substring(0, 6),
-          avatarUrl: '/images/avatar.png',
-          isCreator: openid === team.data.creator
-        };
-      }
-    })
-  );
-  
-  const teamInfo = {
-    ...team.data,
-    members: memberDetails
-  };
-  
-  return {
-    success: true,
-    data: teamInfo
-  };
-}
-
-/**
- * 获取团队成员打卡数据
- */
-async function getTeamMembersCheckinData(memberOpenids) {
-  try {
-    console.log('获取团队成员打卡数据:', memberOpenids);
-    
-    if (!Array.isArray(memberOpenids) || memberOpenids.length === 0) {
-      return { success: true, data: {} };
+  await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    if (team.creator !== openid) throw new Error('只有团队创建者可以更新团队信息');
+    if (fields.name && fields.name !== team.name) {
+      await reserveUniqueField(transaction, 'name', fields.name, teamId);
     }
-    
-    // 获取当前月份
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1;
-    const currentMonthStr = `${currentYear}-${currentMonth.toString().padStart(2, '0')}`;
-    
-    const checkinData = {};
-    
-    // 批量查询用户打卡数据
-    for (const openid of memberOpenids) {
-      try {
-        // 查询用户当月的打卡记录
-        const monthlyResult = await db.collection('meditation_records')
-          .where({
-            _openid: openid,
-            date: db.RegExp({
-              regexp: `^${currentMonthStr}`,
-              options: 'i'
-            })
-          })
-          .get();
-        
-        // 查询用户总打卡记录
-        const totalResult = await db.collection('meditation_records')
-          .where({
-            _openid: openid
-          })
-          .count();
-        
-        checkinData[openid] = {
-          monthlyCount: monthlyResult.data.length,
-          totalCount: totalResult.total
-        };
-        
-        console.log(`用户 ${openid} 打卡数据:`, checkinData[openid]);
-        
-      } catch (error) {
-        console.error(`获取用户 ${openid} 打卡数据失败:`, error);
-        checkinData[openid] = { monthlyCount: 0, totalCount: 0 };
-      }
-    }
-    
-    return { success: true, data: checkinData };
-    
-  } catch (error) {
-    console.error('获取团队成员打卡数据失败:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * 生成邀请链接
- */
-async function generateInvite(inviteData, openid) {
-  console.log('生成邀请链接，传入参数:', { inviteData, openid });
-  
-  if (!openid) {
-    // 尝试从云函数上下文获取openid
-    const wxContext = cloud.getWXContext();
-    openid = wxContext.OPENID;
-    console.log('从上下文获取openid:', openid);
-  }
-  
-  if (!openid) {
-    throw new Error('用户未登录');
-  }
-
-  // 验证团队存在性
-  const team = await db.collection('teams').doc(inviteData.teamId).get();
-  if (!team.data || !team.data.isActive) {
-    throw new Error('团队不存在或已删除');
-  }
-
-  // 生成邀请ID和凭证
-  const inviteId = 'invite_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-  const inviteToken = 'token_' + Math.random().toString(36).substr(2, 16);
-
-  // 构建分享路径
-  const sharePath = `/pages/joinTeam/joinTeam?` +
-    `teamId=${inviteData.teamId}&` +
-    `teamName=${encodeURIComponent(inviteData.teamName)}&` +
-    `inviterId=${openid}&` +
-    `inviteId=${inviteId}`;
-
-  // 创建邀请记录
-  const inviteRecord = {
-    _id: inviteId,
-    teamId: inviteData.teamId,
-    teamName: inviteData.teamName,
-    inviterId: openid,
-    inviterName: inviteData.inviterName || '匿名用户',
-    inviteToken: inviteToken,
-    sharePath: sharePath,
-    status: 'pending',
-    inviteTime: db.serverDate(),
-    expireTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7天后过期
-    createdAt: db.serverDate(),
-    updatedAt: db.serverDate()
-  };
-
-  // 保存到数据库
-  await db.collection('invites').add({
-    data: inviteRecord
+    await transaction.collection('teams').doc(teamId).update({ data: { ...fields, updatedAt: db.serverDate() } });
   });
-
-  console.log('邀请记录创建成功:', inviteId);
-
-  return {
-    success: true,
-    data: {
-      inviteId: inviteId,
-      sharePath: sharePath,
-      title: `邀请您加入${inviteData.teamName}团队`
-    }
-  };
+  return { success: true, data: { teamId } };
 }
 
-/**
- * 带邀请信息的加入团队
- */
-async function joinTeamWithInvite(teamId, openid, inviterId, inviteId) {
-  if (!openid) {
-    throw new Error('用户未登录');
+async function deleteTeam(teamId, openid) {
+  await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    if (team.creator !== openid) throw new Error('只有团队创建者可以删除团队');
+    await transaction.collection('teams').doc(teamId).remove();
+  });
+  // 团队文档是权限和成员身份的唯一依据；清理旧索引失败不能恢复已删除的团队。
+  for (const name of ['team_members', 'invites']) {
+    try { await db.collection(name).where({ teamId }).remove(); }
+    catch (error) { console.warn('清理团队附属记录失败:', name, error); }
   }
+  return { success: true, data: { teamId } };
+}
 
-  // 验证团队存在性
-  const team = await db.collection('teams').doc(teamId).get();
-  if (!team.data || !team.data.isActive) {
-    throw new Error('团队不存在或已删除');
-  }
-
-  // 检查用户是否已经是成员
-  if (team.data.members.includes(openid)) {
-    throw new Error('用户已经是团队成员');
-  }
-
-  // 检查团队人数限制
-  if (team.data.memberCount >= 50) {
-    throw new Error('团队人数已达上限');
-  }
-
-  // 如果有邀请信息，验证邀请有效性
-  if (inviteId) {
-    const invite = await db.collection('invites').doc(inviteId).get();
-    if (!invite.data || invite.data.status !== 'pending') {
-      throw new Error('邀请链接已失效');
+async function joinTeam(data, openid) {
+  const { teamId, inviteId } = data;
+  await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    const members = memberIds(team);
+    // 重试同一请求时返回成功，避免重复成员和人数增长。
+    if (members.includes(openid)) return;
+    if (typeof inviteId !== 'string' || !inviteId.trim()) throw new Error('请通过团长的邀请加入团队');
+    const invite = await optionalDocument(transaction, 'invites', inviteId);
+    // 邀请必须由当前团长签发。忽略客户端 inviterId，也拒绝历史普通成员签发的邀请。
+    // 分享到群聊的邀请仍可被多人使用，但不能跨团队、撤销后或过期后使用。
+    if (!invite || invite.teamId !== teamId || invite.inviterId !== team.creator ||
+        !['pending', 'accepted'].includes(invite.status) ||
+        !Number.isFinite(timestampValue(invite.expireTime)) || timestampValue(invite.expireTime) <= Date.now()) {
+      throw new Error('邀请链接已失效，请联系团长重新邀请');
     }
-
-    // 更新邀请状态为已接受
-    await db.collection('invites').doc(inviteId).update({
-      data: {
-        status: 'accepted',
-        inviteeId: openid,
-        acceptTime: db.serverDate(),
-        updatedAt: db.serverDate()
-      }
+    if (members.length >= MAX_MEMBERS) throw new Error('团队人数已达上限');
+    members.push(openid);
+    await transaction.collection('teams').doc(teamId).update({
+      data: { members, memberCount: members.length, updatedAt: db.serverDate() }
     });
-  }
-
-  // 添加用户到团队成员
-  await db.collection('teams').doc(teamId).update({
-    data: {
-      members: db.command.push(openid),
-      memberCount: db.command.inc(1),
-      updatedAt: db.serverDate()
-    }
+    // set 可以覆盖旧版本退出后遗留的关系，团队及关系写入必须一起成功。
+    await transaction.collection('team_members').doc(`${teamId}_${openid}`).set({ data: {
+      teamId, openid, nickname: '新成员', role: 'member', joinedAt: db.serverDate(),
+      invitedBy: invite.inviterId, inviteId, status: 'active',
+      lastActive: db.serverDate(), checkInCount: 0,
+      createdAt: db.serverDate(), updatedAt: db.serverDate()
+    } });
   });
-
-  // 创建团队成员关系记录
-  const memberRecord = {
-    _id: `${teamId}_${openid}`,
-    teamId: teamId,
-    openid: openid,
-    nickname: '新成员', // 实际应该从用户信息获取
-    role: 'member',
-    joinedAt: db.serverDate(),
-    invitedBy: inviterId || null,
-    inviteId: inviteId || null,
-    status: 'active',
-    lastActive: db.serverDate(),
-    checkInCount: 0,
-    createdAt: db.serverDate(),
-    updatedAt: db.serverDate()
-  };
-
-  await db.collection('team_members').add({
-    data: memberRecord
-  });
-
-  console.log('用户通过邀请加入团队成功:', { teamId, openid, inviterId, inviteId });
-
-  return {
-    success: true,
-    data: { teamId }
-  };
+  return { success: true, data: { teamId } };
 }
 
-/**
- * 记录邀请行为
- */
-async function recordInviteAction(actionData) {
-  const actionRecord = {
-    _id: 'action_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-    teamId: actionData.teamId,
-    inviterId: actionData.inviterId,
-    inviteId: actionData.inviteId,
-    actionType: 'generate',
-    actionTime: db.serverDate(),
-    details: {
-      inviteTime: actionData.inviteTime
-    },
-    createdAt: db.serverDate()
-  };
-
-  await db.collection('invite_actions').add({
-    data: actionRecord
-  });
-
-  console.log('邀请行为记录成功:', actionRecord._id);
-
-  return {
-    success: true,
-    data: { actionId: actionRecord._id }
-  };
-}
-
-/**
- * 记录邀请关系
- */
-async function recordInviteRelation(relationData) {
-  const relationRecord = {
-    _id: 'relation_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-    teamId: relationData.teamId,
-    inviterId: relationData.inviterId,
-    inviteeId: relationData.inviteeId,
-    inviteId: relationData.inviteId,
-    inviteTime: relationData.inviteTime,
-    status: relationData.status || 'accepted',
-    createdAt: db.serverDate()
-  };
-
-  await db.collection('invite_actions').add({
-    data: relationRecord
-  });
-
-  console.log('邀请关系记录成功:', relationRecord._id);
-
-  return {
-    success: true,
-    data: { relationId: relationRecord._id }
-  };
-}
-
-/**
- * 获取所有团队数据（向所有用户开放）
- */
-async function getAllTeams(data) {
-  try {
-    console.log('🔄 获取所有团队数据...');
-    
-    // 查询所有团队数据，按创建时间倒序排列
-    const result = await db.collection('teams')
-      .where({
-        isActive: true // 只查询活跃团队
-      })
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    console.log('✅ 所有团队数据查询完成:', {
-      团队数量: result.data.length,
-      团队列表: result.data.map(team => ({name: team.name, id: team._id}))
+async function leaveTeam(teamId, openid) {
+  await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    if (team.creator === openid) throw new Error('团队创建者不能离开团队，请删除团队');
+    const members = memberIds(team).filter(id => id !== openid);
+    await transaction.collection('teams').doc(teamId).update({
+      data: { members, memberCount: members.length, updatedAt: db.serverDate() }
     });
-    
-    // 格式化返回数据，只包含公开信息
-    const teams = result.data.map(team => ({
-      _id: team._id,
-      name: team.name,
-      description: team.description || '暂无团队介绍',
-      icon: team.icon || '/images/icons/team.png',
-      memberCount: team.memberCount || 0,
-      isActive: team.isActive || true,
-      createdAt: team.createdAt,
-      creatorName: team.creatorName || '匿名创建者',
-      // 不包含敏感信息如成员列表、openid等
-    }));
-    
-    return {
-      success: true,
-      data: {
-        teams: teams,
-        count: teams.length
-      }
-    };
-    
-  } catch (error) {
-    console.error('❌ 获取所有团队数据失败:', error);
-    // 返回空数组而不是错误，让前端可以降级处理
-    return {
-      success: true,
-      data: {
-        teams: [],
-        count: 0
-      }
-    };
-  }
+    await transaction.collection('team_members').doc(`${teamId}_${openid}`).remove();
+  });
+  return { success: true, data: { teamId } };
 }
 
-/**
- * 获取成员本周的打卡记录
- */
-async function getMemberWeekCheckin(data) {
+async function getTeamInfo(teamId, openid) {
+  const team = await activeTeam(db, teamId);
+  const allowed = isMember(team, openid);
+  const members = await Promise.all(memberIds(team).map(async memberOpenid => {
+    let user = {};
+    try {
+      const users = await db.collection('users').where({ _openid: memberOpenid }).limit(1).get();
+      user = users.data[0] || {};
+    } catch (error) { console.warn('获取成员资料失败:', error); }
+    return {
+      ...(allowed ? { openid: memberOpenid } : {}),
+      nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
+      avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: memberOpenid === team.creator
+    };
+  }));
+  const info = allowed ? { ...team } : publicTeam(team);
+  return { success: true, data: { ...info, ...practiceSettings(team), members, memberCount: members.length, isMember: allowed } };
+}
+
+// 打卡数据只能被本人或同一活跃团队的成员读取，不能接受任意 OPENID 查询。
+async function authorizeMembers(data, requested, openid) {
+  if (!Array.isArray(requested) || requested.length > MAX_MEMBERS || requested.some(id => typeof id !== 'string' || !id)) {
+    throw new Error('成员列表无效');
+  }
+  const permitted = new Set([openid]);
+  if (data.teamId) {
+    const team = await activeTeam(db, data.teamId);
+    if (!isMember(team, openid)) throw new Error('只有团队成员可以查看打卡数据');
+    memberIds(team).forEach(id => permitted.add(id));
+  } else {
+    const teams = await userTeams(openid);
+    teams.forEach(team => memberIds(team).forEach(id => permitted.add(id)));
+  }
+  if (requested.some(id => !permitted.has(id))) throw new Error('只能查看同团队成员的打卡数据');
+  return [...new Set(requested)];
+}
+
+async function getTeamMembersCheckinData(data, openid) {
+  const members = await authorizeMembers(data, data.memberOpenids, openid);
+  const month = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  const counts = await Promise.all(members.map(async memberOpenid => {
+    const [monthly, total] = await Promise.all([
+      db.collection('meditation_records').where({ _openid: memberOpenid,
+        date: db.command.gte(`${month}-01`).and(db.command.lte(`${month}-31`)) }).count(),
+      db.collection('meditation_records').where({ _openid: memberOpenid }).count()
+    ]);
+    return [memberOpenid, { monthlyCount: monthly.total, totalCount: total.total }];
+  }));
+  return { success: true, data: Object.fromEntries(counts) };
+}
+
+function recordTimestamp(record) {
+  const value = record.timestamp;
+  const timestamp = typeof value === 'number' ? value :
+    typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.parse(`${record.date}T00:00:00+08:00`);
+}
+
+async function getMemberWeekCheckin(data, openid) {
   const { memberOpenid, weekStart, weekEnd } = data;
-  
-  console.log('🔄 获取成员本周打卡记录:', { memberOpenid, weekStart, weekEnd });
-  
-  try {
-    // 查询本周的冥想记录
-    const result = await db.collection('meditation_records')
-      .where({
-        _openid: memberOpenid,
-        date: db.command.gte(weekStart).and(db.command.lte(weekEnd))
-      })
-      .orderBy('date', 'desc')
-      .get();
-    
-    console.log('✅ 本周打卡记录查询完成:', {
-      记录数量: result.data.length,
-      时间范围: `${weekStart} 至 ${weekEnd}`
-    });
-    
-    // 格式化返回数据
-    const records = result.data.map(record => ({
-      timestamp: record.date ? new Date(record.date).getTime() : record.timestamp || Date.now(),
-      duration: record.duration || 0,
-      emotion: record.emotion || [],
-      experience: record.experience || [],
-      textCount: record.textCount || 0,
-      textPreview: record.textPreview || ''
-    }));
-    
-    return {
-      success: true,
-      data: {
-        records: records,
-        count: records.length
-      }
-    };
-    
-  } catch (error) {
-    console.error('❌ 获取本周打卡记录失败:', error);
-    // 返回空记录而不是错误，让前端可以降级处理
-    return {
-      success: true,
-      data: {
-        records: [],
-        count: 0
-      }
-    };
+  await authorizeMembers(data, [memberOpenid], openid);
+  if (![weekStart, weekEnd].every(date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) || weekStart > weekEnd) {
+    throw new Error('打卡查询日期无效');
   }
+  const result = await readAll(db.collection('meditation_records').where({
+    _openid: memberOpenid, date: db.command.gte(weekStart).and(db.command.lte(weekEnd))
+  }).orderBy('date', 'desc').orderBy('_id', 'asc'));
+  const records = result.map(record => ({
+    date: record.date, timestamp: recordTimestamp(record), duration: record.duration || 0,
+    emotion: record.emotion || [], experience: record.experience || [],
+    textCount: record.textCount || 0, textPreview: record.textPreview || ''
+  })).sort((a, b) => b.timestamp - a.timestamp);
+  return { success: true, data: { records, count: records.length } };
+}
+
+function positiveMinutes(value) {
+  const minutes = typeof value === 'number' ? value :
+    typeof value === 'string' && /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim()) ? Number(value) : NaN;
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 0;
+}
+
+function addMinutes(total, minutes) {
+  // 补偿求和，避免多次短练习累加后20分钟变成19.99999999999996。
+  const corrected = minutes - total.correction;
+  const next = total.sum + corrected;
+  total.correction = (next - total.sum) - corrected;
+  total.sum = next;
+}
+
+function meetsGoal(minutes, goal) {
+  // 只容忍机器浮点误差，不将19.99等真实不足时长四舍五入成达标。
+  return minutes >= goal || goal - minutes <= Number.EPSILON * Math.max(1, goal) * 4;
+}
+
+function practiceSession(record, startDate, businessDate, now) {
+  const timestamp = timestampValue(record.timestamp);
+  const hasTimestamp = Number.isFinite(timestamp);
+  if (hasTimestamp && timestamp > now) return null;
+  // 缺少有效时间戳的旧记录沿用原始日期，不能先补成零点再回退一天。
+  const date = hasTimestamp ? practiceDate(timestamp) : validDate(record.date) ? record.date : null;
+  const duration = positiveMinutes(record.duration);
+  if (!date || date < startDate || date > businessDate || !duration) return null;
+  return { date, timestamp: hasTimestamp ? timestamp : null, duration };
+}
+
+async function getTeamMemberPracticeRecords(data, openid) {
+  const now = Date.now();
+  const team = await activeTeam(db, data.teamId);
+  if (!isMember(team, openid)) throw new Error('只有团队成员可以查看练习记录');
+  const memberOpenid = requireId(data.memberOpenid, '成员');
+  if (!isMember(team, memberOpenid)) throw new Error('该用户已不在团队中');
+  const startDate = practiceSettings(team, now).effectivePracticeStartDate;
+  const businessDate = practiceDate(now);
+  const users = await db.collection('users').where({ _openid: memberOpenid })
+    .field({ _id: true, nickName: true, avatarUrl: true }).orderBy('_id', 'asc').limit(1).get();
+  const user = users.data[0] || {};
+  const member = {
+    openid: memberOpenid,
+    nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
+    avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: memberOpenid === team.creator
+  };
+  const records = [];
+  let cursor = null;
+  for (;;) {
+    const filter = { _openid: memberOpenid, ...(cursor === null ? {} : { _id: db.command.gt(cursor) }) };
+    const result = await db.collection('meditation_records').where(filter)
+      .field({ _id: true, date: true, timestamp: true, duration: true, source: true })
+      .orderBy('_id', 'asc').limit(PAGE_SIZE).get();
+    for (const record of result.data) {
+      const session = practiceSession(record, startDate, businessDate, now);
+      if (session) records.push({ _id: record._id, ...session,
+        ...(typeof record.source === 'string' && record.source ? { source: record.source } : {}) });
+    }
+    if (result.data.length < PAGE_SIZE) break;
+    cursor = result.data[result.data.length - 1]._id;
+  }
+  records.sort((a, b) => b.date.localeCompare(a.date) || (b.timestamp || 0) - (a.timestamp || 0) || a._id.localeCompare(b._id));
+  return { success: true, data: { member, startDate, businessDate, records } };
+}
+
+async function getTeamPracticeReport(teamId, openid) {
+  // 一次请求只读取一次当前时间，避免恰好跨04:00时今日与历史窗口不一致。
+  const now = Date.now();
+  const team = await activeTeam(db, teamId);
+  if (!isMember(team, openid)) throw new Error('只有团队成员可以查看共修统计');
+  const ids = memberIds(team);
+  const settings = practiceSettings(team, now);
+  const businessDate = practiceDate(now);
+  const startDate = settings.effectivePracticeStartDate;
+  const hasGoal = settings.dailyGoalMinutes !== null;
+  const endDate = shiftDate(businessDate, -1);
+  const totalDays = Math.max(0, Math.round((Date.parse(`${businessDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / DAY_MS));
+  const totals = new Map(ids.map(id => [id, new Map()]));
+  const activity = new Map(ids.map(id => [id, {
+    totalPracticeCount: 0, todayPracticeCount: 0, minutes: { sum: 0, correction: 0 },
+    lastPracticeAt: null, lastPracticeDate: null
+  }]));
+  const profiles = new Map();
+
+  for (let offset = 0; offset < ids.length; offset += MEMBER_BATCH_SIZE) {
+    const batch = ids.slice(offset, offset + MEMBER_BATCH_SIZE);
+    const filter = { _openid: db.command.in(batch) };
+    const users = await readAll(db.collection('users').where(filter)
+      .field({ _id: true, _openid: true, nickName: true, avatarUrl: true }).orderBy('_id', 'asc'));
+    users.forEach(user => { if (!profiles.has(user._openid)) profiles.set(user._openid, user); });
+
+    // 旧记录的timestamp存在数字/ISO/数字字符串三种类型，date又是自然日。
+    // 仅按date裁剪会漏掉次日凌晨或旧的错日数据，因此按当前成员分批扫描，
+    // 只投影统计必需字段，逐页归属04:00业务日，不读取日记和感受内容。
+    let cursor = null;
+    for (;;) {
+      // 读取期间新增/删除前面的记录会改变skip偏移；按最后一条_id继续，
+      // 避免同一条打卡重复累计或漏掉后一页记录而误判是否达标。
+      const pageFilter = cursor === null ? filter : { ...filter, _id: db.command.gt(cursor) };
+      const result = await db.collection('meditation_records').where(pageFilter)
+        .field({ _id: true, _openid: true, date: true, timestamp: true, duration: true })
+        .orderBy('_id', 'asc').limit(PAGE_SIZE).get();
+      for (const record of result.data) {
+        const session = practiceSession(record, startDate, businessDate, now);
+        if (!session) continue;
+        const { date, timestamp, duration: minutes } = session;
+        const hasTimestamp = timestamp !== null;
+        const days = totals.get(record._openid);
+        if (days) {
+          if (!days.has(date)) days.set(date, { sum: 0, correction: 0 });
+          addMinutes(days.get(date), minutes);
+          const memberActivity = activity.get(record._openid);
+          memberActivity.totalPracticeCount++;
+          if (date === businessDate) memberActivity.todayPracticeCount++;
+          addMinutes(memberActivity.minutes, minutes);
+          if (!memberActivity.lastPracticeDate || date > memberActivity.lastPracticeDate) {
+            memberActivity.lastPracticeDate = date;
+            memberActivity.lastPracticeAt = hasTimestamp ? timestamp : null;
+          } else if (date === memberActivity.lastPracticeDate && hasTimestamp &&
+              (memberActivity.lastPracticeAt === null || timestamp > memberActivity.lastPracticeAt)) {
+            memberActivity.lastPracticeAt = timestamp;
+          }
+        }
+      }
+      if (result.data.length < PAGE_SIZE) break;
+      cursor = result.data[result.data.length - 1]._id;
+    }
+  }
+
+  const summary = { memberCount: ids.length, notPracticedCount: 0, practicedCount: 0, belowGoalCount: 0, qualifiedCount: 0 };
+  const members = ids.map(id => {
+    const user = profiles.get(id) || {};
+    const days = totals.get(id);
+    const todayMinutes = days.has(businessDate) ? days.get(businessDate).sum : 0;
+    const todayStatus = todayMinutes <= 0 ? 'not_practiced' : !hasGoal ? 'practiced' :
+      meetsGoal(todayMinutes, settings.dailyGoalMinutes) ? 'qualified' : 'below_goal';
+    if (todayMinutes > 0) summary.practicedCount++;
+    if (todayStatus === 'not_practiced') summary.notPracticedCount++;
+    else if (todayStatus === 'below_goal') summary.belowGoalCount++;
+    else if (todayStatus === 'qualified') summary.qualifiedCount++;
+    let practiceDays = 0;
+    let qualifiedDays = 0;
+    const historicalMinutes = { sum: 0, correction: 0 };
+    for (const [date, total] of days) {
+      if (date === businessDate) continue;
+      practiceDays++;
+      if (hasGoal && meetsGoal(total.sum, settings.dailyGoalMinutes)) qualifiedDays++;
+      addMinutes(historicalMinutes, total.sum);
+    }
+    const belowGoalDays = hasGoal ? practiceDays - qualifiedDays : 0;
+    const missedDays = totalDays - practiceDays;
+    const memberActivity = activity.get(id);
+    return {
+      openid: id, nickname: user.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
+      avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: id === team.creator,
+      todayMinutes, todayStatus, practiceDays, qualifiedDays, belowGoalDays, missedDays,
+      unmetDays: hasGoal ? belowGoalDays + missedDays : 0, totalMinutes: historicalMinutes.sum,
+      totalPracticeCount: memberActivity.totalPracticeCount, todayPracticeCount: memberActivity.todayPracticeCount,
+      cumulativeMinutes: memberActivity.minutes.sum,
+      lastPracticeAt: memberActivity.lastPracticeAt, lastPracticeDate: memberActivity.lastPracticeDate
+    };
+  });
+  return { success: true, data: {
+    teamId, businessDate,
+    nextResetAt: Date.parse(`${businessDate}T04:00:00+08:00`) + DAY_MS,
+    settings, history: { startDate, endDate, totalDays }, summary, members,
+    overview: {
+      memberCount: ids.length,
+      totalPracticeCount: members.reduce((count, member) => count + member.totalPracticeCount, 0),
+      activeMemberCount: summary.practicedCount,
+      activityRate: ids.length ? Math.round(summary.practicedCount / ids.length * 100) : 0
+    }
+  } };
+}
+
+async function generateInvite(data, openid) {
+  const team = await activeTeam(db, data.teamId);
+  if (team.creator !== openid) throw new Error('只有团长可以邀请新成员');
+  const inviteId = 'invite_' + crypto.randomBytes(16).toString('hex');
+  const expireTime = Date.now() + 7 * DAY_MS;
+  const sharePath = '/subpackages/team/pages/joinTeam/joinTeam?' +
+    `teamId=${encodeURIComponent(data.teamId)}&teamName=${encodeURIComponent(team.name)}` +
+    `&inviterId=${encodeURIComponent(openid)}&inviteId=${encodeURIComponent(inviteId)}`;
+  await db.collection('invites').add({ data: {
+    _id: inviteId, teamId: data.teamId, teamName: team.name, inviterId: openid,
+    inviterName: typeof data.inviterName === 'string' ? data.inviterName : '匿名用户',
+    sharePath, status: 'pending', inviteTime: db.serverDate(),
+    expireTime: new Date(expireTime),
+    createdAt: db.serverDate(), updatedAt: db.serverDate()
+  } });
+  return { success: true, data: { inviteId, sharePath, expireTime, title: `邀请您加入${team.name}团队` } };
+}
+
+async function recordInviteAction(data, openid) {
+  const team = await activeTeam(db, data.teamId);
+  if (team.creator !== openid) throw new Error('只有团长可以记录邀请');
+  requireId(data.inviteId, '邀请');
+  const invite = (await db.collection('invites').doc(data.inviteId).get()).data;
+  if (!invite || invite.teamId !== data.teamId || invite.inviterId !== openid) throw new Error('邀请信息无效');
+  const result = await db.collection('invite_actions').add({ data: {
+    teamId: data.teamId, inviterId: openid, inviteId: data.inviteId,
+    actionType: 'generate', actionTime: db.serverDate(), createdAt: db.serverDate()
+  } });
+  return { success: true, data: { actionId: result._id } };
+}
+
+async function recordInviteRelation(data, openid) {
+  const team = await activeTeam(db, data.teamId);
+  if (!isMember(team, openid)) throw new Error('用户不是团队成员');
+  const member = (await db.collection('team_members').doc(`${data.teamId}_${openid}`).get()).data;
+  if (!member || !member.invitedBy) throw new Error('邀请关系不存在');
+  const result = await db.collection('invite_actions').add({ data: {
+    teamId: data.teamId, inviterId: member.invitedBy, inviteeId: openid,
+    inviteId: member.inviteId, inviteTime: member.joinedAt,
+    status: 'accepted', createdAt: db.serverDate()
+  } });
+  return { success: true, data: { relationId: result._id } };
+}
+
+function publicTeam(team) {
+  return { _id: team._id, name: team.name, description: team.description || '',
+    icon: team.icon || DEFAULT_ICON, memberCount: memberIds(team).length,
+    isActive: true, createdAt: team.createdAt, creatorName: team.creatorName || '匿名创建者',
+    ...practiceSettings(team) };
+}
+
+async function getAllTeams() {
+  const rows = await readAll(db.collection('teams').where({ isActive: true })
+    .orderBy('createdAt', 'desc').orderBy('_id', 'asc'));
+  const teams = rows.map(publicTeam);
+  return { success: true, data: { teams, count: teams.length } };
 }

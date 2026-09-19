@@ -94,7 +94,7 @@
           <view class="bijing-input-row">
             <input
               class="bijing-input"
-              placeholder="请输入必经之路学号"
+              placeholder="请输入以大写 BJ 开头的学号"
               value="{{bijingInputValue}}"
               bindinput="onBijingInput"
             />
@@ -111,6 +111,7 @@
           </view>
           <view class="bijing-actions">
             <view class="bijing-btn-sm bijing-manual-btn {{bijingSyncing ? 'is-syncing' : ''}}" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
+            <view wx:if="{{bijingStudentNumber}}" class="bijing-text-action" bindtap="openBijingHeatmap">查看热力图</view>
           </view>
           <view class="bijing-auto-note">
             <text class="bijing-auto-note-title">日常无需手动同步</text>
@@ -162,7 +163,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.5.2</text>
+          <text class="font_2 text_9 ml-17">版本 V2.6.0</text>
         </view>
         <image
           class="image_3"

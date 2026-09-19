@@ -1,65 +1,53 @@
-<view class="flex-col page">
-  <view class="flex-col section">
-    <view class="flex-row justify-between items-start self-stretch group">
-      <view class="flex-col justify-start relative group_2">
-        <view class="flex-col justify-start section_5">
-          <view class="flex-col relative section_4">
-            <view class="flex-row self-stretch group_3">
-              <view class="group_4">
-                <text class="text">{{year}}</text>
-                <text class="text_2">年</text>
-              </view>
-              <text class="text_3 ml-21">{{month}}</text>
-            </view>
-            <view class="flex-col justify-start items-center self-center text-wrapper">
-              <text class="text_5">{{day}}</text>
-            </view>
-            <view class="flex-col justify-start items-center self-center text-wrapper">
-              <text class="text_4">{{lunarDate}}</text>
-            </view>           
-          </view>
-        </view>
-        <view class="section_3 pos_3"></view>
-        <view class="section_3 pos"></view>
-        <view class="section_3 pos_2"></view>
-      </view>
-      <view class="section_2"></view>
+<import src="../../templates/memberHistory.wxml" />
+<view class="history-page">
+  <template is="member-history-header" data="{{isMemberHistory, memberName, memberAvatar, memberStartDate}}" />
+  <view class="history-navigation">
+    <view class="history-tabs">
+      <view class="history-tab history-tab-active" aria-role="button" aria-label="按日查看，已选中">按日</view>
+      <button class="history-tab" bindtap="openMonthlyHistory" hover-class="history-tab-hover">按月</button>
     </view>
-    <view class="shrink-0 self-start section_6"></view>
+    <view class="date-navigation">
+      <button class="date-arrow" bindtap="previousDay" disabled="{{!canGoPrevious}}" aria-label="上一日" hover-class="date-button-hover">‹</button>
+      <picker class="date-picker" mode="date" value="{{selectedDateKey}}" start="{{memberStartDate}}" end="{{todayDate}}" bindchange="onDateChange" aria-label="选择日期">
+        <view class="date-picker-value"><text>{{selectedDate}}</text><text class="picker-chevron">⌄</text></view>
+      </picker>
+      <button class="date-arrow" bindtap="nextDay" disabled="{{!canGoNext}}" aria-label="下一日" hover-class="date-button-hover">›</button>
+    </view>
+    <text class="lunar-date">{{lunarDate}}</text>
+    <button class="today-button" bindtap="goToday" disabled="{{isToday}}" hover-class="date-button-hover">{{isToday ? '今天' : '回到今天'}}</button>
+    <text class="history-hint">每天 04:00 至次日 04:00 记为同一天</text>
   </view>
-  <view class="flex-row justify-between relative section_7">
-    <view class="flex-col self-center group_5">
-      <text class="self-center font">当日打卡次数</text>
-      <text class="mt-12 self-start font_2 text_7">{{recordCount}}</text>
+
+  <template is="member-history-status" data="{{isMemberHistory, memberLoading, memberError}}" />
+  <block wx:if="{{!isMemberHistory || (!memberLoading && !memberError)}}">
+  <view class="history-summary">
+    <view class="summary-item">
+      <text class="summary-label">当日打卡</text>
+      <view class="summary-value"><text class="summary-number">{{recordCount}}</text><text class="summary-unit">次</text></view>
     </view>
-    <view class="flex-col self-start group_6">
-      <text class="self-start font text_6">当日累计时长</text>
-      <view class="mt-12 flex-row self-stretch">
-        <text class="self-center font_2 text_8">{{totalDuration}}</text>
-        <text class="ml-4 self-start font text_9">min</text>
-      </view>
+    <view class="summary-divider"></view>
+    <view class="summary-item">
+      <text class="summary-label">静坐时长</text>
+      <view class="summary-value"><text class="summary-number">{{totalDuration}}</text><text class="summary-unit">分钟</text></view>
     </view>
   </view>
-  <view class="empty-records" wx:if="{{!loadingRecords && recordCount === 0}}">
+
+  <view class="records-heading"><text>静坐记录</text><text class="records-order" wx:if="{{recordCount}}">时间从近到远</text></view>
+  <view class="empty-records" wx:if="{{!loadingRecords && !recordCount}}">
     <text class="empty-records-title">当天暂无静坐记录</text>
-    <text class="empty-records-description">每一次静坐，都可以重新开始。</text>
+    <text class="empty-records-description">可以切换日期，回看每一次静坐。</text>
   </view>
-  <view class="flex-col group_8" wx:for="{{recordList}}" wx:for-item="record" wx:key="recordKey">
-    <view class="flex-row justify-between items-center self-start group_7">
-      <view class="flex-row items-center">
-        <view class="shrink-0 section_8"></view>
-        <text class="ml-18 font_3 text_10">{{record.duration}} 分钟</text>
-      </view>
-      <text class="text_11">{{record.time}}</text>
+  <view class="record-card" wx:for="{{recordList}}" wx:for-item="record" wx:key="recordKey">
+    <view class="record-heading">
+      <view class="record-title"><text class="record-duration">{{record.duration}}<text class="record-duration-unit"> 分钟</text></text><text class="record-time">{{record.timeLabel}}</text></view>
+      <button wx:if="{{!isMemberHistory}}" class="record-more" catchtap="showRecordActions" data-record-key="{{record.recordKey}}" disabled="{{deleteBusy}}" loading="{{deletingRecordKey === record.recordKey}}" aria-label="{{record.timeLabel}} 静坐记录的更多操作" hover-class="record-more-hover">···</button>
     </view>
-    <view class="flex-row self-end emotion-tags" wx:if="{{record.emotion.length > 0}}">
-      <text class="emotion-tag" wx:for="{{record.emotion}}" wx:for-item="emo" wx:key="*this">{{emo}}</text>
+    <view class="emotion-tags" wx:if="{{record.emotion.length}}">
+      <text class="emotion-tag" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
     </view>
-    <view class="flex-col justify-start items-start self-end text-wrapper_2" wx:for="{{record.experienceTexts}}" wx:for-item="experienceText" wx:key="index">
-      <text class="font_3 text_12">{{experienceText}}</text>
-    </view>
-    <view class="record-actions self-end">
-      <button class="delete-record-button" data-record-key="{{record.recordKey}}" bindtap="deleteRecord" disabled="{{deleteBusy}}" loading="{{deletingRecordKey === record.recordKey}}" aria-label="删除{{record.time}}的静坐记录">{{deletingRecordKey === record.recordKey ? '删除中' : '删除记录'}}</button>
+    <view class="record-experience" wx:if="{{record.experienceTexts.length}}">
+      <text class="experience-text" wx:for="{{record.experienceTexts}}" wx:for-item="experience" wx:key="*this">{{experience}}</text>
     </view>
   </view>
+  </block>
 </view>

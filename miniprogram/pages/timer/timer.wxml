@@ -28,10 +28,13 @@
     <!-- 计时器控制按钮 -->
     <view class="timer-button-container">
       
-      <!-- 重置按钮 - 始终显示在左侧 -->
-      <view class="weui-btn-circle reset-btn" bindtap="resetTimer" wx:if="{{showResetButton}}">
-        <image class="reset-btn-icon" src="{{resetIcon}}" />
-        <text class="reset-btn-text">重置</text>
+      <!-- 有计时进度时显示重置按钮，隐藏时保留占位以保持主按钮居中 -->
+      <view class="reset-btn-wrapper">
+        <view class="weui-btn-circle reset-btn" bindtap="resetTimer" wx:if="{{showResetButton}}">
+          <image class="reset-btn-icon" src="{{resetIcon}}" />
+          <text class="reset-btn-text">重置</text>
+        </view>
+        <view class="reset-btn-placeholder" wx:else></view>
       </view>
       
       <!-- 主控制按钮 - 开始和暂停按钮在同一位置切换 -->

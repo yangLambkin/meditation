@@ -1,0 +1,8 @@
+<web-view wx:if="{{src && !errorMessage}}" src="{{src}}" binderror="onWebViewError"></web-view>
+<view wx:else class="heatmap-error">
+  <text class="heatmap-error-message">{{errorMessage}}</text>
+  <view wx:if="{{src}}" class="heatmap-error-actions">
+    <button class="heatmap-button" bindtap="retry">重试</button>
+    <button class="heatmap-button" bindtap="copyLink">复制链接</button>
+  </view>
+</view>
