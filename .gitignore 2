@@ -1,0 +1,5 @@
+# Installed npm dependencies
+node_modules/
+
+# WeChat DevTools generated source maps
+/sourcemap.zip

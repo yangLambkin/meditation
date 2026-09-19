@@ -9,12 +9,10 @@
     <view class="history-period-navigation">
       <button class="history-period-arrow" bindtap="previousMonth" disabled="{{!canGoPrevious || checkinDeleting}}" aria-label="上一月" hover-class="history-control-active">‹</button>
       <picker class="history-period-picker" mode="date" fields="month" value="{{selectedMonth}}" start="{{memberStartDate}}" end="{{currentDate}}" disabled="{{checkinDeleting}}" bindchange="changeMonth">
-        <view class="history-period-value"><text>{{selectedMonthLabel}}</text><text class="history-picker-chevron">⌄</text></view>
+        <view class="history-period-value"><text>{{selectedMonthLabel}}</text></view>
       </picker>
       <button class="history-period-arrow" bindtap="nextMonth" disabled="{{!canGoNext || checkinDeleting}}" aria-label="下一月" hover-class="history-control-active">›</button>
     </view>
-    <button class="history-current-period" bindtap="goToCurrentMonth" disabled="{{selectedMonth === currentMonth || checkinDeleting}}" hover-class="history-control-active">{{selectedMonth === currentMonth ? '本月' : '回到本月'}}</button>
-    <text class="checkin-history-hint">每天 04:00 至次日 04:00 记为同一天</text>
   </view>
 
   <template is="member-history-status" data="{{isMemberHistory, memberLoading, memberError}}" />

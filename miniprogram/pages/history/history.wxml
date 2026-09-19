@@ -9,13 +9,11 @@
     <view class="date-navigation">
       <button class="date-arrow" bindtap="previousDay" disabled="{{!canGoPrevious}}" aria-label="上一日" hover-class="date-button-hover">‹</button>
       <picker class="date-picker" mode="date" value="{{selectedDateKey}}" start="{{memberStartDate}}" end="{{todayDate}}" bindchange="onDateChange" aria-label="选择日期">
-        <view class="date-picker-value"><text>{{selectedDate}}</text><text class="picker-chevron">⌄</text></view>
+        <view class="date-picker-value"><text>{{selectedDate}}</text></view>
       </picker>
       <button class="date-arrow" bindtap="nextDay" disabled="{{!canGoNext}}" aria-label="下一日" hover-class="date-button-hover">›</button>
     </view>
     <text class="lunar-date">{{lunarDate}}</text>
-    <button class="today-button" bindtap="goToday" disabled="{{isToday}}" hover-class="date-button-hover">{{isToday ? '今天' : '回到今天'}}</button>
-    <text class="history-hint">每天 04:00 至次日 04:00 记为同一天</text>
   </view>
 
   <template is="member-history-status" data="{{isMemberHistory, memberLoading, memberError}}" />

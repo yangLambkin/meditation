@@ -6,8 +6,7 @@
       <view class="hero-glow"></view>
     </view>
     <view class="hero-content">
-      <text class="hero-eyebrow">团队</text>
-      <text class="hero-title">一群人走得远</text>
+      <text class="hero-title">与伙伴一起，静心前行</text>
       <view class="hero-footer">
         <view class="overview-summary">
           <view class="hero-stat"><text class="count-number">{{totalJoinedTeams}}</text><text class="count-label">已加入团队</text></view>
@@ -28,13 +27,12 @@
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
         <view class="team-identity">
-          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge {{item.isSelfCreated ? 'owner' : ''}}">{{item.isSelfCreated ? '我创建的' : '已加入'}}</text></view>
+          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text></view>
+          <text class="team-owner">团长：{{item.creatorName || '匿名用户'}}</text>
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
-        <text class="chevron">›</text>
       </view>
-      <text class="team-description" wx:if="{{item.description}}">{{item.description}}</text>
-      <view class="rule-row"><text>{{item.dailyGoalMinutes === null ? '未设置期望分钟' : '每日 ' + item.dailyGoalMinutes + ' 分钟'}}</text><text class="rule-dot">·</text><text>{{item.practiceStartDate ? item.practiceStartDate + ' 起统计' : '未设日期，从创建日起统计'}}</text></view>
+      <text class="team-description">{{item.description || '暂时没有团队描述'}}</text>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
       <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长，通过邀请加入团队。
@@ -54,7 +52,7 @@
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
       </view>
-      <text class="team-description">{{item.description || '欢迎一起练习，持续积累。'}}</text>
+      <text class="team-description">{{item.description || '暂时没有团队描述'}}</text>
     </view>
     <view wx:if="{{!allTeams.length && !isLoading}}" class="empty-state"><view class="empty-symbol">◎</view><text class="empty-title">还没有公开团队</text><text class="empty-description">创建一个团队，邀请伙伴加入。</text></view>
   </block>

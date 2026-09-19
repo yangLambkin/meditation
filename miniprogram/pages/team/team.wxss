@@ -10,8 +10,7 @@ button::after { border: none; }
 .hero-orbit-inner { width: 318rpx; height: 318rpx; top: -103rpx; right: -115rpx; }
 .hero-glow { position: absolute; width: 196rpx; height: 196rpx; top: -42rpx; right: -54rpx; border-radius: 50%; background-color: rgba(255, 255, 255, .07); }
 .hero-content { position: relative; z-index: 1; }
-.hero-eyebrow { display: block; color: #fff8eb; font-size: 24rpx; line-height: 1.5; letter-spacing: 3rpx; }
-.hero-title { display: block; margin-top: 18rpx; font-size: 46rpx; font-weight: 600; line-height: 1.4; letter-spacing: 1rpx; }
+.hero-title { display: block; font-size: 46rpx; font-weight: 600; line-height: 1.4; letter-spacing: 1rpx; }
 .hero-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 28rpx; margin-top: 36rpx; }
 .overview-summary { display: flex; align-items: center; gap: 28rpx; min-width: 0; }
 .hero-stat { display: flex; flex-direction: column; gap: 6rpx; }
@@ -38,10 +37,7 @@ button::after { border: none; }
 .role-badge.owner { background-color: #b2976414; color: #a68a57; }
 .team-owner { display: block; color: #697282; font-size: 24rpx; line-height: 1.5; margin-top: 10rpx; word-break: break-all; }
 .member-count { display: block; color: #99a1ae; font-size: 24rpx; margin-top: 10rpx; }
-.chevron { color: #c0c6cf; font-size: 40rpx; flex-shrink: 0; }
 .team-description { display: block; font-size: 26rpx; line-height: 1.6; color: #697282; margin-top: 22rpx; word-break: break-all; }
-.rule-row { display: flex; flex-wrap: wrap; gap: 10rpx; color: #697282; font-size: 24rpx; margin-top: 24rpx; }
-.rule-dot { color: #c0c6cf; }
 .empty-state { padding: 70rpx 24rpx; text-align: center; border-radius: 20rpx; background-color: #ffffff; }
 .empty-symbol { font-size: 72rpx; color: #b29764; margin-bottom: 24rpx; }
 .empty-title { display: block; font-size: 30rpx; color: #354152; margin-bottom: 16rpx; }

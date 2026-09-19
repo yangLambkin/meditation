@@ -43,7 +43,6 @@ page {
 
 .history-tab::after,
 .date-arrow::after,
-.today-button::after,
 .record-more::after {
   border: none;
 }
@@ -89,43 +88,11 @@ page {
   white-space: nowrap;
 }
 
-.picker-chevron {
-  margin-left: 12rpx;
-  color: #b9ab91;
-  font-size: 26rpx;
-}
-
 .lunar-date {
   display: block;
   color: #99a1ae;
   font-size: 23rpx;
   line-height: 1.5;
-  text-align: center;
-}
-
-.history-navigation .today-button {
-  width: 160rpx;
-  margin: 20rpx auto 0;
-  padding: 0;
-  border-radius: 24rpx;
-  background-color: #f7f3eb;
-  color: #a68a57;
-  font-size: 23rpx;
-  font-weight: 400;
-  line-height: 48rpx;
-}
-
-.history-navigation .today-button[disabled] {
-  background-color: #f7f3eb;
-  color: #b7a47f;
-}
-
-.history-hint {
-  display: block;
-  margin-top: 20rpx;
-  color: #99a1ae;
-  font-size: 22rpx;
-  line-height: 1.6;
   text-align: center;
 }
 

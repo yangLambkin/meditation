@@ -32,14 +32,22 @@
   padding-bottom: 40rpx;
   padding-bottom: calc(40rpx + env(safe-area-inset-bottom));
 }
+/* 首屏余量由日历吸收，金句自然落在底部；内容较多时可继续撑高。 */
+.home-overview {
+  min-height: 100vh;
+  padding-bottom: 28rpx;
+}
 .group {
+  flex: 1 0 auto;
   height: auto;
 }
 .section_2 {
   padding-top: 60rpx;
   background-color: #b29764;
   overflow: hidden;
-  height: 296rpx;
+  height: 25vh;
+  min-height: 260rpx;
+  max-height: 336rpx;
 }
 .font {
   font-size: 32rpx;
@@ -98,6 +106,7 @@
   top: 133.29rpx;
 }
 .section_6 {
+  flex: 1 0 auto;
   margin: -64rpx 28.24rpx 0;
   padding: 25rpx 15rpx 25rpx 25rpx;
   background-color: #ffffff;
@@ -114,7 +123,7 @@
   height: 35rpx;
 }
 .font_5 {
-  font-size: 26rpx;
+  font-size: 30rpx;
   font-family: Arimo;
   line-height: 24rpx;
   font-weight: 700;
@@ -308,8 +317,10 @@
   line-height: 30.02rpx;
 }
 .section_11 {
+  justify-content: center;
+  min-height: 156rpx;
   margin: 0 28.24rpx;
-  padding: 35.29rpx 31.76rpx 21.18rpx;
+  padding: 28rpx 31.76rpx;
   background-color: #ffffff;
   border-radius: 24.71rpx;
   filter: drop-shadow(0rpx 1.76rpx 1.76rpx #0000001a, 0rpx 1.76rpx 2.65rpx #0000001a);
@@ -423,6 +434,9 @@
 
 /* 日历网格容器 */
 .calendar-grid {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
   margin-top: 20rpx;
   width: 100%;
   box-sizing: border-box;
@@ -432,12 +446,13 @@
 /* 日历行 */
 .calendar-row {
   display: flex;
+  flex: 1 0 auto;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8rpx;
   width: 100%;
   box-sizing: border-box;
-  height: 40rpx;
+  min-height: 56rpx;
   padding: 0 5rpx;
 }
 
@@ -447,8 +462,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 40rpx;
-  height: 40rpx;
+  width: 52rpx;
+  height: 52rpx;
   border-radius: 50%;
   transition: all 0.3s ease;
   position: relative;
@@ -490,7 +505,7 @@
 
 /* 日期文字 */
 .day-text {
-  font-size: 24rpx;
+  font-size: 26rpx;
   font-family: Arimo;
   line-height: 15rpx;
   color: inherit;
@@ -569,6 +584,24 @@
   font-family: Arimo;
   font-weight: 600;
   line-height: 1;
+}
+
+/* 短屏保留完整操作区，避免放大的日历挤走每日金句。 */
+@media (max-height: 600px) {
+  .calendar-row {
+    min-height: 40rpx;
+  }
+
+  .calendar-day {
+    width: 40rpx;
+    height: 40rpx;
+  }
+
+  .section_11 {
+    min-height: 132rpx;
+    padding-top: 24rpx;
+    padding-bottom: 24rpx;
+  }
 }
 
 /* 授权按钮样式 */

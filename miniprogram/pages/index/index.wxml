@@ -1,84 +1,86 @@
 <!--pages/index/index.wxml-->
 <view class="flex-col page">
   <view class="flex-col section">
-    <view class="flex-col group">
-      <view class="flex-col items-start relative section_2">
-        <view class="flex-row items-center welcome-row">
-          <text class="font text">欢迎回来，</text>
-          <!-- 未登录时显示点击登录按钮 -->
-          <text wx:if="{{!hasUserInfo}}" class="font text login-text" bindtap="showLoginModal" data-debug="login-button-click">点击登录</text>
-          <!-- 已登录时显示用户昵称 -->
-          <text wx:else class="font text">{{userNickname}}</text>
-        </view>
-        <view class="shrink-0 relative section_5"></view>
-        <view class="flex-col justify-start items-end pos">
-          <view class="section_3">
-            <image class="section_3_bg" src="../../images/bg_image.png" mode="aspectFill" />
+    <view class="flex-col home-overview">
+      <view class="flex-col group">
+        <view class="flex-col items-start relative section_2">
+          <view class="flex-row items-center welcome-row">
+            <text class="font text">欢迎回来，</text>
+            <!-- 未登录时显示点击登录按钮 -->
+            <text wx:if="{{!hasUserInfo}}" class="font text login-text" bindtap="showLoginModal" data-debug="login-button-click">点击登录</text>
+            <!-- 已登录时显示用户昵称 -->
+            <text wx:else class="font text">{{userNickname}}</text>
           </view>
-          <text class="font_2 text_2 pos_2">保持觉察，自在当下</text>
-        </view>
-      </view>
-      <view class="flex-col relative section_6">
-        <!-- 日历头部 -->
-        <view class="flex-row justify-between items-center">
-          <view class="calendar-nav-btn" bindtap="prevMonth">
-            <image class="image" src="/images/icons/left.png" />
-          </view>
-          <text class="font_5 text_3">{{currentYear}}年 {{currentMonth}}月</text>
-          <view class="calendar-nav-btn" bindtap="nextMonth">
-            <image class="image image_2" src="/images/icons/right.png" />
+          <view class="shrink-0 relative section_5"></view>
+          <view class="flex-col justify-start items-end pos">
+            <view class="section_3">
+              <image class="section_3_bg" src="../../images/bg_image.png" mode="aspectFill" />
+            </view>
+            <text class="font_2 text_2 pos_2">保持觉察，自在当下</text>
           </view>
         </view>
-        
-        <!-- 星期标题 -->
-        <view class="flex-row justify-between items-baseline self-stretch group_2 mt-21">
-          <text class="font_6 text_10">一</text>
-          <text class="font_6 text_4">二</text>
-          <text class="font_6 text_5">三</text>
-          <text class="font_6 text_6">四</text>
-          <text class="font_6 text_7">五</text>
-          <text class="font_6 text_8">六</text>
-          <text class="font_6 text_9">日</text>
-        </view>
-        
-        <!-- 日历日期网格 -->
-        <view class="calendar-grid">
-          <view class="calendar-row" wx:for="{{calendarDays}}" wx:for-item="week" wx:key="weekIndex">
-            <view 
-              class="calendar-day {{item.type}} {{item.isToday ? 'today' : ''}} {{item.isChecked ? 'checked' : ''}}"
-              wx:for="{{week}}" 
-              wx:for-item="item" 
-              wx:key="day"
-              bindtap="selectDate"
-              data-date="{{item.fullDate}}"
-            >
-              <text class="day-text">{{item.day}}</text>
-              <image 
-                class="check-icon" 
-                src="/images/icons/checked.png" 
-                wx:if="{{item.isChecked}}"
-              />
+        <view class="flex-col relative section_6">
+          <!-- 日历头部 -->
+          <view class="flex-row justify-between items-center">
+            <view class="calendar-nav-btn" bindtap="prevMonth">
+              <image class="image" src="/images/icons/left.png" />
+            </view>
+            <text class="font_5 text_3">{{currentYear}}年 {{currentMonth}}月</text>
+            <view class="calendar-nav-btn" bindtap="nextMonth">
+              <image class="image image_2" src="/images/icons/right.png" />
+            </view>
+          </view>
+
+          <!-- 星期标题 -->
+          <view class="flex-row justify-between items-baseline self-stretch group_2 mt-21">
+            <text class="font_6 text_10">一</text>
+            <text class="font_6 text_4">二</text>
+            <text class="font_6 text_5">三</text>
+            <text class="font_6 text_6">四</text>
+            <text class="font_6 text_7">五</text>
+            <text class="font_6 text_8">六</text>
+            <text class="font_6 text_9">日</text>
+          </view>
+
+          <!-- 日历日期网格 -->
+          <view class="calendar-grid">
+            <view class="calendar-row" wx:for="{{calendarDays}}" wx:for-item="week" wx:key="weekIndex">
+              <view
+                class="calendar-day {{item.type}} {{item.isToday ? 'today' : ''}} {{item.isChecked ? 'checked' : ''}}"
+                wx:for="{{week}}"
+                wx:for-item="item"
+                wx:key="day"
+                bindtap="selectDate"
+                data-date="{{item.fullDate}}"
+              >
+                <text class="day-text">{{item.day}}</text>
+                <image
+                  class="check-icon"
+                  src="/images/icons/checked.png"
+                  wx:if="{{item.isChecked}}"
+                />
+              </view>
             </view>
           </view>
         </view>
       </view>
-    </view>
-    
-    <!-- 觉察与静坐记录入口 -->
-    <view class="meditation-btn-container">
-      <button class="weui-btn meditation-btn primary" bindtap="startMeditation" hover-class="weui-btn_active">
-        <image class="meditation-btn-icon" src="/images/icons/start.png" />
-        <text class="meditation-btn-text">开始觉察</text>
-      </button>
-      <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openCheckinModal" hover-class="checkin-record-active">
-        <text class="meditation-btn-text">记录静坐</text>
-      </button>
-    </view>
-    
-    <!-- 每日一言 - 放置在静坐打卡按钮下方，间距40rpx -->
-    <view class="mt-40 flex-col items-start section_11">
-      <text class="font_6 text_29">每日金句</text>
-      <text class="font text_30 mt-11">{{wisdomQuote}}</text>
+
+      <!-- 觉察与静坐记录入口 -->
+      <view class="meditation-btn-container">
+        <button class="weui-btn meditation-btn primary" bindtap="startMeditation" hover-class="weui-btn_active">
+          <image class="meditation-btn-icon" src="/images/icons/start.png" />
+          <text class="meditation-btn-text">开始觉察</text>
+        </button>
+        <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openCheckinModal" hover-class="checkin-record-active">
+          <text class="meditation-btn-text">记录静坐</text>
+        </button>
+      </view>
+
+      <!-- 每日金句随首屏自适应布局落在操作按钮下方 -->
+      <view class="flex-col items-start section_11">
+        <text class="font_6 text_29">每日金句</text>
+        <text class="font text_30 mt-11">{{wisdomQuote}}</text>
+      </view>
     </view>
 
     <view class="checkin-history">
