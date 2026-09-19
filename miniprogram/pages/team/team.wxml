@@ -7,8 +7,7 @@
     </view>
     <view class="hero-content">
       <text class="hero-eyebrow">团队</text>
-      <text class="hero-title">与伙伴一起，静心前行</text>
-      <text class="hero-description">彼此陪伴，让每一天的练习更有力量。</text>
+      <text class="hero-title">一群人走得远</text>
       <view class="hero-footer">
         <view class="overview-summary">
           <view class="hero-stat"><text class="count-number">{{totalJoinedTeams}}</text><text class="count-label">已加入团队</text></view>
@@ -23,7 +22,6 @@
     <view class="tab {{currentTab === 'created' ? 'selected' : ''}}" bindtap="switchTab" data-tab="created">我的团队</view>
     <view class="tab {{currentTab === 'joined' ? 'selected' : ''}}" bindtap="switchTab" data-tab="joined">发现团队</view>
   </view>
-  <view wx:if="{{isLoading}}" class="refresh-hint"><view class="loading-dot"></view><text>正在更新团队…</text></view>
 
   <block wx:if="{{currentTab === 'created'}}">
     <view class="team-card team-card-clickable" wx:for="{{mergedJoinedTeams}}" wx:key="_id" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
@@ -37,7 +35,6 @@
       </view>
       <text class="team-description" wx:if="{{item.description}}">{{item.description}}</text>
       <view class="rule-row"><text>{{item.dailyGoalMinutes === null ? '未设置期望分钟' : '每日 ' + item.dailyGoalMinutes + ' 分钟'}}</text><text class="rule-dot">·</text><text>{{item.practiceStartDate ? item.practiceStartDate + ' 起统计' : '未设日期，从创建日起统计'}}</text></view>
-      <view class="card-footer"><text>查看当天与历史练习</text></view>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
       <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长，通过邀请加入团队。
@@ -61,4 +58,5 @@
     </view>
     <view wx:if="{{!allTeams.length && !isLoading}}" class="empty-state"><view class="empty-symbol">◎</view><text class="empty-title">还没有公开团队</text><text class="empty-description">创建一个团队，邀请伙伴加入。</text></view>
   </block>
+  <view wx:if="{{isLoading}}" class="refresh-hint"><view class="loading-dot"></view><text>正在更新团队…</text></view>
 </view>

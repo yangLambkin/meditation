@@ -21,12 +21,14 @@ Page({
     loadError: '', reportError: '',
     currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
     teamMembers: [], todayMembers: [], historyMembers: [], attentionCount: 0,
-    overview: null, hasGoal: false,
+    overview: null, historySummary: null, hasGoal: false,
     dayLabel: '', nextDayLabel: '', historyRangeLabel: '',
     settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', draftStartDate: '', draftGoalMinutes: '', dateMax: '',
     draftName: '', draftDescription: '', draftIcon: '', isChoosingIcon: false,
+    draftPracticeRulesEnabled: false,
     settingsError: '', isSaving: false, isDeleting: false,
-    isPreparingInvite: false, inviteReady: false, inviteError: ''
+    isPreparingInvite: false, inviteReady: false, inviteError: '',
+    inviteDialogOpen: false, inviteExpiresLabel: ''
   },
 
   onLoad(options = {}) {
@@ -44,7 +46,7 @@ Page({
     this._isVisible = false;
     this._editVisibilityVersion = (this._editVisibilityVersion || 0) + 1;
     this._loadVersion = (this._loadVersion || 0) + 1;
-    this.resetInvitation();
+    this.resetInvitation({ keepPrepared: true });
     this.setData({ isLoading: false, keyboardHeight: 0, settingsScrollTarget: '' });
     this.clearResetTimer();
   },
@@ -80,7 +82,7 @@ Page({
       this._resetTimer = null;
       if (!this._isVisible || this._unloaded) return;
       // 新练习日不能继续显示上一天的「今日」结果。
-      this.setData({ report: null, overview: null, todayMembers: [], historyMembers: [], reportError: '' });
+      this.setData({ report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: '' });
       this.loadTeamData();
     }, Math.max(1000, Math.min(DAY_MS + 1000, nextResetAt - Date.now() + 100)));
   },
@@ -92,26 +94,28 @@ Page({
     if (this._viewerOpenid !== openid || this._viewerTeamId !== teamId) {
       this.resetInvitation();
       this._reportMembers = [];
-      this.setData({ teamInfo: null, report: null, overview: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, settingsOpen: false, settingsError: '', isChoosingIcon: false });
+      this.setData({ teamInfo: null, report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
     if (this.data.isDeleting || this.data.isSaving) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingTeamId === teamId) return;
     const version = this._loadVersion = (this._loadVersion || 0) + 1;
     this._loadingOpenid = openid;
     this._loadingTeamId = teamId;
+    this._teamInfoReady = false;
     this.clearResetTimer();
-    this.resetInvitation();
+    this.resetInvitation({ keepPrepared: true });
     this._viewerOpenid = openid;
     this._viewerTeamId = teamId;
     const isCurrent = () => !this._unloaded && version === this._loadVersion && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
     this._reportMembers = [];
-    this.setData({ isLoading: true, loadError: '', reportError: '', report: null, overview: null, teamMembers: [], todayMembers: [], historyMembers: [] });
+    this.setData({ isLoading: true, loadError: '', reportError: '', report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [] });
     try {
       const team = await this.callTeam('getTeamInfo', { teamId });
       if (!isCurrent()) return;
       const isMember = typeof team.isMember === 'boolean' ? team.isMember : !!openid && (
         team.creator === openid || (team.members || []).some(member => (typeof member === 'string' ? member : member.openid) === openid));
       if (!isMember) {
+        this.resetInvitation();
         this.setData({ teamInfo: null, isMember: false, isCreator: false });
         wx.redirectTo({ url: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${encodeURIComponent(teamId)}` });
         return;
@@ -119,6 +123,10 @@ Page({
       this.updateLocalTeamCache(team);
       this.setData({ teamInfo: team, teamMembers: this.profileMembers(team.members || []), isMember: true, isCreator: !!openid && team.creator === openid,
         hasGoal: Number.isInteger(team.dailyGoalMinutes) && team.dailyGoalMinutes > 0 });
+      this._teamInfoReady = true;
+      if (!this.data.isCreator) {
+        this.resetInvitation();
+      }
       wx.setNavigationBarTitle({ title: team.name });
       try {
         const report = await this.callTeam('getTeamPracticeReport', { teamId: team._id });
@@ -127,13 +135,15 @@ Page({
         this.scheduleReset(Number(report.nextResetAt));
       } catch (error) {
         if (!isCurrent()) return;
-        this.setData({ report: null, todayMembers: [], historyMembers: [], reportError: error.message || '练习数据暂时无法加载' });
+        this.setData({ report: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: error.message || '练习数据暂时无法加载' });
       }
     } catch (error) {
       if (!isCurrent()) return;
       this.setData({ teamInfo: null, isCreator: false, isMember: false, settingsOpen: false, loadError: error.message || '团队信息暂时无法加载' });
     } finally {
-      if (isCurrent()) this.setData({ isLoading: false });
+      if (isCurrent()) {
+        this.setData({ isLoading: false });
+      }
     }
   },
 
@@ -172,6 +182,7 @@ Page({
       hasGoal,
       todayFilter: !hasGoal && ['below_goal', 'qualified'].includes(this.data.todayFilter) || hasGoal && this.data.todayFilter === 'practiced' ? 'attention' : this.data.todayFilter,
       overview: report.overview || null,
+      historySummary: this.buildHistorySummary(report),
       teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || a.nickname.localeCompare(b.nickname)),
       teamInfo: { ...this.data.teamInfo, ...report.settings },
       attentionCount: report.summary.notPracticedCount + report.summary.belowGoalCount,
@@ -183,6 +194,39 @@ Page({
       reportError: ''
     });
     this.updateTodayMembers();
+  },
+
+  buildHistorySummary(report) {
+    const { members, history, settings } = report;
+    if (!history.totalDays || !members.length) return null;
+    const hasGoal = settings.dailyGoalMinutes !== null;
+    const summary = {
+      memberCount: members.length,
+      unmetMemberCount: 0, unmetCount: 0,
+      missedMemberCount: 0, missedCount: 0,
+      belowGoalMemberCount: 0, belowGoalCount: 0,
+      fullAttendanceCount: 0
+    };
+    let completedCount = 0;
+    members.forEach(member => {
+      summary.missedMemberCount += Number(member.missedDays > 0);
+      summary.missedCount += member.missedDays;
+      if (hasGoal) {
+        summary.unmetMemberCount += Number(member.unmetDays > 0);
+        summary.unmetCount += member.unmetDays;
+        summary.belowGoalMemberCount += Number(member.belowGoalDays > 0);
+        summary.belowGoalCount += member.belowGoalDays;
+      }
+      const completedDays = hasGoal ? member.qualifiedDays : member.practiceDays;
+      completedCount += completedDays;
+      summary.fullAttendanceCount += Number(completedDays === history.totalDays);
+    });
+    // 历史按每人每天计一次，与当日练习次数、今日状态无关。
+    const totalCount = members.length * history.totalDays;
+    const rate = Math.round(completedCount / totalCount * 1000) / 10;
+    // 有未完成的练习日时，不能因为四舍五入而显示为全部完成。
+    summary.rateLabel = `${completedCount < totalCount ? Math.min(99.9, rate) : 100}%`;
+    return summary;
   },
 
   profileMembers(members) {
@@ -233,6 +277,24 @@ Page({
     if (this.data.report) this.updateTodayMembers();
   },
 
+  openHistoryDetails(event) {
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    const { teamId, teamInfo, report, isMember, hasGoal, teamMembers } = this.data;
+    if (this._unloaded || this.data.isLoading || this.data.isSaving || this.data.isDeleting ||
+        !isMember || !teamInfo || teamInfo._id !== teamId || !report || report.teamId !== teamId ||
+        !report.history || report.history.totalDays <= 0 ||
+        !this._viewerOpenid || wx.getStorageSync('userOpenId') !== this._viewerOpenid ||
+        !['unmet', 'not_practiced', 'below_goal', 'all'].includes(dataset.filter)) return;
+    let memberQuery = '';
+    if (dataset.memberOpenid !== undefined) {
+      const member = teamMembers.find(item => item.openid === dataset.memberOpenid);
+      if (!member) return;
+      memberQuery = `&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname)}`;
+    }
+    const filter = !hasGoal && ['unmet', 'below_goal'].includes(dataset.filter) ? 'not_practiced' : dataset.filter;
+    wx.navigateTo({ url: `/subpackages/team/pages/historyDetails/historyDetails?teamId=${encodeURIComponent(teamId)}&month=${report.businessDate.slice(0, 7)}&filter=${filter}${memberQuery}` });
+  },
+
   openMemberRecords(event) {
     const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
     const { teamId, teamInfo, report, isMember, teamMembers } = this.data;
@@ -266,6 +328,7 @@ Page({
       draftName: team.name || '', draftDescription: team.description || '', draftIcon: team.icon || '/images/icons/team.png',
       draftStartDate: settings.practiceStartDate || '',
       draftGoalMinutes: settings.dailyGoalMinutes == null ? '' : String(settings.dailyGoalMinutes),
+      draftPracticeRulesEnabled: Boolean(settings.practiceStartDate || settings.dailyGoalMinutes != null && settings.dailyGoalMinutes !== ''),
       dateMax: this.data.report ? this.data.report.businessDate : currentPracticeDate(),
       settingsError: ''
     });
@@ -277,8 +340,19 @@ Page({
 
   preventSheetClose() {},
 
+  changePracticeRulesEnabled(event) {
+    if (!this.canManageTeam() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || this._unloaded) return;
+    const enabled = event.detail.value === true;
+    // 关闭时保留本次编辑的草稿，提交时再将两项规则清空。
+    this.setData({
+      draftPracticeRulesEnabled: enabled, settingsError: '',
+      ...(!enabled ? { keyboardHeight: 0, settingsScrollTarget: '' } : {})
+    });
+    if (!enabled && typeof wx.hideKeyboard === 'function') wx.hideKeyboard();
+  },
+
   onGoalKeyboardHeightChange(event) {
-    if (!this.data.settingsOpen) return;
+    if (!this.data.settingsOpen || !this.data.draftPracticeRulesEnabled) return;
     const height = Number(event.detail && event.detail.height);
     const keyboardHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
     // 只收缩设置层的可用高度，表单与底部操作都留在可滚动区域。
@@ -334,19 +408,24 @@ Page({
   },
 
   changeStartDate(event) {
-    if (this.canManageTeam() && !this.data.isSaving) this.setData({ draftStartDate: event.detail.value, settingsError: '' });
+    if (this.canEditPracticeRules()) this.setData({ draftStartDate: event.detail.value, settingsError: '' });
   },
 
   clearStartDate() {
-    if (this.canManageTeam() && !this.data.isSaving) this.setData({ draftStartDate: '', settingsError: '' });
+    if (this.canEditPracticeRules()) this.setData({ draftStartDate: '', settingsError: '' });
   },
 
   changeGoalMinutes(event) {
-    if (this.canManageTeam() && !this.data.isSaving) this.setData({ draftGoalMinutes: event.detail.value, settingsError: '' });
+    if (this.canEditPracticeRules()) this.setData({ draftGoalMinutes: event.detail.value, settingsError: '' });
   },
 
   chooseGoalMinutes(event) {
-    if (this.canManageTeam() && !this.data.isSaving) this.setData({ draftGoalMinutes: String(event.currentTarget.dataset.minutes), settingsError: '' });
+    if (this.canEditPracticeRules()) this.setData({ draftGoalMinutes: String(event.currentTarget.dataset.minutes), settingsError: '' });
+  },
+
+  canEditPracticeRules() {
+    return this.canManageTeam() && this.data.settingsOpen && this.data.draftPracticeRulesEnabled &&
+      !this.data.isSaving && !this.data.isDeleting && !this._unloaded;
   },
 
   canManageTeam() {
@@ -356,8 +435,8 @@ Page({
 
   async saveSettings() {
     if (!this.canManageTeam() || this.data.isSaving || this.data.isDeleting || this.data.isChoosingIcon || this._unloaded) return;
-    const practiceStartDate = this.data.draftStartDate || null;
-    const goalInput = this.data.draftGoalMinutes == null ? '' : String(this.data.draftGoalMinutes).trim();
+    const practiceStartDate = this.data.draftPracticeRulesEnabled ? this.data.draftStartDate || null : null;
+    const goalInput = !this.data.draftPracticeRulesEnabled || this.data.draftGoalMinutes == null ? '' : String(this.data.draftGoalMinutes).trim();
     const dailyGoalMinutes = goalInput === '' ? null : Number(goalInput);
     const name = this.data.draftName.trim();
     const description = this.data.draftDescription.trim();
@@ -390,7 +469,7 @@ Page({
     const canSubmit = () => isCurrent() && visibilityVersion === (this._editVisibilityVersion || 0);
     this._loadVersion = (this._loadVersion || 0) + 1;
     this.clearResetTimer();
-    this.resetInvitation();
+    this.resetInvitation({ keepPrepared: true });
     this.setData({ isSaving: true, isLoading: false, settingsError: '' });
     try {
       if (!await contentSec.checkText(name, 2)) return;
@@ -401,7 +480,7 @@ Page({
       if (!isCurrent()) return;
       const team = { ...this.data.teamInfo, ...teamData };
       this.updateLocalTeamCache(team);
-      this.setData({ teamInfo: team, settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', isSaving: false, report: null });
+      this.setData({ teamInfo: team, settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', isSaving: false, report: null, historySummary: null });
       wx.setNavigationBarTitle({ title: name });
       wx.showToast({ title: '团队已更新', icon: 'success' });
       await this.loadTeamData();
@@ -420,32 +499,49 @@ Page({
     }
   },
 
-  resetInvitation() {
+  resetInvitation({ keepPrepared = false, keepDialog = false } = {}) {
     this._inviteVersion = (this._inviteVersion || 0) + 1;
-    this._preparedInvite = null;
+    // 暂停分享时保留有效邀请；页面重新验证团队及团长身份后才能恢复使用。
+    if (!keepPrepared) this._preparedInvite = null;
     if (this._inviteExpiryTimer) clearTimeout(this._inviteExpiryTimer);
     this._inviteExpiryTimer = null;
     if (typeof wx.hideShareMenu === 'function') wx.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] });
-    if (!this._unloaded) this.setData({ isPreparingInvite: false, inviteReady: false, inviteError: '' });
+    if (!this._unloaded) this.setData({ isPreparingInvite: false, inviteReady: false, inviteError: '',
+      inviteDialogOpen: keepDialog && this.data.inviteDialogOpen, inviteExpiresLabel: '' });
   },
+
+  closeInviteDialog() {
+    this.resetInvitation({ keepPrepared: true });
+  },
+
+  noop() {},
 
   canInviteTeam() {
     return this.canManageTeam() && this.data.isMember && this._isVisible && !this._unloaded &&
-      !this.data.isLoading && !this.data.isSaving && !this.data.isDeleting &&
+      this._teamInfoReady && !this.data.isSaving && !this.data.isDeleting &&
       this._viewerTeamId === this.data.teamId && this.data.teamInfo._id === this.data.teamId;
   },
 
   async prepareInvite() {
     if (!this.canInviteTeam() || this.data.isPreparingInvite) return;
-    this.resetInvitation();
+    const prepared = this._preparedInvite;
+    const canReuse = prepared && prepared.teamId === this.data.teamId &&
+      prepared.openid === wx.getStorageSync('userOpenId') && prepared.expireTime > Date.now();
+    if (this.data.inviteReady && canReuse) {
+      this.setData({ inviteDialogOpen: true });
+      return;
+    }
+    this.resetInvitation({ keepDialog: true });
     const version = this._inviteVersion;
     const teamId = this.data.teamId;
     const openid = wx.getStorageSync('userOpenId');
     const isCurrent = () => version === this._inviteVersion && this.canInviteTeam() &&
       this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
-    this.setData({ isPreparingInvite: true });
+    if (!canReuse) this.setData({ isPreparingInvite: true });
     try {
-      const invite = await this.callTeam('generateInvite', { teamId, inviterName: wx.getStorageSync('userNickname') || '' });
+      const invite = canReuse ? prepared : await this.callTeam('generateInvite', {
+        teamId, inviterName: wx.getStorageSync('userNickname') || ''
+      });
       if (!isCurrent()) return;
       const prefix = '/subpackages/team/pages/joinTeam/joinTeam?';
       if (!invite || !invite.inviteId || typeof invite.sharePath !== 'string' || !invite.sharePath.startsWith(prefix) ||
@@ -459,15 +555,20 @@ Page({
       }
       if (params.teamId !== teamId || params.inviterId !== openid || params.inviteId !== invite.inviteId) throw new Error('邀请信息无效，请重新生成');
       this._preparedInvite = { ...invite, teamId, openid };
-      this.setData({ inviteReady: true, inviteError: '' });
+      const expires = new Date(invite.expireTime);
+      const pad = value => String(value).padStart(2, '0');
+      const inviteExpiresLabel = `${expires.getFullYear()}.${pad(expires.getMonth() + 1)}.${pad(expires.getDate())} ${pad(expires.getHours())}:${pad(expires.getMinutes())}`;
+      this.setData({ inviteReady: true, inviteError: '', inviteDialogOpen: true, inviteExpiresLabel });
       if (typeof wx.showShareMenu === 'function') wx.showShareMenu({ menus: ['shareAppMessage'] });
       this._inviteExpiryTimer = setTimeout(() => {
         if (!isCurrent()) return;
-        this.resetInvitation();
+        this.resetInvitation({ keepDialog: true });
         this.setData({ inviteError: '邀请已过期，请重新生成' });
       }, Math.min(invite.expireTime - Date.now(), 2147483647));
     } catch (error) {
-      if (isCurrent()) this.setData({ inviteReady: false, inviteError: error.message || '邀请准备失败，请重试' });
+      if (isCurrent()) {
+        this.setData({ inviteReady: false, inviteError: error.message || '邀请准备失败，请重试' });
+      }
     } finally {
       if (isCurrent()) this.setData({ isPreparingInvite: false });
     }
@@ -477,11 +578,15 @@ Page({
     const invite = this._preparedInvite;
     if (!this.canInviteTeam() || !this.data.inviteReady || !invite ||
         invite.teamId !== this.data.teamId || invite.openid !== wx.getStorageSync('userOpenId') || invite.expireTime <= Date.now()) {
-      this.resetInvitation();
+      this.resetInvitation({ keepDialog: this.canInviteTeam() });
+      if (this.data.inviteDialogOpen) this.setData({ inviteError: '邀请已失效，请重新生成' });
       return { title: '冥想团队', path: '/pages/team/team' };
     }
-    return { title: invite.title || `邀请您加入 ${this.data.teamInfo.name}`,
-      imageUrl: this.data.teamInfo.icon || '/images/icons/team.png', path: invite.sharePath };
+    const path = '/subpackages/team/pages/joinTeam/joinTeam?' +
+      `teamId=${encodeURIComponent(invite.teamId)}&teamName=${encodeURIComponent(this.data.teamInfo.name)}` +
+      `&inviterId=${encodeURIComponent(invite.openid)}&inviteId=${encodeURIComponent(invite.inviteId)}`;
+    return { title: `邀请您加入${this.data.teamInfo.name}团队`,
+      imageUrl: this.data.teamInfo.icon || '/images/icons/team.png', path };
   },
 
   async confirmDeleteTeam() {
@@ -509,7 +614,7 @@ Page({
       const result = await teamManager.deleteTeam(this.data.teamInfo._id);
       if (!result || !result.success) throw new Error(result && result.error || '解散失败，请重试');
       if (this._unloaded || wx.getStorageSync('userOpenId') !== openid) return;
-      this.setData({ teamInfo: null, report: null, isCreator: false, isMember: false, settingsOpen: false });
+      this.setData({ teamInfo: null, report: null, historySummary: null, isCreator: false, isMember: false, settingsOpen: false });
       wx.showToast({ title: '团队解散成功', icon: 'success' });
       wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/team/team' }) });
     } catch (error) {

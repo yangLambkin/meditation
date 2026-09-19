@@ -1,0 +1,85 @@
+<view class="history-details-page">
+  <view class="overview-card">
+    <view class="overview-heading">
+      <text class="page-title">历史练习明细</text>
+      <text wx:if="{{history}}" class="day-count">{{history.totalDays}} <text>天</text></text>
+    </view>
+    <view class="month-navigation">
+      <button class="month-arrow" bindtap="previousMonth" disabled="{{!canPreviousMonth}}" aria-label="上个月">‹</button>
+      <picker class="month-picker" mode="date" fields="month" value="{{selectedMonth}}" start="{{minMonth || '0001-01'}}" end="{{maxMonth}}" bindchange="changeMonth">
+        <view class="month-picker-label"><text>{{monthLabel}}</text><text class="month-picker-chevron">⌄</text></view>
+      </picker>
+      <button class="month-arrow" bindtap="nextMonth" disabled="{{!canNextMonth}}" aria-label="下个月">›</button>
+    </view>
+    <button wx:if="{{selectedMonth !== currentMonth}}" class="current-month-button" bindtap="goToCurrentMonth">回到本月</button>
+    <text wx:if="{{history && history.totalDays}}" class="range-label">{{rangeLabel}}</text>
+    <text wx:elif="{{history}}" class="range-label">本月尚无已结束的统计日期</text>
+    <text wx:if="{{memberOpenid}}" class="member-scope">查看成员：{{memberName}}</text>
+    <text wx:if="{{settings}}" class="rule-label">{{goalLabel}}</text>
+    <text class="rule-label">每人每天计 1 人次，不含今日；练习日按北京时间 04:00 切换。</text>
+  </view>
+
+  <view wx:if="{{settings}}" class="filter-row">
+    <button wx:if="{{hasGoal}}" class="filter-chip {{filter === 'unmet' ? 'active' : ''}}" data-filter="unmet" bindtap="changeFilter">未达标</button>
+    <button class="filter-chip {{filter === 'not_practiced' ? 'active' : ''}}" data-filter="not_practiced" bindtap="changeFilter">未练习</button>
+    <button wx:if="{{hasGoal}}" class="filter-chip {{filter === 'below_goal' ? 'active' : ''}}" data-filter="below_goal" bindtap="changeFilter">时长不足</button>
+    <button class="filter-chip {{filter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeFilter">全部</button>
+  </view>
+
+  <view wx:if="{{isLoading}}" class="state-panel">
+    <view class="loading-dot"></view>
+    <text class="state-title">正在加载历史明细</text>
+  </view>
+  <view wx:elif="{{loadError}}" class="state-panel">
+    <text class="state-title">暂时无法加载</text>
+    <text class="state-description">{{loadError}}</text>
+    <button wx:if="{{teamId}}" class="secondary-button" bindtap="retryLoad">重新加载</button>
+  </view>
+  <view wx:elif="{{hasLoaded && !groups.length}}" class="state-panel">
+    <text class="empty-mark">○</text>
+    <text class="state-title">{{emptyTitle}}</text>
+    <text class="state-description">{{emptyDescription}}</text>
+  </view>
+
+  <block wx:if="{{!isLoading && !loadError && groups.length}}">
+    <text class="list-note">按日期倒序展示 · 点击成员查看当日练习记录</text>
+    <view wx:for="{{groups}}" wx:for-item="group" wx:key="date" class="date-group">
+      <view class="date-heading">
+        <text class="date-title">{{group.dateLabel}}</text>
+        <text class="date-count">已加载 {{group.items.length}} 人</text>
+      </view>
+      <view class="date-card">
+        <view wx:for="{{group.items}}" wx:for-item="member" wx:key="key" class="member-row"
+          bindtap="openDayRecords" data-key="{{member.key}}" hover-class="member-row-pressed" aria-role="button"
+          aria-label="{{member.nickname}}，{{group.dateLabel}}，{{member.statusLabel}}，查看当日练习记录">
+          <image class="member-avatar" src="{{member.avatar}}" mode="aspectFill" />
+          <view class="member-content">
+            <view class="member-heading">
+              <text class="member-name">{{member.nickname}}</text>
+              <text wx:if="{{member.isCreator}}" class="creator-tag">团长</text>
+            </view>
+            <view class="member-status-row">
+              <text class="status-badge status-{{member.status}}">{{member.statusLabel}}</text>
+              <text class="minutes-label">{{member.minutesLabel}}<text class="minutes-unit">{{hasGoal ? ' / ' + settings.dailyGoalMinutes : ''}} 分钟</text></text>
+            </view>
+            <text wx:if="{{member.remainingLabel}}" class="remaining-label">还差 {{member.remainingLabel}} 分钟</text>
+          </view>
+          <text class="row-chevron">›</text>
+        </view>
+      </view>
+    </view>
+  </block>
+
+  <view wx:if="{{hasLoaded && !isLoading && !loadError}}" class="pagination">
+    <block wx:if="{{isLoadingMore}}">
+      <text class="pagination-note">正在加载更多…</text>
+    </block>
+    <block wx:elif="{{moreError}}">
+      <text class="state-description">{{moreError}}</text>
+      <button class="secondary-button" bindtap="loadMore">重试加载更多</button>
+    </block>
+    <button wx:elif="{{nextCursor}}" class="secondary-button" bindtap="loadMore">加载更多</button>
+    <text wx:elif="{{itemCount}}" class="pagination-note">已显示全部 {{itemCount}} 人次</text>
+    <text wx:if="{{nextCursor && itemCount}}" class="pagination-note">已加载 {{itemCount}} 人次，上拉查看更多</text>
+  </view>
+</view>

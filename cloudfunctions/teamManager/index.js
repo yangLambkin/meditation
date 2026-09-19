@@ -31,7 +31,8 @@ exports.main = async (event = {}) => {
       }
       case 'getTeamMembersCheckinData': return await getTeamMembersCheckinData(data, openid);
       case 'getMemberWeekCheckin': return await getMemberWeekCheckin(data, openid);
-      case 'getTeamPracticeReport': return await getTeamPracticeReport(data.teamId, openid);
+      case 'getTeamPracticeReport': return await getTeamPracticeReport(data.teamId, openid, data.month);
+      case 'getTeamHistoryDetails': return await getTeamHistoryDetails(data, openid);
       case 'getTeamMemberPracticeRecords': return await getTeamMemberPracticeRecords(data, openid);
       case 'generateInvite': return await generateInvite(data, openid);
       case 'recordInviteAction': return await recordInviteAction(data, openid);
@@ -426,9 +427,7 @@ async function getTeamMemberPracticeRecords(data, openid) {
   return { success: true, data: { member, startDate, businessDate, records } };
 }
 
-async function getTeamPracticeReport(teamId, openid) {
-  // 一次请求只读取一次当前时间，避免恰好跨04:00时今日与历史窗口不一致。
-  const now = Date.now();
+async function teamPracticeContext(teamId, openid, now) {
   const team = await activeTeam(db, teamId);
   if (!isMember(team, openid)) throw new Error('只有团队成员可以查看共修统计');
   const ids = memberIds(team);
@@ -438,6 +437,33 @@ async function getTeamPracticeReport(teamId, openid) {
   const hasGoal = settings.dailyGoalMinutes !== null;
   const endDate = shiftDate(businessDate, -1);
   const totalDays = Math.max(0, Math.round((Date.parse(`${businessDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / DAY_MS));
+  return { team, ids, settings, businessDate, startDate, hasGoal, endDate, totalDays, now };
+}
+
+function practiceHistoryWindow(context, requestedMonth) {
+  const { startDate: practiceStartDate, businessDate } = context;
+  if (requestedMonth === undefined) {
+    return { startDate: practiceStartDate, endDate: context.endDate, totalDays: context.totalDays };
+  }
+  if (typeof requestedMonth !== 'string' || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(requestedMonth) ||
+      !validDate(`${requestedMonth}-01`)) throw new Error('历史统计月份须为有效的YYYY-MM格式');
+  const minMonth = practiceStartDate.slice(0, 7);
+  const maxMonth = businessDate.slice(0, 7);
+  // 规则修改或过期分享链接可使原月份超界，此时回到最近的有效月份。
+  const month = requestedMonth < minMonth ? minMonth : requestedMonth > maxMonth ? maxMonth : requestedMonth;
+  const monthStartDate = `${month}-01`;
+  const monthEnd = new Date(Date.parse(`${monthStartDate}T00:00:00Z`));
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1, 0);
+  const monthEndDate = monthEnd.toISOString().slice(0, 10);
+  const startDate = practiceStartDate > monthStartDate ? practiceStartDate : monthStartDate;
+  const endDate = context.endDate < monthEndDate ? context.endDate : monthEndDate;
+  const totalDays = Math.max(0, Math.round((Date.parse(`${endDate}T00:00:00Z`) -
+    Date.parse(`${startDate}T00:00:00Z`)) / DAY_MS) + 1);
+  return { startDate, endDate, totalDays, month, minMonth, maxMonth };
+}
+
+// 汇总卡片与按日明细共用记录归属、时长累加及资料读取，避免统计口径漂移。
+async function aggregateTeamPractice({ ids, startDate, businessDate, now }) {
   const totals = new Map(ids.map(id => [id, new Map()]));
   const activity = new Map(ids.map(id => [id, {
     totalPracticeCount: 0, todayPracticeCount: 0, minutes: { sum: 0, correction: 0 },
@@ -489,14 +515,35 @@ async function getTeamPracticeReport(teamId, openid) {
       cursor = result.data[result.data.length - 1]._id;
     }
   }
+  return { totals, activity, profiles };
+}
+
+function memberPracticeProfile(team, id, profiles) {
+  const user = profiles.get(id) || {};
+  return {
+    openid: id, nickname: user.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
+    avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: id === team.creator
+  };
+}
+
+function practiceStatus(minutes, goal) {
+  return minutes <= 0 ? 'not_practiced' : goal === null ? 'practiced' :
+    meetsGoal(minutes, goal) ? 'qualified' : 'below_goal';
+}
+
+async function getTeamPracticeReport(teamId, openid, month) {
+  // 一次请求只读取一次当前时间，避免恰好跨04:00时今日与历史窗口不一致。
+  const context = await teamPracticeContext(teamId, openid, Date.now());
+  const { team, ids, settings, businessDate, hasGoal } = context;
+  const history = practiceHistoryWindow(context, month);
+  const { startDate, endDate, totalDays } = history;
+  const { totals, activity, profiles } = await aggregateTeamPractice(context);
 
   const summary = { memberCount: ids.length, notPracticedCount: 0, practicedCount: 0, belowGoalCount: 0, qualifiedCount: 0 };
   const members = ids.map(id => {
-    const user = profiles.get(id) || {};
     const days = totals.get(id);
     const todayMinutes = days.has(businessDate) ? days.get(businessDate).sum : 0;
-    const todayStatus = todayMinutes <= 0 ? 'not_practiced' : !hasGoal ? 'practiced' :
-      meetsGoal(todayMinutes, settings.dailyGoalMinutes) ? 'qualified' : 'below_goal';
+    const todayStatus = practiceStatus(todayMinutes, settings.dailyGoalMinutes);
     if (todayMinutes > 0) summary.practicedCount++;
     if (todayStatus === 'not_practiced') summary.notPracticedCount++;
     else if (todayStatus === 'below_goal') summary.belowGoalCount++;
@@ -505,7 +552,7 @@ async function getTeamPracticeReport(teamId, openid) {
     let qualifiedDays = 0;
     const historicalMinutes = { sum: 0, correction: 0 };
     for (const [date, total] of days) {
-      if (date === businessDate) continue;
+      if (date < startDate || date > endDate) continue;
       practiceDays++;
       if (hasGoal && meetsGoal(total.sum, settings.dailyGoalMinutes)) qualifiedDays++;
       addMinutes(historicalMinutes, total.sum);
@@ -514,8 +561,7 @@ async function getTeamPracticeReport(teamId, openid) {
     const missedDays = totalDays - practiceDays;
     const memberActivity = activity.get(id);
     return {
-      openid: id, nickname: user.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
-      avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: id === team.creator,
+      ...memberPracticeProfile(team, id, profiles),
       todayMinutes, todayStatus, practiceDays, qualifiedDays, belowGoalDays, missedDays,
       unmetDays: hasGoal ? belowGoalDays + missedDays : 0, totalMinutes: historicalMinutes.sum,
       totalPracticeCount: memberActivity.totalPracticeCount, todayPracticeCount: memberActivity.todayPracticeCount,
@@ -526,7 +572,7 @@ async function getTeamPracticeReport(teamId, openid) {
   return { success: true, data: {
     teamId, businessDate,
     nextResetAt: Date.parse(`${businessDate}T04:00:00+08:00`) + DAY_MS,
-    settings, history: { startDate, endDate, totalDays }, summary, members,
+    settings, history, summary, members,
     overview: {
       memberCount: ids.length,
       totalPracticeCount: members.reduce((count, member) => count + member.totalPracticeCount, 0),
@@ -536,22 +582,100 @@ async function getTeamPracticeReport(teamId, openid) {
   } };
 }
 
+async function getTeamHistoryDetails(data, openid) {
+  const requestedFilter = data.filter === undefined ? 'unmet' : data.filter;
+  if (!['unmet', 'not_practiced', 'below_goal', 'all'].includes(requestedFilter)) {
+    throw new Error('历史统计筛选条件无效');
+  }
+  const limit = data.limit === undefined ? 50 : data.limit;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('每页条数须为1至100之间的整数');
+  const context = await teamPracticeContext(data.teamId, openid, Date.now());
+  const { team, settings, businessDate, hasGoal } = context;
+  const history = practiceHistoryWindow(context, data.month);
+  const { startDate, endDate, totalDays } = history;
+  if (data.memberOpenid !== undefined) {
+    requireId(data.memberOpenid, '成员');
+    if (!isMember(team, data.memberOpenid)) throw new Error('该用户已不在团队中');
+  }
+  const ids = (data.memberOpenid === undefined ? context.ids : [data.memberOpenid]).slice().sort();
+  const cursor = data.cursor == null ? null : data.cursor;
+  if (cursor !== null && (typeof cursor !== 'object' || Array.isArray(cursor) ||
+      !validDate(cursor.date) || cursor.date < startDate || cursor.date > endDate ||
+      typeof cursor.memberOpenid !== 'string' || !ids.includes(cursor.memberOpenid))) {
+    throw new Error('历史统计分页游标无效，请刷新后重试');
+  }
+  const filter = !hasGoal && ['unmet', 'below_goal'].includes(requestedFilter) ? 'not_practiced' : requestedFilter;
+  const items = [];
+  if (totalDays > 0) {
+    const { totals, profiles } = await aggregateTeamPractice({ ...context, ids });
+    // 时长不足只可能发生在已有练习的日期；稀疏日期集合避免多年空白记录的无效遍历。
+    const practicedDates = filter === 'below_goal'
+      ? [...new Set(ids.flatMap(id => [...totals.get(id).keys()]))]
+        .filter(date => date >= startDate && date <= (cursor ? cursor.date : endDate)).sort().reverse()
+      : null;
+    let dateIndex = 0;
+    let date = practicedDates ? practicedDates[0] : cursor ? cursor.date : endDate;
+    // 逐日按成员稳定排序，仅构造本页加一条探测记录，不展开全部成员×历史天数。
+    while (date && date >= startDate && items.length <= limit) {
+      for (const id of ids) {
+        if (cursor && date === cursor.date && id <= cursor.memberOpenid) continue;
+        const total = totals.get(id).get(date);
+        const minutes = total ? total.sum : 0;
+        const status = practiceStatus(minutes, settings.dailyGoalMinutes);
+        if (filter !== 'all' && (filter === 'unmet'
+          ? status !== 'not_practiced' && status !== 'below_goal' : status !== filter)) continue;
+        items.push({ date, ...memberPracticeProfile(team, id, profiles), minutes, status });
+        if (items.length > limit) break;
+      }
+      if (items.length > limit || date === startDate) break;
+      date = practicedDates ? practicedDates[++dateIndex] : shiftDate(date, -1);
+    }
+  }
+  const hasMore = items.length > limit;
+  if (hasMore) items.pop();
+  const lastItem = items[items.length - 1];
+  return { success: true, data: {
+    teamId: data.teamId, businessDate, settings, history, filter, items,
+    nextCursor: hasMore ? { date: lastItem.date, memberOpenid: lastItem.openid } : null
+  } };
+}
+
 async function generateInvite(data, openid) {
-  const team = await activeTeam(db, data.teamId);
-  if (team.creator !== openid) throw new Error('只有团长可以邀请新成员');
-  const inviteId = 'invite_' + crypto.randomBytes(16).toString('hex');
-  const expireTime = Date.now() + 7 * DAY_MS;
-  const sharePath = '/subpackages/team/pages/joinTeam/joinTeam?' +
-    `teamId=${encodeURIComponent(data.teamId)}&teamName=${encodeURIComponent(team.name)}` +
-    `&inviterId=${encodeURIComponent(openid)}&inviteId=${encodeURIComponent(inviteId)}`;
-  await db.collection('invites').add({ data: {
-    _id: inviteId, teamId: data.teamId, teamName: team.name, inviterId: openid,
-    inviterName: typeof data.inviterName === 'string' ? data.inviterName : '匿名用户',
-    sharePath, status: 'pending', inviteTime: db.serverDate(),
-    expireTime: new Date(expireTime),
-    createdAt: db.serverDate(), updatedAt: db.serverDate()
-  } });
-  return { success: true, data: { inviteId, sharePath, expireTime, title: `邀请您加入${team.name}团队` } };
+  const invitation = await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, data.teamId);
+    if (team.creator !== openid) throw new Error('只有团长可以邀请新成员');
+    // 确定 ID 的指针让并发请求产生文档冲突并重试，实际入群凭证仍使用随机 ID。
+    const cacheId = `_invite_cache_${crypto.createHash('sha256').update(data.teamId).digest('hex')}`;
+    const cache = await optionalDocument(transaction, 'invites', cacheId);
+    const cachedInvite = cache && cache._type === 'team_invite_cache' && cache.teamId === data.teamId &&
+      typeof cache.inviteId === 'string' && cache.inviteId.trim()
+      ? await optionalDocument(transaction, 'invites', cache.inviteId) : null;
+    const now = Date.now();
+    const cachedExpiry = cachedInvite && timestampValue(cachedInvite.expireTime);
+    const reusable = cachedInvite && cachedInvite.teamId === data.teamId && cachedInvite.inviterId === openid &&
+      ['pending', 'accepted'].includes(cachedInvite.status) && Number.isFinite(cachedExpiry) && cachedExpiry > now;
+    const inviteId = reusable ? cache.inviteId : 'invite_' + crypto.randomBytes(16).toString('hex');
+    const expireTime = reusable ? cachedExpiry : now + 7 * DAY_MS;
+    // 团队改名只更新本次分享信息，复用邀请时不续期，也不额外写数据库。
+    const sharePath = '/subpackages/team/pages/joinTeam/joinTeam?' +
+      `teamId=${encodeURIComponent(data.teamId)}&teamName=${encodeURIComponent(team.name)}` +
+      `&inviterId=${encodeURIComponent(openid)}&inviteId=${encodeURIComponent(inviteId)}`;
+    if (!reusable) {
+      await transaction.collection('invites').doc(inviteId).set({ data: {
+        teamId: data.teamId, teamName: team.name, inviterId: openid,
+        inviterName: typeof data.inviterName === 'string' ? data.inviterName : '匿名用户',
+        sharePath, status: 'pending', inviteTime: db.serverDate(),
+        expireTime: new Date(expireTime),
+        createdAt: db.serverDate(), updatedAt: db.serverDate()
+      } });
+      // 指针不具备 status/expireTime，不能用可预测的缓存 ID 作为邀请入群。
+      await transaction.collection('invites').doc(cacheId).set({ data: {
+        _type: 'team_invite_cache', teamId: data.teamId, inviteId, updatedAt: db.serverDate()
+      } });
+    }
+    return { inviteId, sharePath, expireTime, title: `邀请您加入${team.name}团队` };
+  });
+  return { success: true, data: invitation };
 }
 
 async function recordInviteAction(data, openid) {

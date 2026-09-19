@@ -323,6 +323,124 @@ test('only the creator can generate an invitation even if an ordinary member imp
   assert.equal(app.stored.invites[0].teamName, '一起冥想');
   assert.equal(result.data.expireTime, NOW + 7 * 24 * 60 * 60 * 1000);
   assert.equal(Date.parse(app.stored.invites[0].expireTime), result.data.expireTime);
+  const writesBeforeDeniedReuse = app.writes.length;
+  assert.equal((await app.call('generateInvite', { teamId: 'team' }, 'member')).success, false);
+  assert.equal(app.writes.length, writesBeforeDeniedReuse);
+});
+
+test('invitation generation reuses persisted credentials without writes or extending the seven-day expiry', async () => {
+  const firstApp = harness({ teams: [team()] });
+  const first = await firstApp.call('generateInvite', { teamId: 'team' });
+  assert.equal(first.success, true);
+  assert.match(first.data.inviteId, /^invite_[a-f0-9]{32}$/);
+  const later = harness(firstApp.stored, { now: NOW + 6 * 24 * 60 * 60 * 1000 });
+  const second = await later.call('generateInvite', { teamId: 'team' });
+  const third = await later.call('generateInvite', { teamId: 'team', inviterName: '新昵称' });
+  assert.deepEqual(second, first);
+  assert.deepEqual(third, first);
+  assert.equal(later.writes.length, 0);
+  assert.equal(later.reads.length, 6);
+  assert.ok(later.reads.every(read => read.inTransaction && typeof read.id === 'string'));
+  assert.deepEqual(later.stored, firstApp.stored);
+});
+
+test('concurrent invitation requests share one random credential and cannot use the predictable cache ID to join', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member'] })] });
+  const results = await Promise.all(Array.from({ length: 8 }, () => app.call('generateInvite', { teamId: 'team' })));
+  assert.ok(results.every(result => result.success));
+  assert.equal(new Set(results.map(result => result.data.inviteId)).size, 1);
+  assert.equal(new Set(results.map(result => result.data.expireTime)).size, 1);
+  assert.equal(app.stored.invites.length, 2);
+  const cache = app.stored.invites.find(row => row._type === 'team_invite_cache');
+  assert.equal(cache.inviteId, results[0].data.inviteId);
+  assert.equal(cache.teamId, 'team');
+  assert.equal(cache.status, undefined);
+  assert.equal(cache.expireTime, undefined);
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: cache._id }, 'outsider')).success, false);
+  assert.deepEqual(app.stored.teams[0], team({ members: ['owner', 'member'] }));
+  for (const type of ['getUserTeams', 'getAllTeams', 'getTeamInfo']) {
+    const read = await app.call(type, { teamId: 'team' }, 'member');
+    assert.equal(read.success, true);
+    assert.equal(JSON.stringify(read).includes(cache.inviteId), false, type);
+  }
+});
+
+test('reused invitations include the current team name in the share path and title', async () => {
+  const app = harness({ teams: [team()] });
+  const first = await app.call('generateInvite', { teamId: 'team' });
+  assert.equal((await app.call('updateTeam', { teamId: 'team', teamData: { name: '新的团队名' } })).success, true);
+  const previousWrites = app.writes.length;
+  const renamed = await app.call('generateInvite', { teamId: 'team', teamName: '客户端旧名称' });
+  assert.equal(renamed.success, true);
+  assert.equal(renamed.data.inviteId, first.data.inviteId);
+  assert.equal(renamed.data.expireTime, first.data.expireTime);
+  assert.equal(renamed.data.title, '邀请您加入新的团队名团队');
+  assert.ok(renamed.data.sharePath.includes(`teamName=${encodeURIComponent('新的团队名')}`));
+  assert.equal(app.writes.length, previousWrites);
+});
+
+test('expired, revoked, missing or mismatched cached invitations are replaced without changing historical invitations', async () => {
+  const firstApp = harness({ teams: [team()] });
+  const first = await firstApp.call('generateInvite', { teamId: 'team' });
+  const replacements = [
+    ['expiry boundary', { expireTime: new Date(NOW).toISOString() }],
+    ['expired', { expireTime: new Date(NOW - 1).toISOString() }],
+    ['invalid expiry', { expireTime: null }],
+    ['revoked', { status: 'revoked' }],
+    ['former creator', { inviterId: 'former-owner' }],
+    ['other team', { teamId: 'other-team' }],
+    ['missing', null]
+  ];
+  for (const [label, change] of replacements) {
+    const initial = firstApp.stored;
+    const oldInvite = initial.invites.find(row => row._id === first.data.inviteId);
+    if (change) Object.assign(oldInvite, change);
+    else initial.invites = initial.invites.filter(row => row._id !== first.data.inviteId);
+    const app = harness(initial);
+    const fresh = await app.call('generateInvite', { teamId: 'team' });
+    assert.equal(fresh.success, true, label);
+    assert.notEqual(fresh.data.inviteId, first.data.inviteId, label);
+    assert.equal(fresh.data.expireTime, NOW + 7 * 24 * 60 * 60 * 1000, label);
+    assert.equal(app.stored.invites.find(row => row._type === 'team_invite_cache').inviteId, fresh.data.inviteId, label);
+    assert.deepEqual(app.stored.invites.find(row => row._id === first.data.inviteId), change ? oldInvite : undefined, label);
+    assert.equal((await app.call('generateInvite', { teamId: 'team' })).data.inviteId, fresh.data.inviteId, label);
+  }
+});
+
+test('new and reused group invitations admit multiple people while legacy invitations remain valid', async () => {
+  const app = harness({ teams: [team()], invites: [invitation()] });
+  const generated = await app.call('generateInvite', { teamId: 'team' });
+  const reused = await app.call('generateInvite', { teamId: 'team' });
+  assert.equal(generated.data.inviteId, reused.data.inviteId);
+  const joined = await Promise.all(['first', 'second'].map(openid =>
+    app.call('joinTeam', { teamId: 'team', inviteId: reused.data.inviteId }, openid)));
+  assert.ok(joined.every(result => result.success));
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'legacy-member')).success, true);
+  assert.equal(app.stored.teams[0].memberCount, 4);
+  assert.equal(app.stored.invites.find(row => row._id === generated.data.inviteId).status, 'pending');
+  assert.equal((await app.call('generateInvite', { teamId: 'team' })).data.inviteId, generated.data.inviteId);
+  assert.equal((await app.call('deleteTeam', { teamId: 'team' })).success, true);
+  assert.equal(app.stored.invites.length, 0, 'team deletion removes cache and invitation documents');
+});
+
+test('accepted cached invitations are reused but inactive teams and storage failures cannot generate invitations', async () => {
+  const firstApp = harness({ teams: [team()] });
+  const first = await firstApp.call('generateInvite', { teamId: 'team' });
+  const initial = firstApp.stored;
+  initial.invites.find(row => row._id === first.data.inviteId).status = 'accepted';
+  const accepted = harness(initial);
+  assert.equal((await accepted.call('generateInvite', { teamId: 'team' })).data.inviteId, first.data.inviteId);
+  assert.equal(accepted.writes.length, 0);
+  for (const teams of [[], [team({ isActive: false })]]) {
+    const inactive = harness({ teams, invites: initial.invites });
+    assert.equal((await inactive.call('generateInvite', { teamId: 'team' })).success, false);
+    assert.equal(inactive.writes.length, 0);
+  }
+  for (const fail of ['invites:get', 'invites:set', 'commit']) {
+    const app = harness({ teams: [team()] }, { fail });
+    assert.equal((await app.call('generateInvite', { teamId: 'team' })).success, false, fail);
+    assert.equal(app.stored.invites.length, 0, fail);
+  }
 });
 
 test('direct joins and forged creator parameters cannot admit a new member without a saved invitation', async () => {
@@ -855,6 +973,401 @@ test('practice report retains the next-page record when an already-read document
   assert.equal(result.data.members[0].todayStatus, 'qualified');
   assert.equal(result.data.summary.qualifiedCount, 1);
   assert.equal(app.reads.filter(read => read.name === 'meditation_records').length, 2);
+});
+
+test('history details agree with report counts and identify each unpracticed or insufficient member-day', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member', 'absent', 'member'],
+    practiceStartDate: '2026-09-14', dailyGoalMinutes: 20 })], users: [
+    { _id: 'profile', _openid: 'member', nickName: '同修', avatarUrl: 'cloud://avatar', phone: 'private phone' }
+  ], meditation_records: [
+    practiceRecord('owner-qualified-one', 'owner', '2026-09-14', 12),
+    practiceRecord('owner-qualified-two', 'owner', '2026-09-14', 8),
+    practiceRecord('owner-below-one', 'owner', '2026-09-15', 10),
+    practiceRecord('owner-below-two', 'owner', '2026-09-15', 9.99),
+    practiceRecord('member-below', 'member', '2026-09-16', 19.99),
+    practiceRecord('member-qualified', 'member', '2026-09-14', 40),
+    practiceRecord('today', 'owner', '2026-09-17', 5),
+    practiceRecord('old', 'owner', '2026-09-13', 5),
+    practiceRecord('future', 'owner', '2026-09-18', 5),
+    practiceRecord('zero', 'absent', '2026-09-16', 0),
+    practiceRecord('invalid', 'absent', '2026-09-15', '20 minutes'),
+    practiceRecord('departed', 'departed', '2026-09-16', 10)
+  ] });
+  const report = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
+  const result = await app.call('getTeamHistoryDetails', { teamId: 'team' });
+  assert.equal(result.success, true);
+  const details = result.data;
+  assert.deepEqual(details.settings, report.settings);
+  assert.deepEqual(details.history, report.history);
+  assert.equal(details.teamId, 'team');
+  assert.equal(details.businessDate, report.businessDate);
+  assert.equal(details.filter, 'unmet');
+  assert.equal(details.nextCursor, null);
+  assert.deepEqual(details.items.map(({ date, openid, status }) => [date, openid, status]), [
+    ['2026-09-16', 'absent', 'not_practiced'], ['2026-09-16', 'member', 'below_goal'], ['2026-09-16', 'owner', 'not_practiced'],
+    ['2026-09-15', 'absent', 'not_practiced'], ['2026-09-15', 'member', 'not_practiced'], ['2026-09-15', 'owner', 'below_goal'],
+    ['2026-09-14', 'absent', 'not_practiced']
+  ]);
+  assert.deepEqual(details.items[1], { date: '2026-09-16', openid: 'member', nickname: '同修', avatarUrl: 'cloud://avatar',
+    isCreator: false, minutes: 19.99, status: 'below_goal' });
+  assert.equal(details.items[2].nickname, '队长');
+  assert.equal(details.items[2].isCreator, true);
+  assert.equal(details.items[0].nickname, '匿名用户');
+  assert.equal(details.items[0].minutes, 0);
+  assert.equal(details.items.length, report.members.reduce((count, member) => count + member.unmetDays, 0));
+  const all = (await app.call('getTeamHistoryDetails', { teamId: 'team', filter: 'all' })).data.items;
+  assert.equal(all.length, report.history.totalDays * report.members.length);
+  assert.equal(all.find(item => item.openid === 'owner' && item.date === '2026-09-14').minutes, 20);
+  assert.equal(all.filter(item => item.status === 'qualified').length, 2);
+  for (const [filter, field] of [['not_practiced', 'missedDays'], ['below_goal', 'belowGoalDays']]) {
+    const filtered = (await app.call('getTeamHistoryDetails', { teamId: 'team', filter })).data;
+    assert.equal(filtered.filter, filter);
+    assert.ok(filtered.items.every(item => item.status === filter));
+    assert.equal(filtered.items.length, report.members.reduce((count, member) => count + member[field], 0));
+  }
+  assert.equal(JSON.stringify(details).includes('private'), false);
+  for (const read of app.reads.filter(read => read.name === 'meditation_records')) {
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'date', 'duration', 'timestamp']);
+    assert.deepEqual(read.filter._openid.inValues.slice().sort(), ['absent', 'member', 'owner']);
+  }
+  for (const read of app.reads.filter(read => read.name === 'users')) {
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'avatarUrl', 'nickName']);
+  }
+});
+
+test('history details honor the 04:00 boundary, timestamp precedence and compensated sums without including today', async () => {
+  const boundary = Date.parse('2026-09-18T04:00:00+08:00');
+  const records = [
+    practiceRecord('early', 'owner', '2026-09-18', 12, String(boundary - 1)),
+    practiceRecord('same-practice-day', 'owner', 'wrong-date', 7.99, '2026-09-17T04:00:00+08:00'),
+    practiceRecord('today', 'owner', '2026-09-17', 1, boundary),
+    practiceRecord('future', 'member', '2026-09-17', 100, boundary + 1),
+    practiceRecord('timezone-missing', 'owner', '2026-09-16', 19.99, '2026-09-17T03:00:00'),
+    practiceRecord('tiny-shortfall', 'absent', '2026-09-17', 19.999999)
+  ];
+  for (let index = 0; index < 100; index++) records.push(practiceRecord(`fraction-${index}`, 'member', '2026-09-17', 0.2));
+  const initial = { teams: [team({ members: ['owner', 'member', 'absent'], practiceStartDate: '2026-09-16' })], meditation_records: records };
+  const before = (await harness(initial, { now: boundary - 1 }).call('getTeamHistoryDetails', { teamId: 'team', filter: 'all' })).data;
+  assert.equal(before.businessDate, '2026-09-17');
+  assert.equal(before.items.length, 3);
+  assert.ok(before.items.every(item => item.date === '2026-09-16'));
+  const at = (await harness(initial, { now: boundary }).call('getTeamHistoryDetails', { teamId: 'team', filter: 'all' })).data;
+  assert.equal(at.businessDate, '2026-09-18');
+  assert.equal(at.items.length, 6);
+  assert.deepEqual(at.items.slice(0, 3).map(({ openid, minutes, status }) => [openid, Number(minutes.toFixed(6)), status]), [
+    ['absent', 19.999999, 'below_goal'], ['member', 20, 'qualified'], ['owner', 19.99, 'below_goal']
+  ]);
+  assert.equal(at.items.find(item => item.date === '2026-09-16' && item.openid === 'owner').minutes, 19.99);
+});
+
+test('history detail pagination is stable across same-day members, sparse filters and single-member views', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'z-member', 'a-member'], practiceStartDate: '2026-09-12' })], meditation_records: [
+    practiceRecord('one', 'owner', '2026-09-16', 10),
+    practiceRecord('two', 'a-member', '2026-09-16', 10),
+    practiceRecord('three', 'z-member', '2026-09-14', 10),
+    practiceRecord('four', 'owner', '2026-09-12', 10),
+    practiceRecord('qualified', 'a-member', '2026-09-13', 20)
+  ] });
+  for (const filter of ['unmet', 'not_practiced', 'below_goal', 'all']) {
+    for (const memberOpenid of [undefined, 'owner']) {
+      const args = { teamId: 'team', filter, ...(memberOpenid ? { memberOpenid } : {}) };
+      const expected = (await app.call('getTeamHistoryDetails', args)).data.items;
+      for (const limit of [1, 2, 3, 4]) {
+        const combined = [];
+        let cursor = null;
+        let pageCount = 0;
+        do {
+          const page = await app.call('getTeamHistoryDetails', { ...args, limit, cursor });
+          assert.equal(page.success, true);
+          assert.ok(page.data.items.length <= limit);
+          combined.push(...page.data.items);
+          cursor = page.data.nextCursor;
+          if (cursor) {
+            const last = page.data.items[page.data.items.length - 1];
+            assert.deepEqual(cursor, { date: last.date, memberOpenid: last.openid });
+          }
+          assert.ok(++pageCount <= 15, 'pagination must make progress');
+        } while (cursor);
+        assert.deepEqual(combined, expected);
+        assert.equal(new Set(combined.map(item => `${item.date}/${item.openid}`)).size, combined.length);
+      }
+    }
+  }
+  const single = harness({ teams: app.stored.teams, meditation_records: app.stored.meditation_records });
+  const details = await single.call('getTeamHistoryDetails', { teamId: 'team', memberOpenid: 'owner' });
+  assert.ok(details.data.items.every(item => item.openid === 'owner'));
+  assert.ok(single.reads.filter(read => ['users', 'meditation_records'].includes(read.name))
+    .every(read => JSON.stringify(read.filter._openid.inValues) === JSON.stringify(['owner'])));
+});
+
+test('history details normalize goal filters for goal-free teams and use the effective creation-day start', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member'], dailyGoalMinutes: null,
+    practiceStartDate: null, createdAt: '2026-09-15T03:59:59+08:00' })], meditation_records: [
+    practiceRecord('first', 'owner', '2026-09-14', 5),
+    practiceRecord('last', 'member', '2026-09-16', 1),
+    practiceRecord('too-early', 'owner', '2026-09-13', 5)
+  ] });
+  for (const filter of ['unmet', 'below_goal', 'not_practiced']) {
+    const details = (await app.call('getTeamHistoryDetails', { teamId: 'team', filter })).data;
+    assert.equal(details.filter, 'not_practiced');
+    assert.deepEqual(details.history, { startDate: '2026-09-14', endDate: '2026-09-16', totalDays: 3 });
+    assert.equal(details.items.length, 4);
+    assert.ok(details.items.every(item => item.status === 'not_practiced'));
+  }
+  const all = (await app.call('getTeamHistoryDetails', { teamId: 'team', filter: 'all' })).data;
+  assert.equal(all.items.length, 6);
+  assert.equal(all.items.filter(item => item.status === 'practiced').length, 2);
+  assert.equal(all.items.some(item => ['below_goal', 'qualified'].includes(item.status)), false);
+});
+
+test('history details default to 50 rows, support 100 rows and return empty completed histories', async () => {
+  const app = harness({ teams: [team({ practiceStartDate: '2026-01-01' })] });
+  const defaultPage = (await app.call('getTeamHistoryDetails', { teamId: 'team' })).data;
+  assert.equal(defaultPage.items.length, 50);
+  assert.ok(defaultPage.nextCursor);
+  const largest = (await app.call('getTeamHistoryDetails', { teamId: 'team', limit: 100 })).data;
+  assert.equal(largest.items.length, 100);
+  assert.ok(largest.nextCursor);
+  const emptyStart = harness({ teams: [team({ practiceStartDate: '2026-09-17' })] });
+  const today = (await emptyStart.call('getTeamHistoryDetails', { teamId: 'team' })).data;
+  assert.equal(today.history.totalDays, 0);
+  assert.deepEqual(today.items, []);
+  assert.equal(today.nextCursor, null);
+  assert.equal(emptyStart.reads.filter(read => ['users', 'meditation_records'].includes(read.name)).length, 0);
+  const done = harness({ teams: [team({ practiceStartDate: '2026-09-16' })], meditation_records: [
+    practiceRecord('qualified', 'owner', '2026-09-16', 20)
+  ] });
+  const qualified = (await done.call('getTeamHistoryDetails', { teamId: 'team' })).data;
+  assert.deepEqual(qualified.items, []);
+  assert.equal(qualified.nextCursor, null);
+});
+
+test('history details reject unauthorized callers, former members and malformed paging before private collection reads', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member'], practiceStartDate: '2026-09-14' })] });
+  for (const [data, requester, extra] of [
+    [{ teamId: 'team' }, '', { openid: 'owner' }],
+    [{ teamId: 'team', openid: 'owner' }, 'outsider', { openid: 'owner' }],
+    [{ teamId: 'missing' }, 'owner'],
+    [{ teamId: 'team', memberOpenid: 'former-member' }, 'owner'],
+    [{ teamId: 'team', memberOpenid: '' }, 'owner'],
+    [{ teamId: 'team', memberOpenid: null }, 'owner'],
+    [{ teamId: 'team', memberOpenid: { $ne: '' } }, 'owner']
+  ]) assert.equal((await app.call('getTeamHistoryDetails', data, requester, extra)).success, false);
+  for (const filter of ['', 'qualified', 'practiced', null, {}, []]) {
+    assert.equal((await app.call('getTeamHistoryDetails', { teamId: 'team', filter })).success, false);
+  }
+  for (const limit of [0, -1, 1.5, 101, '50', null, true, {}]) {
+    assert.equal((await app.call('getTeamHistoryDetails', { teamId: 'team', limit })).success, false);
+  }
+  for (const cursor of [
+    false, '2026-09-16', [], {}, { date: '2026-09-16' },
+    { date: '2026-02-30', memberOpenid: 'owner' },
+    { date: '2026-09-13', memberOpenid: 'owner' },
+    { date: '2026-09-17', memberOpenid: 'owner' },
+    { date: '9999-12-31', memberOpenid: 'owner' },
+    { date: '2026-09-16', memberOpenid: 'former-member' },
+    { date: '2026-09-16', memberOpenid: {} }
+  ]) assert.equal((await app.call('getTeamHistoryDetails', { teamId: 'team', cursor })).success, false);
+  assert.equal((await app.call('getTeamHistoryDetails', { teamId: 'team', memberOpenid: 'owner',
+    cursor: { date: '2026-09-16', memberOpenid: 'member' } })).success, false);
+  assert.equal(app.reads.filter(read => ['users', 'meditation_records'].includes(read.name)).length, 0);
+  const allowed = await app.call('getTeamHistoryDetails', { teamId: 'team', memberOpenids: ['former-member'] }, 'member');
+  assert.equal(allowed.success, true);
+  assert.deepEqual([...new Set(allowed.data.items.map(item => item.openid))].sort(), ['member', 'owner']);
+  const inactive = harness({ teams: [team({ isActive: false })] });
+  assert.equal((await inactive.call('getTeamHistoryDetails', { teamId: 'team' })).success, false);
+});
+
+test('history details surface storage failures rather than treating unread records as missed days', async () => {
+  for (const fail of ['users:get', 'meditation_records:get']) {
+    const app = harness({ teams: [team({ practiceStartDate: '2026-09-14' })] }, { fail });
+    const result = await app.call('getTeamHistoryDetails', { teamId: 'team' });
+    assert.equal(result.success, false);
+    assert.match(result.error, /unavailable/);
+    assert.equal(app.writes.length, 0);
+  }
+});
+
+test('monthly history narrows report and detail counts while retaining today and lifetime activity', async () => {
+  const latest = Date.parse('2026-09-17T05:30:00+08:00');
+  const app = harness({ teams: [team({ members: ['owner', 'member'], practiceStartDate: '2026-08-30' })], meditation_records: [
+    practiceRecord('aug-owner-one', 'owner', '2026-08-30', 10),
+    practiceRecord('aug-owner-two', 'owner', '2026-08-30', 10),
+    practiceRecord('aug-owner-below', 'owner', '2026-08-31', 10),
+    practiceRecord('aug-member-below', 'member', '2026-08-31', 1),
+    practiceRecord('sep-owner-below', 'owner', '2026-09-01', 19.99),
+    practiceRecord('sep-owner-qualified', 'owner', '2026-09-16', 20),
+    practiceRecord('today', 'owner', '2026-09-17', 5, latest),
+    practiceRecord('before-start', 'owner', '2026-08-29', 100)
+  ] });
+  const full = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
+  assert.deepEqual(full.history, { startDate: '2026-08-30', endDate: '2026-09-16', totalDays: 18 });
+  for (const [month, expectedHistory, expectedOwner] of [
+    ['2026-08', { startDate: '2026-08-30', endDate: '2026-08-31', totalDays: 2 },
+      { practiceDays: 2, qualifiedDays: 1, belowGoalDays: 1, missedDays: 0, unmetDays: 1, totalMinutes: 30 }],
+    ['2026-09', { startDate: '2026-09-01', endDate: '2026-09-16', totalDays: 16 },
+      { practiceDays: 2, qualifiedDays: 1, belowGoalDays: 1, missedDays: 14, unmetDays: 15, totalMinutes: 39.99 }]
+  ]) {
+    const reportResult = await app.call('getTeamPracticeReport', { teamId: 'team', month });
+    assert.equal(reportResult.success, true);
+    const report = reportResult.data;
+    assert.deepEqual(report.history, { ...expectedHistory, month, minMonth: '2026-08', maxMonth: '2026-09' });
+    assert.deepEqual(report.summary, full.summary);
+    assert.deepEqual(report.overview, full.overview);
+    assert.equal(report.businessDate, full.businessDate);
+    assert.equal(report.nextResetAt, full.nextResetAt);
+    for (const [key, expected] of Object.entries(expectedOwner)) {
+      assert.ok(Math.abs(report.members[0][key] - expected) < 1e-10, key);
+    }
+    for (const [index, member] of report.members.entries()) {
+      for (const key of ['todayMinutes', 'todayStatus', 'totalPracticeCount', 'todayPracticeCount',
+        'cumulativeMinutes', 'lastPracticeAt', 'lastPracticeDate']) {
+        assert.equal(member[key], full.members[index][key], `${month} ${key}`);
+      }
+    }
+    for (const [filter, countField] of [['unmet', 'unmetDays'], ['below_goal', 'belowGoalDays'], ['not_practiced', 'missedDays']]) {
+      const detail = (await app.call('getTeamHistoryDetails', { teamId: 'team', month, filter, limit: 100 })).data;
+      assert.deepEqual(detail.history, report.history);
+      assert.ok(detail.items.every(item => item.date.startsWith(month)));
+      for (const member of report.members) {
+        assert.equal(detail.items.filter(item => item.openid === member.openid).length, member[countField]);
+      }
+    }
+  }
+  assert.equal(full.members[0].totalPracticeCount, 6);
+  assert.ok(Math.abs(full.members[0].cumulativeMinutes - 74.99) < 1e-10);
+  assert.equal(full.members[0].lastPracticeAt, latest);
+});
+
+test('monthly history clamps valid old or future months and preserves creation-date fallback for goal-free teams', async () => {
+  const app = harness({ teams: [team({ practiceStartDate: null, dailyGoalMinutes: null,
+    createdAt: '2026-08-31T03:59:59+08:00' })], meditation_records: [
+    practiceRecord('aug', 'owner', '2026-08-30', 1),
+    practiceRecord('sep', 'owner', '2026-09-02', 2)
+  ] });
+  for (const type of ['getTeamPracticeReport', 'getTeamHistoryDetails']) {
+    const early = (await app.call(type, { teamId: 'team', month: '2025-01' })).data;
+    assert.deepEqual(early.history, { startDate: '2026-08-30', endDate: '2026-08-31', totalDays: 2,
+      month: '2026-08', minMonth: '2026-08', maxMonth: '2026-09' });
+    const late = (await app.call(type, { teamId: 'team', month: '9999-12' })).data;
+    assert.deepEqual(late.history, { startDate: '2026-09-01', endDate: '2026-09-16', totalDays: 16,
+      month: '2026-09', minMonth: '2026-08', maxMonth: '2026-09' });
+    if (type === 'getTeamHistoryDetails') {
+      assert.equal(early.filter, 'not_practiced');
+      assert.deepEqual(early.items.map(item => item.date), ['2026-08-31']);
+      assert.ok(late.items.every(item => item.date.startsWith('2026-09')));
+      assert.equal(late.items.length, 15);
+    } else {
+      assert.equal(early.members[0].totalMinutes, 1);
+      assert.equal(late.members[0].totalMinutes, 2);
+      assert.equal(early.members[0].cumulativeMinutes, 3);
+      assert.equal(late.members[0].cumulativeMinutes, 3);
+    }
+  }
+});
+
+test('monthly windows include leap days and year-end and can have zero elapsed days in the current month', async () => {
+  for (const [now, start, month, expected] of [
+    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2027-12', ['2027-12-31', '2027-12-31', 1]],
+    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-01', ['2028-01-01', '2028-01-31', 31]],
+    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-02', ['2028-02-01', '2028-02-29', 29]],
+    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-03', ['2028-03-01', '2028-02-29', 0]],
+    ['2027-03-01T04:00:00+08:00', '2027-02-01', '2027-02', ['2027-02-01', '2027-02-28', 28]],
+    ['2028-03-01T04:00:00+08:00', '2028-02-29', '2028-02', ['2028-02-29', '2028-02-29', 1]]
+  ]) {
+    const app = harness({ teams: [team({ practiceStartDate: start })], meditation_records: [
+      practiceRecord('month-end', 'owner', expected[1], 5),
+      practiceRecord('leap-day', 'owner', '2028-02-29', 20)
+    ] }, { now: Date.parse(now) });
+    const report = (await app.call('getTeamPracticeReport', { teamId: 'team', month })).data;
+    const details = (await app.call('getTeamHistoryDetails', { teamId: 'team', month, filter: 'all' })).data;
+    assert.deepEqual(report.history, { startDate: expected[0], endDate: expected[1], totalDays: expected[2],
+      month, minMonth: start.slice(0, 7), maxMonth: now.slice(0, 7) });
+    assert.deepEqual(details.history, report.history);
+    assert.equal(details.items.length, expected[2]);
+    assert.ok(details.items.every(item => item.date.startsWith(month)));
+    assert.equal(details.nextCursor, null);
+    assert.equal(report.members[0].practiceDays, expected[2] ? 1 : 0);
+    if (expected[2]) assert.equal(details.items[0].date, expected[1]);
+  }
+});
+
+test('month availability changes at 04:00 with prior-month early-morning sessions and today kept separate', async () => {
+  const boundary = Date.parse('2026-09-01T04:00:00+08:00');
+  const initial = { teams: [team({ practiceStartDate: '2026-08-30' })], meditation_records: [
+    practiceRecord('aug-early', 'owner', '2026-09-01', 10, boundary - 1),
+    practiceRecord('sep-start', 'owner', '2026-08-31', 5, boundary)
+  ] };
+  for (const type of ['getTeamPracticeReport', 'getTeamHistoryDetails']) {
+    const before = (await harness(initial, { now: boundary - 1 }).call(type, { teamId: 'team', month: '2026-09', filter: 'all' })).data;
+    assert.equal(before.businessDate, '2026-08-31');
+    assert.deepEqual(before.history, { startDate: '2026-08-30', endDate: '2026-08-30', totalDays: 1,
+      month: '2026-08', minMonth: '2026-08', maxMonth: '2026-08' });
+    const atApp = harness(initial, { now: boundary });
+    const at = (await atApp.call(type, { teamId: 'team', month: '2026-09', filter: 'all' })).data;
+    assert.equal(at.businessDate, '2026-09-01');
+    assert.deepEqual(at.history, { startDate: '2026-09-01', endDate: '2026-08-31', totalDays: 0,
+      month: '2026-09', minMonth: '2026-08', maxMonth: '2026-09' });
+    const previous = (await atApp.call(type, { teamId: 'team', month: '2026-08', filter: 'all' })).data;
+    if (type === 'getTeamPracticeReport') {
+      assert.equal(before.members[0].todayMinutes, 10);
+      assert.equal(at.members[0].todayMinutes, 5);
+      assert.equal(at.members[0].totalMinutes, 0);
+      assert.equal(at.members[0].cumulativeMinutes, 15);
+      assert.equal(previous.members[0].totalMinutes, 10);
+    } else {
+      assert.deepEqual(at.items, []);
+      assert.equal(at.nextCursor, null);
+      assert.equal(previous.items[0].date, '2026-08-31');
+      assert.equal(previous.items[0].minutes, 10);
+    }
+  }
+});
+
+test('monthly detail cursors page only within the selected month including sparse insufficient-practice filters', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member'], practiceStartDate: '2026-07-31' })], meditation_records: [
+    practiceRecord('jul', 'owner', '2026-07-31', 10),
+    practiceRecord('aug-start', 'owner', '2026-08-01', 10),
+    practiceRecord('aug-mid', 'owner', '2026-08-15', 20),
+    practiceRecord('aug-end', 'owner', '2026-08-31', 10),
+    practiceRecord('sep', 'owner', '2026-09-01', 10)
+  ] });
+  for (const filter of ['all', 'unmet', 'not_practiced', 'below_goal']) {
+    const args = { teamId: 'team', month: '2026-08', filter };
+    const expected = (await app.call('getTeamHistoryDetails', { ...args, limit: 100 })).data.items;
+    let cursor = null;
+    const combined = [];
+    do {
+      const result = await app.call('getTeamHistoryDetails', { ...args, limit: 7, cursor });
+      assert.equal(result.success, true);
+      assert.ok(result.data.items.every(item => item.date >= '2026-08-01' && item.date <= '2026-08-31'));
+      combined.push(...result.data.items);
+      assert.ok(combined.length <= 62);
+      cursor = result.data.nextCursor;
+      if (cursor) assert.ok(cursor.date.startsWith('2026-08'));
+    } while (cursor);
+    assert.deepEqual(combined, expected);
+  }
+  const badCursor = harness({ teams: app.stored.teams });
+  for (const date of ['2026-07-31', '2026-09-01']) {
+    assert.equal((await badCursor.call('getTeamHistoryDetails', { teamId: 'team', month: '2026-08',
+      cursor: { date, memberOpenid: 'owner' } })).success, false);
+  }
+  assert.equal(badCursor.reads.filter(read => ['users', 'meditation_records'].includes(read.name)).length, 0);
+});
+
+test('monthly report and history requests reject malformed month values before reading private collections', async () => {
+  const app = harness({ teams: [team({ practiceStartDate: '2026-08-01' })] });
+  for (const type of ['getTeamPracticeReport', 'getTeamHistoryDetails']) {
+    for (const month of ['', null, 202609, {}, [], true, '2026-00', '2026-13', '2026-9',
+      '26-09', '2026-09-01', ' 2026-09', '2026-09 ', '10000-01', '-001-01']) {
+      const result = await app.call(type, { teamId: 'team', month });
+      assert.equal(result.success, false, `${type} ${JSON.stringify(month)}`);
+      assert.match(result.error, /月份/);
+    }
+    assert.equal((await app.call(type, { teamId: 'team', month: '2026-08' }, 'outsider')).success, false);
+  }
+  assert.equal(app.reads.filter(read => ['users', 'meditation_records'].includes(read.name)).length, 0);
 });
 
 test('member practice records require active membership for both requester and target before reading private collections', async () => {

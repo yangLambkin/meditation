@@ -22,6 +22,7 @@
       "pages": [
         "pages/createTeam/createTeam",
         "pages/teamDetails/teamDetails",
+        "pages/historyDetails/historyDetails",
         "pages/joinTeam/joinTeam",
         "pages/testJoinTeam/testJoinTeam"
       ]

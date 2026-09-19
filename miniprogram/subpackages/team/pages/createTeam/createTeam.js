@@ -34,6 +34,7 @@ Page({
     // 团队介绍
     teamDescription: '',
     // 团队练习规则
+    practiceRulesEnabled: false,
     practiceStartDate: '',
     maxPracticeStartDate: '',
     dailyGoalMinutes: '',
@@ -158,8 +159,13 @@ Page({
     });
   },
 
-  onPracticeStartDateChange(e) {
+  onPracticeRulesChange(e) {
     if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    this.setData({ practiceRulesEnabled: e.detail.value === true });
+  },
+
+  onPracticeStartDateChange(e) {
+    if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     const value = e.detail.value;
     const today = currentPracticeDay();
     this.setData({ maxPracticeStartDate: today });
@@ -171,22 +177,22 @@ Page({
   },
 
   onDailyGoalInput(e) {
-    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     this.setData({ dailyGoalMinutes: e.detail.value });
   },
 
   clearPracticeStartDate() {
-    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     this.setData({ practiceStartDate: '' });
   },
 
   clearDailyGoal() {
-    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     this.setData({ dailyGoalMinutes: '' });
   },
 
   selectDailyGoal(e) {
-    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     const minutes = Number(e.currentTarget.dataset.minutes);
     if (this.data.dailyGoalPresets.includes(minutes)) this.setData({ dailyGoalMinutes: minutes });
   },
@@ -211,8 +217,8 @@ Page({
     }
 
     // 固定本次发布内容，审核与最终提交必须使用同一份数据。
-    const practiceStartDate = optionalRuleValue(this.data.practiceStartDate);
-    const rawGoal = optionalRuleValue(this.data.dailyGoalMinutes);
+    const practiceStartDate = this.data.practiceRulesEnabled ? optionalRuleValue(this.data.practiceStartDate) : null;
+    const rawGoal = this.data.practiceRulesEnabled ? optionalRuleValue(this.data.dailyGoalMinutes) : null;
     const teamInfo = {
       name: this.data.teamName.trim(),
       description: this.data.teamDescription.trim(),
@@ -314,7 +320,7 @@ Page({
     this._unloaded = false;
     this._visible = true;
     const today = currentPracticeDay();
-    this.setData({ practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '' });
+    this.setData({ practiceRulesEnabled: false, practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '' });
     console.log('=== createTeam页面加载 ===');
     
     // 获取用户信息

@@ -1,0 +1,297 @@
+/* 创建和编辑团队共用表单样式，避免两个入口的外观逐渐分叉。 */
+.team-form-card {
+  padding: 28rpx;
+  border: 2rpx solid #f2f4f6;
+  border-radius: 24rpx;
+  background-color: #ffffff;
+}
+
+.team-form-card + .team-form-card {
+  margin-top: 20rpx;
+}
+
+.team-form-field + .team-form-field {
+  margin-top: 32rpx;
+}
+
+.team-form-label-row,
+.team-form-heading,
+.team-form-avatar-row,
+.team-form-control,
+.team-form-presets {
+  display: flex;
+  align-items: center;
+}
+
+.team-form-label-row,
+.team-form-heading,
+.team-form-control {
+  justify-content: space-between;
+}
+
+.team-form-label-row {
+  min-height: 42rpx;
+}
+
+.team-form-label {
+  display: block;
+  color: #354152;
+  font-size: 28rpx;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.team-form-optional {
+  margin-left: 10rpx;
+  color: #99a1ae;
+  font-size: 22rpx;
+  font-weight: 400;
+}
+
+.team-form-count {
+  margin-left: 16rpx;
+  color: #99a1ae;
+  font-size: 23rpx;
+}
+
+.team-form-avatar-row {
+  gap: 24rpx;
+  margin-top: 16rpx;
+}
+
+.team-form-avatar {
+  width: 100rpx;
+  height: 100rpx;
+  border-radius: 24rpx;
+  background-color: #f8fafc;
+}
+
+.team-form-avatar-placeholder {
+  padding: 20rpx;
+}
+
+.team-form-card .team-form-avatar-button {
+  box-sizing: border-box;
+  flex: none;
+  width: auto;
+  min-width: 0;
+  height: 64rpx;
+  min-height: 0;
+  margin: 0;
+  padding: 0 24rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #a68a57;
+  font-size: 25rpx;
+  font-weight: 400;
+  line-height: 60rpx;
+}
+
+.team-form-control {
+  box-sizing: border-box;
+  height: 88rpx;
+  margin-top: 16rpx;
+  padding: 0 24rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #354152;
+  font-size: 28rpx;
+}
+
+.team-form-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 48rpx;
+  color: #354152;
+  font-size: 28rpx;
+  text-align: left;
+}
+
+.team-form-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  height: 168rpx;
+  margin-top: 16rpx;
+  padding: 20rpx 24rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #354152;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+.team-form-placeholder {
+  color: #99a1ae;
+}
+
+.team-form-heading {
+  gap: 16rpx;
+  margin-bottom: 28rpx;
+}
+
+.team-form-rules-heading {
+  margin-bottom: 0;
+}
+
+.team-form-rules-summary {
+  flex: 1;
+  min-width: 0;
+}
+
+.team-form-rules-summary .team-form-help {
+  margin-top: 8rpx;
+}
+
+.team-form-rules-switch {
+  flex: none;
+}
+
+.team-form-rules-content {
+  margin-top: 28rpx;
+}
+
+.team-form-title {
+  color: #354152;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.team-form-badge {
+  padding: 6rpx 12rpx;
+  border-radius: 10rpx;
+  background-color: #f7f3eb;
+  color: #b29764;
+  font-size: 22rpx;
+}
+
+.team-form-card .team-form-clear {
+  flex: none;
+  width: auto;
+  min-width: 0;
+  height: 40rpx;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4rpx;
+  background-color: transparent;
+  color: #a68a57;
+  font-size: 23rpx;
+  font-weight: 400;
+  line-height: 40rpx;
+}
+
+.team-form-chevron {
+  margin-left: 12rpx;
+  color: #99a1ae;
+  font-size: 34rpx;
+}
+
+.team-form-help {
+  display: block;
+  margin-top: 12rpx;
+  color: #99a1ae;
+  font-size: 23rpx;
+  line-height: 1.65;
+}
+
+.team-form-unit {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  color: #697282;
+  font-size: 25rpx;
+}
+
+.team-form-presets {
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 16rpx;
+}
+
+.team-form-card .team-form-preset {
+  box-sizing: border-box;
+  flex: none;
+  width: auto;
+  min-width: 0;
+  height: 60rpx;
+  min-height: 0;
+  margin: 0;
+  padding: 0 20rpx;
+  border: 2rpx solid #edf0f3;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+  color: #697282;
+  font-size: 24rpx;
+  font-weight: 400;
+  line-height: 56rpx;
+}
+
+.team-form-card .team-form-preset.selected {
+  border-color: #b29764;
+  background-color: #f7f3eb;
+  color: #b29764;
+}
+
+.team-form-readonly {
+  margin-top: 16rpx;
+  color: #354152;
+  font-size: 28rpx;
+  line-height: 1.8;
+}
+
+.team-form-note {
+  margin-top: 24rpx;
+  padding: 20rpx 24rpx;
+  border-radius: 12rpx;
+  background-color: #f8fafc;
+}
+
+.team-form-note > text {
+  display: block;
+  color: #99a1ae;
+  font-size: 23rpx;
+  line-height: 1.8;
+}
+
+.team-form-actions {
+  margin-top: 28rpx;
+}
+
+.team-form-actions .team-form-submit {
+  box-sizing: border-box;
+  width: 100%;
+  height: 72rpx;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border-radius: 14rpx;
+  background-color: #b29764;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 72rpx;
+}
+
+.team-form-submit::after,
+.team-form-avatar-button::after,
+.team-form-clear::after,
+.team-form-preset::after {
+  border: none;
+}
+
+.team-form-actions .team-form-submit[disabled] {
+  background-color: #c7b58f;
+  color: #ffffff;
+}
+
+.team-form-avatar-button[disabled],
+.team-form-clear[disabled],
+.team-form-preset[disabled] {
+  opacity: 0.5;
+}
+
+.team-form-button-hover {
+  opacity: 0.85;
+}

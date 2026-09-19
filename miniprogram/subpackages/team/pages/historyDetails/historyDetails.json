@@ -1,0 +1,10 @@
+{
+  "usingComponents": {},
+  "navigationBarTitleText": "历史练习明细",
+  "navigationBarBackgroundColor": "#B29764",
+  "navigationBarTextStyle": "white",
+  "backgroundColor": "#F8FAFC",
+  "backgroundTextStyle": "dark",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 120
+}

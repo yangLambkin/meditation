@@ -4,92 +4,95 @@
     <text class="page-description">一起觉察，让练习成为日常</text>
   </view>
 
-  <view class="form-card">
-    <view class="form-field">
-      <text class="field-label">选择图标</text>
-      <view class="team-icons-container">
-        <view class="team-icons-row">
-          <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index"
-            wx:if="{{index < 6}}"
-            class="team-icon-item {{icon.selected ? 'selected' : ''}} {{isCreating || isChoosingIcon || hasCreatedTeam ? 'disabled' : ''}}"
-            bindtap="selectTeamIcon" data-id="{{icon.id}}">
-            <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
-          </view>
-        </view>
-        <view class="team-icons-row">
-          <view wx:for="{{teamIcons}}" wx:key="id" wx:for-item="icon" wx:for-index="index"
-            wx:if="{{index >= 6}}"
-            class="team-icon-item {{icon.selected ? 'selected' : ''}} {{isCreating || isChoosingIcon || hasCreatedTeam ? 'disabled' : ''}}"
-            bindtap="selectTeamIcon" data-id="{{icon.id}}">
-            <image class="icon-image" src="{{icon.path}}" mode="aspectFit" />
-          </view>
-        </view>
+  <view class="team-form-card">
+    <view class="team-form-field">
+      <text class="team-form-label">团队头像</text>
+      <view class="team-form-avatar-row">
+        <image class="team-form-avatar {{!selectedIcon ? 'team-form-avatar-placeholder' : ''}}"
+          src="{{teamIcons[0].path}}" mode="{{selectedIcon ? 'aspectFill' : 'aspectFit'}}" />
+        <button class="team-form-avatar-button" bindtap="selectTeamIcon" loading="{{isChoosingIcon}}"
+          disabled="{{isCreating || isChoosingIcon || hasCreatedTeam}}">
+          {{isChoosingIcon ? '上传中…' : selectedIcon ? '更换头像' : '选择头像'}}
+        </button>
       </view>
     </view>
 
-    <view class="form-field">
-      <view class="field-heading">
-        <text class="field-label">团队名称</text>
-        <text class="field-count">{{nameCharCount}}/20</text>
+    <view class="team-form-field">
+      <view class="team-form-label-row">
+        <text class="team-form-label">团队名称</text>
+        <text class="team-form-count">{{nameCharCount}}/20</text>
       </view>
-      <input class="input-field" placeholder="填写团队名称" placeholder-class="field-placeholder"
-        value="{{teamName}}" bindinput="onTeamNameInput" maxlength="20"
+      <view class="team-form-control">
+        <input class="team-form-input" placeholder="填写团队名称" placeholder-class="team-form-placeholder"
+          value="{{teamName}}" bindinput="onTeamNameInput" maxlength="20"
+          disabled="{{isCreating || hasCreatedTeam}}" />
+      </view>
+    </view>
+
+    <view class="team-form-field">
+      <view class="team-form-label-row">
+        <text class="team-form-label">团队介绍 <text class="team-form-optional">选填</text></text>
+        <text class="team-form-count">{{descCharCount}}/100</text>
+      </view>
+      <textarea class="team-form-textarea" placeholder="介绍一下你的团队" placeholder-class="team-form-placeholder"
+        value="{{teamDescription}}" bindinput="onTeamDescriptionInput" maxlength="100"
         disabled="{{isCreating || hasCreatedTeam}}" />
     </view>
-
-    <view class="form-field">
-      <view class="field-heading">
-        <text class="field-label">团队介绍</text>
-        <text class="field-count">{{descCharCount}}/100</text>
-      </view>
-      <textarea class="textarea-field" placeholder="介绍一下你的团队" placeholder-class="field-placeholder"
-        value="{{teamDescription}}" bindinput="onTeamDescriptionInput" maxlength="100"
-        disabled="{{isCreating || hasCreatedTeam}}" auto-height />
-    </view>
   </view>
 
-  <view class="form-card practice-rules">
-    <view class="practice-rules-heading">
-      <text class="practice-rules-title">练习规则</text>
-      <text class="practice-rules-badge">每天累计计算</text>
+  <view class="team-form-card">
+    <view class="team-form-heading team-form-rules-heading">
+      <view class="team-form-rules-summary">
+        <text class="team-form-title">练习规则</text>
+        <text class="team-form-help">{{practiceRulesEnabled ? '每日多次练习累计计算' : '开启后可设置统计日期和每日期望分钟。'}}</text>
+      </view>
+      <switch class="team-form-rules-switch" checked="{{practiceRulesEnabled}}" bindchange="onPracticeRulesChange"
+        color="#b29764" aria-label="启用练习规则" disabled="{{isCreating || hasCreatedTeam}}" />
     </view>
-    <view class="practice-rule-row">
-      <text class="practice-rule-label">开始日期（选填）</text>
-      <view class="practice-date-field">
+    <view wx:if="{{practiceRulesEnabled}}" class="team-form-rules-content">
+      <view class="team-form-field">
+        <view class="team-form-label-row">
+          <text class="team-form-label">统计起始日期 <text class="team-form-optional">选填</text></text>
+          <button wx:if="{{practiceStartDate}}" class="team-form-clear" bindtap="clearPracticeStartDate"
+            disabled="{{isCreating || hasCreatedTeam}}">清空</button>
+        </view>
         <picker mode="date" value="{{practiceStartDate || maxPracticeStartDate}}" end="{{maxPracticeStartDate}}"
           bindchange="onPracticeStartDateChange" disabled="{{isCreating || hasCreatedTeam}}">
-          <view class="practice-date-value {{!practiceStartDate ? 'practice-rule-placeholder' : ''}}">
-            <text>{{practiceStartDate || '不设置'}}</text>
-            <text class="practice-date-arrow">›</text>
+          <view class="team-form-control">
+            <text class="{{!practiceStartDate ? 'team-form-placeholder' : ''}}">{{practiceStartDate || '不设置，默认从创建日统计'}}</text>
+            <text class="team-form-chevron">›</text>
           </view>
         </picker>
-        <button wx:if="{{practiceStartDate}}" class="practice-date-clear" bindtap="clearPracticeStartDate"
-          disabled="{{isCreating || hasCreatedTeam}}">清空</button>
+        <text class="team-form-help">全体当前成员从这一天开始统计，不区分加入时间。</text>
+      </view>
+      <view class="team-form-field">
+        <text class="team-form-label">每日期望分钟 <text class="team-form-optional">选填</text></text>
+        <view class="team-form-control">
+          <input class="team-form-input" type="number" value="{{dailyGoalMinutes}}"
+            bindinput="onDailyGoalInput" maxlength="4" placeholder="手动填写分钟数" placeholder-class="team-form-placeholder"
+            disabled="{{isCreating || hasCreatedTeam}}" />
+          <text class="team-form-unit">分钟 / 天</text>
+        </view>
+        <text class="team-form-help">可选推荐值，也可输入 1–1440 的整数；留空则不设置。</text>
+        <view class="team-form-presets">
+          <button class="team-form-preset {{dailyGoalMinutes === '' ? 'selected' : ''}}"
+            bindtap="clearDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
+          <button wx:for="{{dailyGoalPresets}}" wx:key="*this"
+            class="team-form-preset {{dailyGoalMinutes == item ? 'selected' : ''}}"
+            data-minutes="{{item}}" bindtap="selectDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">
+            {{item}} 分钟
+          </button>
+        </view>
+      </view>
+      <view class="team-form-note">
+        <text>练习日为北京时间 04:00 至次日 04:00。</text>
+        <text>当日多次练习累计计算；未设置期望分钟时不判断达标。</text>
       </view>
     </view>
-    <view class="practice-rule-row practice-goal-row">
-      <text class="practice-rule-label">期望分钟（选填）</text>
-      <view class="practice-goal-field">
-        <input class="practice-goal-input" type="number" value="{{dailyGoalMinutes}}"
-          bindinput="onDailyGoalInput" maxlength="4" placeholder="不设置" placeholder-class="field-placeholder"
-          disabled="{{isCreating || hasCreatedTeam}}" />
-        <text class="practice-goal-unit">分钟</text>
-      </view>
-    </view>
-    <view class="practice-goal-presets">
-      <button class="practice-goal-preset {{dailyGoalMinutes === '' ? 'selected' : ''}}"
-        bindtap="clearDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
-      <button wx:for="{{dailyGoalPresets}}" wx:key="*this"
-        class="practice-goal-preset {{dailyGoalMinutes == item ? 'selected' : ''}}"
-        data-minutes="{{item}}" bindtap="selectDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">
-        {{item}} 分钟
-      </button>
-    </view>
-    <text class="practice-rules-note">可稍后设置。设置期望分钟后，每日多次练习时长累加，达到期望即算达标。练习日按北京时间 04:00 至次日 04:00 计算。</text>
   </view>
 
-  <view class="create-action">
-    <button class="create-button" bindtap="createTeam" hover-class="button-hover"
+  <view class="team-form-actions">
+    <button class="team-form-submit" bindtap="createTeam" hover-class="team-form-button-hover"
       loading="{{isCreating || isChoosingIcon}}" disabled="{{isCreating || isChoosingIcon}}">
       {{hasCreatedTeam ? '返回团队列表' : isChoosingIcon ? '图标检测中' : isCreating ? '创建中' : '创建团队'}}
     </button>

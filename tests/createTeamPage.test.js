@@ -264,6 +264,7 @@ test('practice rules start unset while the date limit rolls over at Beijing 04:0
     ['2026-09-18T13:00:00-07:00', '2026-09-19']
   ]) {
     const { page } = createPage({ now });
+    assert.equal(page.data.practiceRulesEnabled, false, now);
     assert.equal(page.data.practiceStartDate, '', now);
     assert.equal(page.data.maxPracticeStartDate, expected, now);
     assert.equal(page.data.dailyGoalMinutes, '', now);
@@ -279,6 +280,7 @@ test('optional practice rules can be omitted independently without introducing d
     ['', '30', null, 30]
   ]) {
     const { page, calls } = createPage();
+    page.onPracticeRulesChange({ detail: { value: true } });
     Object.assign(page.data, { practiceStartDate: date, dailyGoalMinutes: goal });
     await page.createTeam();
     assert.equal(calls.create.length, 1);
@@ -289,6 +291,7 @@ test('optional practice rules can be omitted independently without introducing d
 
 test('chosen dates and goals can be cleared independently before submission', async () => {
   const { page, calls } = createPage();
+  page.onPracticeRulesChange({ detail: { value: true } });
   page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
   page.selectDailyGoal({ currentTarget: { dataset: { minutes: '60' } } });
   page.clearPracticeStartDate();
@@ -309,6 +312,7 @@ test('chosen dates and goals can be cleared independently before submission', as
 test('valid historical dates and integer daily goals are persisted as top-level team fields', async () => {
   for (const [date, goal] of [['2024-02-29', '30'], ['2026-09-18', 1], ['2026-09-19', '1440']]) {
     const { page, calls } = createPage();
+    page.onPracticeRulesChange({ detail: { value: true } });
     page.onPracticeStartDateChange({ detail: { value: date } });
     page.onDailyGoalInput({ detail: { value: goal } });
     await page.createTeam();
@@ -322,6 +326,7 @@ test('valid historical dates and integer daily goals are persisted as top-level 
 test('impossible, malformed and future practice dates never reach moderation or creation', async () => {
   for (const date of [true, false, 20260919, '2026-02-29', '2026-09-31', '2026-13-01', '2026-9-01', '2026-09-20', '0000-01-01']) {
     const { page, calls } = createPage();
+    page.onPracticeRulesChange({ detail: { value: true } });
     const before = page.data.practiceStartDate;
     page.onPracticeStartDateChange({ detail: { value: date } });
     assert.equal(page.data.practiceStartDate, before, String(date));
@@ -333,6 +338,7 @@ test('impossible, malformed and future practice dates never reach moderation or 
     assert.match(calls.toast.at(-1).title, /有效日期/);
   }
   const { page, calls } = createPage({ now: '2026-09-19T03:59:59+08:00' });
+  page.onPracticeRulesChange({ detail: { value: true } });
   page.data.practiceStartDate = '2026-09-19';
   await page.createTeam();
   assert.equal(calls.create.length, 0, 'the current calendar date has not become a practice day before 04:00');
@@ -341,6 +347,7 @@ test('impossible, malformed and future practice dates never reach moderation or 
 test('a specified daily goal rejects malformed values, fractions and values outside 1 to 1440 minutes', async () => {
   for (const goal of [true, false, '20.0', '2e1', '+20', 'abc', 0, -1, 1.5, 1441, Infinity]) {
     const { page, calls } = createPage();
+    page.onPracticeRulesChange({ detail: { value: true } });
     page.onDailyGoalInput({ detail: { value: goal } });
     await page.createTeam();
     assert.equal(calls.text.length, 0, String(goal));
@@ -353,6 +360,7 @@ test('a specified daily goal rejects malformed values, fractions and values outs
 test('quick goals and practice dates cannot change a pending or completed creation snapshot', async () => {
   const pending = deferred();
   const { page, calls } = createPage({ checkText: () => pending.promise });
+  page.onPracticeRulesChange({ detail: { value: true } });
   page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
   page.selectDailyGoal({ currentTarget: { dataset: { minutes: '60' } } });
   assert.equal(page.data.dailyGoalMinutes, 60);
@@ -379,6 +387,7 @@ test('quick goals and practice dates cannot change a pending or completed creati
 
 test('returning after the 04:00 cutoff refreshes the date limit and preserves the chosen rules', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-09-19T03:59:59+08:00' });
+  page.onPracticeRulesChange({ detail: { value: true } });
   page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
   page.selectDailyGoal({ currentTarget: { dataset: { minutes: '30' } } });
   page.onHide();
@@ -394,6 +403,7 @@ test('returning after the 04:00 cutoff refreshes the date limit and preserves th
 
 test('creation failure preserves custom practice rules and a fresh page can create another team', async () => {
   const failed = createPage({ create: () => ({ success: false, error: '网络中断' }) });
+  failed.page.onPracticeRulesChange({ detail: { value: true } });
   failed.page.onPracticeStartDateChange({ detail: { value: '2026-09-02' } });
   failed.page.onDailyGoalInput({ detail: { value: '45' } });
   await failed.page.createTeam();
@@ -408,4 +418,90 @@ test('creation failure preserves custom practice rules and a fresh page can crea
     assert.equal(calls.create[0].name, name);
     assert.equal(calls.create[0].dailyGoalMinutes, null);
   }
+});
+
+test('practice rules are disabled by default and create a team without any configuration', async () => {
+  const { page, calls } = createPage();
+  assert.equal(page.data.practiceRulesEnabled, false);
+  await page.createTeam();
+  assert.equal(calls.create.length, 1);
+  assert.equal(calls.create[0].practiceStartDate, null);
+  assert.equal(calls.create[0].dailyGoalMinutes, null);
+});
+
+test('disabling rules preserves drafts for reopening and skips validation of hidden values', async () => {
+  const { page, calls } = createPage();
+  page.onPracticeRulesChange({ detail: { value: true } });
+  page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
+  page.onDailyGoalInput({ detail: { value: '45' } });
+  page.onPracticeRulesChange({ detail: { value: false } });
+  assert.equal(page.data.practiceRulesEnabled, false);
+  page.onPracticeRulesChange({ detail: { value: true } });
+  assert.equal(page.data.practiceStartDate, '2026-09-01');
+  assert.equal(page.data.dailyGoalMinutes, '45');
+  page.onDailyGoalInput({ detail: { value: '1441' } });
+  page.data.practiceStartDate = '2026-02-29';
+  page.onPracticeRulesChange({ detail: { value: false } });
+  await page.createTeam();
+  assert.equal(calls.create.length, 1);
+  assert.equal(calls.create[0].practiceStartDate, null);
+  assert.equal(calls.create[0].dailyGoalMinutes, null);
+  assert.equal(page.data.practiceStartDate, '2026-02-29');
+  assert.equal(page.data.dailyGoalMinutes, '1441');
+  assert.equal(calls.toast.some(({ title }) => /有效日期|1至1440/.test(title)), false);
+});
+
+test('hidden rule fields ignore input, preset and clear events', () => {
+  const { page, calls } = createPage();
+  page.onPracticeRulesChange({ detail: { value: true } });
+  page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
+  page.onDailyGoalInput({ detail: { value: '45' } });
+  page.onPracticeRulesChange({ detail: { value: false } });
+  const updates = calls.updates.length;
+  page.onPracticeStartDateChange({ detail: { value: '2026-09-02' } });
+  page.onDailyGoalInput({ detail: { value: '90' } });
+  page.selectDailyGoal({ currentTarget: { dataset: { minutes: '60' } } });
+  page.clearPracticeStartDate();
+  page.clearDailyGoal();
+  assert.equal(page.data.practiceStartDate, '2026-09-01');
+  assert.equal(page.data.dailyGoalMinutes, '45');
+  assert.equal(calls.updates.length, updates);
+});
+
+test('rule toggling cannot change a pending or completed creation', async () => {
+  for (const enabled of [false, true]) {
+    const pending = deferred();
+    const started = deferred();
+    const { page, calls } = createPage({
+      checkText: () => pending.promise,
+      create: () => { started.resolve(); return { success: true }; }
+    });
+    page.onPracticeRulesChange({ detail: { value: true } });
+    page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
+    page.onDailyGoalInput({ detail: { value: '45' } });
+    page.onPracticeRulesChange({ detail: { value: enabled } });
+    const creation = page.createTeam();
+    assert.equal(page.data.isCreating, true);
+    page.onPracticeRulesChange({ detail: { value: !enabled } });
+    assert.equal(page.data.practiceRulesEnabled, enabled);
+    pending.resolve(true);
+    await started.promise;
+    await creation;
+    assert.equal(calls.create[0].practiceStartDate, enabled ? '2026-09-01' : null);
+    assert.equal(calls.create[0].dailyGoalMinutes, enabled ? 45 : null);
+    assert.equal(page.data.hasCreatedTeam, true);
+    page.onPracticeRulesChange({ detail: { value: !enabled } });
+    assert.equal(page.data.practiceRulesEnabled, enabled);
+  }
+});
+
+test('loading the page resets the practice rules toggle and drafts', () => {
+  const { page } = createPage();
+  page.onPracticeRulesChange({ detail: { value: true } });
+  page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
+  page.onDailyGoalInput({ detail: { value: '45' } });
+  page.onLoad();
+  assert.equal(page.data.practiceRulesEnabled, false);
+  assert.equal(page.data.practiceStartDate, '');
+  assert.equal(page.data.dailyGoalMinutes, '');
 });

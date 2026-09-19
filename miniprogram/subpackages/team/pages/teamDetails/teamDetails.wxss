@@ -1,10 +1,12 @@
+@import "../../styles/teamForm.wxss";
+
 /* 团队概览沿用应用金色，成员与记录共享卡片规格。 */
 page { background: #f8fafc; color: #354152; }
 .team-page { min-height: 100vh; padding: 0 28rpx calc(48rpx + env(safe-area-inset-bottom)); box-sizing: border-box; }
 button { margin: 0; font-weight: 400; }
 button::after { border: none; }
 .team-overview { margin: 0 -28rpx; padding: 12rpx 32rpx 36rpx; color: #ffffff; background: #b29764; }
-.team-name-row, .team-stats, .hero-actions, .main-tabs, .record-toolbar, .record-tabs, .section-heading, .today-summary, .filter-row, .member-row, .member-name-row, .history-overview-top, .history-list-caption, .history-metrics, .history-breakdown, .sheet-heading, .field-control, .quick-goals, .roster-card, .edit-avatar-row, .field-label-row { display: flex; align-items: center; }
+.team-name-row, .team-stats, .hero-actions, .main-tabs, .record-toolbar, .record-tabs, .section-heading, .today-summary, .filter-row, .member-row, .member-name-row, .history-overview-top, .history-list-caption, .history-metrics, .history-breakdown, .sheet-heading, .roster-card { display: flex; align-items: center; }
 .team-identity { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 18rpx 12rpx 28rpx; }
 .team-icon { width: 128rpx; height: 128rpx; border: 4rpx solid rgba(255,255,255,.65); border-radius: 28rpx; background: #f8fafc; }
 .team-name-row { max-width: 100%; margin-top: 22rpx; flex-direction: row; flex-wrap: nowrap; justify-content: center; }
@@ -21,6 +23,22 @@ button::after { border: none; }
 .hero-actions .invite-button[disabled], .hero-actions .hero-dissolve[disabled] { background: rgba(255,255,255,.04); color: rgba(255,255,255,.45); border-color: rgba(255,255,255,.12); }
 .invite-note { display: block; margin-top: 16rpx; font-size: 22rpx; line-height: 1.7; color: rgba(255,255,255,.78); text-align: center; }
 .invite-error { color: #fff0df; }
+.invite-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1100; display: flex; align-items: center; justify-content: center; padding: calc(32rpx + env(safe-area-inset-top)) 40rpx calc(32rpx + env(safe-area-inset-bottom)); box-sizing: border-box; background: rgba(29, 40, 56, .45); }
+.invite-dialog { width: 100%; max-width: 640rpx; padding: 24rpx 32rpx 20rpx; box-sizing: border-box; border-radius: 28rpx; background: #ffffff; box-shadow: 0 24rpx 80rpx rgba(29, 40, 56, .12); }
+.invite-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.invite-dialog-title { color: #354152; font-size: 30rpx; font-weight: 600; line-height: 1.5; }
+.invite-dialog .invite-dialog-close { flex: none; width: 60rpx; min-width: 0; min-height: 0; height: 60rpx; padding: 0; line-height: 60rpx; font-size: 44rpx; font-weight: 300; color: #99a1ae; background: transparent; }
+.invite-dialog-team { display: flex; flex-direction: column; align-items: center; padding: 18rpx 10rpx 24rpx; text-align: center; }
+.invite-dialog-icon { width: 104rpx; height: 104rpx; border-radius: 24rpx; background: #f8fafc; }
+.invite-dialog-name { max-width: 100%; margin-top: 20rpx; color: #354152; font-size: 32rpx; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; word-break: break-all; }
+.invite-dialog-description { margin-top: 12rpx; color: #7a8493; font-size: 25rpx; line-height: 1.7; }
+.invite-dialog-expiry, .invite-dialog-error { display: block; padding: 14rpx 16rpx; border-radius: 12rpx; font-size: 22rpx; line-height: 1.7; text-align: center; overflow-wrap: anywhere; }
+.invite-dialog-expiry { color: #a68a57; background: #f8f5ef; }
+.invite-dialog-error { color: #a4594e; background: #fcf2ef; }
+.invite-dialog-actions { margin-top: 28rpx; }
+.invite-dialog .invite-dialog-share { width: 100%; min-height: 0; padding: 0 20rpx; border-radius: 14rpx; color: #ffffff; background: #b29764; font-size: 28rpx; line-height: 82rpx; }
+.invite-dialog .invite-dialog-share[disabled] { color: rgba(255,255,255,.72); background: #cbb994; }
+.invite-dialog .invite-dialog-cancel { width: 100%; min-height: 0; margin-top: 8rpx; padding: 0 20rpx; color: #99a1ae; background: transparent; font-size: 26rpx; line-height: 72rpx; }
 .main-tabs { margin-top: 30rpx; padding: 6rpx; border-radius: 18rpx; background: #ffffff; }
 .main-tab { flex: 1; border-radius: 13rpx; font-size: 29rpx; font-weight: 500; line-height: 74rpx; color: #697282; text-align: center; }
 .main-tab.active { color: #ffffff; background: #b29764; }
@@ -85,6 +103,18 @@ button::after { border: none; }
 .history-day-count { white-space: nowrap; font-size: 36rpx; color: #b29764; font-weight: 500; }
 .history-day-count text { font-size: 22rpx; font-weight: 400; }
 .history-rule { display: block; font-size: 22rpx; color: #99a1ae; line-height: 1.7; margin-top: 12rpx; }
+.history-summary { margin-top: 20rpx; padding: 28rpx 16rpx 20rpx; background: #ffffff; border-radius: 24rpx; }
+.history-summary-metrics { padding: 0; }
+.history-summary-metrics .summary-item { min-width: 0; padding: 3rpx 8rpx; text-align: center; }
+.history-summary-metrics .summary-number { max-width: 100%; overflow-wrap: anywhere; }
+.history-summary-metrics .summary-label { font-size: 22rpx; }
+.history-summary-unit { font-size: 20rpx; font-weight: 400; white-space: nowrap; }
+.history-summary-breakdown { margin: 24rpx 12rpx 0; padding-top: 18rpx; border-top: 2rpx solid #f2f4f6; }
+.history-summary-breakdown > view { display: flex; align-items: center; flex-wrap: wrap; gap: 8rpx 12rpx; padding: 8rpx 0; font-size: 22rpx; color: #99a1ae; line-height: 1.8; }
+.history-summary-breakdown > view + view { margin-top: 6rpx; }
+.history-summary-breakdown .breakdown-number { margin-left: auto; }
+.history-summary-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8rpx 16rpx; margin: 18rpx 12rpx 0; color: #99a1ae; font-size: 21rpx; line-height: 1.6; }
+.history-summary-note { display: block; margin: 14rpx 3rpx 0; color: #99a1ae; font-size: 20rpx; line-height: 1.7; }
 .history-list-caption { justify-content: space-between; margin: 30rpx 3rpx 19rpx; font-size: 22rpx; color: #99a1ae; }
 .history-list-caption text:last-child { color: #99a1ae; font-size: 20rpx; }
 .history-avatar { width: 62rpx; height: 62rpx; }
@@ -110,39 +140,14 @@ button::after { border: none; }
 .text-button { background: transparent; color: #99a1ae; font-size: 24rpx; margin-top: 14rpx; line-height: 64rpx; }
 .sheet-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1000; display: flex; align-items: flex-end; }
 .sheet-backdrop { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: rgba(29, 40, 56, .45); }
-.settings-sheet { position: relative; display: flex; flex-direction: column; width: 100%; height: 90%; max-height: 1200rpx; overflow: hidden; box-sizing: border-box; padding-top: 18rpx; border-radius: 28rpx 28rpx 0 0; background: #ffffff; }
+.settings-sheet { position: relative; display: flex; flex-direction: column; width: 100%; height: 90%; max-height: 1200rpx; overflow: hidden; box-sizing: border-box; padding-top: 18rpx; border-radius: 28rpx 28rpx 0 0; background: #f8fafc; }
 .settings-scroll { flex: 1; height: 0; min-height: 0; width: 100%; }
-.settings-scroll-content { padding: 0 32rpx calc(26rpx + env(safe-area-inset-bottom)); }
+.settings-scroll-content { padding: 0 28rpx calc(26rpx + env(safe-area-inset-bottom)); }
 .sheet-handle { flex-shrink: 0; width: 64rpx; height: 7rpx; border-radius: 8rpx; background: #c0c6cf; margin: 0 auto 24rpx; }
-.sheet-heading { flex-shrink: 0; justify-content: space-between; padding: 0 32rpx 12rpx; }
-.sheet-title { font-size: 32rpx; font-weight: 600; color: #354152; }
-.sheet-close { width: 60rpx; line-height: 60rpx; padding: 0; font-size: 44rpx; font-weight: 300; color: #99a1ae; background: transparent; }
-.sheet-description { display: block; font-size: 24rpx; color: #99a1ae; margin-top: 9rpx; }
-.setting-field { margin-top: 34rpx; }
-.field-label { display: block; color: #697282; font-size: 26rpx; margin-bottom: 14rpx; }
-.field-control { justify-content: space-between; background: #f8fafc; border: 2rpx solid #edf0f3; border-radius: 12rpx; padding: 0 20rpx; color: #354152; font-size: 28rpx; height: 84rpx; }
-.field-chevron { color: #99a1ae; font-size: 34rpx; }
-.field-help { display: block; color: #99a1ae; font-size: 22rpx; line-height: 1.7; margin-top: 11rpx; }
-.goal-input { flex: 1; min-width: 0; height: 46rpx; font-size: 32rpx; color: #354152; }
-.goal-suffix { color: #99a1ae; font-size: 24rpx; }
-.quick-goals { flex-wrap: wrap; gap: 12rpx; margin-top: 17rpx; }
-.quick-goal { padding: 11rpx 20rpx; border: 1rpx solid #f2f4f6; border-radius: 12rpx; font-size: 24rpx; color: #99a1ae; }
-.quick-goal.selected { color: #a68a57; background: #b2976414; border-color: #b2976433; }
-.readonly-value { font-size: 32rpx; color: #354152; line-height: 1.8; }
-.settings-note { margin-top: 28rpx; padding: 20rpx 24rpx; border-radius: 12rpx; background: #f8fafc; }
-.settings-note text { display: block; font-size: 22rpx; color: #99a1ae; line-height: 1.9; }
+.sheet-heading { flex-shrink: 0; justify-content: space-between; padding: 0 28rpx 12rpx; }
+.sheet-title { font-size: 32rpx; font-weight: 600; color: #1d293d; }
+.sheet-heading .sheet-close { flex: none; width: 60rpx; min-width: 0; height: 60rpx; min-height: 0; margin: 0; line-height: 60rpx; padding: 0; font-size: 44rpx; font-weight: 300; color: #99a1ae; background: transparent; }
+.sheet-description { display: block; font-size: 26rpx; color: #697282; line-height: 1.5; margin: 9rpx 0 28rpx; }
 .settings-error { display: block; color: #d9534f; font-size: 24rpx; line-height: 1.6; margin-top: 21rpx; }
-.primary-button { width: 100%; margin-top: 28rpx; line-height: 84rpx; background: #b29764; color: #ffffff; border-radius: 14rpx; font-size: 30rpx; font-weight: 600; }
-.primary-button:active { background-color: #9c8357; }
-.primary-button[disabled] { background: #c7b58f; color: #ffffff; }
 .dissolve-button { margin-top: 14rpx; width: 100%; line-height: 65rpx; font-size: 22rpx; color: #d9534f; background: transparent; }
-.field-label-row { justify-content: space-between; margin-bottom: 14rpx; }
-.field-label-row .field-label { margin-bottom: 0; }
-.optional-label { margin-left: 10rpx; font-size: 22rpx; color: #99a1ae; font-weight: 400; }
-.clear-field { padding: 0 4rpx; line-height: 40rpx; color: #a68a57; font-size: 23rpx; background: transparent; }
-.edit-avatar-row { gap: 24rpx; margin-top: 28rpx; }
-.edit-avatar { width: 100rpx; height: 100rpx; border-radius: 24rpx; background: #f8fafc; }
-.avatar-button { margin-top: 0; line-height: 64rpx; }
-.team-name-input { width: 100%; font-size: 28rpx; }
-.description-input { width: 100%; height: 160rpx; box-sizing: border-box; padding: 18rpx 20rpx; background: #f8fafc; border: 2rpx solid #edf0f3; border-radius: 12rpx; font-size: 26rpx; color: #354152; line-height: 1.7; }
 @media (max-width: 360px) { .team-stats { gap: 10rpx; } .status-badge { margin-left: auto; } .practice-detail { margin-left: 0; } }
