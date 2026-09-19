@@ -2,6 +2,7 @@
 const checkinManager = require('../../utils/checkin.js');
 const contentSec = require('../../utils/contentSec.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
+const dailyWisdom = require('../../utils/dailyWisdom.js');
 
 Page({
   data: {
@@ -12,7 +13,7 @@ Page({
     todayDate: "", // 今天的日期
     userOpenId: '', // 当前用户标识
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
-    wisdomQuote: '"静心即是修心，心安即是归处。"', // 每日一言金句
+    wisdomQuote: '"' + dailyWisdom.DEFAULT_QUOTE + '"', // 每日一言金句
     hasUserInfo: false, // 是否已获取用户信息
     checkinDate: '',
     checkinTime: '',
@@ -1171,29 +1172,6 @@ Page({
   },
 
   /**
-   * 获取随机金句
-   */
-  getRandomWisdom: function() {
-    wx.cloud.callFunction({
-      name: 'getRandomWisdom',
-      success: res => {
-        if (res.result.success && res.result.data) {
-          this.setData({
-            wisdomQuote: '"' + res.result.data.content + '"'
-          });
-          console.log('index页面获取金句成功:', res.result.data.content);
-        } else {
-          console.warn('index页面获取金句失败，使用默认金句');
-        }
-      },
-      fail: err => {
-        console.error('index页面调用云函数失败:', err);
-        // 使用默认金句
-      }
-    });
-  },
-
-  /**
    * 测试函数 - 用于验证showLoginModal能否被调用
    */
   testShowLoginModal: function() {
@@ -1236,9 +1214,6 @@ Page({
       this.refreshPageData();
     });
     
-    // 获取随机金句
-    this.getRandomWisdom();
-    
     // 页面加载时立即检查用户信息状态，确保正确显示登录按钮
     this.checkUserInfoStatus(false);
     
@@ -1259,6 +1234,10 @@ Page({
    */
   onShow() {
     console.log('=== index页面onShow函数开始 ===');
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
+      this.setData({ wisdomQuote: '"' + content + '"' });
+    });
     this.refreshCheckinDefaults();
     this.refreshCheckinRecords();
     clearInterval(this._checkinClock);
@@ -1291,6 +1270,8 @@ Page({
    */
   onHide() {
     clearInterval(this._checkinClock);
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = null;
   },
 
   /**
@@ -1298,6 +1279,8 @@ Page({
    */
   onUnload() {
     clearInterval(this._checkinClock);
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = null;
   },
 
   /**

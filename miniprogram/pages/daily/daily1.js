@@ -3,10 +3,12 @@ const checkinManager = require('../../utils/checkin.js');
 const imageConfig = require('../../config/images.js');
 const badgeManager = require('../../utils/badgeManager.js');
 const dateUtil = require('../../utils/dateUtil.js');
+const dailyWisdom = require('../../utils/dailyWisdom.js');
 
 Page({
   data: {
-    // 唯一必要的占位：displayImage 由云存储异步加载，加载完成前用 1x1 透明 gif 占位，避免裂图/闪烁
+    wisdomQuote: dailyWisdom.DEFAULT_QUOTE,
+    // displayImage 由云存储异步加载，加载完成前用 1x1 透明 gif 占位，避免裂图/闪烁
     // 其余字段（日期/用户/统计/勋章）均在 onLoad 中同步填充，无需占位初值
     displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
   },
@@ -26,11 +28,6 @@ Page({
       });
     });
 
-    // 3. 异步加载金句（不影响图片显示）
-    setTimeout(() => {
-      this.getRandomWisdom();
-    }, 100);
-
     console.log('开始预加载图片，避免闪烁');
   },
 
@@ -39,6 +36,10 @@ Page({
    */
   onShow() {
     console.log('=== daily1页面onShow函数开始 ===');
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
+      this.setData({ wisdomQuote: content });
+    });
     
     // 重新获取用户数据，确保显示最新的登录状态
     this.getUserData();
@@ -89,29 +90,6 @@ Page({
    */
   formatTime: function(minutes) {
     return `${minutes}分钟`;
-  },
-
-  /**
-   * 获取随机金句
-   */
-  getRandomWisdom: function() {
-    wx.cloud.callFunction({
-      name: 'getRandomWisdom',
-      success: res => {
-        if (res.result.success && res.result.data) {
-          this.setData({
-            wisdomQuote: res.result.data.content
-          });
-          console.log('获取金句成功:', res.result.data.content);
-        } else {
-          console.warn('获取金句失败，使用默认金句');
-        }
-      },
-      fail: err => {
-        console.error('调用云函数失败:', err);
-        // 使用默认金句
-      }
-    });
   },
 
   /**
@@ -499,8 +477,15 @@ Page({
   },
 
 
+  onHide() {
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = null;
+  },
+
   // 重写页面返回逻辑
   onUnload() {
+    if (this._stopWisdomWatch) this._stopWisdomWatch();
+    this._stopWisdomWatch = null;
     // 页面返回时跳转到首页
     wx.switchTab({
       url: '/pages/index/index'

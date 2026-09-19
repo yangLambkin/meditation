@@ -9,6 +9,7 @@
     "test:bijing-sync": "node --test tests/bijingSync.test.js tests/bijingSyncPage.test.js tests/bijingCheckinIntegration.test.js",
     "test:home-checkin": "node --test tests/checkinTimestamp.test.js tests/homeCheckinGrouping.test.js tests/homeCheckinPage.test.js tests/checkinHistoryPage.test.js tests/checkinCloudRefresh.test.js tests/getAllRecordsCloud.test.js",
     "test:checkin-delete": "node --test tests/checkinDelete.test.js tests/deleteMeditationCloud.test.js tests/historyDeletePage.test.js tests/homeDeletePage.test.js tests/checkinRecoveryDelete.test.js",
+    "test:daily-wisdom": "node --test tests/dailyWisdom.test.js tests/dailyWisdomPage.test.js",
     "cleanup:stats": "node scripts/runCleanup.js stats",
     "cleanup:safe": "node scripts/runCleanup.js safe",
     "cleanup:full": "node scripts/runCleanup.js full",

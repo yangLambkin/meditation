@@ -40,6 +40,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
   };
   const modules = {
+    'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句', watchDailyWisdom: () => () => {} },
     'checkin.js': checkinManager,
     'contentSec.js': {
       checkText: async (...args) => {
