@@ -29,7 +29,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
       getExperienceRecordsFromLocal: () => [],
       getPendingSyncSummary: () => ({ pending: 0 }),
       isUserLoggedIn: () => false,
-      recordCheckinWithSync: async (...args) => { calls.records.push(args); return { success: true, cloudSynced: true }; }
+      recordCheckin: (...args) => { calls.records.push(args); return { success: true }; }
     },
     'contentSec.js': { checkText: async () => true },
     'dailyWisdom.js': { DEFAULT_QUOTE: '静心', watchDailyWisdom: () => () => {} },

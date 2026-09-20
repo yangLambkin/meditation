@@ -8,15 +8,14 @@ const pendingRefreshes = new Map();
 const pendingUploadDrains = new Map();
 const pendingCloudSyncs = new Map();
 const syncStateListeners = new Set();
-let uploadRetryTimer;
-let refreshRetryState;
+const UPLOAD_TIMEOUT_MS = 5000;
 
 function currentUploadOpenid() {
   const openid = wx.getStorageSync('userOpenId');
   return typeof openid === 'string' && openid.startsWith('oz') ? openid : '';
 }
 
-// 自动补传仅认新版记录的显式标记；不把历史无云端 ID 的记录推断为待上传。
+// 待上传队列仅认新版记录的显式标记；不把历史无云端 ID 的记录推断为待上传。
 function uploadEntries(userId) {
   const stored = wx.getStorageSync(`meditation_checkin_${userId}`) || {};
   const data = stored.checkinRecords || stored;
@@ -51,22 +50,24 @@ function updateStoredUpload(userId, localId, update) {
   return false;
 }
 
-function scheduleUploadRetry(userId, openid) {
-  if (wx.getStorageSync('localUserId') !== userId || currentUploadOpenid() !== openid) return;
-  if (typeof clearTimeout === 'function') clearTimeout(uploadRetryTimer);
-  if (!openid || typeof setTimeout !== 'function') return;
-  const retries = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid) && !record.syncBlocked);
-  const deadlines = retries.map(({ record }) => record.syncNextRetryAt || Date.now() + 5000);
-  if (refreshRetryState && refreshRetryState.userId === userId && refreshRetryState.openid === openid) {
-    deadlines.push(refreshRetryState.nextRetryAt);
-  }
-  if (!deadlines.length) return;
-  const next = Math.min(...deadlines);
-  uploadRetryTimer = setTimeout(() => {
-    if (wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid) {
-      checkinManager.syncWithCloud().catch(error => console.warn('自动同步失败，保留本机记录:', error.message));
-    }
-  }, Math.max(1000, next - Date.now()));
+function uploadTimeoutResult() {
+  return { success: false, code: 'CLOUD_TIMEOUT', error: '上传超时（5秒），请手动重试' };
+}
+
+// 截止时间只结束本次请求；失败记录始终留在本机，等待用户手动补传。
+function awaitUploadUntil(request, deadlineAt) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (typeof clearTimeout === 'function') clearTimeout(timer);
+      if (Date.now() >= deadlineAt) resolve(uploadTimeoutResult());
+      else callback(value);
+    };
+    const timer = setTimeout(() => finish(resolve, uploadTimeoutResult()), Math.max(0, deadlineAt - Date.now()));
+    Promise.resolve(request).then(value => finish(resolve, value), error => finish(reject, error));
+  });
 }
 
 function getUserStorageRevision(userId) {
@@ -1059,70 +1060,37 @@ const checkinManager = {
       failed: entries.filter(({ record }) => record.syncStatus === 'failed').length };
   },
 
-  // 所有恢复联网入口共用：先补传，再读取云端完整快照校准本机。
-  // 上传和刷新分别有去重保护，此处额外串起两步，避免只改上传标记却一直显示旧快照。
-  syncWithCloud: function({ force = false } = {}) {
+  // 自动入口只读云端；只有用户明确点补传按钮才会上传待处理记录。
+  // 读请求与手动上传分别去重，慢读请求不能延长补传按钮的五秒期限。
+  syncWithCloud: function({ uploadPending = false } = {}) {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
-    const key = `${userId}:${openid}`;
-    const existing = pendingCloudSyncs.get(key);
-    if (existing) {
-      // 网络刚恢复/用户点重试时，不能被一个正在按退避跳过的普通同步吞掉。
-      if (force && !existing.forcingUpload) existing.forceRequested = true;
-      return existing.promise;
-    }
-    const state = { forceRequested: force, forcingUpload: false };
+    const key = `${userId}:${openid}:${uploadPending ? 'upload' : 'read'}`;
+    if (pendingCloudSyncs.has(key)) return pendingCloudSyncs.get(key);
     const sync = (async () => {
-      let uploaded = 0;
-      const sameAccount = () => wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid;
-      while (true) {
-        state.forcingUpload = state.forceRequested;
-        state.forceRequested = false;
-        // 兼容仍直接使用补传队列的调用方；显式重试不能被其普通退避轮次吞掉。
-        if (state.forcingUpload && pendingUploadDrains.has(key)) await pendingUploadDrains.get(key);
-        if (!sameAccount()) return { success: false, uploaded, refreshed: false, error: '账号已切换，已暂停同步' };
-        const result = await this.retryPendingBackups({ force: state.forcingUpload });
-        state.forcingUpload = false;
-        uploaded += result.uploaded || 0;
-        if (!sameAccount()) {
-          return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
-        }
-        if (!openid) return { ...result, uploaded, refreshed: false };
-        if (state.forceRequested) continue;
-        // 其他入口之前发出的读取可能早于本轮上传，等待它结束后再拿新的快照。
-        const previousRefresh = pendingRefreshes.get(key);
-        if (previousRefresh) await previousRefresh;
-        if (!sameAccount()) return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
-        const refreshed = await this.refreshFromCloud();
-        if (!sameAccount()) return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
-        if (state.forceRequested) continue;
-        const remaining = this.getPendingSyncSummary();
-        if (refreshed) refreshRetryState = null;
-        else {
-          const attempts = refreshRetryState && refreshRetryState.userId === userId && refreshRetryState.openid === openid
-            ? refreshRetryState.attempts + 1 : 1;
-          refreshRetryState = { userId, openid, attempts,
-            nextRetryAt: Date.now() + Math.min(300000, 5000 * Math.pow(2, Math.min(attempts - 1, 6))) };
-        }
-        // 上传完但读取云端失败也要重试校准，不能等到用户下次进入首页才更新。
-        scheduleUploadRetry(userId, openid);
-        return { ...result, uploaded, refreshed, pending: remaining.pending, failed: remaining.failed,
-          success: remaining.pending === 0,
-          ...(remaining.pending === 0 ? { error: undefined } : {}) };
+      if (uploadPending) {
+        const result = await this.retryPendingBackups();
+        return { ...result, refreshed: false };
       }
+      const refreshed = await this.refreshFromCloud();
+      const sameAccount = wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid;
+      const summary = this.getPendingSyncSummary();
+      return { ...summary, uploaded: 0, success: refreshed && sameAccount, refreshed: refreshed && sameAccount,
+        ...(!sameAccount ? { error: '账号已切换，已暂停同步' } : {}) };
     })();
-    state.promise = sync;
-    pendingCloudSyncs.set(key, state);
-    const clear = () => { if (pendingCloudSyncs.get(key) === state) pendingCloudSyncs.delete(key); };
+    pendingCloudSyncs.set(key, sync);
+    const clear = () => { if (pendingCloudSyncs.get(key) === sync) pendingCloudSyncs.delete(key); };
     sync.then(clear, clear);
     return sync;
   },
 
-  retryPendingBackups: function({ force = false } = {}) {
+  // 此方法仅供显式手动补传；一次操作中的所有记录共用一个五秒截止时间。
+  retryPendingBackups: function() {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
     const key = `${userId}:${openid}`;
     if (pendingUploadDrains.has(key)) return pendingUploadDrains.get(key);
+    const uploadDeadlineAt = Date.now() + UPLOAD_TIMEOUT_MS;
     const drain = (async () => {
       const entries = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid));
       const summary = { success: false, total: entries.length, uploaded: 0, failed: 0, pending: entries.length };
@@ -1134,17 +1102,28 @@ const checkinManager = {
             summary.error = '账号已切换，已暂停上传';
             break;
           }
+          if (Date.now() >= uploadDeadlineAt) {
+            summary.error = uploadTimeoutResult().error;
+            summary.code = 'CLOUD_TIMEOUT';
+            break;
+          }
           // 每次重读，跳过已删除/已确认记录，不上传队列开始时的过期快照。
           const current = uploadEntries(userId).find(({ record }) => record.localId === entry.record.localId);
           if (!current || !isPendingUpload(current.record, openid)) continue;
           const { record, date } = current;
-          if (!force && (record.syncBlocked || record.syncNextRetryAt > Date.now())) continue;
+          if (record.syncBlocked) {
+            summary.error = record.syncError || '部分记录无法上传，请查看记录提示';
+            summary.code = record.syncErrorCode;
+            continue;
+          }
           const result = await this.asyncBackupToCloud(record.duration, record.emotion || [], record.experience,
-            record.timestamp, record.localId, { source: record.source, date });
+            record.timestamp, record.localId, { source: record.source, date, uploadDeadlineAt });
           if (result.success) summary.uploaded++;
           else {
             summary.failed++;
             summary.error = result.error || '部分记录仍待上传';
+            summary.code = result.code;
+            if (!['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED'].includes(result.code)) break;
           }
         }
       } catch (error) {
@@ -1152,7 +1131,6 @@ const checkinManager = {
       }
       summary.pending = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid)).length;
       summary.success = summary.pending === 0;
-      scheduleUploadRetry(userId, openid);
       notifySyncState();
       return summary;
     })();
@@ -1191,8 +1169,9 @@ const checkinManager = {
     
     // 2. 异步备份到云端（如果已登录）
     const saved = uploadEntries(this.getUserId()).find(({ record }) => record.localId === localResult.localId);
-    if (this.isUserLoggedIn() && saved && saved.record.syncVersion === 1 && !saved.record._id) {
-      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId, metadata);
+    if (!localResult.duplicate && this.isUserLoggedIn() && saved && saved.record.syncVersion === 1 && !saved.record._id) {
+      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId,
+        { ...metadata, uploadDeadlineAt: Date.now() + UPLOAD_TIMEOUT_MS });
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
@@ -1317,6 +1296,8 @@ const checkinManager = {
     let managed = false;
     let openid = '';
     let result;
+    const uploadDeadlineAt = Math.min(Date.now() + UPLOAD_TIMEOUT_MS,
+      metadata && Number.isFinite(metadata.uploadDeadlineAt) ? metadata.uploadDeadlineAt : Infinity);
     try {
       const entry = localId && uploadEntries(userId).find(({ record }) => record.localId === localId);
       managed = !!(entry && entry.record.syncVersion === 1);
@@ -1341,11 +1322,13 @@ const checkinManager = {
         timestamp = record.timestamp;
         metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid };
       }
+      metadata = { ...metadata, uploadDeadlineAt };
       const experienceToSend = typeof experience === 'string' ? (experience ? [experience] : []) : experience;
       const args = [duration, emotion, experienceToSend, timestamp];
       if (localId || metadata) args.push(localId);
       if (metadata) args.push(metadata);
-      result = await cloudApi.recordMeditation(...args);
+      result = Date.now() >= uploadDeadlineAt ? uploadTimeoutResult()
+        : await awaitUploadUntil(cloudApi.recordMeditation(...args), uploadDeadlineAt);
       if (!result || (result.success && !(result.data && typeof result.data.recordId === 'string' && result.data.recordId.trim()))) {
         result = { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认保存，请重试上传' };
       }
@@ -1370,8 +1353,8 @@ const checkinManager = {
           if (managed) {
             record.syncStatus = 'failed';
             record.syncAttempts = (Number(record.syncAttempts) || 0) + 1;
-            record.syncNextRetryAt = Date.now() + Math.min(300000, 5000 * Math.pow(2, Math.min(record.syncAttempts - 1, 6)));
-            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE'].includes(record.syncErrorCode);
+            delete record.syncNextRetryAt;
+            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED'].includes(record.syncErrorCode);
           }
         }
       });
@@ -1381,7 +1364,6 @@ const checkinManager = {
       console.warn('保存上传状态失败:', error.message);
     }
     if (managed) {
-      try { scheduleUploadRetry(userId, openid); } catch (error) { console.warn('安排补传失败:', error.message); }
       notifySyncState();
     }
     return result;
@@ -1680,7 +1662,7 @@ const checkinManager = {
       return;
     }
 
-    // 登录标记只控制旧恢复流程；本次新待上传记录每次登录都必须重新检查。
+    // 登录仅刷新云端快照，待上传记录由用户手动补传。
     await this.syncWithCloud();
     
     // 检查是否已经执行过登录同步
@@ -1736,44 +1718,9 @@ const checkinManager = {
     }
   },
   
-  // 同步本地数据到云端（简化版本）
-  syncLocalToCloud: async function(localUserId, wechatOpenId) {
-    console.log('📤 同步本地数据到云端...');
-    
-    // 获取本地数据
-    const storedData = this.getUserCheckinDataByUserId(localUserId);
-    this.normalizeBusinessDates(storedData, `meditation_checkin_${localUserId}`);
-    const localData = storedData.checkinRecords || storedData;
-
-    if (!localData || Object.keys(localData.dailyRecords).length === 0) {
-      console.log('✅ 本地没有数据，无需同步');
-      return;
-    }
-    
-    console.log('✅ 本地数据检查完成');
-    
-    // 先将旧离线记录的身份持久化，再发请求；重启、超时重试复用同一身份。
-    let changed = false;
-    Object.values(localData.dailyRecords).forEach(day => (day.records || []).forEach(record => {
-      if (!record._id && !record.localId) {
-        record.localId = `record_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-        changed = true;
-      }
-    }));
-    if (changed) {
-      wx.setStorageSync(`meditation_checkin_${localUserId}`, storedData);
-      bumpUserStorageRevision(localUserId);
-    }
-    // 计时/旧记录不设上传过期窗口；手动补录首次上传仍受云端三天限制，失败保留本地与syncError。
-    for (const dateStr of Object.keys(localData.dailyRecords)) {
-      for (const record of localData.dailyRecords[dateStr].records || []) {
-        if (record._id) continue;
-        await this.asyncBackupToCloud(record.duration, record.emotion || [], record.experience,
-          record.timestamp, record.localId, { source: record.source === 'manual' || record.dateSource === 'manual' ? 'manual' : 'timer', date: dateStr });
-      }
-    }
-
-    console.log('✅ 同步任务已提交');
+  // 兼容旧登录/恢复入口：只刷新云端快照，不隐式补传本机记录。
+  syncLocalToCloud: async function() {
+    return this.syncWithCloud();
   },
   
   // === 辅助功能 ===

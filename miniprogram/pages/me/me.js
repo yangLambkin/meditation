@@ -569,14 +569,10 @@ Page({
       bijingSyncAlreadySynced: false
     });
     try {
-      // 先补传本机的新待上传记录，避免把缺少记录的云端预览当成完整数据。
-      if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
-        await checkinManager.retryPendingBackups({ force: true });
-        if (!isCurrent()) return;
-      }
+      // 查看同步明细不代替用户上传本机记录，避免预览触发后台补传。
       const pendingCount = checkinManager.getPendingSyncSummary({ date: recordDate }).pending;
       if (pendingCount > 0) {
-        throw new Error(`仍有 ${pendingCount} 条记录仅保存在本机，请联网后重试上传，再同步必经`);
+        throw new Error(`仍有 ${pendingCount} 条记录仅保存在本机，请到首页点击“手动上传”，再同步必经`);
       }
       const res = await bijingApi.getBijingSyncDateDetails(recordDate);
       if (!isCurrent()) return;

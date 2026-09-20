@@ -1,14 +1,52 @@
+// 打卡同步请求不依赖 SDK 的最终回调解锁；其它云业务保留原有等待行为。
+const CLOUD_REQUEST_TIMEOUT_MS = 5000;
+
+function cloudTimeoutError() {
+  const error = new Error('上传超时（5秒），请手动重试');
+  error.code = 'CLOUD_TIMEOUT';
+  return error;
+}
+
 // 云存储API封装
 const cloudApi = {
   // 调用云函数
-  callCloudFunction: function(functionName, data) {
+  callCloudFunction: function(functionName, data, options = {}) {
+    const needsTimeout = data && (
+      (functionName === 'contentSecCheck' && data.type === 'text') ||
+      (functionName === 'meditationManager' && ['recordMeditation', 'getAllRecords', 'getUserStats'].includes(data.type))
+    );
+    const deadlineAt = needsTimeout ? Math.min(Date.now() + CLOUD_REQUEST_TIMEOUT_MS,
+      Number.isFinite(options.deadlineAt) ? options.deadlineAt : Infinity) : null;
     return new Promise((resolve, reject) => {
-      wx.cloud.callFunction({
-        name: functionName,
-        data: data,
-        success: resolve,
-        fail: reject
-      });
+      let settled = false;
+      let timeout;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        if (typeof clearTimeout === 'function') clearTimeout(timeout);
+        callback(value);
+      };
+      if (needsTimeout && deadlineAt <= Date.now()) {
+        finish(reject, cloudTimeoutError());
+        return;
+      }
+      if (needsTimeout && typeof setTimeout === 'function') {
+        timeout = setTimeout(() => {
+          finish(reject, cloudTimeoutError());
+        }, Math.max(0, deadlineAt - Date.now()));
+      }
+      try {
+        wx.cloud.callFunction({
+          name: functionName,
+          data: data,
+          success: result => needsTimeout && Date.now() >= deadlineAt
+            ? finish(reject, cloudTimeoutError()) : finish(resolve, result),
+          fail: error => needsTimeout && Date.now() >= deadlineAt
+            ? finish(reject, cloudTimeoutError()) : finish(reject, error)
+        });
+      } catch (error) {
+        finish(reject, error);
+      }
     });
   },
 
@@ -16,6 +54,9 @@ const cloudApi = {
   recordMeditation: async function(duration, emotion, experience = "", timestamp, localId, options = {}) {
     try {
       const now = Date.now();
+      // 同一条上传的文本检测与写入共用截止时间；队列传入的剩余预算只能缩短它。
+      const uploadDeadlineAt = Math.min(now + CLOUD_REQUEST_TIMEOUT_MS,
+        Number.isFinite(options.uploadDeadlineAt) ? options.uploadDeadlineAt : Infinity);
       const recordTimestamp = timestamp === undefined ? now : timestamp;
       if (!Number.isSafeInteger(recordTimestamp) || recordTimestamp <= 0 || recordTimestamp > now) {
         return { success: false, error: '打卡时间无效或晚于当前时间' };
@@ -28,6 +69,28 @@ const cloudApi = {
       } else if (typeof experience === 'string') {
         // 如果是字符串，转换为单元素数组
         experienceToSend = experience ? [experience] : [];
+      }
+
+      // 离线打卡可以先保存本机；正文必须补审通过后才能上传，检测异常等待手动补传。
+      const texts = (Array.isArray(experienceToSend) ? experienceToSend : [experienceToSend])
+        .map(item => typeof item === 'string' ? item : item && typeof item.text === 'string' ? item.text : '')
+        .filter(text => text.trim());
+      for (const content of texts) {
+        let check;
+        try {
+          const response = await this.callCloudFunction('contentSecCheck', { type: 'text', content, scene: 2 },
+            { deadlineAt: uploadDeadlineAt });
+          check = response && response.result;
+        } catch (error) {
+          if (error && error.code === 'CLOUD_TIMEOUT') throw error;
+          return { success: false, code: 'CONTENT_CHECK_UNAVAILABLE', error: '内容安全检测暂不可用，请手动重试上传' };
+        }
+        if (check && check.success === true && check.safe === false) {
+          return { success: false, code: 'CONTENT_REJECTED', error: '所发布内容含违规信息' };
+        }
+        if (!check || check.success !== true || check.safe !== true) {
+          return { success: false, code: 'CONTENT_CHECK_UNAVAILABLE', error: '内容安全检测暂不可用，请手动重试上传' };
+        }
       }
       
       const result = await this.callCloudFunction('meditationManager', {
@@ -42,7 +105,7 @@ const cloudApi = {
           ...(options.expectedOpenid ? { expectedOpenid: options.expectedOpenid } : {}),
           timestamp: recordTimestamp
         }
-      });
+      }, { deadlineAt: uploadDeadlineAt });
 
       const response = result && result.result;
       if (response && response.success && response.data &&
@@ -62,8 +125,8 @@ const cloudApi = {
       console.error('调用云函数失败:', error);
       return {
         success: false,
-        code: 'NETWORK_ERROR',
-        error: '网络错误，请重试'
+        code: error && error.code === 'CLOUD_TIMEOUT' ? 'CLOUD_TIMEOUT' : 'NETWORK_ERROR',
+        error: error && error.code === 'CLOUD_TIMEOUT' ? error.message : '网络错误，请手动重试'
       };
     }
   },

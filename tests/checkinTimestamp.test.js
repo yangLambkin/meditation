@@ -198,14 +198,15 @@ test('failed local storage cannot report success, update the cache, or start a c
   assert.equal(app.storage.has('meditation_monthly_stats_local-test'), false);
 });
 
-test('uploading recent local records preserves their original timestamps in both storage formats', async () => {
+test('manually uploading recent queued records preserves their original timestamps in both storage formats', async () => {
   const timestamp = Date.parse('2026-09-16T02:30:00Z');
-  const data = { dailyRecords: { '2026-09-16': { records: [{ timestamp, duration: 12, emotion: [], experience: [] }] } }, monthlyStats: {} };
+  const data = { dailyRecords: { '2026-09-16': { records: [{ timestamp, duration: 12, emotion: [], experience: [],
+    localId: 'recent-pending', syncVersion: 1, syncStatus: 'pending', syncOpenid: 'oz-test' }] } }, monthlyStats: {} };
   for (const storedData of [data, { checkinRecords: data, experienceRecords: {} }]) {
     const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': storedData } });
-    await app.manager.syncLocalToCloud('local-test', 'oz-test');
+    await app.manager.retryPendingBackups();
     assert.deepEqual(app.backups[0].slice(0, 4), [12, [], [], timestamp]);
-    assert.match(app.backups[0][4], /^record_/);
+    assert.equal(app.backups[0][4], 'recent-pending');
   }
 });
 
@@ -338,18 +339,20 @@ test('one stable local identity survives repeated submits and restart, distinct 
   assert.equal(restarted.manager.getUserStats().totalCount, 2);
 });
 
-test('offline sync persists legacy identities, retries every age and coalesces overlapping uploads', async () => {
+test('legacy sync entry points and manual queues never implicitly upload unversioned historical records', async () => {
   const timestamp = NOW - 30 * 86400000;
   const date = loadModule('miniprogram/utils/dateUtil.js').getBusinessDate(timestamp);
   const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': {
     dailyRecords: { [date]: { count: 1, records: [{ timestamp, duration: 10 }] } }, monthlyStats: {}
   } } });
   await Promise.all([app.manager.syncLocalToCloud('local-test', 'oz-test'), app.manager.syncLocalToCloud('local-test', 'oz-test')]);
-  assert.equal(app.backups.length, 1);
-  const id = app.storage.get('meditation_checkin_local-test').dailyRecords[date].records[0].localId;
-  assert.equal(app.backups[0][4], id);
+  assert.equal(app.backups.length, 0);
+  const record = app.storage.get('meditation_checkin_local-test').dailyRecords[date].records[0];
+  assert.equal(record.localId, undefined);
+  assert.equal(record.timestamp, timestamp);
   await app.manager.syncLocalToCloud('local-test', 'oz-test');
-  assert.equal(app.backups[1][4], id);
+  await app.manager.retryPendingBackups();
+  assert.equal(app.backups.length, 0);
 });
 
 test('manual backfill validates the three business dates but returns a previously saved identity after the window', () => {

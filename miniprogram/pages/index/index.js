@@ -110,7 +110,7 @@ Page({
     if (!this._checkinSubmissionId) this._checkinSubmissionId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     this.setData({ checkinSubmitting: true });
     try {
-      if (text && !(await contentSec.checkText(text, 2))) return;
+      if (text && !(await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 }))) return;
       const selected = homeCheckin.getDateTime(timestamp);
       const experience = text ? [{
         text,
@@ -119,7 +119,7 @@ Page({
         duration: `${duration}分钟`,
         emotion: []
       }] : [];
-      const result = await checkinManager.recordCheckinWithSync(duration, [], experience, timestamp, {
+      const result = checkinManager.recordCheckin(duration, [], experience, timestamp, {
         idempotencyKey: this._checkinSubmissionId, source: 'manual', date: recordDate
       });
       if (!result || !result.success) throw new Error('本地保存失败');
@@ -132,8 +132,8 @@ Page({
       this.refreshCheckinDefaults();
       this.refreshPageData();
       wx.showToast({
-        title: result.cloudSynced ? '打卡成功' : '已存本机，待上传',
-        icon: result.cloudSynced ? 'success' : 'none'
+        title: '已存本机，待上传',
+        icon: 'none'
       });
     } catch (error) {
       console.error('首页打卡保存失败:', error);
@@ -161,7 +161,7 @@ Page({
     this.setData({ checkinRetrying: true });
     let result;
     try {
-      result = await checkinManager.syncWithCloud({ force: true });
+      result = await checkinManager.syncWithCloud({ force: true, uploadPending: true });
     } catch (error) {
       console.error('首页重试上传失败:', error);
       wx.showToast({ title: '记录仍在本机，请稍后重试上传', icon: 'none' });
@@ -173,7 +173,8 @@ Page({
       const pending = this.data.pendingCheckinCount;
       const blocked = (this._allCheckinRecords || []).some(record => record.syncStatus === 'blocked');
       wx.showToast({
-        title: pending > 0 ? (blocked ? '部分记录无法上传，请查看记录提示' : `仍有 ${pending} 条待上传，请稍后重试`)
+        title: pending > 0 ? (blocked ? '部分记录无法上传，请查看记录提示'
+          : result.code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : `仍有 ${pending} 条未上传，请手动重试`)
           : result.error || (result.uploaded > 0 ? '上传成功' : '暂无待上传记录'),
         icon: pending === 0 && result.uploaded > 0 ? 'success' : 'none'
       });
@@ -915,13 +916,12 @@ Page({
   },
 
   /**
-   * 先上传本机新记录，再从云端校准缓存，完成后刷新同一份列表和日历。
+   * 只读取云端校准缓存，未上传记录留在本机等待手动上传。
    */
   refreshCheckinsFromCloud(options) {
     let request;
     try {
-      // 每个入口都交给账号级同步队列处理，让下拉刷新能升级正在退避的自动同步。
-      request = checkinManager.syncWithCloud(options);
+      request = checkinManager.syncWithCloud({ ...options, uploadPending: false });
     } catch (error) {
       console.warn('首页云端打卡记录刷新失败:', error);
       return Promise.resolve(false);

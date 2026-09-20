@@ -93,7 +93,7 @@
       </view>
       <view wx:if="{{pendingCheckinCount > 0}}" class="checkin-pending-banner">
         <text class="checkin-pending-text">{{pendingCheckinCount}} 条本机记录尚未上传</text>
-        <button class="checkin-retry-button" bindtap="retryCheckinUploads" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">重试上传</button>
+        <button class="checkin-retry-button" bindtap="retryCheckinUploads" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">手动上传</button>
       </view>
       <text wx:if="{{checkinTotal}}" class="checkin-load-hint">长按记录可删除</text>
       <view wx:if="{{!checkinTotal}}" class="checkin-empty">尚无打卡记录</view>

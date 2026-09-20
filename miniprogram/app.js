@@ -16,7 +16,7 @@ App({
     });
     
     console.log('云开发初始化完成');
-    this.setupBackupRetry();
+    this.setupRecordRefresh();
     
     // 设置缓存状态标记
     this.setupCacheStatus();
@@ -34,22 +34,22 @@ App({
 
   onShow() {
     if (!wx.cloud) return;
-    // 冷启动和从后台重新打开都会到这里；后台检查一次，不等待上次失败的退避时间。
-    return this.retryPendingRecordBackups({ force: true });
+    // 只读取云端记录；本机未上传记录必须由用户点击上传按钮处理。
+    return this.refreshRecordBackups();
   },
 
-  setupBackupRetry() {
+  setupRecordRefresh() {
     if (this._networkStatusHandler) return;
     this._networkStatusHandler = ({ isConnected }) => {
-      if (isConnected) this.retryPendingRecordBackups({ force: true });
+      if (isConnected) this.refreshRecordBackups();
     };
     wx.onNetworkStatusChange(this._networkStatusHandler);
   },
 
-  retryPendingRecordBackups(options) {
-    // 异步执行，不阻塞页面展示、不弹全局加载框；队列只上传未确认的新记录。
-    return Promise.resolve().then(() => checkinManager.syncWithCloud(options)).catch(error => {
-      console.warn('静坐记录同步失败，保留本机记录:', error);
+  refreshRecordBackups() {
+    // 恢复网络、重新打开均不补传，也不弹全局加载框。
+    return Promise.resolve().then(() => checkinManager.syncWithCloud({ uploadPending: false })).catch(error => {
+      console.warn('读取云端静坐记录失败，保留本机记录:', error);
     });
   },
   

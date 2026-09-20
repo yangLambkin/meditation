@@ -25,10 +25,10 @@ function createApp({ retry = async () => ({ success: true, uploaded: 0, pending:
   return { app, calls };
 }
 
-test('opening the app and recovering network each start an immediate background sync', async () => {
+test('opening the app and recovering network only read cloud records without uploading pending records', async () => {
   const { app, calls } = createApp();
   app.onLaunch();
-  app.setupBackupRetry();
+  app.setupRecordRefresh();
   assert.equal(calls.initializations, 1);
   assert.equal(calls.listeners.length, 1, 'register the network observer only once');
   await app.onShow();
@@ -39,8 +39,8 @@ test('opening the app and recovering network each start an immediate background 
   calls.listeners[0]({ isConnected: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.retries.length, 2);
-  assert.equal(calls.retries[0][0].force, true, 'opening the app checks pending records without waiting for previous backoff');
-  assert.equal(calls.retries[1][0].force, true, 'network recovery makes one immediate upload attempt before calibration');
+  assert.equal(calls.retries[0][0].uploadPending, false, 'opening the app must not upload pending records');
+  assert.equal(calls.retries[1][0].uploadPending, false, 'network recovery must not upload pending records');
 });
 
 test('opening schedules the check asynchronously even when cloud synchronization remains pending', async () => {
@@ -59,7 +59,7 @@ test('opening schedules the check asynchronously even when cloud synchronization
   await showing;
 });
 
-test('automatic upload failure is handled without breaking foreground lifecycle', async () => {
+test('cloud read failure is handled without breaking foreground lifecycle', async () => {
   const { app, calls } = createApp({ retry: async () => { throw new Error('网络不可用'); } });
   await app.onShow();
   assert.equal(calls.retries.length, 1);

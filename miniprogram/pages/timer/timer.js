@@ -370,7 +370,7 @@ Page({
     this.setData({ isSavingCompletion: true });
     const text = this.data.completionText.trim();
     try {
-      if (text && !await contentSec.checkText(text, 2)) return;
+      if (text && !await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 })) return;
       if (this.saveCompletedSession(text)) {
         // 此处只确认同步本地写入；云端确认与失败重试由持久上传队列负责。
         wx.showToast({ title: '已存本机，待上传', icon: 'none' });

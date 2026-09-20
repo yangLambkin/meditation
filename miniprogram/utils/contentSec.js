@@ -121,10 +121,56 @@ async function checkImage(tempFilePath, opts = {}) {
   }
 }
 
-// 检测文本：返回 Promise<boolean>（true=安全，false=违规）
+// 打卡先保存本机；离线或检测超时不阻塞保存，云端上传前由 cloudApi 再次检测。
+// 单个截止时间覆盖网络探测与检测，过期响应不能再弹提示或影响已保存的记录。
+function checkLocalCheckinText(text, scene, opts) {
+  return new Promise(resolve => {
+    let settled = false
+    const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.min(opts.timeoutMs, 1500) : 1500
+    const timer = setTimeout(() => finish(true), timeoutMs)
+    function finish(allowed) {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!allowed) wx.showToast({ title: VIOLATION_TIP, icon: 'none' })
+      resolve(allowed)
+    }
+    function check() {
+      if (settled) return
+      Promise.resolve().then(() => {
+        if (settled) return
+        return wx.cloud.callFunction({
+          name: 'contentSecCheck',
+          data: { type: 'text', content: String(text), scene }
+        })
+      }).then(res => {
+        const result = res && res.result
+        // 只对明确违规拦截本机保存；无法得出结论时留给后台上传前的检测。
+        const risky = result && result.success === true && result.safe === false
+        finish(!risky)
+      }, () => finish(true))
+    }
+    if (typeof wx.getNetworkType !== 'function') {
+      check()
+      return
+    }
+    try {
+      wx.getNetworkType({
+        success: result => result.networkType === 'none' ? finish(true) : check(),
+        fail: check
+      })
+    } catch (error) {
+      check()
+    }
+  })
+}
+
+// 检测文本：返回 Promise<boolean>；allowOffline 只供先存本机、上传前补审的打卡入口。
 // scene: 1=资料(头像/昵称)，2=评论(经验笔记/团队名介绍)
-async function checkText(text, scene = 2) {
+async function checkText(text, scene = 2, opts = {}) {
   if (!text || !String(text).trim()) return true
+  if (opts.allowOffline) return checkLocalCheckinText(text, scene, opts)
   try {
     const res = await wx.cloud.callFunction({
       name: 'contentSecCheck',

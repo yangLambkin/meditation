@@ -5,11 +5,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const pagePath = path.join(__dirname, '../miniprogram/pages/timer/timer.js');
+const contentSecPath = path.join(__dirname, '../miniprogram/utils/contentSec.js');
 const START_AUDIO = '/audio/起坐.mp3';
 const END_AUDIO = '/audio/收坐.mp3';
 const GUIDE_AUDIO = 'https://example.test/meditation-guide.mp3';
 
-function createPage({ withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true, recordCheckin } = {}) {
+function createPage({
+  withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true,
+  recordCheckin, networkType, contentSecRequest = () => new Promise(() => {})
+} = {}) {
   let definition;
   let now = Date.parse('2026-09-18T08:00:00+08:00');
   let nextTimerId = 0;
@@ -88,16 +92,30 @@ function createPage({ withGuide = false, isCountdown = true, initialStorage = {}
     setKeepScreenOn: options => options.success?.({}),
     showModal: options => modals.push(options),
     showToast: options => toasts.push(options),
+    getNetworkType: options => options.success?.({ networkType }),
     navigateTo: options => navigations.push(options.url),
     cloud: {
       init() {},
-      getTempFileURL: options => options.success?.({ fileList: [] })
+      getTempFileURL: options => options.success?.({ fileList: [] }),
+      callFunction: contentSecRequest
     }
   };
 
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
+  }
+
+  let contentSec = { checkText };
+  if (networkType !== undefined) {
+    const module = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(contentSecPath, 'utf8'), {
+      wx, module, Date: ClockDate,
+      console: { log() {}, warn() {}, error() {} },
+      setTimeout: (callback, delay) => addTimer(callback, delay),
+      clearTimeout: id => timers.delete(id)
+    }, { filename: contentSecPath });
+    contentSec = module.exports;
   }
 
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
@@ -116,7 +134,7 @@ function createPage({ withGuide = false, isCountdown = true, initialStorage = {}
           return { success: true };
         }
       };
-      if (request === '../../utils/contentSec') return { checkText };
+      if (request === '../../utils/contentSec') return contentSec;
       assert.equal(request, '../../utils/screenBrightness');
       return { createScreenBrightnessController: () => ({ dim() {}, restore() {} }) };
     },
@@ -523,19 +541,103 @@ test('optional reflection is checked and recorded as text with no emotion', asyn
   assert.equal(records[0][2][0].emotion.length, 0);
 });
 
-test('a rejected reflection stays editable and can be cleared to finish', async () => {
-  const { page, records, advance } = createPage({ checkText: async () => false });
-  page.startTimer();
-  advance(60000);
-  page.handleStop();
-  page.onCompletionInput({ detail: { value: 'blocked' } });
-  await page.confirmCompletion();
-  assert.equal(records.length, 0);
-  assert.equal(page.data.showCompletionDialog, true);
-  assert.equal(page.data.isSavingCompletion, false);
-  page.onCompletionInput({ detail: { value: '' } });
-  await page.confirmCompletion();
-  assert.equal(records.length, 1);
+test('count-up and countdown save offline reflections locally without contacting the cloud or duplicate records', async () => {
+  for (const isCountdown of [false, true]) {
+    let cloudRequests = 0;
+    const { page, records, storage, advance, toasts } = createPage({
+      isCountdown,
+      networkType: 'none',
+      contentSecRequest() {
+        cloudRequests += 1;
+        return new Promise(() => {});
+      }
+    });
+    page.setData({ totalTime: 120, remainingTime: 120 });
+    page.startTimer();
+    const sessionId = page.sessionId;
+    advance(120000);
+    if (!isCountdown) page.handleStop();
+    const endedAt = page.pendingCompletion.endedAt;
+    page.onCompletionInput({ detail: { value: '  离线时也很安静  ' } });
+
+    await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
+
+    assert.equal(cloudRequests, 0, 'known offline status must skip cloud moderation');
+    assert.equal(records.length, 1);
+    assert.equal(records[0][0], 2);
+    assert.equal(records[0][2][0].text, '离线时也很安静');
+    assert.equal(records[0][3], endedAt);
+    assert.equal(records[0][4], sessionId);
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.showCompletionDialog, false);
+    assert.equal(page.pendingCompletion, null);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+    assert.equal(toasts.at(-1).title, '已存本机，待上传');
+    await page.confirmCompletion();
+    assert.equal(records.length, 1);
+
+    const reopened = createPage({ initialStorage: Object.fromEntries(storage), networkType: 'none' });
+    await reopened.page.confirmCompletion();
+    assert.equal(reopened.records.length, 0, 'reopening must not save an offline completion a second time');
+  }
+});
+
+test('both timer modes release saving within 1500 ms when the network request hangs', async () => {
+  for (const isCountdown of [false, true]) {
+    let resolveRequest;
+    const { page, records, advance } = createPage({
+      isCountdown,
+      networkType: 'wifi',
+      contentSecRequest: () => new Promise(resolve => { resolveRequest = resolve; })
+    });
+    page.setData({ totalTime: 60, remainingTime: 60 });
+    page.startTimer();
+    advance(60000);
+    if (!isCountdown) page.handleStop();
+    page.onCompletionInput({ detail: { value: '弱网时的感受' } });
+    const pending = page.confirmCompletion();
+    await page.confirmCompletion();
+    assert.equal(page.data.isSavingCompletion, true);
+    advance(1499);
+    await Promise.resolve();
+    assert.equal(records.length, 0);
+    advance(1);
+    await pending;
+
+    assert.equal(records.length, 1);
+    assert.equal(records[0][2][0].text, '弱网时的感受');
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.showCompletionDialog, false);
+    resolveRequest({ result: { success: true, safe: true } });
+    await Promise.resolve();
+    await page.confirmCompletion();
+    assert.equal(records.length, 1, 'a late network response cannot save the completed session again');
+  }
+});
+
+test('an online rejected reflection stays editable and can be cleared to finish in both modes', async () => {
+  for (const isCountdown of [false, true]) {
+    const { page, records, advance, storage } = createPage({
+      isCountdown,
+      networkType: 'wifi',
+      contentSecRequest: async () => ({ result: { success: true, safe: false } })
+    });
+    page.setData({ totalTime: 60, remainingTime: 60 });
+    page.startTimer();
+    advance(60000);
+    if (!isCountdown) page.handleStop();
+    page.onCompletionInput({ detail: { value: 'blocked' } });
+    await page.confirmCompletion();
+    assert.equal(records.length, 0);
+    assert.equal(page.data.showCompletionDialog, true);
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.completionText, 'blocked');
+    assert.equal(storage.get('timerPendingCompletion').text, 'blocked');
+    page.onCompletionInput({ detail: { value: '' } });
+    await page.confirmCompletion();
+    assert.equal(records.length, 1);
+    assert.equal(page.data.isSavingCompletion, false);
+  }
 });
 
 test('count-up ends on background with the actual duration and never accrues offline time', () => {
@@ -600,6 +702,7 @@ test('a failed completion retries with the original session id and timestamp', a
   page.handleStop();
   await page.confirmCompletion();
   assert.equal(page.data.showCompletionDialog, true);
+  assert.equal(page.data.isSavingCompletion, false, 'a local write failure must release the save button');
   assert.ok(storage.get('timerPendingCompletion'));
   advance(60000);
   await page.confirmCompletion();
@@ -607,6 +710,7 @@ test('a failed completion retries with the original session id and timestamp', a
   assert.equal(attempts[0][3], attempts[1][3]);
   assert.equal(attempts[0][4], attempts[1][4]);
   assert.equal(page.data.showCompletionDialog, false);
+  assert.equal(page.data.isSavingCompletion, false);
   assert.equal(storage.get('timerPendingCompletion'), null);
 });
 

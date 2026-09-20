@@ -79,7 +79,8 @@ function getRecordSyncState(record) {
   }
   return {
     syncStatus: record.syncStatus || 'pending',
-    syncStatusText: record.syncStatus === 'uploading' ? '正在上传' : '已存本机，待上传'
+    syncStatusText: record.syncStatus === 'uploading' ? '正在上传'
+      : record.syncStatus === 'failed' ? '上传失败，已存本机，请手动上传' : '已存本机，待上传'
   };
 }
 

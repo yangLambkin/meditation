@@ -112,6 +112,7 @@ function createHarness() {
     throw new Error(`Unexpected cloud dependency: ${name}`);
   }
   const handlers = {
+    contentSecCheck: { async main() { return { success: true, safe: true }; } },
     meditationManager: load('cloudfunctions/meditationManager/index.js', { require: cloudRequire }),
     bijingSync: load('cloudfunctions/bijingSync/index.js', { require: cloudRequire }),
   };
@@ -142,7 +143,7 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   const experience = [{ text: '平静', uniqueId: String(timestamp) }];
   const result = clone(await app.api.recordMeditation(15, ['平静'], experience, timestamp));
   assert.equal(result.success, true);
-  assert.equal(app.calls[0].data.data.timestamp, timestamp);
+  assert.equal(app.calls.find(call => call.name === 'meditationManager').data.data.timestamp, timestamp);
   assert.equal(result.data.date, '2026-09-16');
   assert.equal(result.data.timestamp, timestamp);
 
@@ -166,7 +167,7 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   assert.equal(nextDay.count, 0);
   assert.equal(nextDay.totalDuration, 0);
   assert.deepEqual(app.collections, beforePreview, 'Reading previews must not mutate records or sync markers');
-  assert.deepEqual(app.calls.map(call => call.name), ['meditationManager', 'bijingSync', 'bijingSync']);
+  assert.deepEqual(app.calls.map(call => call.name), ['contentSecCheck', 'meditationManager', 'bijingSync', 'bijingSync']);
 });
 
 test('front-end check-ins around 02:00 belong to exactly one sync day with the same business storage dates', async () => {

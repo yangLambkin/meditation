@@ -10,7 +10,7 @@ const utilsPath = path.join(__dirname, '../miniprogram/utils');
 function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], legacyUserRecords = {}, record, checkText, refreshFromCloud, pending = 0, retry, openid } = {}) {
   let currentTime = Date.parse(now);
   let definition;
-  const calls = { record: [], retry: [], sync: [], content: [], toast: [], navigation: [], refresh: 0, cloudRefresh: 0, userDataReads: 0, stopPullDownRefresh: 0 };
+  const calls = { record: [], blockingRecord: [], retry: [], sync: [], content: [], toast: [], navigation: [], refresh: 0, cloudRefresh: 0, userDataReads: 0, stopPullDownRefresh: 0 };
   let pendingCloudSync;
   const subscribers = new Set();
   const intervals = new Map();
@@ -23,13 +23,16 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     getPendingSyncSummary: () => ({ total: pending, pending, failed: 0 }),
     syncWithCloud: options => {
       calls.sync.push(options);
+      if (options && options.uploadPending) {
+        calls.retry.push(options);
+        return Promise.resolve().then(() => retry ? retry(options) : { success: true, uploaded: 0, pending })
+          .then(result => ({ ...result, refreshed: false }));
+      }
       if (pendingCloudSync) return pendingCloudSync;
-      calls.retry.push(options);
       pendingCloudSync = (async () => {
-        const result = retry ? await retry(options) : { success: true, uploaded: 0, pending };
         calls.cloudRefresh++;
         const refreshed = refreshFromCloud ? await refreshFromCloud() : false;
-        return { ...result, refreshed };
+        return { success: pending === 0, uploaded: 0, pending, refreshed };
       })();
       const request = pendingCloudSync;
       const clear = () => { if (pendingCloudSync === request) pendingCloudSync = null; };
@@ -43,9 +46,13 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     getUserCheckinData: () => { calls.userDataReads++; return { dailyRecords }; },
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
-    recordCheckinWithSync: (...args) => {
+    recordCheckin: (...args) => {
       calls.record.push(args);
-      return record ? record(...args) : { success: true, cloudSynced: true };
+      return record ? record(...args) : { success: true };
+    },
+    recordCheckinWithSync: (...args) => {
+      calls.blockingRecord.push(args);
+      return new Promise(() => {});
     }
   };
   const wx = {
@@ -124,16 +131,16 @@ function makeRecords(count, startAt = '2026-09-17T04:10:00+08:00') {
   return dailyRecords;
 }
 
-test('home waits for cloud confirmation and does not report success for a local-only record', async () => {
-  let completeUpload;
-  const { page, calls } = createPage({ record: () => new Promise(resolve => { completeUpload = resolve; }) });
+test('home finishes local saving immediately without waiting for cloud confirmation', async () => {
+  const { page, calls } = createPage();
   page.openCheckinModal();
   const saving = page.submitCheckin();
-  assert.equal(page.data.checkinSubmitting, true);
-  assert.equal(calls.toast.length, 0);
+  assert.equal(page.data.checkinSubmitting, false);
+  assert.equal(page.data.showCheckinModal, false);
+  assert.equal(calls.blockingRecord.length, 0);
+  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
-  completeUpload({ success: true, cloudSynced: false, syncError: '网络断开' });
   await saving;
   assert.equal(page.data.checkinSubmitting, false);
   assert.equal(page.data.showCheckinModal, false);
@@ -153,6 +160,7 @@ test('home retry forces the existing upload queue, refreshes status and blocks d
   await page.retryCheckinUploads();
   assert.equal(calls.retry.length, 1);
   assert.equal(calls.retry[0].force, true);
+  assert.equal(calls.retry[0].uploadPending, true);
   assert.equal(calls.record.length, 0, 'retry must not create another check-in');
   setPending(0);
   completeUpload({ success: true, uploaded: 2, pending: 0 });
@@ -169,9 +177,22 @@ test('home retry failure retains the pending indicator and releases its button',
     assert.equal(page.data.pendingCheckinCount, 1);
     assert.equal(page.data.checkinRetrying, false);
     assert.equal(calls.toast.at(-1).icon, 'none');
-    assert.match(calls.toast.at(-1).title, /待上传|本机/);
+    assert.match(calls.toast.at(-1).title, /未上传|本机/);
     assert.equal(calls.record.length, 0);
   }
+});
+
+test('manual upload timeout releases the button and tells the user to retry manually', async () => {
+  const { page, calls } = createPage({ pending: 2, retry: async () => ({
+    success: false, uploaded: 0, pending: 2, code: 'CLOUD_TIMEOUT'
+  }) });
+  await page.retryCheckinUploads();
+  assert.equal(page.data.checkinRetrying, false);
+  assert.equal(page.data.pendingCheckinCount, 2);
+  assert.equal(calls.toast.at(-1).title, '上传超时（5秒），请手动重试');
+  assert.equal(calls.retry.length, 1);
+  assert.equal(calls.retry[0].uploadPending, true);
+  assert.equal(calls.cloudRefresh, 0, 'upload completion must not wait for another cloud read');
 });
 
 test('home observes background upload changes in both calendar and list and unsubscribes on unload', async () => {
@@ -240,34 +261,34 @@ test('home hides another known account from both the list and calendar without d
   assert.equal(JSON.stringify(dailyRecords), before);
 });
 
-test('returning home syncs after refreshing login state and waits for upload before reading the cloud', async () => {
+test('returning home only reads the cloud after refreshing login state and leaves pending uploads alone', async () => {
   let loggedIn = false;
-  let completeUpload;
-  const { page, calls } = createPage({ pending: 1, retry: () => {
+  let completeRead;
+  const { page, calls } = createPage({ pending: 1, refreshFromCloud: () => {
     assert.equal(loggedIn, true);
-    return new Promise(resolve => { completeUpload = resolve; });
+    return new Promise(resolve => { completeRead = resolve; });
   } });
   page.checkUserInfoStatus = () => { loggedIn = true; };
   page.generateCalendar = () => {};
   const showing = page.onShow();
   await Promise.resolve();
-  assert.equal(calls.retry.length, 1);
-  assert.equal(calls.retry[0], undefined, 'returning home must retain automatic retry backoff');
-  assert.equal(calls.cloudRefresh, 0, 'cloud calibration waits for the upload attempt');
-  assert.equal(calls.toast.length, 0, 'automatic retry stays quiet');
-  completeUpload({ success: false, uploaded: 0, pending: 1 });
+  assert.equal(calls.retry.length, 0);
+  assert.equal(calls.sync[0].uploadPending, false);
+  assert.equal(calls.cloudRefresh, 1);
+  assert.equal(calls.toast.length, 0);
+  completeRead(true);
   await showing;
   assert.equal(calls.cloudRefresh, 1);
   page.onUnload();
 });
 
-test('home background retry errors do not reject the page show lifecycle', async () => {
-  const { page, calls } = createPage({ retry: async () => { throw new Error('offline'); } });
+test('home background read errors do not reject the page show lifecycle or upload pending records', async () => {
+  const { page, calls } = createPage({ pending: 1, refreshFromCloud: async () => { throw new Error('offline'); } });
   page.checkUserInfoStatus = () => {};
   page.generateCalendar = () => {};
   await page.onShow();
-  assert.equal(calls.retry.length, 1);
-  assert.equal(calls.cloudRefresh, 0);
+  assert.equal(calls.retry.length, 0);
+  assert.equal(calls.cloudRefresh, 1);
   assert.equal(calls.toast.length, 0);
   page.onUnload();
 });
@@ -377,7 +398,7 @@ test('unedited fields submit the actual current instant even after Beijing midni
   assert.equal(page.data.checkinDate, '2026-09-17');
   assert.equal(page.data.checkinTime, '00:02');
   assert.equal(page.data.checkinSubmitting, false);
-  assert.ok(calls.toast.some(value => /成功/.test(value.title)));
+  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
 });
 
 test('manual date/time and experience are submitted together after text approval', async () => {
@@ -388,7 +409,7 @@ test('manual date/time and experience are submitted together after text approval
   page.onCheckinDurationInput({ detail: { value: '35' } });
   page.onCheckinExperienceInput({ detail: { value: '今天更能觉察呼吸。' } });
   await page.submitCheckin();
-  assert.deepEqual(calls.content, [['今天更能觉察呼吸。', 2]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.content)), [['今天更能觉察呼吸。', 2, { allowOffline: true, timeoutMs: 1500 }]]);
   assert.equal(calls.record.length, 1);
   const [duration, emotion, experience, timestamp] = calls.record[0];
   assert.equal(duration, 35);
@@ -451,7 +472,7 @@ test('rejected text preserves the draft and never writes a check-in', async () =
   page.refreshCheckinDefaults();
   page.onCheckinExperienceInput({ detail: { value: '待修改的体验' } });
   await page.submitCheckin();
-  assert.deepEqual(calls.content, [['待修改的体验', 2]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.content)), [['待修改的体验', 2, { allowOffline: true, timeoutMs: 1500 }]]);
   assert.equal(calls.record.length, 0);
   assert.equal(calls.refresh, 0);
   assert.equal(page.data.checkinExperience, '待修改的体验');
@@ -744,7 +765,8 @@ test('concurrent page shows and pull-down share one cloud request and allow anot
   const pullDown = page.onPullDownRefresh();
   assert.equal(firstShow, secondShow);
   assert.equal(calls.sync.length, 3, 'every entry reaches account-level deduplication');
-  assert.equal(calls.sync[2].force, true, 'a pending automatic sync cannot swallow the pull-down force request');
+  assert.equal(calls.sync[2].force, true);
+  assert.ok(calls.sync.every(options => options.uploadPending === false), 'pull-to-refresh and page lifecycle must only read');
   await Promise.resolve();
   assert.equal(calls.cloudRefresh, 1);
   assert.equal(calls.stopPullDownRefresh, 0);

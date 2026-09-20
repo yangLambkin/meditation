@@ -5,17 +5,20 @@ const path = require('node:path');
 const vm = require('node:vm');
 const pagePath = path.join(__dirname, '../miniprogram/pages/recorder/recorder.js');
 
-function createPage({ recordCheckin = () => ({ success: true, cloudSynced: true }), checkText = async () => true, options = {} } = {}) {
+function createPage({ recordCheckin = () => ({ success: true }), checkText = async () => true, options = {} } = {}) {
   let definition;
   let now = Date.parse('2026-09-20T09:00:00+08:00');
-  const calls = { records: [], texts: [], toasts: [], navigations: [] };
+  const calls = { records: [], blockingRecords: [], texts: [], toasts: [], navigations: [] };
   class Clock extends Date { static now() { return now; } }
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     Date: Clock,
     Page: value => { definition = value; },
     wx: { showToast: value => calls.toasts.push(value), switchTab: value => calls.navigations.push(value) },
     require(request) {
-      if (request === '../../utils/checkin.js') return { recordCheckinWithSync: (...args) => { calls.records.push(args); return recordCheckin(...args); } };
+      if (request === '../../utils/checkin.js') return {
+        recordCheckin: (...args) => { calls.records.push(args); return recordCheckin(...args); },
+        recordCheckinWithSync: (...args) => { calls.blockingRecords.push(args); return new Promise(() => {}); }
+      };
       assert.equal(request, '../../utils/contentSec.js');
       return { checkText: (...args) => { calls.texts.push(args); return checkText(...args); } };
     }
@@ -27,17 +30,16 @@ function createPage({ recordCheckin = () => ({ success: true, cloudSynced: true 
 
 function setText(page, value) { page.onTextInput({ detail: { value } }); }
 
-test('recorder waits for cloud confirmation and keeps local-only saves from being recorded twice', async () => {
-  let completeUpload;
-  const { page, calls } = createPage({ recordCheckin: () => new Promise(resolve => { completeUpload = resolve; }) });
+test('recorder completes local saving immediately and keeps local-only saves from being recorded twice', async () => {
+  const { page, calls } = createPage();
   const saving = page.completeCheckIn();
-  assert.equal(page.data.submitting, true);
-  assert.equal(page.data.completed, false);
-  assert.equal(calls.toasts.length, 0);
-  assert.equal(calls.navigations.length, 0);
+  assert.equal(page.data.submitting, false);
+  assert.equal(page.data.completed, true);
+  assert.equal(calls.blockingRecords.length, 0);
+  assert.equal(calls.toasts.at(-1).title, '已存本机，待上传');
+  assert.equal(calls.navigations.length, 1);
   await page.completeCheckIn();
   assert.equal(calls.records.length, 1);
-  completeUpload({ success: true, cloudSynced: false, syncError: '网络断开' });
   await saving;
   assert.equal(page.data.completed, true);
   assert.equal(page.data.submitting, false);
@@ -48,11 +50,11 @@ test('recorder waits for cloud confirmation and keeps local-only saves from bein
   assert.equal(calls.records.length, 1);
 });
 
-test('recorder only shows check-in success after the cloud confirms the record', async () => {
-  const { page, calls } = createPage();
+test('recorder never claims a cloud upload from the local save response', async () => {
+  const { page, calls } = createPage({ recordCheckin: () => ({ success: true, cloudSynced: true }) });
   await page.completeCheckIn();
-  assert.equal(calls.toasts.at(-1).title, '打卡成功');
-  assert.equal(calls.toasts.at(-1).icon, 'success');
+  assert.equal(calls.toasts.at(-1).title, '已存本机，待上传');
+  assert.equal(calls.toasts.at(-1).icon, 'none');
 });
 
 test('recorder saves blank or whitespace-only reflection without requiring emotions', async () => {
@@ -78,7 +80,7 @@ test('recorder stores approved text together with its only check-in record', asy
   const { page, calls } = createPage();
   setText(page, '  呼吸平稳  ');
   await page.completeCheckIn();
-  assert.deepEqual(calls.texts, [['呼吸平稳', 2]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.texts)), [['呼吸平稳', 2, { allowOffline: true, timeoutMs: 1500 }]]);
   assert.equal(calls.records.length, 1);
   const [duration, emotions, experiences, timestamp, options] = calls.records[0];
   assert.equal(duration, 7);

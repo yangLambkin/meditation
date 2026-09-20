@@ -248,7 +248,7 @@ test('the same list distinguishes cloud records, new uploads and legacy unconfir
   assert.equal(byId['legacy-local'].syncStatusText, '本机记录，未确认上传');
   assert.equal(byId.saved.syncStatus, undefined);
   assert.equal(byId.pending.syncStatusText, '已存本机，待上传');
-  assert.equal(byId.failed.syncStatusText, '已存本机，待上传');
+  assert.equal(byId.failed.syncStatusText, '上传失败，已存本机，请手动上传');
   assert.equal(byId.failed.syncStatus, 'failed');
   assert.equal(byId.uploading.syncStatusText, '正在上传');
   assert.equal(byId.expired.syncStatus, 'blocked');

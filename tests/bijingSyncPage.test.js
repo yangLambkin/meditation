@@ -97,19 +97,17 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   };
 }
 
-test('manual sync retries pending uploads before requesting its cloud preview', async () => {
-  const upload = deferred();
-  const { page, calls, setPending } = createPage({ pending: 1, retry: () => upload.promise });
-  const opening = page.syncBijingNow();
-  assert.equal(page.data.bijingSyncDetailsLoading, true);
-  assert.equal(calls.retry.length, 1);
-  assert.equal(calls.retry[0].force, true);
+test('cloud preview directs users to the home upload button without silently uploading pending records', async () => {
+  const { page, calls, setPending } = createPage({ pending: 1 });
+  await page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDetailsLoading, false);
+  assert.equal(calls.retry.length, 0);
+  assert.match(page.data.bijingSyncDetailsError, /首页.*手动上传/);
   assert.equal(calls.preview.length, 0);
   await page.confirmBijingSyncDate();
   assert.equal(calls.sync.length, 0);
   setPending(0);
-  upload.resolve({ success: true, uploaded: 1, pending: 0 });
-  await opening;
+  await page.retryBijingSyncDetails();
   assert.equal(calls.preview.length, 1);
   assert.equal(page.data.bijingSyncDetailsError, '');
   await page.confirmBijingSyncDate();
@@ -148,15 +146,14 @@ test('new pending records invalidate a preview both while loading and before con
   assert.equal(second.page.data.bijingShowSyncDatePicker, true);
 });
 
-test('canceling during upload retry prevents stale previews and page updates', async () => {
-  const upload = deferred();
-  const { page, calls, setPending } = createPage({ pending: 1, retry: () => upload.promise });
-  const opening = page.syncBijingNow();
+test('canceling a preview with pending records cannot initiate an upload or later reopen it', async () => {
+  const { page, calls, setPending } = createPage({ pending: 1 });
+  await page.syncBijingNow();
   page.cancelBijingSyncDate();
   const data = JSON.stringify(page.data);
   setPending(0);
-  upload.resolve({ success: true, uploaded: 1, pending: 0 });
-  await opening;
+  await page.retryBijingSyncDetails();
+  assert.equal(calls.retry.length, 0);
   assert.equal(calls.preview.length, 0);
   assert.equal(JSON.stringify(page.data), data);
 });
@@ -173,8 +170,7 @@ test('pending uploads on other dates do not block the selected sync day', async 
 
   await page.syncBijingNow();
   await page.onBijingSyncDateChange({ detail: { value: '2026-09-15' } });
-  assert.equal(calls.retry.length, 1, 'the selected day still retries its own pending record');
-  assert.equal(calls.retry[0].force, true);
+  assert.equal(calls.retry.length, 0, 'selecting another day must not upload pending records');
   assert.match(page.data.bijingSyncDetailsError, /1 条记录仅保存在本机/);
   await page.confirmBijingSyncDate();
   assert.equal(calls.sync.length, 1);

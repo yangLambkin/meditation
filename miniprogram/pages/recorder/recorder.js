@@ -26,19 +26,19 @@ Page({
     this.setData({ submitting: true });
     try {
       const text = this.data.currentText.trim();
-      if (text && !(await contentSec.checkText(text, 2))) return;
+      if (text && !(await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 }))) return;
       const experience = text ? [{
         text, uniqueId: this._submissionId, timestamp: this._timestamp,
         duration: `${this.data.duration}分钟`, emotion: []
       }] : [];
-      const result = await checkinManager.recordCheckinWithSync(this.data.duration, [], experience, this._timestamp, {
+      const result = checkinManager.recordCheckin(this.data.duration, [], experience, this._timestamp, {
         idempotencyKey: this._submissionId, source: 'manual'
       });
       if (!result || !result.success) throw new Error((result && result.error) || '保存失败，请重试');
       this.setData({ completed: true });
       wx.showToast({
-        title: result.cloudSynced ? '打卡成功' : '已存本机，待上传',
-        icon: result.cloudSynced ? 'success' : 'none'
+        title: '已存本机，待上传',
+        icon: 'none'
       });
       wx.switchTab({ url: '/pages/index/index' });
     } catch (error) {
