@@ -5,21 +5,23 @@ cloud.init({
 
 const db = cloud.database();
 
-// 业务日期工具：统一按东八区（中国时区 UTC+8）划分"天/月"，作为唯一日期基准。
-// 避免 new Date().toISOString() 返回 UTC 日期导致中国时区 00:00-08:00 归属前一天/月（全局根因③）。
-// 采用"时间 +8h 后用 UTC 分量取值"技巧，使结果不受运行环境本地时区影响，
-// 保证云端与前端（用户手机）使用完全一致的日期基准。
+// 与小程序一致：北京时间 02:00 切换业务日期，按 UTC 分量读取避免容器时区影响。
 function getBusinessDate(date) {
-  const d = date ? new Date(date) : new Date();
-  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
-  const y = utc8.getUTCFullYear();
-  const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(utc8.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const timestamp = new Date(date === undefined ? Date.now() : date).getTime();
+  return new Date(timestamp + 6 * 3600000).toISOString().slice(0, 10);
 }
-
-function getBusinessMonth(date) {
-  return getBusinessDate(date).substring(0, 7);
+function getBusinessMonth(date) { return getBusinessDate(date).slice(0, 7); }
+function isDateLabel(date) {
+  return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+}
+function getRecordBusinessDate(record) {
+  if ((record.source === 'manual' || record.dateSource === 'manual') && isDateLabel(record.date)) return record.date;
+  const timestamp = meditationTimestamp(record.timestamp);
+  return Number.isFinite(timestamp) ? getBusinessDate(timestamp) : record.date;
+}
+function stableDocumentId(prefix, openid, key) {
+  return prefix + require('crypto').createHash('sha256').update(JSON.stringify([openid, key])).digest('hex');
 }
 
 // 云函数入口函数
@@ -42,6 +44,9 @@ exports.main = async (event, context) => {
       return await deleteMeditationRecord(openid, event.data);
     case "getUserRecords":
       return await getUserRecords(openid, event.date);
+    case "migrateBusinessDates":
+      if (openid) return { success: false, error: '仅支持云端运维调用' };
+      return await migrateBusinessDates(event);
     case "getUserStats":
       return await getUserStats(openid);
     case "getMonthlyStats":
@@ -77,67 +82,234 @@ exports.main = async (event, context) => {
   }
 };
 
+function databaseErrorText(error) {
+  return typeof error === 'string' ? error : [error && error.code, error && error.errCode,
+    error && error.message, error && error.errMsg].filter(value => value !== undefined).join(' ');
+}
+
+function isMissingCollection(error) {
+  const codes = [error && error.code, error && error.errCode].map(String);
+  // wx-server-sdk 的 -502005 专指集合不存在；通用请求失败码不能视为缺集合。
+  return codes.includes('-502005') || /\b(?:DATABASE_COLLECTION_NOT_EXIST|TCB_DB_COLLECTION_NOT_EXISTS)\b/i.test(databaseErrorText(error)) ||
+    /\bcollection\b(?:\s+["'`]?[\w.-]+["'`]?)?\s+(?:(?:does|is)\s+)?(?:not exists?|not found)\b|集合\s*(?:["'`]?[\w.-]+["'`]?)?\s*不存在/i.test(databaseErrorText(error));
+}
+
+function isExistingCollection(error) {
+  const text = databaseErrorText(error);
+  return /\b(?:DATABASE_COLLECTION_(?:ALREADY_)?EXISTS?|COLLECTION_ALREADY_EXISTS?|TCB_DB_COLLECTION_EXISTS)\b/i.test(text) ||
+    /\b(?:collection|table)\b[^\n]*\balready exists?\b|集合[^\n]*已存在/i.test(text);
+}
+
+async function optionalDocument(database, collection, id) {
+  try { return (await database.collection(collection).doc(id).get()).data || null; }
+  catch (error) {
+    // 文档不存在是首次写入的正常情况；集合不存在必须由调用方修复，不能伪装成空文档。
+    if (!isMissingCollection(error) && /\bDATABASE_DOCUMENT_NOT_EXIST\b|\bdocument\b(?!\.)[^\n]*(?:not exist|not found)|文档不存在/i.test(databaseErrorText(error))) return null;
+    throw error;
+  }
+}
+
+let meditationLockCollectionCreation;
+async function initializeMeditationLockCollection() {
+  if (!meditationLockCollectionCreation) {
+    meditationLockCollectionCreation = (async () => {
+      try {
+        // 仅服务端创建空辅助集合；不写样例、不设置或放宽客户端数据库权限。
+        await db.createCollection('meditation_locks');
+      } catch (error) {
+        // 不同云函数实例可能同时创建；只允许明确的“已存在”继续执行。
+        if (!isExistingCollection(error)) {
+          console.error('初始化静坐记录锁集合失败:', error);
+          throw deletionError('LOCK_COLLECTION_UNAVAILABLE', '云端保存暂不可用：无法初始化记录锁集合，请稍后重试或联系管理员');
+        }
+      }
+    })();
+  }
+  try { await meditationLockCollectionCreation; }
+  finally { meditationLockCollectionCreation = null; }
+}
+
+async function readMeditationLock(lockId) {
+  try { return await optionalDocument(db, 'meditation_locks', lockId); }
+  catch (error) {
+    if (!isMissingCollection(error)) throw error;
+    await initializeMeditationLockCollection();
+    // 创建成功（或被其他实例先创建）后重新读取，不能把仍然不可用的集合当成空锁。
+    return await optionalDocument(db, 'meditation_locks', lockId);
+  }
+}
+
+// 查询在事务外分页执行，事务内仅使用 doc API，兼容云开发各 SDK 版本。
+// 每次修改都推进用户 revision；快照读取期间发生任何写入时重读，避免丢累计统计。
+async function withMeditationSnapshot(openid, operation, dryRun = false) {
+  // 预览无需锁，也不能因缺少集合而创建任何云端数据。
+  if (dryRun) return operation(null,
+    await getMeditationDeletionRows(db, 'meditation_records', openid),
+    await getMeditationDeletionRows(db, 'user_stats', openid));
+  const lockId = stableDocumentId('lock_', openid, 'records');
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const before = await readMeditationLock(lockId);
+    const revision = before ? Number(before.revision) || 0 : 0;
+    const records = await getMeditationDeletionRows(db, 'meditation_records', openid);
+    const stats = await getMeditationDeletionRows(db, 'user_stats', openid);
+    try {
+      return await db.runTransaction(async transaction => {
+        const current = await optionalDocument(transaction, 'meditation_locks', lockId);
+        if ((current ? Number(current.revision) || 0 : 0) !== revision) {
+          throw deletionError('STALE_SNAPSHOT', '记录已变更，重新读取');
+        }
+        const result = await operation(transaction, records, stats);
+        if (!result || !result.duplicate) await transaction.collection('meditation_locks').doc(lockId).set({ data: {
+          ownerOpenid: openid, revision: revision + 1, updatedAt: new Date()
+        } });
+        return result;
+      });
+    } catch (error) {
+      if (error.code !== 'STALE_SNAPSHOT') throw error;
+    }
+  }
+  throw deletionError('RETRY_REQUIRED', '同步繁忙，请稍后重试');
+}
+
 // 记录冥想打卡（支持本地用户标识）
-async function recordMeditation(openid, data, localUserId = null) {
+async function recordMeditation(openid, data = {}, localUserId = null) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再记录' };
   try {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('打卡参数无效');
+    if (data.expectedOpenid !== undefined && data.expectedOpenid !== openid) {
+      return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变更，请切换回保存该记录时的账号后重试' };
+    }
     const now = new Date();
     const timestamp = data.timestamp === undefined ? now.getTime() : data.timestamp;
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > now.getTime()) {
       return { success: false, error: '打卡时间无效或晚于当前时间' };
     }
-    if (data.localId !== undefined && (typeof data.localId !== 'string' || !data.localId.trim())) {
+    const key = data.idempotencyKey || data.localId;
+    if (key !== undefined && (typeof key !== 'string' || !key.trim() || key.length > 200)) {
       return { success: false, code: 'INVALID_RECORD', error: '本地记录标识无效' };
     }
-    const dateStr = getBusinessDate(timestamp);
-    
-    // 创建打卡记录 - 支持本地用户标识映射
+    const duration = Number(data.duration || 0);
+    if (!Number.isInteger(duration) || duration < 1 || duration > 1440) throw new Error('静坐时长须为 1–1440 分钟的整数');
+    const source = data.source === 'manual' || data.dateSource === 'manual' ? 'manual' : 'timer';
+    const dateStr = source === 'manual' && data.date ? data.date : getBusinessDate(timestamp);
+    if (!isDateLabel(dateStr)) throw new Error('打卡日期无效');
     const record = {
-      _openid: openid,
-      date: dateStr,
-      timestamp: timestamp,
-      duration: data.duration || 0,
-      emotion: Array.isArray(data.emotion) ? data.emotion : [], // 情绪标签数组
-      experience: Array.isArray(data.experience) ? data.experience : (data.experience ? [data.experience] : []), // 体验记录ID数组，可能为空数组
-      createdAt: now,
-      updatedAt: now
+      _openid: openid, date: dateStr, timestamp, duration, source, businessDayVersion: 2,
+      emotion: Array.isArray(data.emotion) ? data.emotion : [],
+      experience: Array.isArray(data.experience) ? data.experience : (data.experience ? [data.experience] : []),
+      createdAt: now, updatedAt: now
     };
-    if (data.localId !== undefined) record.localId = data.localId;
-    
-    // 如果提供了本地用户ID，创建用户映射
-    if (localUserId) {
-      await createUserMapping(openid, localUserId);
+    if (key) {
+      record.localId = key;
+      record.idempotencyKey = key;
+      record._id = stableDocumentId('med_', openid, key);
     }
-    
-    // 插入记录
-    const result = await db.collection("meditation_records").add({
-      data: record
-    });
-    
-    // 更新用户统计
-    await updateUserStats(openid, dateStr, data.duration);
-    
-    return {
-      success: true,
-      data: {
-        recordId: result._id,
-        date: dateStr,
-        timestamp: timestamp
+    if (!record._id) record._id = stableDocumentId('med_', openid, require('crypto').randomBytes(16).toString('hex'));
+    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+      const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
+      // 成功后的重试即使跨过三天窗口，仍返回原结果；不再次写心得或累计统计。
+      if (existing) return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true };
+      if (source === 'manual') {
+        const today = getBusinessDate(now);
+        const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 2 * 86400000).toISOString().slice(0, 10);
+        if (dateStr < earliest || dateStr > today) throw deletionError('DATE_OUT_OF_RANGE', '只能记录最近三天（含今天）的静坐');
       }
-    };
-    
+      const { _id, ...document } = record;
+      await transaction.collection('meditation_records').doc(_id).set({ data: document });
+      await writeRebuiltStats(transaction, openid, statsRows, rebuildMeditationStats([...records, record]));
+      return { recordId: record._id, date: dateStr, timestamp, duplicate: false };
+    });
+    if (localUserId) await createUserMapping(openid, localUserId);
+    return { success: true, data: result };
   } catch (error) {
-    console.error("记录冥想打卡失败:", error);
-    return { success: false, error: error.message };
+    console.error('记录冥想打卡失败:', error);
+    return { success: false, code: error.code || error.errCode || 'RECORD_FAILED', error: error.message || error.errMsg || '云端保存失败，请稍后重试' };
   }
 }
 
+async function writeRebuiltStats(transaction, openid, rows, stats) {
+  if (rows.length) {
+    for (const row of rows) {
+      const result = await transaction.collection('user_stats').doc(row._id).update({
+        data: { ...stats, businessDayVersion: 2, monthlyStats: db.command.set(stats.monthlyStats) }
+      });
+      if (!result.stats || result.stats.updated !== 1) throw deletionError('STATS_UPDATE_FAILED', '更新统计失败，请重试');
+    }
+  } else {
+    // 同一用户并发写第一条记录时，同一个统计文档使事务冲突并自动重试。
+    await transaction.collection('user_stats').doc(stableDocumentId('stats_', openid, 'statistics')).set({ data: {
+      _openid: openid, ...stats, businessDayVersion: 2, createdAt: new Date()
+    } });
+  }
+}
+
+// 上线后可从云端控制台分批调用，重新归属旧记录及日/月/连续天数统计。
+// 返回 nextCursor，下一批带 afterId；仅云端运维调用，无客户端身份时才开放。
+function mergeDuplicateRecords(records) {
+  const canonical = [];
+  const byKey = new Map();
+  const duplicates = [];
+  for (const record of records) {
+    const keys = [record.localId, record.idempotencyKey].filter(Boolean);
+    const prior = keys.map(key => byKey.get(key)).find(Boolean);
+    if (prior) {
+      const experiences = Array.isArray(prior.experience) ? prior.experience : prior.experience ? [prior.experience] : [];
+      const incoming = Array.isArray(record.experience) ? record.experience : record.experience ? [record.experience] : [];
+      for (const experience of incoming) {
+        if (!experiences.some(existing => JSON.stringify(existing) === JSON.stringify(experience))) experiences.push(experience);
+      }
+      prior.experience = experiences;
+      duplicates.push({ recordId: record._id, keepRecordId: prior._id });
+      keys.forEach(key => byKey.set(key, prior));
+    } else {
+      const copy = { ...record };
+      if (Array.isArray(record.experience)) copy.experience = record.experience.slice();
+      canonical.push(copy);
+      keys.forEach(key => byKey.set(key, copy));
+    }
+  }
+  return { records: canonical, duplicates };
+}
+
+async function migrateBusinessDates(event) {
+  const dryRun = event.dryRun !== false;
+  let query = db.collection('meditation_records');
+  if (event.afterId) query = query.where({ _id: db.command.gt(event.afterId) });
+  const batch = await query.orderBy('_id', 'asc').limit(100).get();
+  const users = [];
+  for (const openid of new Set(batch.data.map(record => record._openid))) {
+    const summary = await withMeditationSnapshot(openid, async (transaction, records, stats) => {
+      const merged = mergeDuplicateRecords(records);
+      const dateChanges = merged.records.filter(record => record.date !== getRecordBusinessDate(record))
+        .map(record => ({ recordId: record._id, from: record.date, to: getRecordBusinessDate(record) }));
+      if (!dryRun) {
+        for (const record of merged.records) {
+          await transaction.collection('meditation_records').doc(record._id).update({ data: {
+            date: getRecordBusinessDate(record), businessDayVersion: 2,
+            ...(record.experience !== undefined ? { experience: record.experience } : {})
+          } });
+        }
+        for (const duplicate of merged.duplicates) {
+          await transaction.collection('meditation_records').doc(duplicate.recordId).remove();
+        }
+        await writeRebuiltStats(transaction, openid, stats, rebuildMeditationStats(merged.records));
+      }
+      return { openid, recordCount: records.length, dateChanges, duplicates: merged.duplicates,
+        resultingRecordCount: merged.records.length };
+    }, dryRun);
+    users.push(summary);
+  }
+  return { success: true, data: { dryRun, scannedRecords: batch.data.length, users,
+    nextCursor: batch.data.length === 100 ? batch.data[batch.data.length - 1]._id : null } };
+}
+
 function meditationTimestamp(value) {
-  const timestamp = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && value.trim()
-      ? (/^\d+$/.test(value) ? Number(value) : Date.parse(value))
-      : NaN;
-  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : NaN;
+  let timestamp = NaN;
+  if (typeof value === 'number') timestamp = value;
+  else if (typeof value === 'string' && /^\d+$/.test(value)) timestamp = Number(value);
+  else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) timestamp = Date.parse(value);
+  else if (value && typeof value.getTime === 'function') timestamp = value.getTime();
+  return Number.isSafeInteger(timestamp) && timestamp > 0 && Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
 }
 
 function deletionError(code, message) {
@@ -146,12 +318,12 @@ function deletionError(code, message) {
   return error;
 }
 
-// 在同一个事务快照中分页读取，避免默认查询条数上限造成累计统计被截断。
-async function getMeditationDeletionRows(transaction, collection, openid) {
+// 分页读取每位用户的记录；调用方用用户 revision 保障快照在写入事务时仍有效。
+async function getMeditationDeletionRows(database, collection, openid) {
   const rows = [];
   const pageSize = 100;
   while (true) {
-    const result = await transaction.collection(collection)
+    const result = await database.collection(collection)
       .where({ _openid: openid }).orderBy('_id', 'asc')
       .skip(rows.length).limit(pageSize).get();
     rows.push(...result.data);
@@ -160,6 +332,7 @@ async function getMeditationDeletionRows(transaction, collection, openid) {
 }
 
 function rebuildMeditationStats(records) {
+  records = mergeDuplicateRecords(records).records;
   const days = new Map();
   const monthlyStats = {};
   let totalDuration = 0;
@@ -168,9 +341,8 @@ function rebuildMeditationStats(records) {
   let latestTimestamp = -Infinity;
   for (const record of records) {
     const timestamp = meditationTimestamp(record.timestamp);
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(record.date || '')
-      ? record.date : Number.isFinite(timestamp) ? getBusinessDate(timestamp) : '';
-    if (!date) throw deletionError('INVALID_STORED_RECORD', '历史记录日期异常，暂时无法删除');
+    const date = getRecordBusinessDate(record);
+    if (!isDateLabel(date)) throw deletionError('INVALID_STORED_RECORD', '历史记录日期异常，暂时无法更新统计');
     const rawDuration = Number(record.duration);
     const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
     const month = date.substring(0, 7);
@@ -236,18 +408,16 @@ async function deleteMeditationRecord(openid, data = {}) {
     return { success: false, code: 'INVALID_RECORD', error: '缺少记录标识或打卡日期、时间' };
   }
   try {
-    const result = await db.runTransaction(async transaction => {
-      const records = await getMeditationDeletionRows(transaction, 'meditation_records', openid);
+    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
       // 新本地记录的备份可能失败，此时 localId 未命中不能降级为时间匹配，
       // 否则会误删云端恰好同一时间的另一条记录。仅旧缓存使用时间定位。
       const matches = records.filter(record => recordId
         ? record._id === recordId
         : localId ? record.localId === localId
-          : record.date === data.date && meditationTimestamp(record.timestamp) === timestamp);
+          : getRecordBusinessDate(record) === data.date && meditationTimestamp(record.timestamp) === timestamp);
       if (!matches.length) throw deletionError('RECORD_NOT_FOUND', '记录不存在或已被删除');
       if (matches.length !== 1) throw deletionError('AMBIGUOUS_RECORD', '存在多条匹配记录，请刷新记录后重试');
       const target = matches[0];
-      const statsRows = await getMeditationDeletionRows(transaction, 'user_stats', openid);
       const stats = rebuildMeditationStats(records.filter(record => record._id !== target._id));
 
       const removed = await transaction.collection('meditation_records').doc(target._id).remove();
@@ -257,18 +427,18 @@ async function deleteMeditationRecord(openid, data = {}) {
       if (statsRows.length) {
         for (const row of statsRows) {
           const updated = await transaction.collection('user_stats').doc(row._id).update({
-            data: { ...stats, monthlyStats: db.command.set(stats.monthlyStats) }
+            data: { ...stats, businessDayVersion: 2, monthlyStats: db.command.set(stats.monthlyStats) }
           });
           if (!updated.stats || updated.stats.updated !== 1) {
             throw deletionError('STATS_UPDATE_FAILED', '更新统计失败，请重试');
           }
         }
       } else {
-        await transaction.collection('user_stats').add({
-          data: { _openid: openid, ...stats, createdAt: new Date() }
+        await transaction.collection('user_stats').doc(stableDocumentId('stats_', openid, 'statistics')).set({
+          data: { _openid: openid, ...stats, businessDayVersion: 2, createdAt: new Date() }
         });
       }
-      return { recordId: target._id, date: target.date, timestamp: target.timestamp, stats };
+      return { recordId: target._id, date: getRecordBusinessDate(target), timestamp: target.timestamp, stats };
     });
     return { success: true, data: result };
   } catch (error) {
@@ -454,14 +624,11 @@ async function updateUserStats(openid, dateStr, duration) {
 // 获取用户某天的打卡记录
 async function getUserRecords(openid, date) {
   try {
-    const result = await db.collection("meditation_records")
-      .where({
-        _openid: openid,
-        date: date
-      })
-      .orderBy('timestamp', 'desc')
-      .get();
-    
+    const result = await getAllRecords(openid);
+    if (!result.success) return result;
+    result.data = result.data.map(record => ({ ...record, date: getRecordBusinessDate(record) }))
+      .filter(record => record.date === date);
+
     return {
       success: true,
       data: result.data
@@ -474,6 +641,7 @@ async function getUserRecords(openid, date) {
 
 // 获取用户统计信息
 async function getUserStats(openid) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再获取统计' };
   try {
     const result = await db.collection("user_stats")
       .where({
@@ -481,22 +649,18 @@ async function getUserStats(openid) {
       })
       .get();
     
-    if (result.data.length === 0) {
-      return {
-        success: true,
-        data: {
-          totalDays: 0,
-          totalCount: 0,
-          totalDuration: 0,
-          currentStreak: 0,
-          longestStreak: 0,
-          monthlyStats: {}
-        }
-      };
+    let userStats = result.data[0] || {};
+    // 历史统计尚未迁移时，读取也必须按 02:00 重算；不等待用户下一次打卡。
+    // 只读回退保留勋章和创建信息，不触发迁移写入或改变原始记录。
+    if (userStats.businessDayVersion !== 2) {
+      const records = await getAllRecords(openid);
+      if (!records.success) return records;
+      userStats = { ...userStats, ...rebuildMeditationStats(records.data) };
     }
-    
-    const userStats = result.data[0];
-    
+    const latestDate = userStats.lastCheckinDate || userStats.lastCheckin || '';
+    const today = getBusinessDate();
+    const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
     // 确保返回的数据包含所有必要的字段
     return {
       success: true,
@@ -504,12 +668,12 @@ async function getUserStats(openid) {
         totalDays: userStats.totalDays || 0,
         totalCount: userStats.totalCount || 0,
         totalDuration: userStats.totalDuration || 0,
-        dailyTotalDuration: userStats.dailyTotalDuration || 0,
-        monthlyTotalDuration: userStats.monthlyTotalDuration || 0,
+        dailyTotalDuration: latestDate === today ? userStats.dailyTotalDuration || 0 : 0,
+        monthlyTotalDuration: latestDate.slice(0, 7) === today.slice(0, 7) ? userStats.monthlyTotalDuration || 0 : 0,
         longestCheckInDays: userStats.longestCheckInDays || 0,
-        currentStreak: userStats.currentStreak || 0,
+        currentStreak: latestDate >= yesterday ? userStats.currentStreak || 0 : 0,
         longestStreak: userStats.longestStreak || 0,
-        lastCheckinDate: userStats.lastCheckinDate || '',
+        lastCheckinDate: latestDate,
         lastCheckinDuration: userStats.lastCheckinDuration || 0,
         lastCheckin: userStats.lastCheckin || '',
         monthlyStats: userStats.monthlyStats || {},
@@ -600,17 +764,11 @@ async function getRankings(period) {
 // 获取月度统计
 async function getMonthlyStats(openid, month) {
   try {
-    const result = await db.collection("meditation_records")
-      .where({
-        _openid: openid,
-        date: db.command.regex({
-          regexp: `^${month}`,
-          options: 'i'
-        })
-      })
-      .orderBy('date', 'desc')
-      .get();
-    
+    const result = await getAllRecords(openid);
+    if (!result.success) return result;
+    result.data = result.data.map(record => ({ ...record, date: getRecordBusinessDate(record) }))
+      .filter(record => record.date && record.date.slice(0, 7) === month);
+
     // 按日期分组统计
     const dailyStats = {};
     result.data.forEach(record => {
@@ -646,28 +804,44 @@ async function getMonthlyStats(openid, month) {
 async function getAllRecords(openid) {
   if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再获取记录' };
   try {
-    const records = [];
-    const pageSize = 100;
-    while (true) {
-      // 显式分页绕过默认查询上限；同时间戳以记录 ID 排序，保持分页顺序稳定。
-      const result = await db.collection("meditation_records")
-        .where({ _openid: openid })
-        .orderBy('timestamp', 'desc')
-        .orderBy('_id', 'asc')
-        .skip(records.length)
-        .limit(pageSize)
-        .get();
-      records.push(...result.data);
-      if (result.data.length < pageSize) break;
-    }
-    
-    return {
-      success: true,
-      data: records
+    const lockId = stableDocumentId('lock_', openid, 'records');
+    const readRevision = async () => {
+      try {
+        const lock = await optionalDocument(db, 'meditation_locks', lockId);
+        return lock ? Number(lock.revision) || 0 : 0;
+      } catch (error) {
+        // 兼容旧环境尚未有锁集合：读记录不能创建集合或吞掉权限/网络错误。
+        if (isMissingCollection(error)) return null;
+        throw error;
+      }
     };
+    const pageSize = 100;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = await readRevision();
+      const records = [];
+      while (true) {
+        // 排序只保证同一快照的分页顺序；跨页发生增删时须丢弃本轮并完整重读。
+        const result = await db.collection("meditation_records")
+          .where({ _openid: openid })
+          .orderBy('timestamp', 'desc')
+          .orderBy('_id', 'asc')
+          .skip(records.length)
+          .limit(pageSize)
+          .get();
+        records.push(...result.data);
+        if (result.data.length < pageSize) break;
+      }
+      if (before !== await readRevision()) continue;
+      return {
+        success: true,
+        data: mergeDuplicateRecords(records).records.map(record => ({ ...record, date: getRecordBusinessDate(record) }))
+      };
+    }
+    throw deletionError('RETRY_REQUIRED', '记录正在更新，请稍后刷新');
   } catch (error) {
     console.error("获取所有记录失败:", error);
-    return { success: false, error: error.message };
+    return { success: false, ...(error.code || error.errCode ? { code: error.code || error.errCode } : {}),
+      error: error.message || error.errMsg || '获取记录失败，请稍后刷新' };
   }
 }
 
@@ -688,9 +862,20 @@ async function saveExperienceRecord(openid, record, localUserId = null) {
     };
     
     // 插入到体验记录集合
-    const result = await db.collection("experience_records").add({
-      data: experienceRecord
-    });
+    let result;
+    if (record.uniqueId) {
+      const id = stableDocumentId('exp_', openid, String(record.uniqueId));
+      result = await db.runTransaction(async transaction => {
+        const existing = await optionalDocument(transaction, 'experience_records', id);
+        if (existing) return { _id: existing._id };
+        await transaction.collection('experience_records').doc(id).set({
+          data: { ...experienceRecord, uniqueId: String(record.uniqueId) }
+        });
+        return { _id: id };
+      });
+    } else {
+      result = await db.collection('experience_records').add({ data: experienceRecord });
+    }
     
     console.log(`✅ 体验记录保存成功: recordId=${result._id}`);
     
@@ -881,7 +1066,7 @@ async function updateMeditationRecord(openid, recordId, experience = "") {
       success: true,
       data: {
         recordId: recordId,
-        date: record.date,
+        date: getRecordBusinessDate(record),
         experience: updatedExperience
       }
     };
@@ -1085,69 +1270,32 @@ async function getRankingSnapshot(event, context) {
 }
 
 // 更新用户勋章信息
-async function updateUserBadges(openid, badges) {
+async function updateUserBadges(openid, badges = {}) {
+  if (!openid) return { success: false, error: '请先登录' };
   try {
-    console.log('更新用户勋章信息:', { openid, badges });
-    
-    const userStatsRef = db.collection("user_stats").where({ _openid: openid });
-    const userStats = await userStatsRef.get();
-    
-    if (userStats.data.length === 0) {
-      // 用户不存在，创建新的用户统计记录
-      const now = new Date();
-      await db.collection("user_stats").add({
-        data: {
-          _openid: openid,
-          badges: badges,
-          totalDays: 0,
-          totalCount: 0,
-          totalDuration: 0,
-          dailyTotalDuration: 0,
-          monthlyTotalDuration: 0,
-          longestCheckInDays: 0,
-          currentStreak: 0,
-          longestStreak: 0,
-          lastCheckinDate: '',
-          lastCheckinDuration: 0,
-          lastCheckin: '',
-          monthlyStats: {},
-          createdAt: now,
-          updatedAt: now
+    await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+      const existing = Object.assign({}, ...statsRows.map(row => row.badges || {}));
+      const incoming = Object.fromEntries(Object.entries(badges || {}).filter(([, badge]) => badge && badge.unlockTime));
+      // 保留已颁发勋章及原颁发时间；跨设备上报只能补充。
+      const merged = { ...incoming, ...existing };
+      if (!statsRows.length) {
+        await transaction.collection('user_stats').doc(stableDocumentId('stats_', openid, 'statistics')).set({ data: {
+          _openid: openid, ...rebuildMeditationStats(records), badges: merged,
+          businessDayVersion: 2, createdAt: new Date()
+        } });
+      } else {
+        for (const row of statsRows) {
+          await transaction.collection('user_stats').doc(row._id).update({ data: {
+            badges: db.command.set(merged), updatedAt: new Date()
+          } });
         }
-      });
-    } else {
-      // 更新现有用户的勋章信息
-      // ⚠️ 必须做合并（只增不减），不能整字段覆盖：
-      // 前端 syncBadgesToCloud 只发送「当前本地已解锁」子集，若此处用 badges 整体覆盖，
-      // 会丢失其他设备/历史已颁发的勋章（如 single_duration 类无法靠统计重算），违反「颁发后终身生效」。
-      // 合并策略：以云端已有 badges 为基准，叠加本次上报的已解锁项（已解锁状态不会被撤销）。
-      const existingBadges = userStats.data[0].badges || {};
-      const mergedBadges = { ...existingBadges, ...badges };
-      await userStatsRef.update({
-        data: {
-          badges: mergedBadges,
-          updatedAt: new Date()
-        }
-      });
-      console.log('✅ 勋章信息已合并更新（保留历史已解锁勋章）:', {
-        existing: Object.keys(existingBadges).length,
-        incoming: Object.keys(badges).length,
-        merged: Object.keys(mergedBadges).length
-      });
-    }
-    
-    console.log('✅ 用户勋章信息更新成功');
-    return {
-      success: true,
-      data: { updatedBadges: Object.keys(badges).length }
-    };
-    
+      }
+      return { updatedBadges: Object.keys(incoming).length };
+    });
+    return { success: true, data: { updatedBadges: Object.keys(badges || {}).length } };
   } catch (error) {
     console.error('更新用户勋章信息失败:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
@@ -1255,7 +1403,7 @@ async function recomputeUserBadges(event) {
     res.data.forEach(r => {
       const oid = r._openid;
       if (!recordsByUser[oid]) recordsByUser[oid] = [];
-      recordsByUser[oid].push({ date: r.date, duration: Number(r.duration) || 0 });
+      recordsByUser[oid].push({ date: getRecordBusinessDate(r), duration: Number(r.duration) || 0 });
     });
     if (res.data.length < BATCH) break;
     skip += BATCH;
@@ -1313,7 +1461,7 @@ async function recomputeUserBadges(event) {
         p = dd;
       }
       const lastDay = distinctDays.length ? distinctDays[distinctDays.length - 1] : null;
-      const todayNum = Math.floor((Date.now() + 8 * 3600 * 1000) / 86400000); // 东八区业务日期
+      const todayNum = Math.floor((Date.now() + 6 * 3600 * 1000) / 86400000); // 东八区业务日期
       trailingRun = (lastDay !== null && lastDay >= todayNum - 1) ? run : 0;
     }
 

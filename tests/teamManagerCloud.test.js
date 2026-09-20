@@ -550,13 +550,13 @@ test('checkin queries reject arbitrary users and outsiders before reading record
   assert.equal((await app.call('getTeamMembersCheckinData', { memberOpenids: ['member'] })).success, true);
 });
 
-test('monthly counts include every record and use the same UTC+8 month as meditation records', async () => {
+test('monthly counts include every record and use the Beijing 02:00 business month', async () => {
   const records = Array.from({ length: 125 }, (_, index) => ({ _id: `record-${index}`, _openid: 'member', date: '2026-09-01' }));
   records.push({ _id: 'previous-month', _openid: 'member', date: '2026-08-31' });
   const app = harness({ teams: [team({ members: ['owner', 'member'] })], meditation_records: records }, { now: Date.parse('2026-08-31T17:00:00Z') });
   const result = await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: ['member'] });
-  assert.deepEqual(result.data.member, { monthlyCount: 125, totalCount: 126 });
-  assert.ok(app.reads.filter(read => read.name === 'meditation_records').every(read => read.action === 'count'));
+  assert.deepEqual(result.data.member, { monthlyCount: 1, totalCount: 126 });
+  assert.equal(app.reads.filter(read => read.name === 'meditation_records').length, 2);
 });
 
 test('weekly records paginate and retain actual numeric/ISO timestamps and recorded dates', async () => {
@@ -570,7 +570,7 @@ test('weekly records paginate and retain actual numeric/ISO timestamps and recor
   assert.equal(result.data.records[0].timestamp, NOW);
   assert.equal(result.data.records[0].date, '2026-09-17');
   assert.equal(result.data.records[1].timestamp, NOW - 60000);
-  assert.equal(result.data.records[125].timestamp, Date.parse('2026-09-16T00:00:00+08:00'));
+  assert.equal(result.data.records[125].timestamp, Date.parse('2026-09-16T02:00:00+08:00'));
   assert.deepEqual(app.reads.filter(read => read.name === 'meditation_records').map(read => read.offset), [0, 100]);
 });
 
@@ -610,7 +610,7 @@ test('practice settings persist independently per team; only its creator can edi
     assert.equal(teams.find(row => row._id === first.data.teamId).dailyGoalMinutes, 30);
     assert.equal(teams.find(row => row._id === secondId).dailyGoalMinutes, 45);
     assert.equal(teams.find(row => row._id === secondId).practiceStartDate, '2026-09-12');
-    assert.equal(teams.find(row => row._id === secondId).dayBoundaryHour, 4);
+    assert.equal(teams.find(row => row._id === secondId).dayBoundaryHour, 2);
   }
   const info = await app.call('getTeamInfo', { teamId: secondId });
   assert.equal(info.data.creator, 'owner');
@@ -621,8 +621,8 @@ test('practice settings persist independently per team; only its creator can edi
   assert.equal(saved.practiceStartDate, '2026-09-12');
 });
 
-test('practice settings validate actual calendar dates and integer goals against the current 04:00 practice day', async () => {
-  const beforeReset = Date.parse('2026-09-18T03:59:59+08:00');
+test('practice settings validate actual calendar dates and integer goals against the current 02:00 practice day', async () => {
+  const beforeReset = Date.parse('2026-09-18T01:59:59+08:00');
   const app = harness({ teams: [team()] }, { now: beforeReset });
   for (const practiceStartDate of ['2026-09-18', '2026-02-29', '2026-04-31', '2026-00-01', '2026-13-01', '2026-9-1', '', 1]) {
     assert.equal((await app.call('createTeam', { name: '日期校验', practiceStartDate })).success, false, String(practiceStartDate));
@@ -637,7 +637,7 @@ test('practice settings validate actual calendar dates and integer goals against
   const defaults = await app.call('createTeam', { name: '默认设置' });
   assert.equal(defaults.data.team.practiceStartDate, null);
   assert.equal(defaults.data.team.dailyGoalMinutes, null);
-  const afterReset = harness({}, { now: Date.parse('2026-09-18T04:00:00+08:00') });
+  const afterReset = harness({}, { now: Date.parse('2026-09-18T02:00:00+08:00') });
   assert.equal((await afterReset.call('createTeam', { name: '边界当天', practiceStartDate: '2026-09-18', dailyGoalMinutes: 1 })).success, true);
 });
 
@@ -682,8 +682,8 @@ test('new teams may omit practice settings and the creator may set or clear them
 
 test('legacy teams derive defaults from their creation practice day without being limited by old creator reservations', async () => {
   const app = harness({ teams: [
-    team({ createdAt: '2026-09-02T03:59:59+08:00' }),
-    team({ _id: 'after-reset', name: '四点创建', createdAt: '2026-09-02T04:00:00+08:00' }),
+    team({ createdAt: '2026-09-02T01:59:59+08:00' }),
+    team({ _id: 'after-reset', name: '两点创建', createdAt: '2026-09-02T02:00:00+08:00' }),
     { _id: '_old_creator_reservation', isActive: false, lockField: 'creator', targetTeamId: 'team' }
   ] });
   const before = await app.call('getTeamInfo', { teamId: 'team' });
@@ -724,9 +724,9 @@ test('practice report sums same-day sessions, keeps today separate, and counts q
   assert.equal(result.success, true);
   const report = result.data;
   assert.equal(report.businessDate, '2026-09-17');
-  assert.equal(report.nextResetAt, Date.parse('2026-09-18T04:00:00+08:00'));
+  assert.equal(report.nextResetAt, Date.parse('2026-09-18T02:00:00+08:00'));
   assert.deepEqual(report.settings, { practiceStartDate: '2026-09-14', effectivePracticeStartDate: '2026-09-14',
-    hasPracticeStartDate: true, dailyGoalMinutes: 20, dayBoundaryHour: 4 });
+    hasPracticeStartDate: true, dailyGoalMinutes: 20, dayBoundaryHour: 2 });
   assert.deepEqual(report.history, { startDate: '2026-09-14', endDate: '2026-09-16', totalDays: 3 });
   assert.deepEqual(report.summary, { memberCount: 3, notPracticedCount: 1, practicedCount: 2, belowGoalCount: 1, qualifiedCount: 1 });
   assert.deepEqual(report.overview, { memberCount: 3, totalPracticeCount: 7, activeMemberCount: 2, activityRate: 67 });
@@ -751,7 +751,7 @@ test('practice report sums same-day sessions, keeps today separate, and counts q
 test('teams without a goal show actual activity since creation without inventing qualified or unmet days', async () => {
   const todayTimestamp = Date.parse('2026-09-17T05:30:00+08:00');
   const app = harness({ teams: [team({ members: ['owner', 'member', 'absent'],
-    createdAt: '2026-09-15T03:59:59+08:00', practiceStartDate: null, dailyGoalMinutes: null })], meditation_records: [
+    createdAt: '2026-09-15T01:59:59+08:00', practiceStartDate: null, dailyGoalMinutes: null })], meditation_records: [
     practiceRecord('start-day', 'owner', '2026-09-14', 3),
     practiceRecord('history-second', 'owner', '2026-09-14', 7),
     practiceRecord('older-known-time', 'owner', '2026-09-16', 4, '2026-09-16T22:30:00+08:00'),
@@ -768,7 +768,7 @@ test('teams without a goal show actual activity since creation without inventing
   assert.equal(result.success, true);
   const report = result.data;
   assert.deepEqual(report.settings, { practiceStartDate: null, dailyGoalMinutes: null,
-    effectivePracticeStartDate: '2026-09-14', hasPracticeStartDate: false, dayBoundaryHour: 4 });
+    effectivePracticeStartDate: '2026-09-14', hasPracticeStartDate: false, dayBoundaryHour: 2 });
   assert.deepEqual(report.history, { startDate: '2026-09-14', endDate: '2026-09-16', totalDays: 3 });
   assert.deepEqual(report.summary, { memberCount: 3, practicedCount: 1, notPracticedCount: 2, belowGoalCount: 0, qualifiedCount: 0 });
   assert.deepEqual(report.overview, { memberCount: 3, totalPracticeCount: 7, activeMemberCount: 1, activityRate: 33 });
@@ -803,12 +803,12 @@ test('teams without a goal show actual activity since creation without inventing
   assert.equal(withGoal.members[0].cumulativeMinutes, owner.cumulativeMinutes);
 });
 
-test('04:00 boundaries include next-calendar-day early records and prioritize numeric, ISO and numeric-string timestamps', async () => {
-  const before = Date.parse('2026-09-18T03:59:59.999+08:00');
-  const exact = Date.parse('2026-09-18T04:00:00+08:00');
+test('02:00 boundaries include next-calendar-day early records and prioritize numeric, ISO and numeric-string timestamps', async () => {
+  const before = Date.parse('2026-09-18T01:59:59.999+08:00');
+  const exact = Date.parse('2026-09-18T02:00:00+08:00');
   const records = [
-    practiceRecord('previous-day', 'owner', '2026-09-17', 11, Date.parse('2026-09-17T03:59:59.999+08:00')),
-    practiceRecord('day-start', 'owner', 'wrong-date', 7, '2026-09-17T04:00:00+08:00'),
+    practiceRecord('previous-day', 'owner', '2026-09-17', 11, Date.parse('2026-09-17T01:59:59.999+08:00')),
+    practiceRecord('day-start', 'owner', 'wrong-date', 7, '2026-09-17T02:00:00+08:00'),
     practiceRecord('next-calendar-early', 'owner', '2026-09-18', 13, String(before)),
     practiceRecord('at-reset', 'owner', '2026-09-18', 5, exact),
     practiceRecord('date-only', 'owner', '2026-09-16', 9),
@@ -833,7 +833,7 @@ test('04:00 boundaries include next-calendar-day early records and prioritize nu
   assert.equal(atReport.members[0].qualifiedDays, 2);
   assert.equal(atReport.members[0].practiceDays, 2);
   assert.equal(atReport.history.totalDays, 2);
-  assert.equal(atReport.nextResetAt, Date.parse('2026-09-19T04:00:00+08:00'));
+  assert.equal(atReport.nextResetAt, Date.parse('2026-09-19T02:00:00+08:00'));
 });
 
 test('starting today has zero historical days, and malformed durations/dates or future timestamps cannot add practice', async () => {
@@ -870,7 +870,7 @@ test('practice reports require membership and scope reads to current members wit
   assert.deepEqual(report.data.members.map(member => member.openid), ['owner', 'current']);
   for (const read of allowed.reads.filter(read => read.name === 'meditation_records')) {
     assert.deepEqual(read.filter._openid.inValues, ['owner', 'current']);
-    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'date', 'duration', 'timestamp']);
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'date', 'dateSource', 'duration', 'source', 'timestamp']);
   }
 });
 
@@ -926,7 +926,7 @@ test('fractional session sums meet an exact goal without rounding genuinely insu
 
 test('ISO timestamps without a timezone use the legacy date instead of the cloud runtime timezone', async () => {
   const app = harness({ teams: [team({ practiceStartDate: '2026-09-16' })], meditation_records: [
-    practiceRecord('timezone-missing', 'owner', '2026-09-16', 20, '2026-09-17T03:00:00')
+    practiceRecord('timezone-missing', 'owner', '2026-09-16', 20, '2026-09-17T01:00:00')
   ] });
   const report = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
   assert.equal(report.members[0].todayMinutes, 0);
@@ -1027,7 +1027,7 @@ test('history details agree with report counts and identify each unpracticed or 
   }
   assert.equal(JSON.stringify(details).includes('private'), false);
   for (const read of app.reads.filter(read => read.name === 'meditation_records')) {
-    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'date', 'duration', 'timestamp']);
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'date', 'dateSource', 'duration', 'source', 'timestamp']);
     assert.deepEqual(read.filter._openid.inValues.slice().sort(), ['absent', 'member', 'owner']);
   }
   for (const read of app.reads.filter(read => read.name === 'users')) {
@@ -1035,14 +1035,14 @@ test('history details agree with report counts and identify each unpracticed or 
   }
 });
 
-test('history details honor the 04:00 boundary, timestamp precedence and compensated sums without including today', async () => {
-  const boundary = Date.parse('2026-09-18T04:00:00+08:00');
+test('history details honor the 02:00 boundary, timestamp precedence and compensated sums without including today', async () => {
+  const boundary = Date.parse('2026-09-18T02:00:00+08:00');
   const records = [
     practiceRecord('early', 'owner', '2026-09-18', 12, String(boundary - 1)),
-    practiceRecord('same-practice-day', 'owner', 'wrong-date', 7.99, '2026-09-17T04:00:00+08:00'),
+    practiceRecord('same-practice-day', 'owner', 'wrong-date', 7.99, '2026-09-17T02:00:00+08:00'),
     practiceRecord('today', 'owner', '2026-09-17', 1, boundary),
     practiceRecord('future', 'member', '2026-09-17', 100, boundary + 1),
-    practiceRecord('timezone-missing', 'owner', '2026-09-16', 19.99, '2026-09-17T03:00:00'),
+    practiceRecord('timezone-missing', 'owner', '2026-09-16', 19.99, '2026-09-17T01:00:00'),
     practiceRecord('tiny-shortfall', 'absent', '2026-09-17', 19.999999)
   ];
   for (let index = 0; index < 100; index++) records.push(practiceRecord(`fraction-${index}`, 'member', '2026-09-17', 0.2));
@@ -1102,7 +1102,7 @@ test('history detail pagination is stable across same-day members, sparse filter
 
 test('history details normalize goal filters for goal-free teams and use the effective creation-day start', async () => {
   const app = harness({ teams: [team({ members: ['owner', 'member'], dailyGoalMinutes: null,
-    practiceStartDate: null, createdAt: '2026-09-15T03:59:59+08:00' })], meditation_records: [
+    practiceStartDate: null, createdAt: '2026-09-15T01:59:59+08:00' })], meditation_records: [
     practiceRecord('first', 'owner', '2026-09-14', 5),
     practiceRecord('last', 'member', '2026-09-16', 1),
     practiceRecord('too-early', 'owner', '2026-09-13', 5)
@@ -1241,7 +1241,7 @@ test('monthly history narrows report and detail counts while retaining today and
 
 test('monthly history clamps valid old or future months and preserves creation-date fallback for goal-free teams', async () => {
   const app = harness({ teams: [team({ practiceStartDate: null, dailyGoalMinutes: null,
-    createdAt: '2026-08-31T03:59:59+08:00' })], meditation_records: [
+    createdAt: '2026-08-31T01:59:59+08:00' })], meditation_records: [
     practiceRecord('aug', 'owner', '2026-08-30', 1),
     practiceRecord('sep', 'owner', '2026-09-02', 2)
   ] });
@@ -1268,12 +1268,12 @@ test('monthly history clamps valid old or future months and preserves creation-d
 
 test('monthly windows include leap days and year-end and can have zero elapsed days in the current month', async () => {
   for (const [now, start, month, expected] of [
-    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2027-12', ['2027-12-31', '2027-12-31', 1]],
-    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-01', ['2028-01-01', '2028-01-31', 31]],
-    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-02', ['2028-02-01', '2028-02-29', 29]],
-    ['2028-03-01T04:00:00+08:00', '2027-12-31', '2028-03', ['2028-03-01', '2028-02-29', 0]],
-    ['2027-03-01T04:00:00+08:00', '2027-02-01', '2027-02', ['2027-02-01', '2027-02-28', 28]],
-    ['2028-03-01T04:00:00+08:00', '2028-02-29', '2028-02', ['2028-02-29', '2028-02-29', 1]]
+    ['2028-03-01T02:00:00+08:00', '2027-12-31', '2027-12', ['2027-12-31', '2027-12-31', 1]],
+    ['2028-03-01T02:00:00+08:00', '2027-12-31', '2028-01', ['2028-01-01', '2028-01-31', 31]],
+    ['2028-03-01T02:00:00+08:00', '2027-12-31', '2028-02', ['2028-02-01', '2028-02-29', 29]],
+    ['2028-03-01T02:00:00+08:00', '2027-12-31', '2028-03', ['2028-03-01', '2028-02-29', 0]],
+    ['2027-03-01T02:00:00+08:00', '2027-02-01', '2027-02', ['2027-02-01', '2027-02-28', 28]],
+    ['2028-03-01T02:00:00+08:00', '2028-02-29', '2028-02', ['2028-02-29', '2028-02-29', 1]]
   ]) {
     const app = harness({ teams: [team({ practiceStartDate: start })], meditation_records: [
       practiceRecord('month-end', 'owner', expected[1], 5),
@@ -1292,8 +1292,8 @@ test('monthly windows include leap days and year-end and can have zero elapsed d
   }
 });
 
-test('month availability changes at 04:00 with prior-month early-morning sessions and today kept separate', async () => {
-  const boundary = Date.parse('2026-09-01T04:00:00+08:00');
+test('month availability changes at 02:00 with prior-month early-morning sessions and today kept separate', async () => {
+  const boundary = Date.parse('2026-09-01T02:00:00+08:00');
   const initial = { teams: [team({ practiceStartDate: '2026-08-30' })], meditation_records: [
     practiceRecord('aug-early', 'owner', '2026-09-01', 10, boundary - 1),
     practiceRecord('sep-start', 'owner', '2026-08-31', 5, boundary)
@@ -1393,16 +1393,16 @@ test('member practice records require active membership for both requester and t
 });
 
 test('member practice records match report business dates and accepted durations without exposing journal content', async () => {
-  const numericTimestamp = Date.parse('2026-09-17T04:00:00+08:00');
+  const numericTimestamp = Date.parse('2026-09-17T02:00:00+08:00');
   const app = harness({ teams: [team({ members: ['owner', 'member'], practiceStartDate: '2026-09-16' })], users: [
     { _id: 'user-member', _openid: 'member', nickName: '成员昵称', avatarUrl: 'cloud://member', secret: 'profile secret' }
   ], meditation_records: [
-    practiceRecord('before-boundary', 'member', '2026-09-17', '12.5', '2026-09-17T03:59:59+08:00'),
+    practiceRecord('before-boundary', 'member', '2026-09-17', '12.5', '2026-09-17T01:59:59+08:00'),
     { ...practiceRecord('at-boundary', 'member', '2026-09-01', 3, String(numericTimestamp)), source: 'bijing' },
     practiceRecord('legacy', 'member', '2026-09-16', 5),
-    practiceRecord('invalid-timezone', 'member', '2026-09-16', 7, '2026-09-17T03:00:00'),
+    practiceRecord('invalid-timezone', 'member', '2026-09-16', 7, '2026-09-17T01:00:00'),
     practiceRecord('today-now', 'member', 'wrong-date', 0.2, NOW),
-    practiceRecord('before-start', 'member', '2026-09-16', 100, '2026-09-16T03:59:59+08:00'),
+    practiceRecord('before-start', 'member', '2026-09-16', 100, '2026-09-16T01:59:59+08:00'),
     practiceRecord('future-time', 'member', '2026-09-17', 100, NOW + 1),
     practiceRecord('future-date', 'member', '2026-09-18', 100),
     practiceRecord('bad-date', 'member', '2026-02-30', 100),
@@ -1426,7 +1426,7 @@ test('member practice records match report business dates and accepted durations
   ]);
   for (const read of app.reads.filter(read => read.name === 'meditation_records')) {
     assert.equal(read.filter._openid, 'member');
-    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', 'date', 'duration', 'source', 'timestamp']);
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', 'date', 'dateSource', 'duration', 'source', 'timestamp']);
   }
   assert.equal(JSON.stringify(result).includes('private'), false);
   const report = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
@@ -1436,7 +1436,7 @@ test('member practice records match report business dates and accepted durations
 });
 
 test('member records use the effective team creation date and keep empty records with profile fallback', async () => {
-  const app = harness({ teams: [team({ members: ['member'], createdAt: '2026-09-17T03:59:59+08:00', practiceStartDate: null })], meditation_records: [
+  const app = harness({ teams: [team({ members: ['member'], createdAt: '2026-09-17T01:59:59+08:00', practiceStartDate: null })], meditation_records: [
     practiceRecord('old', 'member', '2026-09-15', 10)
   ] });
   const result = await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'member' });
@@ -1476,4 +1476,134 @@ test('member record database failures are returned as errors instead of an empty
     assert.match(result.error, /unavailable/);
     assert.equal(app.writes.length, 0);
   }
+});
+
+test('only the authenticated creator may remove a current non-creator member', async () => {
+  for (const [viewer, target] of [['member', 'third'], ['outsider', 'member'], ['owner', 'owner'], ['owner', 'missing'], ['', 'member']]) {
+    const app = harness({ teams: [team({ members: ['owner', 'member', 'third'], memberCount: 3 })] });
+    const response = await app.call('removeTeamMember', { teamId: 'team', memberOpenid: target }, viewer, { openid: 'owner' });
+    assert.equal(response.success, false, `${viewer} -> ${target}`);
+    assert.equal(app.writes.length, 0);
+    assert.equal(app.stored.teams[0].memberCount, 3);
+  }
+});
+
+test('removing a member changes roster and relation atomically while retaining personal records', async () => {
+  const app = harness({ teams: [team({ members: ['owner', 'member', 'member', 'third'], memberCount: 99 })],
+    team_members: [{ _id: 'team_member', teamId: 'team', openid: 'member' }],
+    meditation_records: [{ _id: 'private-record', _openid: 'member', date: '2026-09-17', duration: 20 }] });
+  const result = await app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'member' });
+  assert.deepEqual(result.data, { teamId: 'team', memberOpenid: 'member', members: ['owner', 'third'], memberCount: 2 });
+  assert.deepEqual(app.stored.teams[0].members, ['owner', 'third']);
+  assert.equal(app.stored.teams[0].memberCount, 2);
+  assert.equal(app.stored.team_members.length, 0);
+  assert.equal(app.stored.meditation_records.length, 1);
+  assert.ok(app.writes.every(write => write.inTransaction));
+  assert.equal((await app.call('getTeamPracticeReport', { teamId: 'team' }, 'member')).success, false);
+  assert.equal((await app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'member' })).success, false);
+  assert.equal(app.stored.teams[0].memberCount, 2);
+});
+
+test('concurrent removals and leaves never double-decrement or lose another member update', async () => {
+  for (const sameMember of [false, true]) {
+    const app = harness({ teams: [team({ members: ['owner', 'member', 'third'], memberCount: 3 })] });
+    const results = await Promise.all([
+      app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'member' }),
+      app.call('removeTeamMember', { teamId: 'team', memberOpenid: sameMember ? 'member' : 'third' }),
+      app.call('leaveTeam', { teamId: 'team' }, 'member')
+    ]);
+    assert.ok(results.some(result => result.success));
+    assert.deepEqual(app.stored.teams[0].members, sameMember ? ['owner', 'third'] : ['owner']);
+    assert.equal(app.stored.teams[0].memberCount, sameMember ? 2 : 1);
+  }
+});
+
+test('a removal transaction rollback keeps both membership and relation intact', async () => {
+  const initial = { teams: [team({ members: ['owner', 'member'], memberCount: 2 })],
+    team_members: [{ _id: 'team_member', teamId: 'team', openid: 'member' }] };
+  for (const fail of ['team_members:remove', 'commit']) {
+    const app = harness(initial, { fail });
+    assert.equal((await app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'member' })).success, false);
+    assert.deepEqual(app.stored.teams, initial.teams);
+    assert.deepEqual(app.stored.team_members, initial.team_members);
+  }
+});
+
+test('weekly and monthly member APIs use timestamp business dates across a week and month boundary', async () => {
+  const app = harness({ teams: [team()], meditation_records: [
+    { _id: 'early', _openid: 'owner', date: '2026-09-01', timestamp: '2026-09-01T01:59:59+08:00', duration: 5 },
+    { _id: 'exact', _openid: 'owner', date: '2026-08-31', timestamp: '2026-09-01T02:00:00+08:00', duration: 6 },
+    { _id: 'sunday-late', _openid: 'owner', date: '2026-09-21', timestamp: '2026-09-21T01:59:59+08:00', duration: 7 },
+    { _id: 'monday-exact', _openid: 'owner', date: '2026-09-20', timestamp: '2026-09-21T02:00:00+08:00', duration: 8 }
+  ] }, { now: Date.parse('2026-09-21T12:00:00+08:00') });
+  const week = await app.call('getMemberWeekCheckin', { teamId: 'team', memberOpenid: 'owner', weekStart: '2026-09-14', weekEnd: '2026-09-20' });
+  assert.equal(week.data.count, 1);
+  assert.equal(week.data.records[0].date, '2026-09-20');
+  assert.equal(week.data.records[0].duration, 7);
+  const counts = await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: ['owner'] });
+  assert.deepEqual(counts.data.owner, { monthlyCount: 3, totalCount: 4 });
+});
+
+test('manual business dates survive upload timestamps in reports and member history', async () => {
+  const records = [
+    { _id: 'manual', _openid: 'owner', date: '2026-09-16', timestamp: NOW, source: 'manual', duration: 12 },
+    { _id: 'manual-marker', _openid: 'owner', date: '2026-09-15', timestamp: NOW, dateSource: 'manual', duration: 8 }
+  ];
+  const app = harness({ teams: [team()], meditation_records: records });
+  const report = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
+  assert.equal(report.members[0].todayMinutes, 0);
+  assert.equal(report.members[0].totalMinutes, 20);
+  const history = (await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'owner' })).data;
+  assert.deepEqual(history.records.map(record => record.date), ['2026-09-16', '2026-09-15']);
+  assert.equal(history.records[0].source, 'manual');
+  assert.equal(history.records[1].dateSource, 'manual');
+});
+
+test('the year changes at exactly 02:00 in team days, member records and month totals', async () => {
+  const boundary = Date.parse('2027-01-01T02:00:00+08:00');
+  const initial = { teams: [team({ practiceStartDate: '2026-12-31' })], meditation_records: [
+    { _id: 'evening', _openid: 'owner', date: '2026-12-31', timestamp: '2026-12-31T23:00:00+08:00', duration: 10 },
+    { _id: 'early', _openid: 'owner', date: '2027-01-01', timestamp: boundary - 1, duration: 10 },
+    { _id: 'exact', _openid: 'owner', date: '2026-12-31', timestamp: boundary, duration: 5 }
+  ] };
+  const before = (await harness(initial, { now: boundary - 1 }).call('getTeamPracticeReport', { teamId: 'team' })).data;
+  assert.equal(before.businessDate, '2026-12-31');
+  assert.equal(before.history.totalDays, 0);
+  assert.equal(before.members[0].todayMinutes, 20);
+  assert.equal(before.members[0].todayPracticeCount, 2);
+  assert.equal(before.nextResetAt, boundary);
+
+  const app = harness(initial, { now: boundary });
+  const report = (await app.call('getTeamPracticeReport', { teamId: 'team' })).data;
+  assert.equal(report.businessDate, '2027-01-01');
+  assert.equal(report.history.totalDays, 1);
+  assert.equal(report.members[0].practiceDays, 1, 'two sessions on the same practice day count as one day');
+  assert.equal(report.members[0].qualifiedDays, 1);
+  assert.equal(report.members[0].todayMinutes, 5);
+  assert.equal(report.members[0].totalMinutes, 20);
+  assert.equal(report.nextResetAt, boundary + 86400000);
+  const details = (await app.call('getTeamHistoryDetails', { teamId: 'team', month: '2026-12', filter: 'all' })).data;
+  assert.deepEqual(details.items.map(item => [item.date, item.minutes]), [['2026-12-31', 20]]);
+  const member = (await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'owner' })).data;
+  assert.deepEqual(member.records.map(record => [record._id, record.date]), [
+    ['exact', '2027-01-01'], ['early', '2026-12-31'], ['evening', '2026-12-31']
+  ]);
+  const month = (await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: ['owner'] })).data;
+  assert.deepEqual(month.owner, { monthlyCount: 1, totalCount: 3 });
+});
+
+test('weekly member records retain manual date markers so clients preserve the selected business day', async () => {
+  const records = [
+    { _id: 'manual', _openid: 'owner', date: '2026-08-31', timestamp: NOW, source: 'manual', duration: 12 },
+    { _id: 'manual-marker', _openid: 'owner', date: '2026-08-30', timestamp: NOW, dateSource: 'manual', duration: 8 }
+  ];
+  const app = harness({ teams: [team()], meditation_records: records });
+  const week = (await app.call('getMemberWeekCheckin', {
+    teamId: 'team', memberOpenid: 'owner', weekStart: '2026-08-30', weekEnd: '2026-08-31'
+  })).data;
+  const { getRecordBusinessDate } = require('../miniprogram/utils/dateUtil.js');
+  assert.equal(week.count, 2);
+  assert.deepEqual(week.records.map(getRecordBusinessDate), ['2026-08-31', '2026-08-30']);
+  assert.equal(week.records[0].source, 'manual');
+  assert.equal(week.records[1].dateSource, 'manual');
 });

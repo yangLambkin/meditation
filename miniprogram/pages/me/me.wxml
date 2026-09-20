@@ -26,11 +26,11 @@
               <text class="font text">{{userNickname}}</text>
               <text class="edit-hint">点击修改</text>
             </view>
-            <!-- 同步日为北京时间 04:00 至次日 04:00，只提供最近三个已结束的同步日 -->
+            <!-- 同步日为北京时间 02:00 至次日 02:00，只提供最近三个已结束的同步日 -->
             <view wx:if="{{bijingShowSyncDatePicker}}" class="bijing-modal-mask" bindtap="cancelBijingSyncDate" catchtouchmove="noop">
               <view class="bijing-modal bijing-sync-modal" catchtap="noop">
                 <view class="bijing-modal-title">选择同步日期</view>
-                <view class="bijing-sync-hint">每天按北京时间 04:00 至次日 04:00 统计，可同步最近三个已结束的同步日</view>
+                <view class="bijing-sync-hint">每天按北京时间 02:00 至次日 02:00 统计，可同步最近三个已结束的同步日</view>
                 <radio-group bindchange="onBijingSyncDateChange">
                   <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
                     <view class="bijing-date-text"><text>{{item.date}}</text><text class="bijing-date-label">{{item.label}}</text></view>
@@ -39,7 +39,7 @@
                 </radio-group>
                 <view class="bijing-sync-details">
                   <view class="bijing-details-title">{{bijingSyncDate}} 打卡明细</view>
-                  <view class="bijing-details-note">{{bijingSyncDate}} 04:00 至次日 04:00 前（北京时间）</view>
+                  <view class="bijing-details-note">{{bijingSyncDate}} 02:00 至次日 02:00 前（北京时间）</view>
                   <view wx:if="{{bijingSyncDetailsLoading}}" class="bijing-details-state">正在加载当天记录…</view>
                   <view wx:elif="{{bijingSyncDetailsError}}" class="bijing-details-state">
                     <text class="bijing-details-error">{{bijingSyncDetailsError}}</text>
@@ -115,7 +115,7 @@
           </view>
           <view class="bijing-auto-note">
             <text class="bijing-auto-note-title">日常无需手动同步</text>
-            <text class="bijing-auto-note-detail">每天北京时间 04:00 自动同步；补录或重试时，再使用手动同步。</text>
+            <text class="bijing-auto-note-detail">每天北京时间 02:00 自动同步；补录或重试时，再使用手动同步。</text>
           </view>
           <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
         </block>

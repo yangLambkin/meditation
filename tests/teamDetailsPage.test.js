@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const pagePath = path.join(__dirname, '../miniprogram/subpackages/team/pages/teamDetails/teamDetails.js');
 const now = Date.parse('2026-09-19T10:00:00+08:00');
-const nextResetAt = Date.parse('2026-09-20T04:00:00+08:00');
+const nextResetAt = Date.parse('2026-09-20T02:00:00+08:00');
 const team = { _id: 'team-a', name: '一起冥想', description: '每天一起练习', icon: 'cloud://existing-team-icon', creator: 'owner', isMember: true,
   practiceStartDate: '2026-09-01', dailyGoalMinutes: 20,
   members: ['owner', 'member', 'third'].map(openid => ({ openid, nickname: openid, isCreator: openid === 'owner' }))
@@ -19,14 +19,14 @@ const member = (openid, status, minutes, practiceDays, missedDays, belowGoalDays
 });
 const report = {
   teamId: 'team-a', businessDate: '2026-09-19', nextResetAt,
-  settings: { practiceStartDate: '2026-09-01', dailyGoalMinutes: 20, dayBoundaryHour: 4 },
+  settings: { practiceStartDate: '2026-09-01', dailyGoalMinutes: 20, dayBoundaryHour: 2 },
   history: { startDate: '2026-09-01', endDate: '2026-09-18', totalDays: 18 },
   summary: { memberCount: 3, notPracticedCount: 1, belowGoalCount: 1, qualifiedCount: 1 },
   members: [member('owner', 'qualified', 25, 18, 0, 1), member('member', 'below_goal', 12, 13, 5, 2), member('third', 'not_practiced', 0, 16, 2, 3)]
 };
 const optionalReport = {
   ...structuredClone(report),
-  settings: { practiceStartDate: null, effectivePracticeStartDate: '2026-09-01', hasPracticeStartDate: false, dailyGoalMinutes: null, dayBoundaryHour: 4 },
+  settings: { practiceStartDate: null, effectivePracticeStartDate: '2026-09-01', hasPracticeStartDate: false, dailyGoalMinutes: null, dayBoundaryHour: 2 },
   summary: { memberCount: 3, notPracticedCount: 1, belowGoalCount: 0, qualifiedCount: 0, practicedCount: 2 },
   overview: { memberCount: 3, totalPracticeCount: 52, activeMemberCount: 2, activityRate: 67 },
   members: report.members.map((item, index) => ({
@@ -47,13 +47,13 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
   title: `邀请您加入${team.name}团队`
 });
 
-function createPage({ cloud, generateInvite, deleteTeam, checkText, checkImage, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, checkText, checkImage, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { cloud: [], deletes: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -61,6 +61,10 @@ function createPage({ cloud, generateInvite, deleteTeam, checkText, checkImage, 
   const manager = {
     teams: cached,
     addJoinedTeam(info) { this.teams = [{ ...info, cloudId: info._id }]; },
+    async removeTeamMember(teamId, memberOpenid) {
+      calls.removals.push({ teamId, memberOpenid });
+      return removeTeamMember ? removeTeamMember(teamId, memberOpenid) : { success: true };
+    },
     async deleteTeam(id) {
       calls.deletes.push(id);
       return deleteTeam ? deleteTeam(id) : { success: true };
@@ -68,6 +72,7 @@ function createPage({ cloud, generateInvite, deleteTeam, checkText, checkImage, 
   };
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
       if (name.endsWith('/contentSec.js')) return {
         async checkText(text, scene) {
@@ -310,12 +315,12 @@ test('history overview requests and summarizes the complete period across months
 
 test('historical details default to the current practice month while preserving filters and member scope', async () => {
   for (const [businessDate, endDate, totalDays, time] of [
-    ['2026-09-01', '2026-08-31', 62, '2026-09-01T04:00:00+08:00'],
-    ['2026-08-31', '2026-08-30', 61, '2026-09-01T03:59:59+08:00']
+    ['2026-09-01', '2026-08-31', 62, '2026-09-01T02:00:00+08:00'],
+    ['2026-08-31', '2026-08-30', 61, '2026-09-01T01:59:59+08:00']
   ]) {
     const boundary = structuredClone(report);
     boundary.businessDate = businessDate;
-    boundary.nextResetAt = Date.parse(`${businessDate}T04:00:00+08:00`) + 86400000;
+    boundary.nextResetAt = Date.parse(`${businessDate}T02:00:00+08:00`) + 86400000;
     boundary.settings.practiceStartDate = '2026-07-01';
     boundary.history = { startDate: '2026-07-01', endDate, totalDays };
     boundary.members = boundary.members.map(item => ({ ...item,
@@ -432,7 +437,7 @@ test('member cards open the selected member with the correct monthly or daily da
 
 test('member cards remain usable when team statistics fail and default to the current practice date', async () => {
   const { page, calls } = createPage({
-    clockNow: Date.parse('2026-09-19T03:30:00+08:00'),
+    clockNow: Date.parse('2026-09-19T01:30:00+08:00'),
     cloud: type => type === 'getTeamInfo' ? success(team) : { result: { success: false, error: '统计加载失败' } }
   });
   await page.onShow();
@@ -939,7 +944,7 @@ test('members can inspect persisted settings but cannot change, save, or dissolv
   assert.equal(calls.modals.length, 0);
 });
 
-test('04:00 rollover invalidates the report and fetches the next practice day, while hide/unload clear timers', async () => {
+test('02:00 rollover invalidates the report and fetches the next practice day, while hide/unload clear timers', async () => {
   let day = structuredClone(report);
   const { page, calls, timers, setNow } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : day) });
   await page.onShow();
@@ -1444,9 +1449,9 @@ test('settings moderation, save outcomes and deletion outcomes never prepare inv
   }
 });
 
-test('settings date maximum follows the 04:00 practice-day boundary rather than natural midnight', () => {
-  const beforeReset = createPage({ clockNow: Date.parse('2026-09-19T03:59:59+08:00') });
-  const afterReset = createPage({ clockNow: Date.parse('2026-09-19T04:00:00+08:00') });
+test('settings date maximum follows the 02:00 practice-day boundary rather than natural midnight', () => {
+  const beforeReset = createPage({ clockNow: Date.parse('2026-09-19T01:59:59+08:00') });
+  const afterReset = createPage({ clockNow: Date.parse('2026-09-19T02:00:00+08:00') });
   assert.equal(beforeReset.page.data.dateMax, '2026-09-18');
   assert.equal(afterReset.page.data.dateMax, '2026-09-19');
 });
@@ -1563,5 +1568,60 @@ test('practice rule switch cannot change member views, locked saves, or closed s
     if (reason === 'closed') page.closeSettings();
     page.changePracticeRulesEnabled({ detail: { value: false } });
     assert.equal(page.data.draftPracticeRulesEnabled, true, reason);
+  }
+});
+
+test('member removal requires a creator, current non-self member and confirmation', async () => {
+  for (const [openid, target, confirm] of [['member', 'third', true], ['owner', 'owner', true], ['owner', 'missing', true], ['owner', 'member', false]]) {
+    const { page, calls } = createPage({ openid, confirm });
+    await page.onShow();
+    await page.confirmRemoveMember(event('memberOpenid', target));
+    assert.equal(calls.removals.length, 0);
+  }
+});
+
+test('member removal blocks duplicate taps and refreshes roster and statistics after success', async () => {
+  let complete;
+  let removed = false;
+  const nextTeam = structuredClone(team);
+  nextTeam.members = nextTeam.members.filter(member => member.openid !== 'member');
+  const nextReport = structuredClone(report);
+  nextReport.members = nextReport.members.filter(member => member.openid !== 'member');
+  nextReport.summary = { memberCount: 2, notPracticedCount: 1, belowGoalCount: 0, qualifiedCount: 1 };
+  const { page, calls } = createPage({
+    removeTeamMember: () => new Promise(resolve => { complete = () => { removed = true; resolve({ success: true }); }; }),
+    cloud: type => success(type === 'getTeamInfo' ? (removed ? nextTeam : team) : (removed ? nextReport : report))
+  });
+  await page.onShow();
+  const first = page.confirmRemoveMember(event('memberOpenid', 'member'));
+  await flushPromises();
+  assert.equal(page.data.removingMemberId, 'member');
+  await page.confirmRemoveMember(event('memberOpenid', 'member'));
+  assert.equal(calls.removals.length, 1);
+  complete();
+  await first;
+  assert.deepEqual(Array.from(page.data.teamMembers, member => member.openid).sort(), ['owner', 'third']);
+  assert.equal(page.data.report.summary.memberCount, 2);
+  assert.equal(page.data.removingMemberId, '');
+});
+
+test('failed removal retains members and reports the server error', async () => {
+  const { page, calls } = createPage({ removeTeamMember: async () => ({ success: false, error: '暂时无法移除' }) });
+  await page.onShow();
+  await page.confirmRemoveMember(event('memberOpenid', 'member'));
+  assert.equal(page.data.teamMembers.length, 3);
+  assert.equal(page.data.removingMemberId, '');
+  assert.equal(calls.modals.at(-1).title, '移除失败');
+});
+
+test('confirmation opened for one account cannot remove a member after identity or visibility changes', async () => {
+  for (const hide of [true, false]) {
+    const { page, calls, storage } = createPage({ confirm: null });
+    await page.onShow();
+    const request = page.confirmRemoveMember(event('memberOpenid', 'member'));
+    if (hide) page.onHide(); else storage.set('userOpenId', 'other');
+    calls.modals.at(-1).success({ confirm: true });
+    await request;
+    assert.equal(calls.removals.length, 0);
   }
 });

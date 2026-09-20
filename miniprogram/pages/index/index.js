@@ -3,6 +3,7 @@ const checkinManager = require('../../utils/checkin.js');
 const contentSec = require('../../utils/contentSec.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
+const dateUtil = require('../../utils/dateUtil.js');
 
 Page({
   data: {
@@ -17,11 +18,14 @@ Page({
     hasUserInfo: false, // 是否已获取用户信息
     checkinDate: '',
     checkinTime: '',
+    minCheckinDate: '',
     maxCheckinDate: '',
     checkinDuration: '7',
     checkinExperience: '',
     showCheckinModal: false,
     checkinSubmitting: false,
+    checkinRetrying: false,
+    pendingCheckinCount: 0,
     checkinDeleting: false,
     checkinActionsOpen: false,
     deletingCheckinId: '',
@@ -35,6 +39,7 @@ Page({
     if (this.data.checkinSubmitting) return;
     this._checkinDateEdited = false;
     this._checkinTimeEdited = false;
+    this._checkinSubmissionId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     this.refreshCheckinDefaults();
     this.setData({
       showCheckinModal: true,
@@ -52,9 +57,11 @@ Page({
 
   refreshCheckinDefaults() {
     const current = homeCheckin.getDateTime();
+    const today = homeCheckin.getCheckinDay();
     this.setData({
-      maxCheckinDate: current.date,
-      checkinDate: this._checkinDateEdited ? this.data.checkinDate : current.date,
+      minCheckinDate: homeCheckin.shiftCheckinDate(today, -2),
+      maxCheckinDate: today,
+      checkinDate: this._checkinDateEdited ? this.data.checkinDate : today,
       checkinTime: this._checkinTimeEdited ? this.data.checkinTime : current.time
     });
   },
@@ -87,6 +94,10 @@ Page({
       return;
     }
 
+    if (this.data.checkinDate < this.data.minCheckinDate || this.data.checkinDate > this.data.maxCheckinDate) {
+      wx.showToast({ title: '只能记录最近三天的静坐（含今天）', icon: 'none' });
+      return;
+    }
     const selectedTimestamp = homeCheckin.parseDateTime(this.data.checkinDate, this.data.checkinTime);
     if (!Number.isFinite(selectedTimestamp) || selectedTimestamp > Date.now()) {
       wx.showToast({ title: '请选择有效且不晚于当前的时间', icon: 'none' });
@@ -94,28 +105,36 @@ Page({
     }
     // 未修改日期时间时保留实际秒数，避免同一分钟内的正常打卡被同步去重。
     const timestamp = this._checkinDateEdited || this._checkinTimeEdited ? selectedTimestamp : Date.now();
+    const recordDate = this.data.checkinDate;
     const text = this.data.checkinExperience.trim();
+    if (!this._checkinSubmissionId) this._checkinSubmissionId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     this.setData({ checkinSubmitting: true });
     try {
       if (text && !(await contentSec.checkText(text, 2))) return;
       const selected = homeCheckin.getDateTime(timestamp);
       const experience = text ? [{
         text,
-        uniqueId: String(Date.now()),
+        uniqueId: this._checkinSubmissionId,
         timestamp: `${selected.date} ${selected.time}:00`,
         duration: `${duration}分钟`,
         emotion: []
       }] : [];
-      const result = checkinManager.recordCheckin(duration, [], experience, timestamp);
+      const result = await checkinManager.recordCheckinWithSync(duration, [], experience, timestamp, {
+        idempotencyKey: this._checkinSubmissionId, source: 'manual', date: recordDate
+      });
       if (!result || !result.success) throw new Error('本地保存失败');
       this._lastCheckinSubmittedAt = Date.now();
+      this._checkinSubmissionId = null;
 
       this._checkinDateEdited = false;
       this._checkinTimeEdited = false;
       this.setData({ checkinExperience: '', showCheckinModal: false });
       this.refreshCheckinDefaults();
       this.refreshPageData();
-      wx.showToast({ title: '打卡成功', icon: 'success' });
+      wx.showToast({
+        title: result.cloudSynced ? '打卡成功' : '已存本机，待上传',
+        icon: result.cloudSynced ? 'success' : 'none'
+      });
     } catch (error) {
       console.error('首页打卡保存失败:', error);
       wx.showToast({ title: '打卡保存失败，请重试', icon: 'none' });
@@ -126,9 +145,39 @@ Page({
 
   refreshCheckinRecords() {
     this._allCheckinRecords = homeCheckin.readCheckinRecords(
-      checkinManager, wx.getStorageSync('meditationTextRecords') || []
+      checkinManager, wx.getStorageSync('meditationTextRecords') || [], this.getCheckinDisplayOptions()
     );
+    this.setData({ pendingCheckinCount: checkinManager.getPendingSyncSummary().pending });
     this.updateCheckinGroups();
+  },
+
+  getCheckinDisplayOptions() {
+    const openid = wx.getStorageSync('userOpenId');
+    return { openid: typeof openid === 'string' && openid.startsWith('oz') ? openid : '' };
+  },
+
+  async retryCheckinUploads() {
+    if (this.data.checkinRetrying || this.data.checkinSubmitting) return;
+    this.setData({ checkinRetrying: true });
+    let result;
+    try {
+      result = await checkinManager.syncWithCloud({ force: true });
+    } catch (error) {
+      console.error('首页重试上传失败:', error);
+      wx.showToast({ title: '记录仍在本机，请稍后重试上传', icon: 'none' });
+    } finally {
+      this.refreshCalendarData();
+      this.setData({ checkinRetrying: false });
+    }
+    if (result) {
+      const pending = this.data.pendingCheckinCount;
+      const blocked = (this._allCheckinRecords || []).some(record => record.syncStatus === 'blocked');
+      wx.showToast({
+        title: pending > 0 ? (blocked ? '部分记录无法上传，请查看记录提示' : `仍有 ${pending} 条待上传，请稍后重试`)
+          : result.error || (result.uploaded > 0 ? '上传成功' : '暂无待上传记录'),
+        icon: pending === 0 && result.uploaded > 0 ? 'success' : 'none'
+      });
+    }
   },
 
   updateCheckinGroups() {
@@ -142,6 +191,19 @@ Page({
       checkinTotal: records.length,
       hiddenCheckinCount: hiddenCount
     });
+  },
+
+  refreshBusinessDay() {
+    const today = homeCheckin.getCheckinDay();
+    const previousDay = this.data.todayDate;
+    const shownMonth = `${this.data.currentYear}-${String(this.data.currentMonth).padStart(2, '0')}`;
+    if (previousDay && shownMonth === previousDay.slice(0, 7) && shownMonth !== today.slice(0, 7)) {
+      const [currentYear, currentMonth] = today.split('-').map(Number);
+      this.setData({ currentYear, currentMonth });
+    }
+    if (!this.data.checkinSubmitting) this.refreshCheckinDefaults();
+    this.updateCheckinGroups();
+    this.generateCalendar();
   },
 
   openAllCheckins() {
@@ -184,7 +246,7 @@ Page({
       const confirmation = await new Promise((resolve, reject) => {
         const modal = wx.showModal({
           title: '删除静坐记录',
-          content: `确定删除 ${record.date} ${record.time} 的 ${record.duration} 分钟静坐记录吗？\n删除后无法恢复。`,
+          content: `确定删除 ${record.dayDate} ${record.timeLabel} 的 ${record.duration} 分钟静坐记录吗？\n删除后无法恢复。`,
           confirmText: '删除',
           confirmColor: '#b45245',
           cancelText: '取消',
@@ -853,25 +915,37 @@ Page({
   },
 
   /**
-   * 从云端校准打卡记录，完成后刷新最近三天的明细。
+   * 先上传本机新记录，再从云端校准缓存，完成后刷新同一份列表和日历。
    */
-  refreshCheckinsFromCloud() {
-    if (this._checkinCloudRefresh) return this._checkinCloudRefresh;
+  refreshCheckinsFromCloud(options) {
+    let request;
+    try {
+      // 每个入口都交给账号级同步队列处理，让下拉刷新能升级正在退避的自动同步。
+      request = checkinManager.syncWithCloud(options);
+    } catch (error) {
+      console.warn('首页云端打卡记录刷新失败:', error);
+      return Promise.resolve(false);
+    }
+    if (this._checkinCloudSyncRequest === request) return this._checkinCloudRefresh;
 
-    this._checkinCloudRefresh = Promise.resolve()
-      .then(() => checkinManager.refreshFromCloud())
-      .then(refreshed => {
-        if (refreshed) this.refreshCalendarData();
-        return refreshed;
+    const refresh = Promise.resolve(request)
+      .then(result => {
+        if (result.refreshed) this.refreshCalendarData();
+        return result.refreshed;
       })
       .catch(error => {
         console.warn('首页云端打卡记录刷新失败:', error);
         return false;
       })
       .finally(() => {
-        this._checkinCloudRefresh = null;
+        if (this._checkinCloudRefresh === refresh) {
+          this._checkinCloudRefresh = null;
+          this._checkinCloudSyncRequest = null;
+        }
       });
-    return this._checkinCloudRefresh;
+    this._checkinCloudSyncRequest = request;
+    this._checkinCloudRefresh = refresh;
+    return refresh;
   },
 
   /**
@@ -959,21 +1033,22 @@ Page({
   },
 
   /**
-   * 一次读取日历打卡日期，以明细的 04:00 分日结果为准。
+   * 一次读取日历打卡日期，以明细的 02:00 分日结果为准。
    */
   getCalendarCheckedDates() {
     const userData = checkinManager.getUserCheckinData();
-    const records = homeCheckin.buildCheckinRecords(userData);
+    const displayOptions = this.getCheckinDisplayOptions();
+    const records = homeCheckin.buildCheckinRecords(userData, [], displayOptions);
     const dates = new Set(records.map(record => record.dayDate));
     const standardDetailedDates = new Set(records.filter(record => record.sortTimestamp > 0).map(record => record.date));
-    const userOpenId = this.data.userOpenId || wx.getStorageSync('userOpenId');
+    const userOpenId = wx.getStorageSync('userOpenId') || this.data.userOpenId;
     const allUserRecords = wx.getStorageSync('meditationUserRecords') || {};
     const legacySources = userOpenId ? Object.entries(allUserRecords)
       .filter(([id, data]) => data && (id === userOpenId || (data.migrated && data.migratedTo === userOpenId)))
       .map(([, data]) => data) : [];
 
     const sources = [{ data: userData, records }].concat(legacySources.map(data => ({
-      data, records: homeCheckin.buildCheckinRecords(data)
+      data, records: homeCheckin.buildCheckinRecords(data, [], displayOptions)
     })));
     const detailedDates = new Set();
     sources.forEach(source => source.records.forEach(record => {
@@ -1031,13 +1106,11 @@ Page({
     // 查找所有已迁移到当前用户的数据
     for (const [userId, userRecord] of Object.entries(allUserRecords)) {
       if (userRecord.migrated && userRecord.migratedTo === this.data.userOpenId) {
-        if (userRecord.dailyRecords && userRecord.dailyRecords[dateStr]) {
-          const dailyRecord = userRecord.dailyRecords[dateStr];
-          if (dailyRecord && dailyRecord.count > 0) {
-            console.log(`✅ 找到迁移记录: ${dateStr} (来源: ${userId})`);
-            return true;
-          }
-        }
+        const records = homeCheckin.buildCheckinRecords(userRecord);
+        if (records.some(record => record.dayDate === dateStr)) return true;
+        const dailyRecord = (userRecord.dailyRecords || {})[dateStr];
+        if (dailyRecord && Number(dailyRecord.count) > 0 &&
+            !(Array.isArray(dailyRecord.records) && dailyRecord.records.some(Boolean))) return true;
       }
     }
     
@@ -1195,6 +1268,10 @@ Page({
   onLoad(options) {
     console.log('=== index页面onLoad函数开始 ===');
     console.log('页面参数:', options);
+    if (this._stopCheckinSyncWatch) this._stopCheckinSyncWatch();
+    this._stopCheckinSyncWatch = checkinManager.subscribeSyncState(() => {
+      this.refreshCalendarData();
+    });
     
     const [year, month] = homeCheckin.getCheckinDay().split('-').map(Number);
     this.setData({
@@ -1238,14 +1315,16 @@ Page({
     this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
       this.setData({ wisdomQuote: '"' + content + '"' });
     });
+    if (this.data.todayDate && this.data.todayDate !== homeCheckin.getCheckinDay()) this.refreshBusinessDay();
     this.refreshCheckinDefaults();
     this.refreshCheckinRecords();
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => this.refreshBusinessDay());
     clearInterval(this._checkinClock);
     this._checkinClock = setInterval(() => {
       if (!this.data.checkinSubmitting) this.refreshCheckinDefaults();
       if (this._checkinDay !== homeCheckin.getCheckinDay()) {
-        this.updateCheckinGroups();
-        this.generateCalendar();
+        this.refreshBusinessDay();
       }
     }, 30000);
     
@@ -1270,6 +1349,8 @@ Page({
    */
   onHide() {
     clearInterval(this._checkinClock);
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = null;
   },
@@ -1279,8 +1360,12 @@ Page({
    */
   onUnload() {
     clearInterval(this._checkinClock);
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = null;
+    if (this._stopCheckinSyncWatch) this._stopCheckinSyncWatch();
+    this._stopCheckinSyncWatch = null;
   },
 
   /**
@@ -1289,7 +1374,7 @@ Page({
   async onPullDownRefresh() {
     try {
       this.refreshCheckinDefaults();
-      const refreshed = await this.refreshCheckinsFromCloud();
+      const refreshed = await this.refreshCheckinsFromCloud({ force: true });
       if (!refreshed) this.refreshCalendarData();
     } finally {
       wx.stopPullDownRefresh();

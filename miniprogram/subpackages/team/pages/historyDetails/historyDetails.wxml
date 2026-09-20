@@ -16,7 +16,7 @@
     <text wx:elif="{{history}}" class="range-label">本月尚无已结束的统计日期</text>
     <text wx:if="{{memberOpenid}}" class="member-scope">查看成员：{{memberName}}</text>
     <text wx:if="{{settings}}" class="rule-label">{{goalLabel}}</text>
-    <text class="rule-label">每人每天计 1 人次，不含今日；练习日按北京时间 04:00 切换。</text>
+    <text class="rule-label">每人每天计 1 人次，不含今日；练习日按北京时间 02:00 切换。</text>
   </view>
 
   <view wx:if="{{settings}}" class="filter-row">

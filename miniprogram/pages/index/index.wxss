@@ -954,6 +954,11 @@
   background-color: #ffffff;
 }
 
+.checkin-record-brief {
+  padding-top: 24rpx;
+  padding-bottom: 24rpx;
+}
+
 .checkin-record-active {
   background-color: #f7f4ee;
 }
@@ -1064,3 +1069,9 @@
   font-size: 24rpx;
   line-height: 1.5;
 }
+
+.record-sync-error { display: block; margin-top: 16rpx; color: #9b6c36; font-size: 22rpx; line-height: 1.6; }
+.checkin-pending-banner { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; padding: 20rpx; margin: 16rpx 0; border-radius: 16rpx; background: #faf4e9; }
+.checkin-pending-text { flex: 1; color: #8b642f; font-size: 24rpx; line-height: 1.5; }
+.checkin-retry-button { flex-shrink: 0; margin: 0; padding: 8rpx 16rpx; border-radius: 12rpx; background: #fff; color: #8b642f; font-size: 24rpx; line-height: 1.6; }
+.checkin-retry-button::after { border: none; }

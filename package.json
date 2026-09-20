@@ -4,7 +4,7 @@
   "description": "这是云开发的快速启动指引，其中演示了如何上手使用云开发的三大基础能力：",
   "main": "create_collections_consistent.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/*.test.js",
     "test:team": "node --test tests/teamManagerClient.test.js tests/teamManagerCloud.test.js tests/createTeamPage.test.js tests/joinTeamPage.test.js tests/teamDetailsPage.test.js tests/teamHistoryDetailsPage.test.js tests/memberHistoryPage.test.js",
     "test:bijing-sync": "node --test tests/bijingSync.test.js tests/bijingSyncPage.test.js tests/bijingCheckinIntegration.test.js",
     "test:home-checkin": "node --test tests/checkinTimestamp.test.js tests/homeCheckinGrouping.test.js tests/homeCheckinPage.test.js tests/checkinHistoryPage.test.js tests/checkinCloudRefresh.test.js tests/getAllRecordsCloud.test.js",

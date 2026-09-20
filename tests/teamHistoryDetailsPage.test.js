@@ -11,7 +11,7 @@ const row = (openid = 'a', date = '2026-09-18', minutes = 0, status = minutes ? 
 });
 const details = (items = [row()], overrides = {}) => ({
   teamId: 'team-a', businessDate: '2026-09-19', filter: 'unmet',
-  settings: { practiceStartDate: '2026-09-01', dailyGoalMinutes: 20, dayBoundaryHour: 4 },
+  settings: { practiceStartDate: '2026-09-01', dailyGoalMinutes: 20, dayBoundaryHour: 2 },
   history: { month: '2026-09', minMonth: '2026-09', maxMonth: '2026-09', startDate: '2026-09-01', endDate: '2026-09-18', totalDays: 18 },
   items, nextCursor: null, ...overrides
 });
@@ -26,7 +26,7 @@ function monthlyDetails(month, items = [], { practiceStartDate = '2026-07-01', b
   const totalDays = Math.max(0, (Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000 + 1);
   return details(items, {
     businessDate,
-    settings: { practiceStartDate, dailyGoalMinutes: 20, dayBoundaryHour: 4 },
+    settings: { practiceStartDate, dailyGoalMinutes: 20, dayBoundaryHour: 2 },
     history: { month, minMonth: practiceStartDate.slice(0, 7), maxMonth: businessDate.slice(0, 7), startDate, endDate, totalDays },
     ...overrides
   });
@@ -45,13 +45,22 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
   let definition;
   let currentAccount = account;
   const calls = { cloud: [], navigation: [], refreshStopped: 0, updates: 0 };
-  const timestamp = new Date(now).getTime();
+  let timestamp = new Date(now).getTime();
+  let timerId = 0;
+  const timers = new Map();
+  const setTimeout = (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; };
+  const clearTimeout = id => timers.delete(id);
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [timestamp])); }
     static now() { return timestamp; }
   }
+  const dateModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/dateUtil.js'), 'utf8'), {
+    module: dateModule, Date: ClockDate, setTimeout, clearTimeout
+  });
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     Date: ClockDate,
+    require: name => dateModule.exports,
     Page(value) { definition = value; },
     wx: {
       getStorageSync: key => key === 'userOpenId' ? currentAccount : undefined,
@@ -66,7 +75,7 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
   const page = { ...definition, data: structuredClone(definition.data),
     setData(values) { Object.assign(this.data, values); calls.updates++; } };
   page.onLoad(query);
-  return { page, calls, setAccount(value) { currentAccount = value; } };
+  return { page, calls, timers, setNow(value) { timestamp = Date.parse(value); }, setAccount(value) { currentAccount = value; } };
 }
 const rendered = page => plain(page.data.groups.flatMap(group => group.items));
 
@@ -273,7 +282,7 @@ test('a rule or practice-day change during pagination reloads from page one', as
 });
 
 test('no-goal teams normalize unmet to not-practiced and support all daily statuses', async () => {
-  const noGoal = { practiceStartDate: null, effectivePracticeStartDate: '2026-09-01', dailyGoalMinutes: null, dayBoundaryHour: 4 };
+  const noGoal = { practiceStartDate: null, effectivePracticeStartDate: '2026-09-01', dailyGoalMinutes: null, dayBoundaryHour: 2 };
   const { page, calls } = createPage({ cloud: data => success(details(data.filter === 'all' ? [row('a', '2026-09-18', 1, 'practiced')] : [],
     { settings: noGoal, filter: data.filter === 'all' ? 'all' : 'not_practiced' })) });
   await page.onShow();
@@ -300,7 +309,7 @@ test('no historical days and each empty filter have explicit scoped empty states
     assert.equal(page.data.hasLoaded, true);
   }
   const { page } = createPage({ query: { teamId: 'team-a', memberOpenid: 'member', memberName: '小林' }, cloud: () => success(details([], {
-    settings: { practiceStartDate: '2026-09-19', dailyGoalMinutes: 20, dayBoundaryHour: 4 },
+    settings: { practiceStartDate: '2026-09-19', dailyGoalMinutes: 20, dayBoundaryHour: 2 },
     history: { ...details().history, startDate: '2026-09-19', endDate: '2026-09-18', totalDays: 0 }
   })) });
   await page.onShow();
@@ -532,10 +541,10 @@ test('pagination, refresh, and retry keep the selected past month', async () => 
   assert.equal(calls.cloud[3].data.data.cursor, undefined);
 });
 
-test('the default current month follows the Beijing 04:00 practice-day boundary', async () => {
+test('the default current month follows the Beijing 02:00 practice-day boundary', async () => {
   for (const [now, month, businessDate, totalDays] of [
-    ['2026-10-01T03:59:59+08:00', '2026-09', '2026-09-30', 29],
-    ['2026-10-01T04:00:00+08:00', '2026-10', '2026-10-01', 0]
+    ['2026-10-01T01:59:59+08:00', '2026-09', '2026-09-30', 29],
+    ['2026-10-01T02:00:00+08:00', '2026-10', '2026-10-01', 0]
   ]) {
     const { page, calls } = createPage({ now, cloud: () => success(monthlyDetails(month, [], { businessDate })) });
     await page.onShow();
@@ -550,6 +559,36 @@ test('the default current month follows the Beijing 04:00 practice-day boundary'
       assert.match(page.data.emptyDescription, /不包含今日/);
     }
   }
+});
+
+test('a visible history page refreshes at 02:00 across year-end and stops watching when hidden or unloaded', async () => {
+  const app = createPage({ now: '2027-01-01T01:59:59+08:00', cloud: (_, count) => success(monthlyDetails('2026-12',
+    count === 1 ? [] : [row('a', '2026-12-31')], {
+      practiceStartDate: '2026-12-01', businessDate: count === 1 ? '2026-12-31' : '2027-01-01'
+    })) });
+  await app.page.onShow();
+  assert.equal(app.page.data.history.totalDays, 30);
+  assert.equal(app.page.data.selectedMonth, '2026-12');
+  assert.equal(app.timers.size, 1);
+  const [timerId, timer] = [...app.timers.entries()][0];
+  assert.equal(timer.delay, 1000);
+  app.setNow('2027-01-01T02:00:00+08:00');
+  app.timers.delete(timerId);
+  timer.fn();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.equal(app.calls.cloud.length, 2);
+  assert.equal(app.page.data.history.totalDays, 31);
+  assert.equal(app.page.data.currentMonth, '2027-01');
+  assert.equal(app.page.data.selectedMonth, '2026-12', 'keep the month the member is viewing');
+  assert.equal(app.page.data.canNextMonth, true);
+  assert.deepEqual(rendered(app.page).map(item => item.date), ['2026-12-31']);
+  assert.equal(app.timers.size, 1);
+  app.page.onHide();
+  assert.equal(app.timers.size, 0);
+  await app.page.onShow();
+  assert.equal(app.timers.size, 1);
+  app.page.onUnload();
+  assert.equal(app.timers.size, 0);
 });
 
 test('server-clamped query months are accepted only at the matching available boundary', async () => {

@@ -1,3 +1,4 @@
+const { getBusinessDate, watchBusinessDate } = require('../../../../utils/dateUtil.js');
 const FILTERS = ['unmet', 'not_practiced', 'below_goal', 'all'];
 const STATUS_LABELS = { not_practiced: '未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -17,7 +18,7 @@ function validMonth(value) {
 }
 
 function currentPracticeMonth() {
-  return new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  return getBusinessDate(Date.now()).slice(0, 7);
 }
 
 function shiftMonth(month, amount) {
@@ -78,17 +79,31 @@ Page({
 
   onShow() {
     this._isVisible = true;
+    if (this._stopBusinessDateWatch) this._stopBusinessDateWatch();
+    this._stopBusinessDateWatch = watchBusinessDate(date => {
+      if (!this._isVisible || this._unloaded) return;
+      // 前台跨过 02:00 时，已结束的练习日应立即进入历史统计。
+      this.invalidateRequest();
+      this.clearDetails(true);
+      const currentMonth = date.slice(0, 7);
+      this.updateMonthControls({ currentMonth, maxMonth: currentMonth });
+      this.loadDetails();
+    });
     return this.loadDetails();
   },
 
   onHide() {
     this._isVisible = false;
+    if (this._stopBusinessDateWatch) this._stopBusinessDateWatch();
+    this._stopBusinessDateWatch = null;
     this.invalidateRequest();
   },
 
   onUnload() {
     this._unloaded = true;
     this._isVisible = false;
+    if (this._stopBusinessDateWatch) this._stopBusinessDateWatch();
+    this._stopBusinessDateWatch = null;
     this._loadVersion = (this._loadVersion || 0) + 1;
     this._items = [];
   },
@@ -206,7 +221,7 @@ Page({
     const expectedFilter = !hasGoal && ['unmet', 'below_goal'].includes(requestedFilter) ? 'not_practiced' : requestedFilter;
     if (!(settings.practiceStartDate === null ? validDate(settings.effectivePracticeStartDate) : validDate(settings.practiceStartDate)) ||
         !(settings.dailyGoalMinutes === null || Number.isInteger(settings.dailyGoalMinutes) && settings.dailyGoalMinutes > 0 && settings.dailyGoalMinutes <= 1440) ||
-        settings.dayBoundaryHour !== 4 || !validDate(history.startDate) || !validDate(history.endDate) ||
+        settings.dayBoundaryHour !== 2 || !validDate(history.startDate) || !validDate(history.endDate) ||
         !Number.isInteger(history.totalDays) || history.totalDays < 0 || history.endDate >= report.businessDate ||
         filter !== expectedFilter || !Array.isArray(items)) return fail();
     // 必须由月接口明确返回范围，不能把旧版的全历史结果展示为当月数据。

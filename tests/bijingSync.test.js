@@ -21,7 +21,7 @@ function matches(value, filter) {
 }
 
 function createHarness(options = {}) {
-  const now = Date.parse(options.now || '2026-09-17T04:00:00Z');
+  const now = Date.parse(options.now || '2026-09-17T02:00:00Z');
   const openid = Object.hasOwn(options, 'openid') ? options.openid : 'user-a';
   const users = clone(options.users || [{
     _id: 'doc-a',
@@ -108,9 +108,10 @@ function createHarness(options = {}) {
   vm.runInNewContext(source, {
     exports,
     Date: FixedDate,
-    process: { env: { BIJING_API_BASE: 'https://example.test', BIJING_ACCESS_TOKEN: 'test-token' } },
+    process: { env: { BIJING_API_BASE: 'https://example.test', BIJING_ACCESS_TOKEN: 'test-token', ...options.env } },
     console: { log() {}, warn() {}, error() {} },
     require(name) {
+      if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
       if (name === 'wx-server-sdk') {
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => ({ OPENID: openid }) };
       }
@@ -141,6 +142,29 @@ function createHarness(options = {}) {
     async details(recordDate) { return this.run({ type: 'getSyncDateDetails', recordDate }); },
   };
 }
+
+test('getHeatmap dispatches to OpenAPI with the server token and ignores client supplied identity and credentials', async () => {
+  const app = createHarness({ getResponse: { success: true, data: {
+    studentNumber: 'other-user', nickname: '静心者', records: [{ date: '2026-09-15', duration: '30' }]
+  } } });
+  const result = await app.run({ type: 'getHeatmap', studentNumber: 'other-user', accessToken: 'client-token' });
+  assert.deepEqual(result, { success: true, data: {
+    studentNumber: '123456', nickname: '静心者', records: [{ date: '2026-09-15', duration: 30 }]
+  } });
+  assert.deepEqual(app.calls.gets, [['https://example.test/api/openapi/meditation/heatmap', {
+    params: { studentNumber: '123456' }, headers: { 'X-Access-Token': 'test-token' }, timeout: 10000
+  }]]);
+  assert.equal(app.calls.posts.length, 0);
+  assert.equal(app.calls.updates.length, 0);
+});
+
+test('getHeatmap requires the cloud OpenAPI token even if a client supplies one', async () => {
+  const app = createHarness({ env: { BIJING_ACCESS_TOKEN: '' } });
+  assert.deepEqual(await app.run({ type: 'getHeatmap', accessToken: 'client-token' }), {
+    success: false, error: '热力图加载失败，请稍后重试'
+  });
+  assert.equal(app.calls.gets.length, 0);
+});
 
 test('checking and binding reject student numbers without an uppercase BJ prefix before reads, writes or external calls', async t => {
   for (const type of ['checkStudentNumber', 'bindStudentNumber']) {
@@ -211,15 +235,15 @@ test('selected sync includes legacy records for only the chosen date and current
   assert.equal(app.calls.now, 1);
 });
 
-test('only the three completed sync dates are accepted across 04:00, month, leap-year and year boundaries', async t => {
+test('only the three completed sync dates are accepted across 02:00, month, leap-year and year boundaries', async t => {
   const cases = [
     ['2026-09-16T15:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
     ['2026-09-16T16:00:00.000Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
-    ['2026-09-16T19:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
-    ['2026-09-16T20:00:00.000Z', ['2026-09-16', '2026-09-15', '2026-09-14'], '2026-09-17'],
-    ['2026-09-30T20:00:00.000Z', ['2026-09-30', '2026-09-29', '2026-09-28'], '2026-10-01'],
-    ['2026-12-31T20:00:00.000Z', ['2026-12-31', '2026-12-30', '2026-12-29'], '2027-01-01'],
-    ['2028-02-29T20:00:00.000Z', ['2028-02-29', '2028-02-28', '2028-02-27'], '2028-03-01'],
+    ['2026-09-16T17:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
+    ['2026-09-16T18:00:00.000Z', ['2026-09-16', '2026-09-15', '2026-09-14'], '2026-09-17'],
+    ['2026-09-30T18:00:00.000Z', ['2026-09-30', '2026-09-29', '2026-09-28'], '2026-10-01'],
+    ['2026-12-31T18:00:00.000Z', ['2026-12-31', '2026-12-30', '2026-12-29'], '2027-01-01'],
+    ['2028-02-29T18:00:00.000Z', ['2028-02-29', '2028-02-28', '2028-02-27'], '2028-03-01'],
   ];
   for (const [now, allowed, today] of cases) {
     await t.test(now, async () => {
@@ -297,7 +321,7 @@ test('automatic and manual sync can repeat in either order and include late-arri
       await initial();
       assert.equal((await app.details('2026-09-16')).data.alreadySynced, true);
       app.records.push({ _openid: 'user-a', date: '2026-09-17',
-        timestamp: Date.parse('2026-09-17T03:30:00+08:00'), duration: 10 });
+        timestamp: Date.parse('2026-09-17T01:30:00+08:00'), duration: 10 });
       await following();
       await automatic();
       assert.deepEqual(app.calls.posts.map(call => call.body), [20, 30, 30].map(durationMinutes => ({
@@ -383,7 +407,7 @@ test('automatic timer sync still synchronizes only yesterday for all bound users
     await t.test(JSON.stringify({ event, context }), async () => {
       const app = createHarness({
         openid: undefined,
-        now: '2026-09-30T20:00:00Z',
+        now: '2026-09-30T18:00:00Z',
         users: [
           { _id: 'doc-a', _openid: 'user-a', bijingBound: true, bijingStudentNumber: '123456' },
           { _id: 'doc-b', _openid: 'user-b', bijingBound: true, bijingStudentNumber: '234567' },
@@ -426,10 +450,10 @@ test('date details paginate all matching records, omit private fields and match 
   const pages = app.calls.reads.filter(call => call.name === 'meditation_records');
   assert.deepEqual(pages.map(page => page.offset), [0, 100, 200]);
   for (const page of pages) {
-    assert.ok(page.filter.values.every(branch => branch._openid === 'user-a'));
+    assert.deepEqual(page.filter, { _openid: 'user-a' });
     assert.equal(page.maximum, 100);
     assert.deepEqual(page.order, { key: '_id', direction: 'asc' });
-    assert.deepEqual(page.fields, { _id: true, date: true, timestamp: true, duration: true });
+    assert.deepEqual(page.fields, { _id: true, date: true, timestamp: true, duration: true, source: true, dateSource: true, localId: true, idempotencyKey: true });
   }
   assert.equal(app.calls.now, 1);
   for (const key of ['aggregates', 'posts', 'gets', 'updates']) assert.equal(app.calls[key].length, 0);
@@ -514,17 +538,17 @@ test('date details return a failure when user or detail reads fail', async t => 
   }
 });
 
-test('preview and upload use [04:00, next-day 04:00) without counting a record in adjacent days', async () => {
+test('preview and upload use [02:00, next-day 02:00) without counting a record in adjacent days', async () => {
   const record = (id, time, duration, extra = {}) => ({
     _id: id, _openid: 'user-a', date: time.slice(0, 10), timestamp: Date.parse(time), duration, ...extra,
   });
   const app = createHarness({ records: [
-    record('before-start', '2026-09-15T03:59:59.999+08:00', 1),
-    record('start', '2026-09-15T04:00:00+08:00', 2),
+    record('before-start', '2026-09-15T01:59:59.999+08:00', 1),
+    record('start', '2026-09-15T02:00:00+08:00', 2),
     record('midnight', '2026-09-16T00:00:00+08:00', 3),
-    record('before-end', '2026-09-16T03:59:59.999+08:00', 4),
-    record('end', '2026-09-16T04:00:00+08:00', 5),
-    record('wrong-date', '2026-09-16T02:00:00+08:00', 6, { date: '2026-09-01' }),
+    record('before-end', '2026-09-16T01:59:59.999+08:00', 4),
+    record('end', '2026-09-16T02:00:00+08:00', 5),
+    record('wrong-date', '2026-09-16T01:00:00+08:00', 6, { date: '2026-09-01' }),
     record('other-user', '2026-09-16T02:00:00+08:00', 100, { _openid: 'user-b' }),
   ] });
   const previous = (await app.details('2026-09-14')).data;
@@ -543,9 +567,9 @@ test('preview and upload use [04:00, next-day 04:00) without counting a record i
 test('sync windows include next-day early hours across month, year and leap-day boundaries', async t => {
   for (const [date, nextDate] of [['2026-09-30', '2026-10-01'], ['2026-12-31', '2027-01-01'], ['2028-02-29', '2028-03-01']]) {
     await t.test(date, async () => {
-      const app = createHarness({ now: `${nextDate}T04:00:00+08:00`, records: [
-        { _id: 'late', _openid: 'user-a', date: nextDate, timestamp: Date.parse(`${nextDate}T03:59:59.999+08:00`), duration: 20 },
-        { _id: 'new-day', _openid: 'user-a', date: nextDate, timestamp: Date.parse(`${nextDate}T04:00:00+08:00`), duration: 99 },
+      const app = createHarness({ now: `${nextDate}T02:00:00+08:00`, records: [
+        { _id: 'late', _openid: 'user-a', date: nextDate, timestamp: Date.parse(`${nextDate}T01:59:59.999+08:00`), duration: 20 },
+        { _id: 'new-day', _openid: 'user-a', date: nextDate, timestamp: Date.parse(`${nextDate}T02:00:00+08:00`), duration: 99 },
       ] });
       assert.equal((await app.details(date)).data.totalDuration, 20);
       await app.select(date);
@@ -554,10 +578,10 @@ test('sync windows include next-day early hours across month, year and leap-day 
   }
 });
 
-test('before 04:00 manual calls reject the unfinished date and cron only uploads the latest finished day', async () => {
-  const app = createHarness({ now: '2026-09-17T03:59:59.999+08:00', records: [
-    { _id: 'finished', _openid: 'user-a', date: '2026-09-16', timestamp: Date.parse('2026-09-16T03:00:00+08:00'), duration: 10 },
-    { _id: 'unfinished', _openid: 'user-a', date: '2026-09-17', timestamp: Date.parse('2026-09-17T03:00:00+08:00'), duration: 20 },
+test('before 02:00 manual calls reject the unfinished date and cron only uploads the latest finished day', async () => {
+  const app = createHarness({ now: '2026-09-17T01:59:59.999+08:00', records: [
+    { _id: 'finished', _openid: 'user-a', date: '2026-09-16', timestamp: Date.parse('2026-09-16T01:00:00+08:00'), duration: 10 },
+    { _id: 'unfinished', _openid: 'user-a', date: '2026-09-17', timestamp: Date.parse('2026-09-17T01:00:00+08:00'), duration: 20 },
   ] });
   assert.equal((await app.select('2026-09-16')).success, false);
   assert.equal((await app.details('2026-09-16')).success, false);
@@ -566,4 +590,23 @@ test('before 04:00 manual calls reject the unfinished date and cron only uploads
   assert.equal(cron.data.date, '2026-09-15');
   assert.deepEqual(app.calls.posts.map(item => item.body), [{ studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 10 }]);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-15': true });
+});
+
+test('sync normalizes legacy string timestamps, preserves manual days and counts stable retries once', async () => {
+  const app = createHarness({ records: [
+    { _id: 'a', _openid: 'user-a', date: '2026-09-16', timestamp: '2026-09-16T01:00:00+08:00', duration: 10, localId: 'same-session' },
+    { _id: 'b', _openid: 'user-a', date: '2026-09-16', timestamp: String(Date.parse('2026-09-16T01:00:00+08:00')), duration: 10, idempotencyKey: 'same-session' },
+    { _id: 'c', _openid: 'user-a', date: '2026-09-16', timestamp: String(Date.parse('2026-09-16T01:59:59.999+08:00')), duration: 20 },
+    { _id: 'd', _openid: 'user-a', date: '2026-09-14', timestamp: '2026-09-16T01:30:00+08:00', source: 'manual', duration: 30 },
+    { _id: 'e', _openid: 'user-a', date: '2026-09-14', timestamp: '2026-09-16T01:30:00', duration: 40 },
+    { _id: 'f', _openid: 'user-b', date: '2026-09-15', timestamp: '2026-09-16T01:30:00+08:00', duration: 99 },
+  ] });
+  const selected = (await app.details('2026-09-15')).data;
+  assert.deepEqual(selected.records.map(row => row.id), ['c', 'a']);
+  assert.equal(selected.totalDuration, 30);
+  assert.ok(selected.records.every(row => typeof row.timestamp === 'number'));
+  assert.equal((await app.details('2026-09-14')).data.totalDuration, 70);
+  assert.equal((await app.details('2026-09-16')).data.count, 0);
+  await app.select('2026-09-15');
+  assert.equal(app.calls.posts[0].body.durationMinutes, 30);
 });

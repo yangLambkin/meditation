@@ -24,18 +24,30 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview } = {}) {
+function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, pending = 0, retry, pendingByDate } = {}) {
   let currentTime = Date.parse(now);
   let isLoggedIn = loggedIn;
   let definition;
-  const calls = { check: [], bind: [], sync: [], preview: [], cloud: [], toast: [], loading: [], hideLoading: 0 };
+  const calls = { check: [], bind: [], sync: [], preview: [], retry: [], summaries: [], cloud: [], toast: [], loading: [], hideLoading: 0 };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
   }
   const mocks = {
     '../../utils/badgeManager': {},
-    '../../utils/checkin.js': { isUserLoggedIn: () => isLoggedIn },
+    '../../utils/checkin.js': {
+      isUserLoggedIn: () => isLoggedIn,
+      getPendingSyncSummary: (options = {}) => {
+        calls.summaries.push(options);
+        const count = pendingByDate ? (options.date ? pendingByDate[options.date] || 0
+          : Object.values(pendingByDate).reduce((sum, value) => sum + value, 0)) : pending;
+        return { total: count, pending: count, failed: 0 };
+      },
+      retryPendingBackups: async options => {
+        calls.retry.push(options);
+        return retry ? retry(options) : { success: pending === 0, uploaded: 0, pending };
+      }
+    },
     '../../utils/dateUtil.js': dateUtil,
     '../../utils/contentSec.js': {},
     '../../utils/bijingApi.js': {
@@ -80,9 +92,100 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   return {
     page, calls,
     setNow(value) { currentTime = Date.parse(value); },
-    setLoggedIn(value) { isLoggedIn = value; }
+    setLoggedIn(value) { isLoggedIn = value; },
+    setPending(value) { pending = value; }
   };
 }
+
+test('manual sync retries pending uploads before requesting its cloud preview', async () => {
+  const upload = deferred();
+  const { page, calls, setPending } = createPage({ pending: 1, retry: () => upload.promise });
+  const opening = page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDetailsLoading, true);
+  assert.equal(calls.retry.length, 1);
+  assert.equal(calls.retry[0].force, true);
+  assert.equal(calls.preview.length, 0);
+  await page.confirmBijingSyncDate();
+  assert.equal(calls.sync.length, 0);
+  setPending(0);
+  upload.resolve({ success: true, uploaded: 1, pending: 0 });
+  await opening;
+  assert.equal(calls.preview.length, 1);
+  assert.equal(page.data.bijingSyncDetailsError, '');
+  await page.confirmBijingSyncDate();
+  assert.equal(calls.sync.length, 1);
+});
+
+test('local-only records block incomplete manual sync and can recover through the existing retry action', async () => {
+  const { page, calls, setPending } = createPage({ pending: 2 });
+  await page.syncBijingNow();
+  assert.equal(calls.preview.length, 0);
+  assert.match(page.data.bijingSyncDetailsError, /2 条记录仅保存在本机/);
+  assert.equal(page.data.bijingSyncDetailsLoading, false);
+  await page.confirmBijingSyncDate();
+  assert.equal(calls.sync.length, 0);
+  setPending(0);
+  await page.retryBijingSyncDetails();
+  assert.equal(page.data.bijingSyncDetailsError, '');
+  assert.equal(calls.preview.length, 1);
+});
+
+test('new pending records invalidate a preview both while loading and before confirmation', async () => {
+  const response = deferred();
+  const first = createPage({ preview: () => response.promise });
+  const opening = first.page.syncBijingNow();
+  first.setPending(1);
+  response.resolve(previewResult('2026-09-16'));
+  await opening;
+  assert.match(first.page.data.bijingSyncDetailsError, /尚未上传/);
+  assert.equal(first.page.data.bijingSyncRecordCount, 0);
+  const second = createPage();
+  await second.page.syncBijingNow();
+  second.setPending(1);
+  await second.page.confirmBijingSyncDate();
+  assert.equal(second.calls.sync.length, 0);
+  assert.match(second.calls.toast.at(-1).title, /待上传/);
+  assert.equal(second.page.data.bijingShowSyncDatePicker, true);
+});
+
+test('canceling during upload retry prevents stale previews and page updates', async () => {
+  const upload = deferred();
+  const { page, calls, setPending } = createPage({ pending: 1, retry: () => upload.promise });
+  const opening = page.syncBijingNow();
+  page.cancelBijingSyncDate();
+  const data = JSON.stringify(page.data);
+  setPending(0);
+  upload.resolve({ success: true, uploaded: 1, pending: 0 });
+  await opening;
+  assert.equal(calls.preview.length, 0);
+  assert.equal(JSON.stringify(page.data), data);
+});
+
+test('pending uploads on other dates do not block the selected sync day', async () => {
+  const pendingByDate = { '2026-09-13': 1, '2026-09-15': 1 };
+  const { page, calls } = createPage({ pendingByDate });
+  await page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDetailsError, '');
+  assert.equal(calls.retry.length, 0, 'an expired record on another day must not block this preview');
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-09-16']]);
+  assert.ok(calls.summaries.every(options => options.date === '2026-09-16'));
+
+  await page.syncBijingNow();
+  await page.onBijingSyncDateChange({ detail: { value: '2026-09-15' } });
+  assert.equal(calls.retry.length, 1, 'the selected day still retries its own pending record');
+  assert.equal(calls.retry[0].force, true);
+  assert.match(page.data.bijingSyncDetailsError, /1 条记录仅保存在本机/);
+  await page.confirmBijingSyncDate();
+  assert.equal(calls.sync.length, 1);
+
+  pendingByDate['2026-09-15'] = 0;
+  await page.retryBijingSyncDetails();
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-09-16'], ['2026-09-15']]);
+  assert.equal(pendingByDate['2026-09-13'], 1, 'unrelated failed uploads remain available for separate handling');
+  assert.ok(calls.summaries.every(options => options.date), 'every preview and submission check must specify its selected date');
+});
 
 test('binding rejects lowercase, mixed-case and missing BJ prefixes before validation or confirmation', async () => {
   for (const bound of [false, true]) {
@@ -117,17 +220,17 @@ test('uppercase BJ numbers are trimmed and bound only after confirmation for fir
   }
 });
 
-test('recent completed sync dates turn over at Beijing 04:00 with accurate calendar-day labels', () => {
+test('recent completed sync dates turn over at Beijing 02:00 with accurate calendar-day labels', () => {
   for (const [now, expected, beforeCutoff] of [
     ['2026-09-17T00:00:00+08:00', ['2026-09-15', '2026-09-14', '2026-09-13'], true],
-    ['2026-09-17T03:59:59.999+08:00', ['2026-09-15', '2026-09-14', '2026-09-13'], true],
-    ['2026-09-17T04:00:00+08:00', ['2026-09-16', '2026-09-15', '2026-09-14'], false],
+    ['2026-09-17T01:59:59.999+08:00', ['2026-09-15', '2026-09-14', '2026-09-13'], true],
+    ['2026-09-17T02:00:00+08:00', ['2026-09-16', '2026-09-15', '2026-09-14'], false],
     ['2026-03-01T00:00:00+08:00', ['2026-02-27', '2026-02-26', '2026-02-25'], true],
-    ['2026-03-01T04:00:00+08:00', ['2026-02-28', '2026-02-27', '2026-02-26'], false],
-    ['2024-03-01T03:59:59+08:00', ['2024-02-28', '2024-02-27', '2024-02-26'], true],
-    ['2024-03-01T04:00:00+08:00', ['2024-02-29', '2024-02-28', '2024-02-27'], false],
+    ['2026-03-01T02:00:00+08:00', ['2026-02-28', '2026-02-27', '2026-02-26'], false],
+    ['2024-03-01T01:59:59+08:00', ['2024-02-28', '2024-02-27', '2024-02-26'], true],
+    ['2024-03-01T02:00:00+08:00', ['2024-02-29', '2024-02-28', '2024-02-27'], false],
     ['2026-01-01T00:00:00+08:00', ['2025-12-30', '2025-12-29', '2025-12-28'], true],
-    ['2026-01-01T04:00:00+08:00', ['2025-12-31', '2025-12-30', '2025-12-29'], false]
+    ['2026-01-01T02:00:00+08:00', ['2025-12-31', '2025-12-30', '2025-12-29'], false]
   ]) {
     const { page } = createPage({ now });
     const options = page.getBijingSyncDateOptions();
@@ -206,10 +309,10 @@ test('crossing Beijing midnight keeps the same completed sync dates available', 
   assert.deepEqual(calls.sync, [['2026-12-28']]);
 });
 
-test('crossing Beijing 04:00 refreshes an expired selection across year and month boundaries', async () => {
+test('crossing Beijing 02:00 refreshes an expired selection across year and month boundaries', async () => {
   for (const [before, after, oldest, expected] of [
-    ['2027-01-01T03:59:59+08:00', '2027-01-01T04:00:00+08:00', '2026-12-28', ['2026-12-31', '2026-12-30', '2026-12-29']],
-    ['2026-03-01T03:59:59+08:00', '2026-03-01T04:00:00+08:00', '2026-02-25', ['2026-02-28', '2026-02-27', '2026-02-26']]
+    ['2027-01-01T01:59:59+08:00', '2027-01-01T02:00:00+08:00', '2026-12-28', ['2026-12-31', '2026-12-30', '2026-12-29']],
+    ['2026-03-01T01:59:59+08:00', '2026-03-01T02:00:00+08:00', '2026-02-25', ['2026-02-28', '2026-02-27', '2026-02-26']]
   ]) {
     const { page, calls, setNow } = createPage({ now: before });
     await page.syncBijingNow();
@@ -428,15 +531,15 @@ test('retry is ignored while preview is loading or the date picker is closed', a
   await opening;
 });
 
-test('retry after Beijing 04:00 replaces an expired date and loads the refreshed default preview', async () => {
+test('retry after Beijing 02:00 replaces an expired date and loads the refreshed default preview', async () => {
   const { page, calls, setNow } = createPage({
-    now: '2027-01-01T03:59:59+08:00',
+    now: '2027-01-01T01:59:59+08:00',
     preview: date => date === '2026-12-28' ? { success: false, error: '读取失败' } : previewResult(date)
   });
   await page.syncBijingNow();
   await page.onBijingSyncDateChange({ detail: { value: '2026-12-28' } });
   assert.equal(page.data.bijingSyncDetailsError, '读取失败');
-  setNow('2027-01-01T04:00:00+08:00');
+  setNow('2027-01-01T02:00:00+08:00');
   await page.retryBijingSyncDetails();
   assert.equal(page.data.bijingSyncDate, '2026-12-31');
   assert.equal(page.data.bijingSyncDetailsDate, '2026-12-31');
@@ -499,11 +602,11 @@ test('record times are formatted in Beijing time and missing/invalid timestamps 
   const { page } = createPage();
   assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-15T16:05:00Z')), '00:05');
   assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-16T15:59:00Z')), '23:59');
-  assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-16T04:00:00+08:00'), '2026-09-16'), '04:00');
+  assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-16T02:00:00+08:00'), '2026-09-16'), '02:00');
   assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-16T23:59:00+08:00'), '2026-09-16'), '23:59');
   assert.equal(page.formatBijingSyncTime(Date.parse('2026-09-17T02:00:00+08:00'), '2026-09-16'), '次日 02:00');
   assert.equal(page.formatBijingSyncTime(Date.parse('2026-10-01T00:00:00+08:00'), '2026-09-30'), '次日 00:00');
-  assert.equal(page.formatBijingSyncTime(Date.parse('2027-01-01T03:59:59+08:00'), '2026-12-31'), '次日 03:59');
+  assert.equal(page.formatBijingSyncTime(Date.parse('2027-01-01T01:59:59+08:00'), '2026-12-31'), '次日 01:59');
   for (const timestamp of [null, undefined, '', '2026-09-16', 0, -1, NaN, Infinity]) {
     assert.equal(page.formatBijingSyncTime(timestamp), '时间未记录');
   }

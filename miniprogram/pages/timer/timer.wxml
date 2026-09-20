@@ -69,7 +69,7 @@
             />
             <text class="font ml-13">{{isCountdown ? '倒计时' : '正计时'}}模式</text>
           </view>
-          <switch checked="{{isCountdown}}" bindchange="toggleMode" />
+          <switch checked="{{isCountdown}}" bindchange="toggleMode" color="#b29764" />
         </view>
         <view class="flex-row justify-between items-center section_4" bindtap="showTimePicker" wx:if="{{isCountdown}}">
           <view class="flex-col items-start">
@@ -82,6 +82,7 @@
           />
         </view>
       </view>
+      <text wx:if="{{!isCountdown}}" class="timer-mode-hint">离开小程序或切到后台时，正计时会自动结束并记录。</text>
         <view class="mt-12 flex-row justify-between items-center section_5" bindtap="showMusicPicker">
         <view class="flex-row items-center">
           <image
@@ -107,6 +108,7 @@
     <view class="time-picker-content">
       <view class="time-picker-header">
         <text class="time-picker-title">选择时长</text>
+        <text class="duration-manage" bindtap="toggleDurationEditing">{{editingDurations ? '完成' : '管理推荐'}}</text>
         <view class="time-picker-close" bindtap="hideTimePicker">✕</view>
       </view>
       <view class="time-picker-options">
@@ -118,7 +120,16 @@
           data-value="{{item.value}}"
         >
           <text class="time-option-text">{{item.text}}</text>
+          <view wx:if="{{editingDurations}}" class="duration-actions">
+            <text class="duration-edit" catchtap="editRecommendedDuration" data-value="{{item.value}}">编辑</text>
+            <text class="duration-delete" catchtap="removeRecommendedDuration" data-value="{{item.value}}">移除</text>
+          </view>
         </view>
+        <text wx:if="{{!timeOptions.length}}" class="duration-empty">添加你常用的静坐时长</text>
+      </view>
+      <view class="duration-footer">
+        <button class="duration-add" bindtap="addRecommendedDuration">＋ 添加推荐</button>
+        <button class="duration-custom" bindtap="chooseCustomDuration">自定义时长</button>
       </view>
     </view>
   </view>
@@ -128,7 +139,7 @@
     <view class="custom-time-overlay" bindtap="hideCustomTimePicker"></view>
     <view class="custom-time-content">
       <view class="custom-time-header">
-        <text class="custom-time-title">自定义时长</text>
+        <text class="custom-time-title">{{customTimeTitle}}</text>
         <view class="custom-time-close" bindtap="hideCustomTimePicker">✕</view>
       </view>
       <view class="custom-time-body">
@@ -182,6 +193,17 @@
           <text class="music-option-text">{{item.text}}</text>
         </view>
       </view>
+    </view>
+  </view>
+  <!-- 感受可留空，直接确认即可完成本次静坐。 -->
+  <view wx:if="{{showCompletionDialog}}" class="completion-modal">
+    <view class="completion-overlay"></view>
+    <view class="completion-content">
+      <text class="completion-title">静坐结束</text>
+      <text class="completion-summary">这一刻，已静坐 {{completionDuration}} 分钟</text>
+      <textarea class="completion-input" placeholder="此刻有什么感受？可以写下来，也可以留白。" value="{{completionText}}" bindinput="onCompletionInput" maxlength="2000" disabled="{{isSavingCompletion}}" show-confirm-bar="{{false}}" />
+      <text class="completion-hint">感受选填，留空也可以直接确定</text>
+      <button class="completion-confirm" bindtap="confirmCompletion" loading="{{isSavingCompletion}}" disabled="{{isSavingCompletion}}">确定</button>
     </view>
   </view>
 </view>

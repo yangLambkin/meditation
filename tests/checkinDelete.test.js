@@ -75,7 +75,7 @@ test('deleting one same-time record uses its cloud ID and recalculates both stor
     assert.equal(app.calls[0].recordId, 'second');
     const result = app.storage.get(KEY);
     const checkins = result.checkinRecords || result;
-    assert.deepEqual(checkins.dailyRecords['2026-09-17'], day([record('first')]));
+    assert.deepEqual(checkins.dailyRecords['2026-09-17'], day([{ ...record('first'), date: '2026-09-17' }]));
     assert.equal(checkins.monthlyStats['2026-09'].total, 1);
     assert.equal(checkins.monthlyStats['2026-09'].totalDuration, 10);
     assert.equal(checkins.userStats.totalDuration, 10);
@@ -238,5 +238,5 @@ test('cloud backup API includes the stable local ID used to locate a record afte
   await api.recordMeditation(10, [], [], NOW, 'stable-local-id');
   assert.equal(calls[0].data.localId, 'stable-local-id');
   await api.recordMeditation(10, [], [], NOW);
-  assert.equal(Object.hasOwn(calls[1].data, 'localId'), false);
+  assert.match(calls[1].data.localId, /^record_/);
 });

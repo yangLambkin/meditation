@@ -17,7 +17,7 @@ function record(id, date, duration = 10, extra = {}) {
 }
 
 function createHarness(records, stats = [], options = {}) {
-  let stored = clone({ meditation_records: records, user_stats: stats });
+  let stored = clone({ meditation_records: records, user_stats: stats, meditation_locks: [] });
   const queries = [];
   const writes = [];
   let transactionCount = 0;
@@ -25,14 +25,18 @@ function createHarness(records, stats = [], options = {}) {
     command: { set: value => ({ replace: clone(value) }) },
     collection(name) {
       return {
+        doc(id) { return { async get() { return { data: clone(stored[name].find(row => row._id === id)) || null }; } }; },
         where(filter) {
-          return { async get() { return { data: clone(stored[name].filter(row => row._openid === filter._openid)) }; } };
-        },
-        async add({ data }) {
-          const id = `new-${stored[name].length}`;
-          writes.push({ name, action: 'add' });
-          stored[name].push({ _id: id, ...clone(data) });
-          return { _id: id };
+          let offset = 0, limit = 20;
+          return {
+            orderBy() { return this; }, skip(value) { offset = value; return this; }, limit(value) { limit = value; return this; },
+            async get() {
+              queries.push({ name, offset, limit });
+              if (options.fail === 'read') throw new Error('query unavailable');
+              const rows = stored[name].filter(row => row._openid === filter._openid).sort((a, b) => a._id.localeCompare(b._id));
+              return { data: clone(rows.slice(offset, offset + limit)) };
+            }
+          };
         }
       };
     },
@@ -43,26 +47,18 @@ function createHarness(records, stats = [], options = {}) {
         collection(name) {
           assert.ok(Object.hasOwn(pending, name));
           return {
-            where(filter) {
-              // Every scan must be scoped to the authenticated caller.
-              assert.deepEqual(clone(filter), { _openid: options.openid === undefined ? OPENID : options.openid });
-              let offset = 0;
-              let limit = 20;
-              return {
-                orderBy(field, order) { assert.equal(field, '_id'); assert.equal(order, 'asc'); return this; },
-                skip(value) { offset = value; return this; },
-                limit(value) { limit = value; return this; },
-                async get() {
-                  queries.push({ name, offset, limit });
-                  if (options.fail === 'read') throw new Error('query unavailable');
-                  const rows = pending[name].filter(row => row._openid === filter._openid)
-                    .sort((a, b) => a._id.localeCompare(b._id));
-                  return { data: clone(rows.slice(offset, offset + limit)) };
-                }
-              };
-            },
+            where() { throw new Error('Transactions must use doc APIs'); },
             doc(id) {
               return {
+                async get() { return { data: clone(pending[name].find(row => row._id === id)) || null }; },
+                async set({ data }) {
+                  writes.push({ name, id, action: 'set' });
+                  if (options.fail === 'add') throw new Error('stats insert unavailable');
+                  const index = pending[name].findIndex(row => row._id === id);
+                  if (index < 0) pending[name].push({ _id: id, ...clone(data) });
+                  else pending[name][index] = { _id: id, ...clone(data) };
+                  return { _id: id };
+                },
                 async remove() {
                   writes.push({ name, id, action: 'remove' });
                   if (options.fail === 'remove') throw new Error('delete unavailable');
@@ -88,13 +84,7 @@ function createHarness(records, stats = [], options = {}) {
                 }
               };
             },
-            async add({ data }) {
-              writes.push({ name, action: 'add' });
-              if (options.fail === 'add') throw new Error('stats insert unavailable');
-              const id = `new-${pending[name].length}`;
-              pending[name].push({ _id: id, ...clone(data) });
-              return { _id: id };
-            }
+            async add() { throw new Error('Transactions must use doc APIs'); }
           };
         }
       };
@@ -108,6 +98,7 @@ function createHarness(records, stats = [], options = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/meditationManager/index.js'), 'utf8'), {
     module, exports: module.exports, Date: FixedDate, console: { log() {}, warn() {}, error() {} },
     require(name) {
+      if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database,
         getWXContext: () => ({ OPENID: options.openid === undefined ? OPENID : options.openid }) };
@@ -148,7 +139,7 @@ test('legacy ISO and numeric timestamps match the exact date; numeric strings al
     const target = record('target', '2026-09-17');
     const timestamp = target.timestamp;
     if (storedISO) target.timestamp = new Date(timestamp).toISOString();
-    const otherDate = record('other-day', '2026-09-16', 15, { timestamp: target.timestamp });
+    const otherDate = record('other-day', '2026-09-16', 15, { timestamp: target.timestamp, source: 'manual' });
     const app = createHarness([target, otherDate]);
     const result = await app.remove({ date: target.date, timestamp: storedISO ? String(timestamp) : new Date(timestamp).toISOString() });
     assert.equal(result.success, true);

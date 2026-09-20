@@ -7,7 +7,7 @@ const MAX_MEMBERS = 50;
 const PAGE_SIZE = 100;
 const DEFAULT_ICON = '/images/icons/team.png';
 const DAY_MS = 24 * 60 * 60 * 1000;
-const PRACTICE_BOUNDARY_HOUR = 4;
+const PRACTICE_BOUNDARY_HOUR = 2;
 const DEFAULT_DAILY_GOAL_MINUTES = 20;
 const MEMBER_BATCH_SIZE = 20;
 
@@ -23,6 +23,7 @@ exports.main = async (event = {}) => {
       case 'deleteTeam': return await deleteTeam(data.teamId, openid);
       case 'joinTeam': return await joinTeam(data, openid);
       case 'leaveTeam': return await leaveTeam(data.teamId, openid);
+      case 'removeTeamMember': return await removeTeamMember(data, openid);
       case 'updateTeam': return await updateTeam(data.teamId, data.teamData, openid);
       case 'getTeamInfo': return await getTeamInfo(data.teamId, openid);
       case 'checkTeamMember': {
@@ -114,7 +115,7 @@ function timestampValue(value) {
     Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
 }
 
-// 北京时间04:00切日等价于时间戳加4小时后读取UTC日期。
+// 北京时间02:00切日等价于时间戳加6小时后读取UTC日期。
 function practiceDate(timestamp) {
   return new Date(timestamp + (8 - PRACTICE_BOUNDARY_HOUR) * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
@@ -287,6 +288,27 @@ async function leaveTeam(teamId, openid) {
   return { success: true, data: { teamId } };
 }
 
+async function removeTeamMember(data, openid) {
+  const teamId = requireId(data.teamId);
+  const memberOpenid = requireId(data.memberOpenid, '成员');
+  const members = await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    if (team.creator !== openid) throw new Error('只有团长可以移除成员');
+    if (memberOpenid === team.creator) throw new Error('不能移除团长本人');
+    const currentMembers = memberIds(team);
+    if (!currentMembers.includes(memberOpenid)) throw new Error('该成员已不在团队中');
+    // 团队文档是成员权限的依据。事务重试时重新读取并按实际成员计算人数，
+    // 并发移除、加入或退出都不会造成重复扣减或负人数。
+    const remaining = currentMembers.filter(id => id !== memberOpenid);
+    await transaction.collection('teams').doc(teamId).update({
+      data: { members: remaining, memberCount: remaining.length, updatedAt: db.serverDate() }
+    });
+    await transaction.collection('team_members').doc(`${teamId}_${memberOpenid}`).remove();
+    return remaining;
+  });
+  return { success: true, data: { teamId, memberOpenid, members, memberCount: members.length } };
+}
+
 async function getTeamInfo(teamId, openid) {
   const team = await activeTeam(db, teamId);
   const allowed = isMember(team, openid);
@@ -326,36 +348,43 @@ async function authorizeMembers(data, requested, openid) {
 
 async function getTeamMembersCheckinData(data, openid) {
   const members = await authorizeMembers(data, data.memberOpenids, openid);
-  const month = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  const month = practiceDate(Date.now()).slice(0, 7);
   const counts = await Promise.all(members.map(async memberOpenid => {
-    const [monthly, total] = await Promise.all([
-      db.collection('meditation_records').where({ _openid: memberOpenid,
-        date: db.command.gte(`${month}-01`).and(db.command.lte(`${month}-31`)) }).count(),
-      db.collection('meditation_records').where({ _openid: memberOpenid }).count()
-    ]);
-    return [memberOpenid, { monthlyCount: monthly.total, totalCount: total.total }];
+    const records = await readAll(db.collection('meditation_records').where({ _openid: memberOpenid })
+      .field({ _id: true, timestamp: true, date: true, source: true, dateSource: true }).orderBy('_id', 'asc'));
+    return [memberOpenid, { monthlyCount: records.filter(record => recordPracticeDate(record).slice(0, 7) === month).length,
+      totalCount: records.length }];
   }));
   return { success: true, data: Object.fromEntries(counts) };
 }
 
 function recordTimestamp(record) {
-  const value = record.timestamp;
-  const timestamp = typeof value === 'number' ? value :
-    typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.parse(`${record.date}T00:00:00+08:00`);
+  const timestamp = timestampValue(record.timestamp);
+  return Number.isFinite(timestamp) ? timestamp : Date.parse(`${record.date}T02:00:00+08:00`);
+}
+
+function recordPracticeDate(record) {
+  if ((record.source === 'manual' || record.dateSource === 'manual') && validDate(record.date)) return record.date;
+  const timestamp = timestampValue(record.timestamp);
+  return Number.isFinite(timestamp) ? practiceDate(timestamp) : validDate(record.date) ? record.date : '';
 }
 
 async function getMemberWeekCheckin(data, openid) {
   const { memberOpenid, weekStart, weekEnd } = data;
   await authorizeMembers(data, [memberOpenid], openid);
-  if (![weekStart, weekEnd].every(date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) || weekStart > weekEnd) {
+  if (![weekStart, weekEnd].every(validDate) || weekStart > weekEnd) {
     throw new Error('打卡查询日期无效');
   }
   const result = await readAll(db.collection('meditation_records').where({
-    _openid: memberOpenid, date: db.command.gte(weekStart).and(db.command.lte(weekEnd))
+    _openid: memberOpenid
   }).orderBy('date', 'desc').orderBy('_id', 'asc'));
-  const records = result.map(record => ({
-    date: record.date, timestamp: recordTimestamp(record), duration: record.duration || 0,
+  const records = result.filter(record => {
+    const date = recordPracticeDate(record);
+    return date >= weekStart && date <= weekEnd;
+  }).map(record => ({
+    date: recordPracticeDate(record), timestamp: recordTimestamp(record), duration: record.duration || 0,
+    ...(typeof record.source === 'string' && record.source ? { source: record.source } : {}),
+    ...(record.dateSource === 'manual' ? { dateSource: 'manual' } : {}),
     emotion: record.emotion || [], experience: record.experience || [],
     textCount: record.textCount || 0, textPreview: record.textPreview || ''
   })).sort((a, b) => b.timestamp - a.timestamp);
@@ -386,7 +415,7 @@ function practiceSession(record, startDate, businessDate, now) {
   const hasTimestamp = Number.isFinite(timestamp);
   if (hasTimestamp && timestamp > now) return null;
   // 缺少有效时间戳的旧记录沿用原始日期，不能先补成零点再回退一天。
-  const date = hasTimestamp ? practiceDate(timestamp) : validDate(record.date) ? record.date : null;
+  const date = recordPracticeDate(record);
   const duration = positiveMinutes(record.duration);
   if (!date || date < startDate || date > businessDate || !duration) return null;
   return { date, timestamp: hasTimestamp ? timestamp : null, duration };
@@ -413,12 +442,13 @@ async function getTeamMemberPracticeRecords(data, openid) {
   for (;;) {
     const filter = { _openid: memberOpenid, ...(cursor === null ? {} : { _id: db.command.gt(cursor) }) };
     const result = await db.collection('meditation_records').where(filter)
-      .field({ _id: true, date: true, timestamp: true, duration: true, source: true })
+      .field({ _id: true, date: true, timestamp: true, duration: true, source: true, dateSource: true })
       .orderBy('_id', 'asc').limit(PAGE_SIZE).get();
     for (const record of result.data) {
       const session = practiceSession(record, startDate, businessDate, now);
       if (session) records.push({ _id: record._id, ...session,
-        ...(typeof record.source === 'string' && record.source ? { source: record.source } : {}) });
+        ...(typeof record.source === 'string' && record.source ? { source: record.source } : {}),
+        ...(record.dateSource === 'manual' ? { dateSource: 'manual' } : {}) });
     }
     if (result.data.length < PAGE_SIZE) break;
     cursor = result.data[result.data.length - 1]._id;
@@ -480,14 +510,14 @@ async function aggregateTeamPractice({ ids, startDate, businessDate, now }) {
 
     // 旧记录的timestamp存在数字/ISO/数字字符串三种类型，date又是自然日。
     // 仅按date裁剪会漏掉次日凌晨或旧的错日数据，因此按当前成员分批扫描，
-    // 只投影统计必需字段，逐页归属04:00业务日，不读取日记和感受内容。
+    // 只投影统计必需字段，逐页归属02:00业务日，不读取日记和感受内容。
     let cursor = null;
     for (;;) {
       // 读取期间新增/删除前面的记录会改变skip偏移；按最后一条_id继续，
       // 避免同一条打卡重复累计或漏掉后一页记录而误判是否达标。
       const pageFilter = cursor === null ? filter : { ...filter, _id: db.command.gt(cursor) };
       const result = await db.collection('meditation_records').where(pageFilter)
-        .field({ _id: true, _openid: true, date: true, timestamp: true, duration: true })
+        .field({ _id: true, _openid: true, date: true, timestamp: true, duration: true, source: true, dateSource: true })
         .orderBy('_id', 'asc').limit(PAGE_SIZE).get();
       for (const record of result.data) {
         const session = practiceSession(record, startDate, businessDate, now);
@@ -532,7 +562,7 @@ function practiceStatus(minutes, goal) {
 }
 
 async function getTeamPracticeReport(teamId, openid, month) {
-  // 一次请求只读取一次当前时间，避免恰好跨04:00时今日与历史窗口不一致。
+  // 一次请求只读取一次当前时间，避免恰好跨02:00时今日与历史窗口不一致。
   const context = await teamPracticeContext(teamId, openid, Date.now());
   const { team, ids, settings, businessDate, hasGoal } = context;
   const history = practiceHistoryWindow(context, month);
@@ -571,7 +601,7 @@ async function getTeamPracticeReport(teamId, openid, month) {
   });
   return { success: true, data: {
     teamId, businessDate,
-    nextResetAt: Date.parse(`${businessDate}T04:00:00+08:00`) + DAY_MS,
+    nextResetAt: Date.parse(`${businessDate}T02:00:00+08:00`) + DAY_MS,
     settings, history, summary, members,
     overview: {
       memberCount: ids.length,

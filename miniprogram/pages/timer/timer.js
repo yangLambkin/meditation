@@ -1,5 +1,10 @@
-// pages/timer/timer.js - 使用wx.createBackgroundTimer的稳定方案
+// pages/timer/timer.js
 const { createScreenBrightnessController } = require('../../utils/screenBrightness');
+const checkinManager = require('../../utils/checkin');
+const contentSec = require('../../utils/contentSec');
+const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
+const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
+const MAX_SESSION_SECONDS = 24 * 60 * 60;
 
 Page({
   data: {
@@ -19,18 +24,20 @@ Page({
     showTimePicker: false,
     showCustomTimePicker: false,
     customTimeInput: "",
-    timeOptions: [
-      { value: 7, text: "7 分钟" },
-      { value: 10, text: "10 分钟" },
-      { value: 15, text: "15 分钟" },
-      { value: 20, text: "20 分钟" },
-      { value: 30, text: "30 分钟" },
-      { value: 60, text: "60 分钟" },
-      { value: "custom", text: "自定义" }
-    ],
-    
+    timeOptions: DEFAULT_DURATIONS.map(value => ({ value, text: `${value} 分钟` })),
+    editingDurations: false,
+    customTimeTitle: '自定义时长',
+    customTimeAction: 'select',
+    editingDuration: null,
     isValidCustomTime: false,
-    
+
+    // 结束后可直接保存，也可附上一段感受。
+    showCompletionDialog: false,
+    completionDuration: 0,
+    completionText: '',
+    isSavingCompletion: false,
+    completionNotice: '',
+
     // 计时器控制
     timerInterval: null,
     
@@ -77,6 +84,10 @@ Page({
     this.screenBrightness = createScreenBrightnessController(wx);
     this.isPageVisible = false;
     this.isUnloaded = false;
+    this.sessionId = null;
+    this.pendingCompletion = wx.getStorageSync('timerPendingCompletion') || null;
+    this.setData({ completionNotice: wx.getStorageSync('timerCompletionNotice') || '' });
+    this.loadDurationOptions();
 
     this.updateDisplay();
     this.updateButtonStates();
@@ -90,6 +101,12 @@ Page({
   onShow() {
     this.isPageVisible = true;
     this.setKeepScreenOn();
+    if (this.pendingCompletion) this.showCompletion();
+    if (this.data.completionNotice) {
+      wx.showToast({ title: this.data.completionNotice, icon: 'none', duration: 2500 });
+      this.setData({ completionNotice: '' });
+      wx.setStorageSync('timerCompletionNotice', '');
+    }
     if (this.data.isRunning) {
       this.syncTimerTime();
       this.startBrightnessControl();
@@ -118,10 +135,12 @@ Page({
       if (this.isUnloaded) return;
       this.isPageVisible = false;
       this.restoreScreenSettings();
-      console.log('📱 应用进入后台，保存状态');
+      // 微信不区分关闭和切后台：正计时在此刻结束，不累计离线时间。
+      if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+        this.finishSession(this.calculateElapsedTime(), { silent: true });
+        return;
+      }
       this.saveTimerState();
-      
-      // 确保后台音频继续播放
       this.ensureBackgroundAudioPlayback();
     };
     wx.onAppShow(this.appShowHandler);
@@ -170,11 +189,16 @@ Page({
       
       this.updateDisplay();
     }
+    if (this.data.isCountdown && expectedElapsed >= this.data.totalTime) {
+      this.handleTimerFinished();
+    } else if (!this.data.isCountdown && expectedElapsed >= MAX_SESSION_SECONDS) {
+      this.finishSession(expectedElapsed);
+    }
   },
 
   // 开始计时器
   startTimer() {
-    if (this.data.isRunning) return;
+    if (this.data.isRunning || this.pendingCompletion || this.data.isSavingCompletion) return;
     const isResuming = this.data.isPaused;
 
     // 清理之前的计时器
@@ -182,7 +206,6 @@ Page({
     
     // 计算开始时间戳
     const now = Date.now();
-    let startTime = now;
     
     if (this.data.isPaused && this.data.pauseTimestamp > 0) {
       // 从暂停状态恢复，累计暂停时间
@@ -192,13 +215,15 @@ Page({
         pauseTimestamp: 0
       });
     } else {
-      // 全新开始
+      // 一次静坐只有一个身份，完成、重试、重启恢复都复用。
+      this.sessionId = `timer_${now}_${Math.random().toString(36).slice(2)}`;
       this.setData({
+        elapsedTime: 0,
+        remainingTime: this.data.totalTime,
         startTimestamp: now,
         totalPausedTime: 0,
         pauseTimestamp: 0
       });
-      startTime = now;
     }
     
     this.setData({
@@ -228,7 +253,8 @@ Page({
     console.log('✅ 启动前台计时器（屏幕常亮模式）');
 
     this.updateButtonStates();
-    console.log('✅ 开始计时，支持后台运行');
+    this.updateDisplay();
+    this.saveTimerState();
   },
 
   // 创建前台计时器
@@ -253,6 +279,11 @@ Page({
     // 检查是否完成（仅倒计时模式：到达设定时长才自动结束）
     if (this.data.isCountdown && elapsed >= this.data.totalTime) {
       this.handleTimerFinished();
+    } else if (!this.data.isCountdown && elapsed >= MAX_SESSION_SECONDS) {
+      this.finishSession(elapsed);
+    } else if (!this.data.isCountdown && elapsed % 5 === 0) {
+      // 若系统没有派发退出回调，最多恢复到最后一个前台检查点。
+      this.saveTimerState();
     }
   },
 
@@ -269,47 +300,112 @@ Page({
     );
   },
 
-  // 处理计时完成
+  // 处理计时完成；以设定的结束时刻入账，不把后台延迟算入静坐。
   handleTimerFinished() {
-    console.log('✅ 计时完成');
-    
-    // 停止所有计时器
-    this.cleanupTimers();
-    
-    // 停止亮度控制并恢复亮度
-    this.stopBrightnessControl();
-    
-    // 停止背景音乐（引导音频）
-    this.stopBackgroundMusic();
-    
-    // 播放收坐音频
-    this.playSessionSound('end');
-    
-    // 更新状态
+    if (!this.data.isRunning && !this.data.isPaused) return;
+    const endedAt = this.data.startTimestamp + this.data.totalPausedTime + this.data.totalTime * 1000;
+    this.finishSession(this.data.totalTime, { endedAt });
+  },
+
+  finishSession(elapsedSeconds, { silent = false, endedAt = Date.now() } = {}) {
+    if (!this.data.isRunning && !this.data.isPaused) return;
+    if (elapsedSeconds >= MAX_SESSION_SECONDS) {
+      elapsedSeconds = MAX_SESSION_SECONDS;
+      endedAt = Math.min(endedAt, this.data.startTimestamp + this.data.totalPausedTime + MAX_SESSION_SECONDS * 1000);
+    }
+    const duration = Math.floor(Math.max(0, elapsedSeconds) / 60);
+    const sessionId = this.sessionId || `timer_${this.data.startTimestamp}_${Math.random().toString(36).slice(2)}`;
+    if (duration >= 1) {
+      this.pendingCompletion = { sessionId, duration, endedAt, text: '' };
+      wx.setStorageSync('timerPendingCompletion', this.pendingCompletion);
+    }
+    this.stopTimer({ playEndSound: !silent });
     this.setData({
-      isRunning: false,
-      isPaused: false,
-      elapsedTime: this.data.totalTime,
-      remainingTime: 0
+      elapsedTime: Math.max(0, elapsedSeconds),
+      remainingTime: Math.max(0, this.data.totalTime - elapsedSeconds)
     });
-    
     this.updateDisplay();
-    this.updateButtonStates();
-    
-    // 显示完成提示
-    wx.showModal({
-      title: '计时结束',
-      content: '计时结束',
-      showCancel: false,
-      success: () => {
-        // 延迟1秒后自动跳转到记录页面
-        setTimeout(() => {
-          wx.navigateTo({
-            url: '/pages/recorder/recorder?duration=' + this.data.duration
-          });
-        }, 1000);
+    if (duration < 1) {
+      if (silent) {
+        this.setCompletionNotice('正计时已结束，不足1分钟未记录');
+      } else {
+        wx.showToast({ title: '不足1分钟，本次不会记录', icon: 'none', duration: 2500 });
       }
+      return;
+    }
+    if (silent) {
+      // 本地写入同步完成，系统随后挂起小程序也不会延长本次记录。
+      const saved = this.saveCompletedSession('');
+      this.setCompletionNotice(saved ? `正计时已结束，${duration}分钟已存本机，待上传` : '正计时已结束，请确认保存记录');
+    } else {
+      this.showCompletion();
+    }
+  },
+
+  setCompletionNotice(notice) {
+    this.setData({ completionNotice: notice });
+    wx.setStorageSync('timerCompletionNotice', notice);
+  },
+
+  showCompletion() {
+    if (!this.pendingCompletion) return;
+    this.setData({
+      showCompletionDialog: true,
+      completionDuration: this.pendingCompletion.duration,
+      completionText: this.pendingCompletion.text || ''
     });
+  },
+
+  onCompletionInput(e) {
+    const text = String(e.detail.value || '').slice(0, 2000);
+    this.setData({ completionText: text });
+    if (this.pendingCompletion) {
+      this.pendingCompletion.text = text;
+      wx.setStorageSync('timerPendingCompletion', this.pendingCompletion);
+    }
+  },
+
+  async confirmCompletion() {
+    if (!this.pendingCompletion || this.data.isSavingCompletion) return;
+    this.setData({ isSavingCompletion: true });
+    const text = this.data.completionText.trim();
+    try {
+      if (text && !await contentSec.checkText(text, 2)) return;
+      if (this.saveCompletedSession(text)) {
+        // 此处只确认同步本地写入；云端确认与失败重试由持久上传队列负责。
+        wx.showToast({ title: '已存本机，待上传', icon: 'none' });
+      }
+    } finally {
+      if (!this.isUnloaded) this.setData({ isSavingCompletion: false });
+    }
+  },
+
+  saveCompletedSession(text) {
+    const completion = this.pendingCompletion;
+    if (!completion) return false;
+    const experience = text ? [{
+      text,
+      timestamp: completion.endedAt,
+      emotion: [],
+      duration: `${completion.duration}分钟`,
+      uniqueId: completion.sessionId
+    }] : [];
+    try {
+      const result = checkinManager.recordCheckin(
+        completion.duration, [], experience, completion.endedAt, completion.sessionId
+      );
+      if (!result || !result.success) throw new Error('本地保存失败');
+      wx.setStorageSync('timerPendingCompletion', null);
+      this.pendingCompletion = null;
+      this.setData({ showCompletionDialog: false, completionText: '' });
+      return true;
+    } catch (error) {
+      console.error('静坐保存失败，保留本次记录以便重试:', error);
+      if (this.isPageVisible && !this.isUnloaded) {
+        wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+      }
+      return false;
+    }
   },
 
   // 暂停计时器
@@ -340,6 +436,7 @@ Page({
     }
     
     this.updateButtonStates();
+    this.saveTimerState();
     console.log('⏸️ 计时器已暂停');
   },
 
@@ -373,35 +470,14 @@ Page({
     
     this.updateDisplay();
     this.updateButtonStates();
+    this.sessionId = null;
+    this.saveTimerState();
     console.log('⏹️ 计时器已停止');
   },
 
-  // 停止（用户点击「停止」按钮）
-  // 两种模式均按实际已用时长处理，满 1 分钟才进入记录页
+  // 用户结束时按实际已用分钟保存，暂停时间不计入。
   handleStop() {
-    if (!this.data.isRunning && !this.data.isPaused) return;
-
-    // 按实际已用秒数向下取整为分钟，不计入暂停时间
-    const elapsedSeconds = this.calculateElapsedTime();
-    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-
-    // 先清理计时资源（停定时器/音乐/亮度），再提示或跳转
-    this.stopTimer();
-
-    if (elapsedMinutes < 1) {
-      wx.showToast({
-        title: '不足1分钟，本次不会记录',
-        icon: 'none',
-        duration: 2500
-      });
-      return;
-    }
-
-    console.log('⏹️ 计时停止，实际时长:', elapsedMinutes + '分钟');
-
-    wx.navigateTo({
-      url: '/pages/recorder/recorder?duration=' + elapsedMinutes
-    });
+    this.finishSession(this.calculateElapsedTime());
   },
 
   // 停止所有计时器
@@ -415,13 +491,13 @@ Page({
   // 更新按钮显示状态
   updateButtonStates() {
     const isRunning = this.data.isRunning;
-    const hasStarted = this.data.elapsedTime > 0;
+    const isActive = isRunning || this.data.isPaused;
     
     this.setData({
       showStartButton: !isRunning,
       showPauseButton: isRunning,
-      showStopButton: hasStarted || isRunning,
-      showResetButton: isRunning || this.data.isPaused || hasStarted
+      showStopButton: isActive,
+      showResetButton: isActive
     });
   },
 
@@ -446,10 +522,16 @@ Page({
     });
   },
 
-  // 保存计时状态
+  // 保存运行检查点。停止状态不保留可恢复的时间戳。
   saveTimerState() {
-    const state = {
-      elapsedTime: this.data.elapsedTime,
+    if (!this.data.isRunning && !this.data.isPaused) {
+      wx.setStorageSync('timerState', null);
+      return;
+    }
+    wx.setStorageSync('timerState', {
+      isCountdown: this.data.isCountdown,
+      sessionId: this.sessionId,
+      elapsedTime: this.calculateElapsedTime(),
       totalTime: this.data.totalTime,
       isRunning: this.data.isRunning,
       isPaused: this.data.isPaused,
@@ -457,49 +539,45 @@ Page({
       pauseTimestamp: this.data.pauseTimestamp,
       totalPausedTime: this.data.totalPausedTime,
       saveTime: Date.now()
-    };
-    
-    wx.setStorageSync('timerState', state);
+    });
   },
 
-  // 恢复计时状态
   restoreTimerState() {
-    const timerState = wx.getStorageSync('timerState');
-    if (timerState && timerState.isRunning) {
-      const timeSinceSave = Math.floor((Date.now() - timerState.saveTime) / 1000);
-      const estimatedElapsed = timerState.elapsedTime + timeSinceSave;
-      
-      this.setData({
-        elapsedTime: estimatedElapsed,
-        remainingTime: Math.max(0, timerState.totalTime - estimatedElapsed),
-        totalTime: timerState.totalTime
-      });
-      
-      wx.showModal({
-        title: '恢复计时',
-        content: `检测到未完成的计时，是否继续？\n已进行: ${Math.floor(estimatedElapsed/60)}分${estimatedElapsed%60}秒`,
-        success: (res) => {
-          if (res.confirm) {
-            // 恢复计时
-            this.setData({
-              startTimestamp: Date.now() - (estimatedElapsed * 1000),
-              totalPausedTime: 0
-            });
-            this.startTimer();
-
-            // 开始计时后才允许调暗；确认弹窗的回调也受页面可见性约束。
-            if (estimatedElapsed >= 60) {
-              console.log('💡 恢复计时，已超过1分钟，立即降低亮度');
-              this.startBrightnessControl(0);
-            }
-          } else {
-            this.stopTimer();
-          }
-        }
-      });
-      
-      this.updateDisplay();
+    const state = wx.getStorageSync('timerState');
+    if (this.pendingCompletion) {
+      wx.setStorageSync('timerState', null);
+      return;
     }
+    if (!state || (!state.isRunning && !state.isPaused)) return;
+    // 旧缓存未保存模式或会话身份，不能据此累加关闭后的时间。
+    if (typeof state.isCountdown !== 'boolean' || !state.sessionId) {
+      wx.setStorageSync('timerState', null);
+      return;
+    }
+    this.sessionId = state.sessionId;
+    this.setData({
+      isCountdown: state.isCountdown,
+      totalTime: state.totalTime,
+      duration: state.totalTime / 60,
+      durationText: `${state.totalTime / 60} 分钟`,
+      isRunning: state.isRunning,
+      isPaused: state.isPaused,
+      startTimestamp: state.startTimestamp,
+      pauseTimestamp: state.pauseTimestamp,
+      totalPausedTime: state.totalPausedTime || 0,
+      elapsedTime: state.elapsedTime,
+      remainingTime: Math.max(0, state.totalTime - state.elapsedTime)
+    });
+    if (!state.isCountdown) {
+      this.finishSession(state.elapsedTime, { silent: true, endedAt: state.saveTime });
+      return;
+    }
+    if (state.isRunning) {
+      this.syncTimerTime();
+      if (this.data.isRunning) this.createForegroundTimer();
+    }
+    this.updateDisplay();
+    this.updateButtonStates();
   },
 
   // 设置屏幕常亮
@@ -564,6 +642,9 @@ Page({
   },
 
   onUnload() {
+    if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+      this.finishSession(this.calculateElapsedTime(), { silent: true });
+    }
     this.isUnloaded = true;
     this.isPageVisible = false;
     wx.offAppShow(this.appShowHandler);
@@ -583,7 +664,7 @@ Page({
     console.log('📱 页面卸载，资源清理完成');
   },
 
-  // 以下为原有UI控制函数（保持不变）
+  // 模式与时长设置
   toggleMode(e) {
     this.stopTimer({ playEndSound: false });
     this.setData({ isCountdown: e.detail.value });
@@ -597,53 +678,88 @@ Page({
     this.updateButtonStates();
   },
 
-  showTimePicker() { this.setData({ showTimePicker: true }); },
+  loadDurationOptions() {
+    const stored = wx.getStorageSync(DURATION_STORAGE_KEY);
+    const values = Array.isArray(stored)
+      ? [...new Set(stored.map(Number).filter(value => Number.isInteger(value) && value >= 1 && value <= 180))]
+      : DEFAULT_DURATIONS;
+    this.setData({ timeOptions: values.sort((a, b) => a - b).map(value => ({ value, text: `${value} 分钟` })) });
+  },
+
+  saveDurationOptions(values) {
+    const durations = [...new Set(values)].sort((a, b) => a - b);
+    wx.setStorageSync(DURATION_STORAGE_KEY, durations);
+    this.setData({ timeOptions: durations.map(value => ({ value, text: `${value} 分钟` })) });
+  },
+
+  showTimePicker() { this.setData({ showTimePicker: true, editingDurations: false }); },
   hideTimePicker() { this.setData({ showTimePicker: false }); },
   hideCustomTimePicker() { this.setData({ showCustomTimePicker: false }); },
+  toggleDurationEditing() { this.setData({ editingDurations: !this.data.editingDurations }); },
+
+  openCustomTime(action, value = null) {
+    this.setData({
+      showTimePicker: false,
+      showCustomTimePicker: true,
+      customTimeAction: action,
+      editingDuration: value,
+      customTimeTitle: action === 'edit' ? '编辑推荐时长' : action === 'add' ? '添加推荐时长' : '自定义时长',
+      customTimeInput: value === null ? '' : String(value),
+      isValidCustomTime: value !== null
+    });
+  },
+
+  addRecommendedDuration() { this.openCustomTime('add'); },
+  chooseCustomDuration() { this.openCustomTime('select'); },
+  editRecommendedDuration(e) { this.openCustomTime('edit', Number(e.currentTarget.dataset.value)); },
+  removeRecommendedDuration(e) {
+    const value = Number(e.currentTarget.dataset.value);
+    this.saveDurationOptions(this.data.timeOptions.map(item => item.value).filter(item => item !== value));
+  },
 
   onCustomTimeInput(e) {
     const value = e.detail.value;
-    const minutes = parseInt(value);
+    const minutes = Number(value);
     this.setData({
       customTimeInput: value,
-      isValidCustomTime: !isNaN(minutes) && minutes >= 1 && minutes <= 180
+      isValidCustomTime: /^\d+$/.test(value) && Number.isInteger(minutes) && minutes >= 1 && minutes <= 180
     });
   },
 
   confirmCustomTime() {
-    if (!this.data.isValidCustomTime) return;
-    const minutes = parseInt(this.data.customTimeInput);
-    const totalSeconds = minutes * 60;
-    
+    const minutes = Number(this.data.customTimeInput);
+    if (!this.data.isValidCustomTime || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) return;
+    const action = this.data.customTimeAction;
+    if (action === 'add' || action === 'edit') {
+      const values = this.data.timeOptions.map(item => item.value)
+        .filter(value => action !== 'edit' || value !== this.data.editingDuration);
+      this.saveDurationOptions([...values, minutes]);
+      this.setData({ showCustomTimePicker: false, showTimePicker: true, customTimeInput: '' });
+      return;
+    }
+    this.applyDuration(minutes);
+  },
+
+  applyDuration(minutes) {
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 180) return;
+    this.stopTimer({ playEndSound: false });
     this.setData({
       duration: minutes,
-      durationText: minutes + " 分钟",
-      totalTime: totalSeconds,
-      remainingTime: totalSeconds,
+      durationText: `${minutes} 分钟`,
+      totalTime: minutes * 60,
+      remainingTime: minutes * 60,
+      showTimePicker: false,
       showCustomTimePicker: false,
-      customTimeInput: ""
+      customTimeInput: ''
     });
-    
     this.updateDisplay();
-    if (this.data.isRunning || this.data.isPaused) this.stopTimer({ playEndSound: false });
   },
 
   selectDuration(e) {
     const value = e.currentTarget.dataset.value;
-    if (value === "custom") {
-      this.setData({ showTimePicker: false, showCustomTimePicker: true, customTimeInput: "" });
-    } else {
-      const totalSeconds = value * 60;
-      this.setData({
-        duration: value,
-        durationText: value + " 分钟",
-        totalTime: totalSeconds,
-        remainingTime: totalSeconds,
-        showTimePicker: false
-      });
-      this.updateDisplay();
-      if (this.data.isRunning || this.data.isPaused) this.stopTimer({ playEndSound: false });
-    }
+    if (value === 'custom') return this.chooseCustomDuration();
+    if (this.data.editingDurations) return this.editRecommendedDuration(e);
+    this.applyDuration(Number(value));
   },
 
   createAudioPlayer() {

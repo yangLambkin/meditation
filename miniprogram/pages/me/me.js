@@ -49,6 +49,18 @@ Page({
   },
 
   onShow() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
+      this.calculateUserStatistics();
+      if (this.data.bijingShowSyncDatePicker) {
+        const options = this.getBijingSyncDateOptions();
+        const date = options.some(option => option.date === this.data.bijingSyncDate)
+          ? this.data.bijingSyncDate : options[0].date;
+        const changed = date !== this.data.bijingSyncDate;
+        this.setData({ bijingSyncDateOptions: options, bijingSyncDate: date });
+        if (changed) this.loadBijingSyncDetails(date);
+      }
+    });
     // 页面显示时更新数据
     this.getUserData();
   },
@@ -489,11 +501,11 @@ Page({
     this.setData({ bijingShowBindInput: false, bijingInputValue: '' });
   },
 
-  // 同步日按北京时间 04:00 至次日 04:00 划分，只提供最近三个已结束的同步日
+  // 同步日按北京时间 02:00 至次日 02:00 划分，只提供最近三个已结束的同步日
   getBijingSyncDateOptions() {
     const now = Date.now();
-    const syncNow = now - 4 * 3600 * 1000;
-    const beforeCutoff = dateUtil.getBusinessDate(new Date(syncNow)) !== dateUtil.getBusinessDate(new Date(now));
+    const syncNow = now;
+    const beforeCutoff = dateUtil.getBusinessDate(now) !== new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const labels = ['昨天', '前天', '大前天', '4天前'];
     return [1, 2, 3].map((daysAgo, index) => ({
       label: labels[index + (beforeCutoff ? 1 : 0)],
@@ -538,7 +550,7 @@ Page({
     if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp <= 0) return '时间未记录';
     const date = new Date(timestamp + 8 * 3600 * 1000);
     if (Number.isNaN(date.getTime())) return '时间未记录';
-    const isNextDay = recordDate && dateUtil.getBusinessDate(new Date(timestamp - 24 * 3600 * 1000)) === recordDate;
+    const isNextDay = recordDate && date.toISOString().slice(0, 10) > recordDate;
     return `${isNextDay ? '次日 ' : ''}${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
   },
 
@@ -557,8 +569,20 @@ Page({
       bijingSyncAlreadySynced: false
     });
     try {
+      // 先补传本机的新待上传记录，避免把缺少记录的云端预览当成完整数据。
+      if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
+        await checkinManager.retryPendingBackups({ force: true });
+        if (!isCurrent()) return;
+      }
+      const pendingCount = checkinManager.getPendingSyncSummary({ date: recordDate }).pending;
+      if (pendingCount > 0) {
+        throw new Error(`仍有 ${pendingCount} 条记录仅保存在本机，请联网后重试上传，再同步必经`);
+      }
       const res = await bijingApi.getBijingSyncDateDetails(recordDate);
       if (!isCurrent()) return;
+      if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
+        throw new Error('有记录尚未上传，请重试加载明细后再同步');
+      }
       if (!res.success) throw new Error(res.error || '获取明细失败');
       const details = res.data;
       if (!details || details.date !== recordDate || !Array.isArray(details.records)) {
@@ -599,7 +623,7 @@ Page({
       return;
     }
     const recordDate = this.data.bijingSyncDate;
-    // 弹窗跨过北京时间 04:00 时重新校验，不能提交已经超出最近三个同步日的日期
+    // 弹窗跨过北京时间 02:00 时重新校验，不能提交已经超出最近三个同步日的日期
     const options = this.getBijingSyncDateOptions();
     if (!options.some(option => option.date === recordDate)) {
       this.setData({ bijingSyncDateOptions: options, bijingSyncDate: options[0].date });
@@ -613,6 +637,11 @@ Page({
     }
     if (this.data.bijingSyncDetailsError || this.data.bijingSyncDetailsDate !== recordDate) {
       wx.showToast({ title: '请先重试加载当天明细', icon: 'none' });
+      return;
+    }
+    if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
+      this.setData({ bijingSyncDetailsError: '有记录尚未上传，请重试加载明细后再同步' });
+      wx.showToast({ title: '有记录待上传，请先重试加载明细', icon: 'none' });
       return;
     }
     if (!this.data.bijingSyncRecordCount || this.data.bijingSyncDuration <= 0) {
@@ -653,10 +682,14 @@ Page({
   },
 
   onHide() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     this.cancelBijingSyncDate();
   },
 
   onUnload() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     this._bijingSyncDetailsRequestId++;
   },
 

@@ -35,11 +35,11 @@
     <text class="empty-records-title">当天暂无静坐记录</text>
     <text class="empty-records-description">可以切换日期，回看每一次静坐。</text>
   </view>
-  <view class="record-card" wx:for="{{recordList}}" wx:for-item="record" wx:key="recordKey">
+  <view class="record-card" wx:for="{{recordList}}" wx:for-item="record" wx:key="recordKey" catchlongpress="showRecordActions" data-record-key="{{record.recordKey}}">
     <view class="record-heading">
       <view class="record-title"><text class="record-duration">{{record.duration}}<text class="record-duration-unit"> 分钟</text></text><text class="record-time">{{record.timeLabel}}</text></view>
-      <button wx:if="{{!isMemberHistory}}" class="record-more" catchtap="showRecordActions" data-record-key="{{record.recordKey}}" disabled="{{deleteBusy}}" loading="{{deletingRecordKey === record.recordKey}}" aria-label="{{record.timeLabel}} 静坐记录的更多操作" hover-class="record-more-hover">···</button>
     </view>
+    <text wx:if="{{record.syncError}}" class="record-sync-error">已保存在本机，云端同步失败：{{record.syncError}}</text>
     <view class="emotion-tags" wx:if="{{record.emotion.length}}">
       <text class="emotion-tag" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
     </view>

@@ -1,11 +1,12 @@
+const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const statusLabels = { not_practiced: '尚未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 
-// 练习日按北京时间 04:00 切换；页面统计日期仍以云端报告为准。
+// 练习日按北京时间 02:00 切换；页面统计日期仍以云端报告为准。
 function currentPracticeDate() {
-  return new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return getBusinessDate(Date.now());
 }
 
 function validDate(value) {
@@ -26,7 +27,7 @@ Page({
     settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', draftStartDate: '', draftGoalMinutes: '', dateMax: '',
     draftName: '', draftDescription: '', draftIcon: '', isChoosingIcon: false,
     draftPracticeRulesEnabled: false,
-    settingsError: '', isSaving: false, isDeleting: false,
+    settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '',
     isPreparingInvite: false, inviteReady: false, inviteError: '',
     inviteDialogOpen: false, inviteExpiresLabel: ''
   },
@@ -96,7 +97,7 @@ Page({
       this._reportMembers = [];
       this.setData({ teamInfo: null, report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
-    if (this.data.isDeleting || this.data.isSaving) return;
+    if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingTeamId === teamId) return;
     const version = this._loadVersion = (this._loadVersion || 0) + 1;
     this._loadingOpenid = openid;
@@ -153,7 +154,7 @@ Page({
     const validCount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
     if (!report || report.teamId !== this.data.teamInfo._id || !validDate(report.businessDate) ||
         !report.settings || !(report.settings.practiceStartDate === null ? validDate(report.settings.effectivePracticeStartDate) : validDate(report.settings.practiceStartDate)) ||
-        !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= 1440)) || report.settings.dayBoundaryHour !== 4 ||
+        !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= 1440)) || report.settings.dayBoundaryHour !== 2 ||
         !report.history || !validCount(report.history.totalDays) || !validDate(report.history.startDate) || !validDate(report.history.endDate) ||
         !report.summary || !summaryKeys.every(key => validCount(report.summary[key])) || !Array.isArray(report.members) ||
         !report.members.every(member => member && member.openid && statusLabels[member.todayStatus] && counts.every(key => validCount(member[key]))) ||
@@ -430,7 +431,51 @@ Page({
 
   canManageTeam() {
     const openid = wx.getStorageSync('userOpenId');
-    return !!this.data.teamInfo && this.data.isCreator && this._viewerOpenid === openid && this.data.teamInfo.creator === openid;
+    return !this.data.removingMemberId && !!this.data.teamInfo && this.data.isCreator && this._viewerOpenid === openid && this.data.teamInfo.creator === openid;
+  },
+
+  async confirmRemoveMember(event) {
+    if (!this.canManageTeam() || !this._isVisible || this._unloaded || this._removePrompt ||
+        this.data.isLoading || this.data.isSaving || this.data.isDeleting) return;
+    const memberOpenid = event && event.currentTarget && event.currentTarget.dataset.memberOpenid;
+    const member = this.data.teamMembers.find(item => item.openid === memberOpenid);
+    const teamId = this.data.teamId;
+    const openid = wx.getStorageSync('userOpenId');
+    const visibilityVersion = this._editVisibilityVersion || 0;
+    if (!member || memberOpenid === openid || member.isCreator) return;
+    this._removePrompt = true;
+    let removed = false;
+    const isCurrent = () => !this._unloaded && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
+    try {
+      const confirmed = await new Promise(resolve => wx.showModal({
+        title: '移除成员', content: `确定将「${member.nickname}」移出团队吗？对方的个人静坐记录会保留。`,
+        confirmText: '移除', confirmColor: '#a4594e', cancelText: '取消',
+        success: result => resolve(result.confirm), fail: () => resolve(false)
+      }));
+      if (!confirmed || !isCurrent() || !this._isVisible || visibilityVersion !== (this._editVisibilityVersion || 0) ||
+          !this.canManageTeam() || this.data.isSaving || this.data.isDeleting) return;
+      this._loadVersion = (this._loadVersion || 0) + 1;
+      this.clearResetTimer();
+      this.setData({ removingMemberId: memberOpenid, isLoading: false });
+      const result = await teamManager.removeTeamMember(teamId, memberOpenid);
+      if (!result || !result.success) throw new Error(result && result.error || '移除失败，请重试');
+      if (!isCurrent()) return;
+      removed = true;
+      // 云端已确认移除，立即清除旧统计，避免刷新失败时继续显示该成员。
+      this._reportMembers = [];
+      const teamMembers = this.data.teamMembers.filter(item => item.openid !== memberOpenid);
+      this.setData({ teamMembers, teamInfo: { ...this.data.teamInfo, members: teamMembers, memberCount: teamMembers.length },
+        report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [] });
+      wx.showToast({ title: '已移除成员', icon: 'success' });
+    } catch (error) {
+      if (isCurrent()) wx.showModal({ title: '移除失败', content: error.message || '请稍后重试', showCancel: false });
+    } finally {
+      this._removePrompt = false;
+      if (!this._unloaded) this.setData({ removingMemberId: '' });
+      if (removed && isCurrent() && this._isVisible) await this.loadTeamData();
+      else if (!this._unloaded && !isCurrent() && this._isVisible) await this.loadTeamData();
+      else if (isCurrent() && this.data.report) this.scheduleReset(this.data.report.nextResetAt);
+    }
   },
 
   async saveSettings() {

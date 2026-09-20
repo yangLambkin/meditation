@@ -199,6 +199,33 @@ class TeamManager {
     return this.callCloud('deleteTeam', { teamId: team ? teamIdOf(team) : teamId }, openid);
   }
 
+  async removeTeamMember(teamId, memberOpenid) {
+    try {
+      const openid = this.ensureCurrentUser();
+      if (!openid) throw new Error('用户未登录');
+      const team = this.teams.find(item => teamIdOf(item) === teamId);
+      if (!team || team.isActive === false) throw new Error('团队不存在，请刷新后重试');
+      if (team.creator !== openid) throw new Error('只有团长可以移除成员');
+      if (memberOpenid === openid) throw new Error('不能移除团长本人');
+      if (!memberIdsOf(team).includes(memberOpenid)) throw new Error('该成员已不在团队中');
+      const data = await this.callCloud('removeTeamMember', { teamId, memberOpenid }, openid);
+      if (openid !== currentUser()) throw new Error('登录状态已变更，请重新进入团队');
+      if (!data || data.teamId !== teamId || !Array.isArray(data.members) || data.members.includes(memberOpenid)) {
+        throw new Error('成员变更结果异常，请刷新团队');
+      }
+      this.teams = this.loadTeamsFromStorage().map(item => teamIdOf(item) === teamId
+        ? { ...item, members: [...new Set(data.members)], memberCount: new Set(data.members).size } : item);
+      this.cacheRevision++;
+      this.saveTeamsToStorage(openid);
+      this.cleanupJoinedTeamsFromCloud(this.teams);
+      try { wx.removeStorageSync('allTeams_cache'); } catch (_) {}
+      return { success: true, data };
+    } catch (error) {
+      console.error('移除团队成员失败:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   loadJoinedTeamsFromStorage() {
     return this.readTeams('joinedTeams');
   }

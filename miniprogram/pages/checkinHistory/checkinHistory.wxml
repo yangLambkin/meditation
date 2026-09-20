@@ -30,11 +30,11 @@
       <text class="checkin-day-date">{{day.date}}</text>
       <view class="checkin-day-summary"><text>{{day.count}} 次 · {{day.totalDuration}} 分钟</text><text class="checkin-day-chevron">›</text></view>
     </view>
-    <view class="checkin-record" wx:for="{{day.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" data-date="{{day.date}}" hover-class="checkin-record-active">
+    <view class="checkin-record" wx:for="{{day.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{day.date}}" hover-class="checkin-record-active">
       <view class="checkin-record-heading">
         <view class="checkin-record-main"><text class="checkin-record-duration">{{record.duration}} 分钟</text><text class="checkin-record-time">{{record.timeLabel}}</text></view>
-        <button wx:if="{{!isMemberHistory}}" class="checkin-record-more" catchtap="deleteCheckinRecord" data-id="{{record.id}}" disabled="{{checkinDeleting}}" loading="{{deletingCheckinId === record.id}}" aria-label="更多记录操作" hover-class="history-control-active">···</button>
       </view>
+      <text wx:if="{{record.syncError}}" class="record-sync-error">已保存在本机，云端同步失败：{{record.syncError}}</text>
       <view wx:if="{{record.emotion.length}}" class="checkin-record-emotions">
         <text class="checkin-emotion" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
       </view>

@@ -1,3 +1,4 @@
+const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
 
 Page({
@@ -40,8 +41,7 @@ Page({
   getPracticeDate(value) {
     const date = value ? new Date(value) : new Date();
     if (!Number.isFinite(date.getTime())) return '';
-    // 北京时间04:00换日，即UTC时间加4小时后取日期。
-    return new Date(date.getTime() + 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return getBusinessDate(date);
   },
 
   onLoad() {

@@ -28,6 +28,7 @@ function createPage({ openid = 'openid-user', create, checkText, checkImage, nav
     Page: value => { definition = value; },
     Date: FixedDate,
     require(name) {
+      if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return { createTeam: async info => {
         calls.create.push({ ...info });
         return create ? create(info) : { success: true, team: { _id: 'cloud-team', ...info } };
@@ -248,20 +249,20 @@ test('cancelled or rejected avatar selection keeps the previous approved icon an
 });
 
 
-test('practice rules start unset while the date limit rolls over at Beijing 04:00', () => {
+test('practice rules start unset while the date limit rolls over at Beijing 02:00', () => {
   for (const [now, expected] of [
-    ['2026-09-19T03:59:59.999+08:00', '2026-09-18'],
-    ['2026-09-19T04:00:00+08:00', '2026-09-19'],
+    ['2026-09-19T01:59:59.999+08:00', '2026-09-18'],
+    ['2026-09-19T02:00:00+08:00', '2026-09-19'],
     ['2026-09-19T23:59:59+08:00', '2026-09-19'],
-    ['2026-10-01T03:59:59+08:00', '2026-09-30'],
-    ['2026-10-01T04:00:00+08:00', '2026-10-01'],
-    ['2024-03-01T03:59:59+08:00', '2024-02-29'],
-    ['2026-03-01T03:59:59+08:00', '2026-02-28'],
-    ['2027-01-01T03:59:59+08:00', '2026-12-31'],
-    ['2027-01-01T04:00:00+08:00', '2027-01-01'],
-    ['2026-09-18T19:59:59.999Z', '2026-09-18'],
-    ['2026-09-18T20:00:00Z', '2026-09-19'],
-    ['2026-09-18T13:00:00-07:00', '2026-09-19']
+    ['2026-10-01T01:59:59+08:00', '2026-09-30'],
+    ['2026-10-01T02:00:00+08:00', '2026-10-01'],
+    ['2024-03-01T01:59:59+08:00', '2024-02-29'],
+    ['2026-03-01T01:59:59+08:00', '2026-02-28'],
+    ['2027-01-01T01:59:59+08:00', '2026-12-31'],
+    ['2027-01-01T02:00:00+08:00', '2027-01-01'],
+    ['2026-09-18T17:59:59.999Z', '2026-09-18'],
+    ['2026-09-18T18:00:00Z', '2026-09-19'],
+    ['2026-09-18T11:00:00-07:00', '2026-09-19']
   ]) {
     const { page } = createPage({ now });
     assert.equal(page.data.practiceRulesEnabled, false, now);
@@ -337,11 +338,11 @@ test('impossible, malformed and future practice dates never reach moderation or 
     assert.equal(page.data.isCreating, false);
     assert.match(calls.toast.at(-1).title, /有效日期/);
   }
-  const { page, calls } = createPage({ now: '2026-09-19T03:59:59+08:00' });
+  const { page, calls } = createPage({ now: '2026-09-19T01:59:59+08:00' });
   page.onPracticeRulesChange({ detail: { value: true } });
   page.data.practiceStartDate = '2026-09-19';
   await page.createTeam();
-  assert.equal(calls.create.length, 0, 'the current calendar date has not become a practice day before 04:00');
+  assert.equal(calls.create.length, 0, 'the current calendar date has not become a practice day before 02:00');
 });
 
 test('a specified daily goal rejects malformed values, fractions and values outside 1 to 1440 minutes', async () => {
@@ -385,13 +386,13 @@ test('quick goals and practice dates cannot change a pending or completed creati
   assert.equal(page.data.dailyGoalMinutes, 10);
 });
 
-test('returning after the 04:00 cutoff refreshes the date limit and preserves the chosen rules', async () => {
-  const { page, calls, setNow } = createPage({ now: '2026-09-19T03:59:59+08:00' });
+test('returning after the 02:00 cutoff refreshes the date limit and preserves the chosen rules', async () => {
+  const { page, calls, setNow } = createPage({ now: '2026-09-19T01:59:59+08:00' });
   page.onPracticeRulesChange({ detail: { value: true } });
   page.onPracticeStartDateChange({ detail: { value: '2026-09-01' } });
   page.selectDailyGoal({ currentTarget: { dataset: { minutes: '30' } } });
   page.onHide();
-  setNow('2026-09-19T04:00:00+08:00');
+  setNow('2026-09-19T02:00:00+08:00');
   page.onShow();
   assert.equal(page.data.maxPracticeStartDate, '2026-09-19');
   assert.equal(page.data.practiceStartDate, '2026-09-01');

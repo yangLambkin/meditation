@@ -81,6 +81,7 @@ function createPage(kind, options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(utilsPath, filename), 'utf8'), {
       module, require: loadModule, wx, getApp, Date: ClockDate, console: silentConsole
     }, { filename });
+    if (filename === 'dateUtil.js') module.exports.watchBusinessDate = () => () => {};
     modules[filename] = module.exports;
     return module.exports;
   }
@@ -277,10 +278,10 @@ test('member day and month navigation preserve encoded identity and the selected
   assert.equal(assertNavigationContext(monthly.calls.navigations[0].url, '/pages/history/history', context).get('date'), '2026-09-16');
 });
 
-test('member month totals use the 04:00 boundary and preserve legacy records without timestamps', async () => {
+test('member month totals use the 02:00 boundary and preserve legacy records without timestamps', async () => {
   const records = [
-    record('before-boundary', '2026-08-31', '2026-09-01T03:59:00+08:00', 10),
-    record('at-boundary', '2026-09-01', '2026-09-01T04:00:00+08:00', 20),
+    record('before-boundary', '2026-08-31', '2026-09-01T01:59:00+08:00', 10),
+    record('at-boundary', '2026-09-01', '2026-09-01T02:00:00+08:00', 20),
     record('legacy', '2026-08-30', null, 30)
   ];
   const { page, calls } = createPage('checkinHistory', { records, query: { ...defaultQuery, date: '2026-08-31', month: '2026-08' } });
@@ -289,7 +290,7 @@ test('member month totals use the 04:00 boundary and preserve legacy records wit
   assert.equal(page.data.monthDuration, 40);
   assert.equal(page.data.monthDayCount, 2);
   assert.deepEqual(plain(page.data.monthDays).map(day => day.date), ['2026-08-31', '2026-08-30']);
-  assert.equal(page.data.monthDays[0].records[0].timeLabel, '次日 03:59');
+  assert.equal(page.data.monthDays[0].records[0].timeLabel, '次日 01:59');
   assert.equal(page.data.monthDays[1].records[0].timeLabel, '时间未记录');
   page.nextMonth();
   assert.equal(page.data.monthCount, 1);
@@ -300,7 +301,7 @@ test('member month totals use the 04:00 boundary and preserve legacy records wit
   await daily.page.onShow();
   assert.equal(daily.page.data.recordCount, 1);
   assert.equal(daily.page.data.totalDuration, 10);
-  assert.equal(daily.page.data.recordList[0].timeLabel, '次日 03:59');
+  assert.equal(daily.page.data.recordList[0].timeLabel, '次日 01:59');
 });
 
 test('member start date limits daily/monthly navigation and returning to a daily page', async () => {
@@ -321,14 +322,23 @@ test('member start date limits daily/monthly navigation and returning to a daily
   assert.ok(assertNavigationContext(monthly.calls.redirects[0].url, '/pages/history/history').get('date') >= '2026-09-12');
 });
 
-test('member loading and read errors are visible while delete controls are hidden in both templates', () => {
-  for (const [kind, action] of [['history', 'showRecordActions'], ['checkinHistory', 'deleteCheckinRecord']]) {
+test('member loading and read errors are visible and deletion is available only through personal long press', () => {
+  for (const kind of ['history', 'checkinHistory']) {
     const wxml = fs.readFileSync(path.join(__dirname, `../miniprogram/pages/${kind}/${kind}.wxml`), 'utf8');
-    const button = wxml.match(new RegExp(`<button\\b[^>]*catchtap="${action}"[^>]*>`));
-    assert.ok(button, `${kind} retains the personal record action button`);
-    assert.match(button[0], /wx:if="\{\{!isMemberHistory\}\}"/);
+    assert.match(wxml, /catchlongpress=/);
+    assert.doesNotMatch(wxml, /<button\b[^>]*catchtap="(?:showRecordActions|deleteCheckinRecord)"/);
     assert.match(wxml, /memberLoading/);
     assert.match(wxml, /memberError/);
     assert.match(wxml, /memberName/);
+  }
+});
+
+test('member history keeps an explicit manual business date even when uploaded on a later day', async () => {
+  for (const marker of [{ source: 'manual' }, { dateSource: 'manual' }]) {
+    const records = [{ ...record('manual', '2026-09-17', '2026-09-19T12:00:00+08:00', 12), ...marker }];
+    const { page } = createPage('history', { records });
+    await page.onShow();
+    assert.equal(page.data.recordCount, 1);
+    assert.equal(page.data.totalDuration, 12);
   }
 });

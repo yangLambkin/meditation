@@ -6,14 +6,13 @@ cloud.init({
 });
 
 const db = cloud.database();
-const _ = db.command;
 
 // ===== 业务日期工具：与 meditationManager / dateUtil 完全一致 =====
-// 采用"时间 +8h 后读 UTC 分量"技巧，使结果不受运行环境本地时区影响，
+// 采用"时间 +6h 后读 UTC 分量"技巧，使结果不受运行环境本地时区影响，
 // 保证云端与前端使用完全一致的东八区日期基准，避免时差导致同步错日期。
 function getBusinessDate(date) {
-  const d = date ? new Date(date) : new Date();
-  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const d = new Date(date === undefined ? Date.now() : date);
+  const utc8 = new Date(d.getTime() + 6 * 60 * 60 * 1000);
   const y = utc8.getUTCFullYear();
   const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
   const day = String(utc8.getUTCDate()).padStart(2, '0');
@@ -21,21 +20,30 @@ function getBusinessDate(date) {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SYNC_CUTOFF_MS = 4 * 60 * 60 * 1000;
 
-// 必经同步单独按北京时间 04:00 切日；原始打卡 date 仍保留自然日。
+
+// 必经同步按北京时间 02:00 切日，与所有静坐业务日保持一致。
 function getSyncBusinessDate(timestamp) {
-  return getBusinessDate(new Date(timestamp - SYNC_CUTOFF_MS));
+  return getBusinessDate(timestamp);
 }
 
 function getSyncDateWindow(dateStr) {
-  const start = Date.parse(`${dateStr}T04:00:00+08:00`);
+  const start = Date.parse(`${dateStr}T02:00:00+08:00`);
   return { start, end: start + DAY_MS };
 }
 
-function hasRecordTimestamp(timestamp) {
-  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 &&
-    !Number.isNaN(new Date(timestamp).getTime());
+function recordTimestamp(value) {
+  let timestamp = NaN;
+  if (typeof value === 'number') timestamp = value;
+  else if (typeof value === 'string' && /^\d+$/.test(value)) timestamp = Number(value);
+  else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) timestamp = Date.parse(value);
+  else if (value && typeof value.getTime === 'function') timestamp = value.getTime();
+  return Number.isSafeInteger(timestamp) && timestamp > 0 && Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
+}
+
+function isDateLabel(date) {
+  return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 }
 
 // ===== 外部系统配置（全部走环境变量，前端不持有） =====
@@ -80,30 +88,34 @@ async function postMeditationRecord(studentNumber, recordDate, durationMinutes) 
   return res.data; // { success, data } 或 { success:false, message }
 }
 
-// 预览和上报共用同一批云端记录，避免原自然日 date 丢掉次日凌晨的打卡。
+// 预览和上报共用同一批云端记录。旧数据的 timestamp 可能是数字串或带时区 ISO，
+// 按用户分页读取后统一归属，避免数据库数值范围查询漏掉次日凌晨的历史记录。
 async function getDayRecords(openid, dateStr) {
   const { start, end } = getSyncDateWindow(dateStr);
-  const filter = _.or([
-    { _openid: openid, timestamp: _.gte(start).and(_.lt(end)) },
-    { _openid: openid, date: dateStr },
-  ]);
   const records = [];
+  const identities = new Set();
   const limit = 100;
   for (let skip = 0; ; skip += limit) {
     const result = await db.collection('meditation_records')
-      .where(filter)
-      .field({ _id: true, date: true, timestamp: true, duration: true })
+      .where({ _openid: openid })
+      .field({ _id: true, date: true, timestamp: true, duration: true, source: true, dateSource: true, localId: true, idempotencyKey: true })
       .orderBy('_id', 'asc')
       .skip(skip)
       .limit(limit)
       .get();
     for (const record of result.data) {
-      const hasTime = hasRecordTimestamp(record.timestamp);
+      const keys = [record.localId, record.idempotencyKey].filter(Boolean);
+      const duplicate = keys.some(key => identities.has(key));
+      keys.forEach(key => identities.add(key));
+      if (duplicate) continue;
+      const timestamp = recordTimestamp(record.timestamp);
+      const hasTime = Number.isFinite(timestamp);
       // 旧记录缺少有效时间戳时，只能沿用原日期；不能用上传时间推测打卡时间。
-      if (hasTime ? record.timestamp < start || record.timestamp >= end : record.date !== dateStr) continue;
+      const manualDate = (record.source === 'manual' || record.dateSource === 'manual') && isDateLabel(record.date);
+      if (manualDate ? record.date !== dateStr : hasTime ? timestamp < start || timestamp >= end : record.date !== dateStr) continue;
       records.push({
         id: record._id,
-        timestamp: hasTime ? record.timestamp : null,
+        timestamp: hasTime ? timestamp : null,
         duration: typeof record.duration === 'number' && Number.isFinite(record.duration) ? record.duration : 0,
       });
     }
@@ -243,9 +255,9 @@ async function syncDate(openid, dateStr) {
     return { openid, date: dateStr, skipped: true, reason: '无打卡数据(未标记待复查)', duration: 0 };
   }
 
-  // 必须等次日 04:00 窗口结束后上报，保证同步日已完整结束。
+  // 必须等次日 02:00 窗口结束后上报，保证同步日已完整结束。
   if (getSyncDateWindow(dateStr).end > new Date().getTime()) {
-    return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨4点后同步', duration };
+    return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨2点后同步', duration };
   }
 
   try {
@@ -281,7 +293,7 @@ async function markSynced(openid, dateStr) {
   }
 }
 
-// ===== 凌晨 4 点自动：同步所有绑定用户最近一个已结束的同步日 =====
+// ===== 凌晨 2 点自动：同步所有绑定用户最近一个已结束的同步日 =====
 async function cronSyncAll() {
   const yesterday = getSyncBusinessDate(Date.now() - DAY_MS);
   console.log(`🚀 定时同步开始, 昨天=${yesterday}`);
@@ -323,8 +335,8 @@ async function cronSyncAll() {
   return { success: true, data: { date: yesterday, total, success, failed } };
 }
 
-// 手动同步仅允许最近三个已在次日 04:00 结束的同步日。
-// 每次请求只取一次当前时间，避免跨 04:00 时生成不一致的日期范围。
+// 手动同步仅允许最近三个已在次日 02:00 结束的同步日。
+// 每次请求只取一次当前时间，避免跨 02:00 时生成不一致的日期范围。
 function getRecentSyncDates(now = Date.now()) {
   return [1, 2, 3].map(daysAgo => getSyncBusinessDate(now - daysAgo * DAY_MS));
 }
@@ -333,7 +345,7 @@ function validateManualSyncDate(openid, recordDate) {
   if (!openid) return '用户未登录';
   const allowedDates = getRecentSyncDates();
   if (typeof recordDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || !allowedDates.includes(recordDate)) {
-    return '仅支持同步最近三天已结束的数据（北京时间次日凌晨4点结束）';
+    return '仅支持同步最近三天已结束的数据（北京时间次日凌晨2点结束）';
   }
   return null;
 }
@@ -451,6 +463,8 @@ exports.main = async (event, context) => {
   }
 
   switch (event.type) {
+    case 'getHeatmap':
+      return await require('./heatmap').getHeatmap({ openid, getUserDoc, getApiBase, getAccessToken, axios });
     case 'bindStudentNumber':
       return await bindStudentNumber(openid, event.studentNumber);
     case 'checkStudentNumber':

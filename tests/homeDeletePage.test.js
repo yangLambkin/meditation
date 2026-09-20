@@ -17,6 +17,7 @@ function createPage({ records = [], dailyRecords: storedRecords, now = '2026-09-
   const dailyRecords = structuredClone(storedRecords || { '2026-09-17': { count: records.length, records } });
   const calls = { menu: [], modal: [], remove: [], toast: [], rank: 0 };
   const checkinManager = {
+    getPendingSyncSummary: () => ({ total: 0, pending: 0, failed: 0 }),
     getUserCheckinData: () => ({ dailyRecords }),
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: () => [],
@@ -225,13 +226,13 @@ test('deleting a recent record updates group totals and never reveals older reco
   assert.equal(calls.rank, 0);
 });
 
-test('a before-04:00 record is grouped under the previous day but deleted from its original bucket', async () => {
-  const earlyMorning = { ...example, timestamp: '2026-09-17T03:59:59+08:00' };
+test('a before-02:00 record is grouped under the previous day but deleted from its original bucket', async () => {
+  const earlyMorning = { ...example, timestamp: '2026-09-17T01:59:59+08:00' };
   const { page, calls } = createPage({ records: [earlyMorning] });
   assert.equal(page.data.checkinGroups[0].date, '2026-09-16');
   assert.equal(page.data.checkinRecords[0].date, '2026-09-17');
   assert.equal(page.data.checkinRecords[0].dayDate, '2026-09-16');
-  assert.match(page.data.checkinRecords[0].timeLabel, /次日.*03:59/);
+  assert.match(page.data.checkinRecords[0].timeLabel, /次日.*01:59/);
   await tapDelete(page);
   assert.equal(calls.remove[0].date, '2026-09-17');
   assert.deepEqual({ ...calls.remove[0].identity }, {

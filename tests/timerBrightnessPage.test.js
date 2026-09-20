@@ -100,7 +100,11 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     ...globals,
     Page: page => { definition = page; },
-    require: request => loadModule(require.resolve(path.resolve(path.dirname(pagePath), request)))
+    require(request) {
+      if (request === '../../utils/checkin') return { recordCheckin: () => ({ success: true }) };
+      if (request === '../../utils/contentSec') return { checkText: async () => true };
+      return loadModule(require.resolve(path.resolve(path.dirname(pagePath), request)));
+    }
   }, { filename: pagePath });
   const page = {
     ...definition,

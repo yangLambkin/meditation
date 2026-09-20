@@ -868,3 +868,155 @@
 .music-picker-close:active {
   background-color: #e5e7eb;
 }
+
+
+.timer-mode-hint {
+  margin: 20rpx 8rpx 0;
+  color: #8b8376;
+  font-size: 23rpx;
+  line-height: 1.6;
+}
+
+.duration-manage {
+  margin-left: auto;
+  margin-right: 24rpx;
+  color: #a18551;
+  font-size: 25rpx;
+}
+
+.time-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.duration-actions {
+  display: flex;
+  gap: 24rpx;
+  font-size: 23rpx;
+  color: #8b8376;
+}
+
+.time-option.selected .duration-actions {
+  color: #fff;
+}
+
+.duration-empty {
+  display: block;
+  padding: 20rpx 0;
+  text-align: center;
+  color: #8b8376;
+  font-size: 26rpx;
+}
+
+.duration-footer {
+  display: flex;
+  gap: 16rpx;
+  padding: 0 32rpx 32rpx;
+}
+
+.duration-add,
+.duration-custom {
+  flex: 1;
+  margin: 0;
+  padding: 0 12rpx;
+  font-size: 26rpx;
+  line-height: 80rpx;
+  border-radius: 14rpx;
+}
+
+.duration-add {
+  background: #f5f1e9;
+  color: #967b47;
+}
+
+.duration-custom {
+  background: #b29764;
+  color: #fff;
+}
+
+.duration-add::after,
+.duration-custom::after,
+.completion-confirm::after {
+  border: none;
+}
+
+.completion-modal,
+.completion-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.completion-modal {
+  z-index: 1100;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.completion-overlay {
+  background: rgba(31, 29, 25, 0.45);
+}
+
+.completion-content {
+  position: relative;
+  box-sizing: border-box;
+  width: 640rpx;
+  padding: 40rpx 36rpx 32rpx;
+  border-radius: 28rpx;
+  background: #fff;
+}
+
+.completion-title,
+.completion-summary,
+.completion-hint {
+  display: block;
+}
+
+.completion-title {
+  color: #302b23;
+  font-size: 36rpx;
+  font-weight: 600;
+}
+
+.completion-summary {
+  margin-top: 14rpx;
+  color: #8b8376;
+  font-size: 26rpx;
+}
+
+.completion-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 224rpx;
+  margin-top: 28rpx;
+  padding: 24rpx;
+  border: 2rpx solid #ece6dc;
+  border-radius: 18rpx;
+  background: #faf8f4;
+  color: #403b32;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+.completion-hint {
+  margin-top: 16rpx;
+  color: #969084;
+  font-size: 23rpx;
+}
+
+.completion-confirm {
+  box-sizing: border-box;
+  height: 80rpx;
+  margin-top: 28rpx;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-radius: 16rpx;
+  background: #b29764;
+  color: #fff;
+  font-size: 30rpx;
+  line-height: 80rpx;
+}

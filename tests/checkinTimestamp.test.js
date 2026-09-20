@@ -48,15 +48,17 @@ function createLocalHarness(options = {}) {
       throw new Error(`Unexpected dependency: ${name}`);
     },
   });
-  return { manager, storage, backups, writes };
+  return { manager, storage, backups, writes, dateUtil };
 }
 
 function createCloudHarness(initialStats, otherUsers = []) {
   const records = [];
-  let stats = clone(initialStats);
+  let stats = initialStats ? { _id: 'existing-stats', ...clone(initialStats) } : undefined;
+  const locks = new Map();
   const peers = clone(otherUsers);
   const allStats = () => stats ? [stats, ...peers] : peers;
   const operations = {
+    set: value => ({ op: 'set', value }),
     inc: value => ({ op: 'inc', value }),
     max: value => ({ op: 'max', value }),
     push: value => ({ op: 'push', value }),
@@ -86,11 +88,13 @@ function createCloudHarness(initialStats, otherUsers = []) {
       if (rawValue && rawValue.op === 'inc') target[key] = (target[key] || 0) + rawValue.value;
       else if (rawValue && rawValue.op === 'max') target[key] = Math.max(target[key] || 0, rawValue.value);
       else if (rawValue && rawValue.op === 'push') target[key] = [...(target[key] || []), rawValue.value];
+      else if (rawValue && rawValue.op === 'set') target[key] = clone(rawValue.value);
       else target[key] = clone(rawValue);
     }
   }
   const database = {
     command: operations,
+    async runTransaction(callback) { return callback({ collection(name) { return { doc: database.collection(name).doc }; } }); },
     collection(name) {
       return {
         async count() {
@@ -98,18 +102,28 @@ function createCloudHarness(initialStats, otherUsers = []) {
           return { total: allStats().length };
         },
         async add({ data }) {
-          if (name === 'meditation_records') records.push(clone(data));
-          else if (name === 'user_stats') stats = clone(data);
+          if (name === 'meditation_records') records.push({ _id: data._id || `record-${records.length}`, ...clone(data) });
+          else if (name === 'user_stats') stats = { _id: data._id || 'stats', ...clone(data) };
           else throw new Error(`Unexpected collection: ${name}`);
-          return { _id: 'record-id' };
+          return { _id: data._id || (name === 'meditation_records' ? `record-${records.length - 1}` : 'stats') };
         },
+        doc(id) { return {
+          async get() { return { data: clone(name === 'meditation_locks' ? locks.get(id) : name === 'meditation_records' ? records.find(row => row._id === id) : stats) || null }; },
+          async set({ data }) {
+            if (name === 'meditation_locks') locks.set(id, { _id: id, ...clone(data) });
+            else if (name === 'meditation_records') records.push({ _id: id, ...clone(data) });
+            else stats = { _id: id, ...clone(data) };
+            return { _id: id };
+          },
+          async update({ data }) { applyUpdates(data); return { stats: { updated: 1 } }; }
+        }; },
         where(filter) {
-          assert.equal(name, 'user_stats');
-          let projection;
+          let projection, offset = 0, limit = Infinity;
           return {
             field(value) { projection = value; return this; },
+            orderBy() { return this; }, skip(value) { offset = value; return this; }, limit(value) { limit = value; return this; },
             async get() {
-              let rows = allStats().filter(row => matches(row, filter));
+              let rows = (name === 'meditation_records' ? records : allStats()).filter(row => matches(row, filter)).slice(offset, offset + limit);
               if (projection) rows = rows.map(row => Object.fromEntries(
                 Object.keys(projection).filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])
               ));
@@ -124,6 +138,7 @@ function createCloudHarness(initialStats, otherUsers = []) {
   };
   const entry = loadModule('cloudfunctions/meditationManager/index.js', {
     require(name) {
+      if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return {
         init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database,
@@ -144,13 +159,13 @@ test('local check-in uses the selected Beijing date/month and identical backup t
   const timestamp = Date.parse('2026-08-31T16:05:00Z');
   const experience = [{ text: '平静', uniqueId: String(timestamp) }];
   const result = manager.recordCheckin(20, ['平静'], experience, timestamp);
-  assert.equal(result.date, '2026-09-01');
+  assert.equal(result.date, '2026-08-31');
   const data = storage.get('meditation_checkin_local-test');
-  assert.equal(data.dailyRecords['2026-09-01'].records[0].timestamp, timestamp);
-  assert.deepEqual(data.dailyRecords['2026-09-01'].records[0].experience, experience);
-  assert.equal(data.monthlyStats['2026-09'].total, 1);
-  assert.equal(storage.get('meditation_monthly_stats_local-test').totalMinutes, 20);
-  assert.deepEqual(backups, [[20, ['平静'], experience, timestamp, result.localId]]);
+  assert.equal(data.dailyRecords['2026-08-31'].records[0].timestamp, timestamp);
+  assert.deepEqual(data.dailyRecords['2026-08-31'].records[0].experience, experience);
+  assert.equal(data.monthlyStats['2026-08'].total, 1);
+  assert.equal(storage.get('meditation_monthly_stats_local-test').totalMinutes, 0);
+  assert.deepEqual(backups[0].slice(0, 5), [20, ['平静'], experience, timestamp, result.localId]);
 });
 
 test('legacy calls default to now; earlier same-day and previous-month records do not regress latest time/current-month cache', () => {
@@ -189,7 +204,8 @@ test('uploading recent local records preserves their original timestamps in both
   for (const storedData of [data, { checkinRecords: data, experienceRecords: {} }]) {
     const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': storedData } });
     await app.manager.syncLocalToCloud('local-test', 'oz-test');
-    assert.deepEqual(app.backups, [[12, [], [], timestamp]]);
+    assert.deepEqual(app.backups[0].slice(0, 4), [12, [], [], timestamp]);
+    assert.match(app.backups[0][4], /^record_/);
   }
 });
 
@@ -218,13 +234,13 @@ test('cloud persists selected Beijing date and experience objects while creation
   const experience = [{ text: '平静', uniqueId: String(timestamp), timestamp: '2026-09-01 00:05:00' }];
   const result = await app.record({ duration: 20, emotion: [], experience, timestamp });
   assert.equal(result.success, true);
-  assert.equal(result.data.date, '2026-09-01');
+  assert.equal(result.data.date, '2026-08-31');
   assert.equal(result.data.timestamp, timestamp);
   assert.equal(app.records[0].timestamp, timestamp);
   assert.equal(app.records[0].createdAt, new Date(NOW).toISOString());
   assert.equal(app.records[0].updatedAt, new Date(NOW).toISOString());
   assert.deepEqual(app.records[0].experience, experience);
-  assert.equal(app.stats.monthlyStats['2026-09'].count, 1);
+  assert.equal(app.stats.monthlyStats['2026-08'].count, 1);
 });
 
 test('cloud accepts old callers without timestamp and rejects invalid/future timestamps without writes', async () => {
@@ -306,4 +322,154 @@ test('the current user can use a legacy lastCheckin date, but an explicit old la
     _openid: 'oz-test', lastCheckinDate: '2026-09-16', lastCheckin: '2026-09-17', dailyTotalDuration: 20,
   });
   assert.equal((await old.ranking()).data.hasRanking, false);
+});
+
+test('one stable local identity survives repeated submits and restart, distinct identities remain separate', async () => {
+  const app = createLocalHarness();
+  const first = app.manager.recordCheckin(10, [], [], NOW, 'session');
+  const second = app.manager.recordCheckin(10, [], [], NOW, 'session');
+  assert.equal(second.duplicate, true);
+  assert.equal(first.localId, second.localId);
+  assert.equal(app.manager.getUserStats().totalCount, 1);
+  app.manager.recordCheckin(10, [], [], NOW, 'another-session');
+  assert.equal(app.manager.getUserStats().totalCount, 2);
+  const restarted = createLocalHarness({ storage: Object.fromEntries(app.storage) });
+  assert.equal(restarted.manager.recordCheckin(10, [], [], NOW, 'session').duplicate, true);
+  assert.equal(restarted.manager.getUserStats().totalCount, 2);
+});
+
+test('offline sync persists legacy identities, retries every age and coalesces overlapping uploads', async () => {
+  const timestamp = NOW - 30 * 86400000;
+  const date = loadModule('miniprogram/utils/dateUtil.js').getBusinessDate(timestamp);
+  const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': {
+    dailyRecords: { [date]: { count: 1, records: [{ timestamp, duration: 10 }] } }, monthlyStats: {}
+  } } });
+  await Promise.all([app.manager.syncLocalToCloud('local-test', 'oz-test'), app.manager.syncLocalToCloud('local-test', 'oz-test')]);
+  assert.equal(app.backups.length, 1);
+  const id = app.storage.get('meditation_checkin_local-test').dailyRecords[date].records[0].localId;
+  assert.equal(app.backups[0][4], id);
+  await app.manager.syncLocalToCloud('local-test', 'oz-test');
+  assert.equal(app.backups[1][4], id);
+});
+
+test('manual backfill validates the three business dates but returns a previously saved identity after the window', () => {
+  const app = createLocalHarness();
+  assert.throws(() => app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'new', source: 'manual', date: '2026-09-14' }), /最近三天/);
+  const result = app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'saved', source: 'manual', date: '2026-09-15' });
+  assert.equal(result.date, '2026-09-15');
+  assert.equal(app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'saved', source: 'manual', date: '2026-09-14' }).duplicate, true);
+  assert.equal(app.manager.getUserStats().totalCount, 1);
+});
+
+test('cached automatic history is regrouped at 02:00 while explicit manual dates are kept', () => {
+  const timestamp = Date.parse('2026-09-01T00:30:00+08:00');
+  const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': {
+    dailyRecords: { '2026-09-01': { count: 2, records: [
+      { localId: 'timer', timestamp, duration: 10 },
+      { localId: 'manual', timestamp, duration: 20, source: 'manual' }
+    ] } }, monthlyStats: {}
+  } } });
+  const data = app.manager.getUserCheckinData();
+  assert.equal(data.dailyRecords['2026-08-31'].count, 1);
+  assert.equal(data.dailyRecords['2026-09-01'].count, 1);
+  assert.equal(data.monthlyStats['2026-08'].total, 1);
+  assert.equal(data.monthlyStats['2026-09'].total, 1);
+});
+
+test('business date helpers use 02:00 across year/month/leap boundaries independent of local timezone', () => {
+  const dates = loadModule('miniprogram/utils/dateUtil.js');
+  assert.equal(dates.getBusinessDate('2027-01-01T01:59:59+08:00'), '2026-12-31');
+  assert.equal(dates.getBusinessDate('2027-01-01T02:00:00+08:00'), '2027-01-01');
+  assert.equal(dates.getCalendarDate('2027-01-01T01:00:00+08:00'), '2027-01-01');
+  assert.equal(dates.getBusinessMonth('2027-01-01T01:00:00+08:00'), '2026-12');
+  assert.equal(dates.addBusinessDays('2028-03-01', -1), '2028-02-29');
+  assert.equal(dates.getBusinessDateWindow('2028-02-29').end, Date.parse('2028-03-01T02:00:00+08:00'));
+});
+
+test('cloud recovery retains legacy explicit manual dates and clears resolved upload errors', () => {
+  const app = createLocalHarness();
+  const timestamp = NOW;
+  const stored = { dailyRecords: { '2026-09-15': { count: 1, records: [
+    { localId: 'manual', date: '2026-09-15', dateSource: 'manual', timestamp, duration: 10, syncError: '失败', syncErrorCode: 'SYNC_FAILED' }
+  ] } }, monthlyStats: {} };
+  const remote = { _id: 'cloud', localId: 'manual', date: '2026-09-15', dateSource: 'manual', timestamp, duration: 10 };
+  const merged = app.manager.mergeCloudRecordsIntoCache(stored, [remote]);
+  const record = merged.checkinRecords.dailyRecords['2026-09-15'].records[0];
+  assert.equal(record.dateSource, 'manual');
+  assert.equal(record.syncError, undefined);
+  assert.equal(record.syncErrorCode, undefined);
+  const dates = loadModule('miniprogram/utils/dateUtil.js');
+  assert.equal(dates.getRecordBusinessDate(record), '2026-09-15');
+});
+
+test('business date migration preserves early-hours records beside older count-only buckets in either order', () => {
+  const timestamp = Date.parse('2026-09-01T01:59:59.999+08:00');
+  const entries = [
+    ['2026-09-01', { count: 1, records: [{ localId: 'late', timestamp, duration: 10 }] }],
+    ['2026-08-31', { count: 2, records: [] }]
+  ];
+  for (const ordered of [entries, entries.slice().reverse()]) {
+    for (const nested of [false, true]) {
+      const data = { dailyRecords: Object.fromEntries(ordered), monthlyStats: {}, userStats: { totalDays: 2 } };
+      const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': nested ? { checkinRecords: data } : data } });
+      const migrated = app.manager.getUserCheckinData();
+      assert.deepEqual(Object.keys(migrated.dailyRecords), ['2026-08-31']);
+      assert.equal(migrated.dailyRecords['2026-08-31'].count, 3);
+      assert.equal(migrated.dailyRecords['2026-08-31'].records[0].localId, 'late');
+      assert.equal(migrated.monthlyStats['2026-08'].totalDuration, 10);
+      assert.equal(migrated.userStats.totalDays, 1);
+      const writes = app.writes.length;
+      assert.deepEqual(clone(app.manager.getUserCheckinData().dailyRecords), clone(migrated.dailyRecords));
+      assert.equal(app.writes.length, writes, 'repeat reads do not migrate a second time');
+    }
+  }
+});
+
+test('recent legacy monthly cache is invalidated before returning totals under the 02:00 rule', () => {
+  const app = createLocalHarness({ storage: {
+    'meditation_checkin_local-test': { dailyRecords: {
+      '2026-09-01': { count: 2, records: [
+        { timestamp: Date.parse('2026-09-01T01:00:00+08:00'), duration: 10 },
+        { timestamp: Date.parse('2026-09-01T02:00:00+08:00'), duration: 20 }
+      ] }
+    }, monthlyStats: {} },
+    'meditation_monthly_stats_local-test': {
+      currentMonth: '2026-09', totalMinutes: 30, lastUpdateTime: new Date(NOW).toISOString()
+    }
+  } });
+  assert.equal(app.manager.getCurrentMonthMinutes(), 20);
+  assert.equal(app.storage.get('meditation_monthly_stats_local-test').businessDayVersion, 2);
+  assert.equal(app.manager.getUserStats().totalDays, 2);
+});
+
+test('migration retains historical counts without detail when a partially known day moves across months', () => {
+  const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': {
+    dailyRecords: { '2026-09-01': { count: 3, records: [
+      { localId: 'known', timestamp: Date.parse('2026-09-01T01:00:00+08:00'), duration: 10 }
+    ] } }, monthlyStats: {}
+  } } });
+  const data = app.manager.getUserCheckinData();
+  assert.equal(data.dailyRecords['2026-08-31'].count, 1);
+  assert.equal(data.dailyRecords['2026-09-01'].count, 2);
+  assert.equal(data.dailyRecords['2026-09-01'].records.length, 0);
+  assert.equal(data.monthlyStats['2026-08'].total, 1);
+  assert.equal(data.monthlyStats['2026-09'].total, 2);
+  assert.equal(app.manager.getUserStats().totalDays, 2);
+  assert.equal(app.manager.getUserStats().totalCount, 3);
+});
+
+test('monthly cache keeps the month used for calculation when 02:00 passes before cache write', () => {
+  const app = createLocalHarness({ storage: { 'meditation_checkin_local-test': {
+    businessDayVersion: 2,
+    dailyRecords: {
+      '2026-09-30': { count: 1, records: [{ duration: 10 }] },
+      '2026-10-01': { count: 1, records: [{ duration: 20 }] }
+    }, monthlyStats: {}
+  } } });
+  let calls = 0;
+  app.dateUtil.getBusinessMonth = () => calls++ === 0 ? '2026-09' : '2026-10';
+  assert.equal(app.manager.updateMonthlyStatsCache({}, 0, '2026-09'), 10);
+  assert.equal(app.storage.get('meditation_monthly_stats_local-test').currentMonth, '2026-09');
+  assert.equal(app.manager.getCurrentMonthMinutes(), 20);
+  assert.equal(app.storage.get('meditation_monthly_stats_local-test').currentMonth, '2026-10');
 });

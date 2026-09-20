@@ -1,10 +1,11 @@
+const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 // pages/createTeam/createTeam.js
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
 
-// 北京时间减去凌晨 4 点分界，等价于 UTC 时间加 4 小时。
+// 练习日按北京时间 02:00 切换，与全应用业务日期保持一致。
 function currentPracticeDay() {
-  return new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return getBusinessDate(Date.now());
 }
 
 function isCalendarDate(value) {

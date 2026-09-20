@@ -13,7 +13,7 @@ const cloudApi = {
   },
 
   // 记录冥想打卡
-  recordMeditation: async function(duration, emotion, experience = "", timestamp, localId) {
+  recordMeditation: async function(duration, emotion, experience = "", timestamp, localId, options = {}) {
     try {
       const now = Date.now();
       const recordTimestamp = timestamp === undefined ? now : timestamp;
@@ -36,26 +36,33 @@ const cloudApi = {
           duration: duration,
           emotion: emotion,
           experience: experienceToSend,
-          ...(localId ? { localId } : {}),
+          localId: localId || options.idempotencyKey || `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          ...(options.source ? { source: options.source } : {}),
+          ...(options.date ? { date: options.date } : {}),
+          ...(options.expectedOpenid ? { expectedOpenid: options.expectedOpenid } : {}),
           timestamp: recordTimestamp
         }
       });
 
-      if (result.result.success) {
+      const response = result && result.result;
+      if (response && response.success && response.data &&
+          typeof response.data.recordId === 'string' && response.data.recordId.trim()) {
         return {
           success: true,
-          data: result.result.data
+          data: response.data
         };
       } else {
         return {
           success: false,
-          error: result.result.error || '打卡失败'
+          code: response && !response.success ? response.code : 'INVALID_RESPONSE',
+          error: response && response.error || '云端尚未确认保存，请重试上传'
         };
       }
     } catch (error) {
       console.error('调用云函数失败:', error);
       return {
         success: false,
+        code: 'NETWORK_ERROR',
         error: '网络错误，请重试'
       };
     }

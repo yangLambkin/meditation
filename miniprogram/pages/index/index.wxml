@@ -91,6 +91,11 @@
           <view class="checkin-scope-arrow" aria-hidden="true"></view>
         </button>
       </view>
+      <view wx:if="{{pendingCheckinCount > 0}}" class="checkin-pending-banner">
+        <text class="checkin-pending-text">{{pendingCheckinCount}} 条本机记录尚未上传</text>
+        <button class="checkin-retry-button" bindtap="retryCheckinUploads" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">重试上传</button>
+      </view>
+      <text wx:if="{{checkinTotal}}" class="checkin-load-hint">长按记录可删除</text>
       <view wx:if="{{!checkinTotal}}" class="checkin-empty">尚无打卡记录</view>
       <view wx:elif="{{!checkinGroups.length}}" class="checkin-empty">最近三天暂无打卡记录</view>
       <view wx:else>
@@ -99,14 +104,15 @@
             <text class="checkin-day-date">{{group.date}}</text>
             <text class="checkin-day-summary">{{group.count}} 次 · {{group.totalDuration}} 分钟</text>
           </view>
-          <view class="checkin-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" data-date="{{record.dayDate}}" hover-class="checkin-record-active">
+          <view class="checkin-record {{!record.emotion.length && !record.experienceTexts.length && !record.syncError && !record.syncStatusText ? 'checkin-record-brief' : ''}}" wx:for="{{group.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{record.dayDate}}" hover-class="checkin-record-active">
             <view class="checkin-record-heading">
               <text class="checkin-record-time">{{record.timeLabel}}</text>
               <view class="checkin-record-actions">
                 <text class="checkin-record-duration">{{record.duration}} 分钟</text>
-                <button class="checkin-more" catchtap="showCheckinActions" data-id="{{record.id}}" disabled="{{checkinDeleting || checkinActionsOpen}}" loading="{{deletingCheckinId === record.id}}" aria-label="{{record.dayDate}} {{record.timeLabel}} 的记录操作" hover-class="checkin-more-active">···</button>
               </view>
             </view>
+            <text wx:if="{{record.syncStatusText}}" class="record-sync-error">{{record.syncStatusText}}</text>
+            <text wx:elif="{{record.syncError}}" class="record-sync-error">已保存在本机，云端同步失败：{{record.syncError}}</text>
             <view wx:if="{{record.emotion.length}}" class="checkin-record-emotions">
               <text class="checkin-emotion" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
             </view>
@@ -132,11 +138,11 @@
       </view>
       <scroll-view class="checkin-dialog-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
         <view class="checkin-dialog-body">
-          <text class="checkin-subtitle">日期和时间默认当前，可修改补记</text>
+          <text class="checkin-subtitle">仅可记录最近三天（含今天），北京时间凌晨 2 点换日</text>
           <view class="checkin-fields-row">
             <view class="checkin-field checkin-date-field">
-              <text class="checkin-label">日期</text>
-              <picker mode="date" value="{{checkinDate}}" end="{{maxCheckinDate}}" bindchange="onCheckinDateChange" disabled="{{checkinSubmitting}}">
+              <text class="checkin-label">归属日期</text>
+              <picker mode="date" value="{{checkinDate}}" start="{{minCheckinDate}}" end="{{maxCheckinDate}}" bindchange="onCheckinDateChange" disabled="{{checkinSubmitting}}">
                 <view class="checkin-picker">
                   <text>{{checkinDate}}</text>
                   <text class="checkin-picker-arrow">⌄</text>
@@ -147,7 +153,7 @@
               <text class="checkin-label">时间</text>
               <picker mode="time" value="{{checkinTime}}" bindchange="onCheckinTimeChange" disabled="{{checkinSubmitting}}">
                 <view class="checkin-picker">
-                  <text>{{checkinTime}}</text>
+                  <text>{{checkinTime < '02:00' ? '次日 ' : ''}}{{checkinTime}}</text>
                   <text class="checkin-picker-arrow">⌄</text>
                 </view>
               </picker>

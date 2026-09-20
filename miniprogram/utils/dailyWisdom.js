@@ -6,7 +6,7 @@ const DAY = 24 * 60 * 60 * 1000;
 let cachedQuote = null;
 const pending = new Map();
 
-// 首页和分享卡片共用当天首次成功取得的金句，以北京时间 04:00 分日。
+// 首页和分享卡片共用当天首次成功取得的金句，以北京时间 02:00 分日。
 function getDailyWisdom() {
   const day = getCheckinDay();
   if (cachedQuote && cachedQuote.day === day) return Promise.resolve(cachedQuote);
@@ -24,7 +24,7 @@ function getDailyWisdom() {
   const request = Promise.resolve()
     .then(() => wx.cloud.callFunction({ name: 'getRandomWisdom' }))
     .then(response => {
-      // 请求可能跨过 04:00；旧日响应不能写入缓存或显示到新日页面。
+      // 请求可能跨过 02:00；旧日响应不能写入缓存或显示到新日页面。
       if (getCheckinDay() !== day) return getDailyWisdom();
       const result = response && response.result;
       const quote = result && result.data;
@@ -65,7 +65,7 @@ function watchDailyWisdom(onChange) {
 
   function schedule() {
     const now = Date.now();
-    const nextBoundary = Date.parse(`${getCheckinDay(now)}T04:00:00+08:00`) + DAY;
+    const nextBoundary = Date.parse(`${getCheckinDay(now)}T02:00:00+08:00`) + DAY;
     timer = setTimeout(() => {
       if (stopped) return;
       refresh();

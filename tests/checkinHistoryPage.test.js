@@ -85,6 +85,7 @@ function createPage(options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(utilsPath, filename), 'utf8'), {
       module, require: loadModule, wx, Date: ClockDate, console: silentConsole
     }, { filename });
+    if (filename === 'dateUtil.js') module.exports.watchBusinessDate = () => () => {};
     modules[filename] = module.exports;
     return module.exports;
   }
@@ -111,17 +112,17 @@ function deletionEvent(record) {
   return { currentTarget: { dataset: { id: record.id } } };
 }
 
-test('all months are cached but only the selected month renders, using the 04:00 boundary', async () => {
+test('all months are cached but only the selected month renders, using the 02:00 boundary', async () => {
   const pending = deferred();
   const { page } = createPage({
     dailyRecords: {
       '2026-08-30': day(record('older-august', '2026-08-30T23:00:00+08:00', 10)),
-      '2026-09-02': day(record('september-2', '2026-09-02T04:00:00+08:00', 20)),
+      '2026-09-02': day(record('september-2', '2026-09-02T02:00:00+08:00', 20)),
       '2026-09-01': day(
-        record('late-august', '2026-09-01T03:59:00+08:00', 30),
-        record('september-1', '2026-09-01T04:00:00+08:00', 40)
+        record('late-august', '2026-09-01T01:59:00+08:00', 30),
+        record('september-1', '2026-09-01T02:00:00+08:00', 40)
       ),
-      '2026-01-01': day(record('last-year', '2026-01-01T03:59:00+08:00', 50))
+      '2026-01-01': day(record('last-year', '2026-01-01T01:59:00+08:00', 50))
     },
     refreshFromCloud: () => pending.promise
   });
@@ -137,7 +138,7 @@ test('all months are cached but only the selected month renders, using the 04:00
   assert.deepEqual(months.map(month => [month.count, month.totalDuration]), [[2, 60], [2, 40], [1, 50]]);
   assert.deepEqual(months[0].days.map(value => value.date), ['2026-09-02', '2026-09-01']);
   assert.deepEqual(months[1].days.map(value => value.date), ['2026-08-31', '2026-08-30']);
-  assert.equal(months[1].days[0].records[0].timeLabel, '次日 03:59');
+  assert.equal(months[1].days[0].records[0].timeLabel, '次日 01:59');
   assert.equal(months[1].days[0].records[0].date, '2026-09-01');
   assert.equal(months[2].days[0].date, '2025-12-31');
   pending.resolve(false);
@@ -244,7 +245,7 @@ test('empty data has zero records and no month headings, including after cloud r
 
 test('opening a record grouped into the preceding month navigates to its logical date', async () => {
   const { page, calls } = createPage({
-    dailyRecords: { '2026-09-01': day(record('late', '2026-09-01T03:30:00+08:00')) }
+    dailyRecords: { '2026-09-01': day(record('late', '2026-09-01T01:30:00+08:00')) }
   });
   await page.onShow();
   const item = page._allCheckinMonths[0].days[0].records[0];
@@ -254,10 +255,10 @@ test('opening a record grouped into the preceding month navigates to its logical
 });
 
 test('deleting uses the original date and stable identity, recalculates month totals and removes empty days and months', async () => {
-  const late = record('late', '2026-09-01T03:30:00+08:00', 20, { localId: 'local-late' });
+  const late = record('late', '2026-09-01T01:30:00+08:00', 20, { localId: 'local-late' });
   const { page, calls } = createPage({
     dailyRecords: {
-      '2026-09-01': day(late, record('september', '2026-09-01T04:00:00+08:00', 30)),
+      '2026-09-01': day(late, record('september', '2026-09-01T02:00:00+08:00', 30)),
       '2026-08-30': day(record('august', '2026-08-30T05:00:00+08:00', 10))
     }
   });
@@ -270,7 +271,7 @@ test('deleting uses the original date and stable identity, recalculates month to
   assert.deepEqual(calls.deleted[0], {
     date: '2026-09-01', identity: { recordId: 'late', localId: 'local-late', timestamp: late.timestamp }
   });
-  assert.match(calls.modal[0].content, /2026-09-01 03:30/);
+  assert.match(calls.modal[0].content, /2026-08-31 次日 01:30/);
   assert.equal(page.data.checkinTotal, 2);
   assert.equal(page._allCheckinMonths[0].count, 1);
   assert.equal(page._allCheckinMonths[0].totalDuration, 30);
@@ -420,15 +421,15 @@ test('month picker jumps directly, renders empty months and ignores invalid or f
   assert.equal(page.data.monthDuration, 30);
 });
 
-test('month defaults and limits use 04:00 Beijing time, and refresh preserves the selected month across the boundary', async () => {
-  const { page, setNow } = createPage({ now: '2026-09-01T03:59:59+08:00' });
+test('month defaults and limits use 02:00 Beijing time, and refresh preserves the selected month across the boundary', async () => {
+  const { page, setNow } = createPage({ now: '2026-09-01T01:59:59+08:00' });
   await page.onShow();
   assert.equal(page.data.currentDate, '2026-08-31');
   assert.equal(page.data.currentMonth, '2026-08');
   assert.equal(page.data.selectedMonth, '2026-08');
   page.nextMonth();
   assert.equal(page.data.selectedMonth, '2026-08');
-  setNow('2026-09-01T04:00:00+08:00');
+  setNow('2026-09-01T02:00:00+08:00');
   await page.onPullDownRefresh();
   assert.equal(page.data.currentMonth, '2026-09');
   assert.equal(page.data.selectedMonth, '2026-08');
@@ -455,7 +456,7 @@ test('query month is validated and dates preserve a logical day when returning t
 
 test('daily mode opens the latest recorded logical day in a historical month, or its first day when empty', async () => {
   const { page, calls } = createPage({ query: { month: '2026-08' }, dailyRecords: {
-    '2026-09-01': day(record('late-august', '2026-09-01T03:30:00+08:00')),
+    '2026-09-01': day(record('late-august', '2026-09-01T01:30:00+08:00')),
     '2026-08-11': day(record('august', '2026-08-11T06:00:00+08:00'))
   } });
   await page.onShow();
@@ -552,7 +553,7 @@ test('pending menu blocks duplicate actions and month navigation, then unload pr
 
 test('deleting the final record keeps the selected historical month with zero summaries', async () => {
   const { page } = createPage({ query: { month: '2026-08' }, dailyRecords: {
-    '2026-09-01': day(record('late-august', '2026-09-01T03:30:00+08:00'))
+    '2026-09-01': day(record('late-august', '2026-09-01T01:30:00+08:00'))
   } });
   await page.onShow();
   await page.deleteCheckinRecord(deletionEvent(page.data.monthDays[0].records[0]));

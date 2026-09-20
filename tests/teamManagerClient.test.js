@@ -35,7 +35,7 @@ function harness({ stored = {}, cloud = async () => ({ success: true, data: [] }
   vm.runInNewContext(source, { module, wx, console: quiet });
   let definition;
   vm.runInNewContext(pageSource, {
-    wx, console: quiet, require: () => module.exports, Page: page => { definition = page; }
+    wx, console: quiet, require: name => name.endsWith('/dateUtil.js') ? require('../miniprogram/utils/dateUtil.js') : module.exports, Page: page => { definition = page; }
   });
   const page = { ...definition, data: clone(definition.data), setData(data) { Object.assign(this.data, data); } };
   return { manager: module.exports, page, storage, calls, uploads, toasts, navigations, modals };
@@ -346,11 +346,11 @@ test('dissolving one owned team preserves the user’s other teams and rules', a
   assert.equal(app.manager.getMyTeams().length, 1);
 });
 
-test('legacy team list rule start uses the Beijing 04:00 practice-day boundary', () => {
+test('legacy team list rule start uses the Beijing 02:00 practice-day boundary', () => {
   const app = harness();
-  assert.equal(app.page.getPracticeDate('2026-09-19T03:59:59+08:00'), '2026-09-18');
-  assert.equal(app.page.getPracticeDate('2026-09-19T04:00:00+08:00'), '2026-09-19');
-  assert.equal(app.page.getPracticeDate('2026-01-01T03:00:00+08:00'), '2025-12-31');
+  assert.equal(app.page.getPracticeDate('2026-09-19T01:59:59+08:00'), '2026-09-18');
+  assert.equal(app.page.getPracticeDate('2026-09-19T02:00:00+08:00'), '2026-09-19');
+  assert.equal(app.page.getPracticeDate('2026-01-01T01:00:00+08:00'), '2025-12-31');
 });
 
 test('team lists preserve explicitly unset rules independently and keep legacy missing-field defaults', () => {
@@ -358,7 +358,7 @@ test('team lists preserve explicitly unset rules independently and keep legacy m
     { ...team('unset'), practiceStartDate: null, dailyGoalMinutes: null },
     { ...team('date-only'), practiceStartDate: '2026-09-01', dailyGoalMinutes: null },
     { ...team('goal-only'), practiceStartDate: null, dailyGoalMinutes: 45 },
-    { ...team('legacy'), createdAt: '2026-09-19T03:59:59+08:00' }
+    { ...team('legacy'), createdAt: '2026-09-19T01:59:59+08:00' }
   ];
   const app = harness({ stored: { userTeams_owner: saved } });
   app.page.renderTeams(saved);
@@ -379,4 +379,41 @@ test('a different team submitted during a pending creation is not reported as th
   pending.resolve({ success: true, data: { teamId: 'first-team' } });
   assert.equal((await first).team.name, '团队甲');
   assert.equal(app.storage.userTeams_owner.length, 1);
+});
+
+test('remove-member client rejects non-creators, self and missing members before cloud access', async () => {
+  const teamInfo = { ...team('team'), members: ['owner', 'member'], memberCount: 2 };
+  for (const [viewer, target] of [['member', 'owner'], ['owner', 'owner'], ['owner', 'missing']]) {
+    const app = harness({ stored: { userOpenId: viewer, [`userTeams_${viewer}`]: [teamInfo] } });
+    assert.equal((await app.manager.removeTeamMember('team', target)).success, false);
+    assert.equal(app.calls.length, 0);
+  }
+});
+
+test('remove-member client updates both caches only after server confirmation', async () => {
+  const teamInfo = { ...team('team'), members: ['owner', 'member'], memberCount: 2 };
+  const stored = { userTeams_owner: [teamInfo], joinedTeams_owner: [teamInfo], allTeams_cache: [teamInfo] };
+  const pending = deferred();
+  const app = harness({ stored, cloud: () => pending.promise });
+  const request = app.manager.removeTeamMember('team', 'member');
+  assert.equal(app.storage.userTeams_owner[0].memberCount, 2);
+  pending.resolve({ success: true, data: { teamId: 'team', members: ['owner'], memberCount: 1 } });
+  assert.equal((await request).success, true);
+  assert.equal(app.storage.userTeams_owner[0].memberCount, 1);
+  assert.equal(app.storage.joinedTeams_owner[0].memberCount, 1);
+  assert.equal(app.storage.allTeams_cache, undefined);
+  const failure = harness({ stored, cloud: async () => ({ success: false, error: 'offline' }) });
+  assert.equal((await failure.manager.removeTeamMember('team', 'member')).success, false);
+  assert.equal(failure.storage.userTeams_owner[0].memberCount, 2);
+});
+
+test('remove-member responses cannot overwrite another account cache', async () => {
+  const teamInfo = { ...team('team'), members: ['owner', 'member'], memberCount: 2 };
+  const pending = deferred();
+  const app = harness({ stored: { userTeams_owner: [teamInfo], userTeams_second: [] }, cloud: () => pending.promise });
+  const request = app.manager.removeTeamMember('team', 'member');
+  app.storage.userOpenId = 'second';
+  pending.resolve({ success: true, data: { teamId: 'team', members: ['owner'], memberCount: 1 } });
+  assert.equal((await request).success, false);
+  assert.deepEqual(app.storage.userTeams_second, []);
 });

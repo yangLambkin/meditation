@@ -35,6 +35,9 @@
           <text wx:if="{{report && item.totalPracticeCount !== undefined}}" class="member-subtitle">练习 {{item.totalPracticeCount}} 次 · {{item.cumulativeMinutesLabel}} 分钟</text>
           <text wx:if="{{report}}" class="member-last-practice">{{item.lastPracticeLabel ? '最近练习 · ' + item.lastPracticeLabel : (item.totalPracticeCount === 0 ? '还没有练习记录' : '')}}</text>
         </view>
+        <button wx:if="{{isCreator && !item.isCreator}}" class="remove-member-button" catchtap="confirmRemoveMember"
+          data-member-openid="{{item.openid}}" loading="{{removingMemberId === item.openid}}"
+          disabled="{{!!removingMemberId || isLoading || isSaving || isDeleting}}" aria-label="移除成员{{item.nickname}}">移除</button>
         <text class="member-card-chevron" aria-hidden="true">›</text>
       </view>
       <view wx:if="{{isLoading}}" class="member-load-note">正在同步成员练习数据…</view>
@@ -61,7 +64,7 @@
         <view class="section-heading">
           <view>
             <text class="section-title">{{dayLabel}}<text class="date-caption"> · 练习日</text></text>
-            <text class="section-caption">04:00 — 次日 04:00 · 当日多次练习累计计算</text>
+            <text class="section-caption">02:00 — 次日 02:00 · 当日多次练习累计计算</text>
           </view>
           <text class="member-total">{{report.summary.memberCount}} 位成员</text>
         </view>
@@ -110,7 +113,7 @@
           <text class="state-title">{{todayFilter === 'attention' ? (hasGoal ? '今天，大家都已完成目标' : '今天，大家都已练习') : '当前分类暂无成员'}}</text>
           <text class="state-description">{{todayFilter === 'attention' ? '一起把这份坚持，带到明天。' : '可以切换其他分类，查看团队练习情况。'}}</text>
         </view>
-        <text class="page-footnote">{{nextDayLabel}} 04:00 更新为下一个练习日 · 北京时间</text>
+        <text class="page-footnote">{{nextDayLabel}} 02:00 更新为下一个练习日 · 北京时间</text>
       </view>
 
       <view wx:else class="history-view">
@@ -159,7 +162,7 @@
           </view>
         </block>
         <view wx:else class="empty-panel"><text class="empty-mark">○</text><text class="state-title">暂无历史统计</text><text class="state-description">当前练习日结束后，这里会展示每位成员的积累。</text></view>
-        <text class="page-footnote">全体当前成员使用同一起始日期 · 每日 04:00 结算</text>
+        <text class="page-footnote">全体当前成员使用同一起始日期 · 每日 02:00 结算</text>
       </view>
     </block>
     </block>
@@ -287,7 +290,7 @@
                 </block>
               </view>
               <view class="team-form-note">
-                <text>练习日为北京时间 04:00 至次日 04:00。</text>
+                <text>练习日为北京时间 02:00 至次日 02:00。</text>
                 <text>当日多次练习累计计算；未设置期望分钟时不判断达标。</text>
                 <text wx:if="{{isCreator}}">修改规则后，历史统计也会按新规则重新计算。</text>
               </view>

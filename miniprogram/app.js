@@ -1,4 +1,6 @@
 // app.js
+const checkinManager = require('./utils/checkin.js');
+
 App({
   onLaunch: function () {
     if (!wx.cloud) {
@@ -14,6 +16,7 @@ App({
     });
     
     console.log('云开发初始化完成');
+    this.setupBackupRetry();
     
     // 设置缓存状态标记
     this.setupCacheStatus();
@@ -27,6 +30,27 @@ App({
     // 注意：数据库集合只需在项目部署时创建一次
     // 如需创建数据库集合，请手动调用 autoCreateCollections 云函数
     // this.autoCreateCollections();
+  },
+
+  onShow() {
+    if (!wx.cloud) return;
+    // 冷启动和从后台重新打开都会到这里；后台检查一次，不等待上次失败的退避时间。
+    return this.retryPendingRecordBackups({ force: true });
+  },
+
+  setupBackupRetry() {
+    if (this._networkStatusHandler) return;
+    this._networkStatusHandler = ({ isConnected }) => {
+      if (isConnected) this.retryPendingRecordBackups({ force: true });
+    };
+    wx.onNetworkStatusChange(this._networkStatusHandler);
+  },
+
+  retryPendingRecordBackups(options) {
+    // 异步执行，不阻塞页面展示、不弹全局加载框；队列只上传未确认的新记录。
+    return Promise.resolve().then(() => checkinManager.syncWithCloud(options)).catch(error => {
+      console.warn('静坐记录同步失败，保留本机记录:', error);
+    });
   },
   
   // 测试云环境连接

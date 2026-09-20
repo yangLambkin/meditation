@@ -89,10 +89,10 @@ test('concurrent pages share one request and the first successful daily quote', 
   assert.equal(h.calls.length, 1);
 });
 
-test('reopening restores persistent cache through the next calendar day until 04:00', async () => {
+test('reopening restores persistent cache through the next calendar day until 02:00', async () => {
   const h = harness();
   const quote = clone(await h.api.getDailyWisdom());
-  h.setTime('2026-09-20T03:59:59.999+08:00');
+  h.setTime('2026-09-20T01:59:59.999+08:00');
   assert.deepEqual(clone(await h.load().getDailyWisdom()), quote);
   assert.equal(h.calls.length, 1);
 });
@@ -103,10 +103,10 @@ for (const [boundary, before, after] of [
   ['2026-01-01', '2025-12-31', '2026-01-01'],
   ['2024-03-01', '2024-02-29', '2024-03-01']
 ]) {
-  test(`quote changes exactly at Beijing 04:00 on ${boundary}`, async () => {
-    const h = harness({ time: `${boundary}T03:59:59.999+08:00` });
+  test(`quote changes exactly at Beijing 02:00 on ${boundary}`, async () => {
+    const h = harness({ time: `${boundary}T01:59:59.999+08:00` });
     assert.deepEqual(clone(await h.api.getDailyWisdom()), { day: before, content: '金句 1' });
-    h.setTime(`${boundary}T04:00:00+08:00`);
+    h.setTime(`${boundary}T02:00:00+08:00`);
     assert.deepEqual(clone(await h.api.getDailyWisdom()), { day: after, content: '金句 2' });
     assert.equal(h.calls.length, 2);
   });
@@ -128,13 +128,13 @@ test('expired or malformed persisted values do not become the current quote', as
   assert.equal(h.calls.length, 4);
 });
 
-test('an old request finishing across 04:00 fetches the new day before returning', async () => {
+test('an old request finishing across 02:00 fetches the new day before returning', async () => {
   const oldResponse = deferred();
-  const h = harness({ time: '2026-09-19T03:59:59+08:00', cloud: call =>
+  const h = harness({ time: '2026-09-19T01:59:59+08:00', cloud: call =>
     call === 1 ? oldResponse.promise : Promise.resolve(success('新日金句')) });
   const result = h.api.getDailyWisdom();
   await flush();
-  h.setTime('2026-09-19T04:00:00+08:00');
+  h.setTime('2026-09-19T02:00:00+08:00');
   oldResponse.resolve(success('过期金句'));
   assert.deepEqual(clone(await result), { day: '2026-09-19', content: '新日金句' });
   assert.deepEqual(h.writes, [{ day: '2026-09-19', content: '新日金句' }]);
@@ -143,11 +143,11 @@ test('an old request finishing across 04:00 fetches the new day before returning
 
 test('a late old response cannot overwrite an already completed new-day request', async () => {
   const oldResponse = deferred();
-  const h = harness({ time: '2026-09-19T03:59:59+08:00', cloud: call =>
+  const h = harness({ time: '2026-09-19T01:59:59+08:00', cloud: call =>
     call === 1 ? oldResponse.promise : Promise.resolve(success('新日金句')) });
   const oldRequest = h.api.getDailyWisdom();
   await flush();
-  h.setTime('2026-09-19T04:00:00+08:00');
+  h.setTime('2026-09-19T02:00:00+08:00');
   const current = clone(await h.api.getDailyWisdom());
   oldResponse.resolve(success('过期金句'));
   assert.deepEqual(clone(await oldRequest), current);
@@ -181,16 +181,16 @@ test('unavailable persistent storage still keeps the quote stable in this sessio
   const first = clone(await h.api.getDailyWisdom());
   assert.deepEqual(clone(await h.api.getDailyWisdom()), first);
   assert.equal(h.calls.length, 1);
-  h.setTime('2026-09-20T04:00:00+08:00');
+  h.setTime('2026-09-20T02:00:00+08:00');
   assert.equal((await h.api.getDailyWisdom()).content, '金句 2');
 });
 
-test('watchers load immediately, refresh exactly at 04:00 and schedule the next boundary', async () => {
-  const h = harness({ time: '2026-01-01T03:59:59.999+08:00' });
+test('watchers load immediately, refresh exactly at 02:00 and schedule the next boundary', async () => {
+  const h = harness({ time: '2026-01-01T01:59:59.999+08:00' });
   const changes = [];
   const stop = h.api.watchDailyWisdom(quote => changes.push(clone(quote)));
   await flush();
-  const boundary = Date.parse('2026-01-01T04:00:00+08:00');
+  const boundary = Date.parse('2026-01-01T02:00:00+08:00');
   assert.deepEqual([...h.timers.values()].map(timer => timer.at), [boundary]);
   assert.deepEqual(changes, [{ day: '2025-12-31', content: '金句 1' }]);
   await h.advanceTo(boundary);
@@ -204,7 +204,7 @@ test('watchers load immediately, refresh exactly at 04:00 and schedule the next 
 });
 
 test('a watcher starting from persistent cache still schedules and performs the daily refresh', async () => {
-  const h = harness({ time: '2026-09-20T03:59:59.999+08:00' });
+  const h = harness({ time: '2026-09-20T01:59:59.999+08:00' });
   h.storage.set('dailyWisdom', { day: '2026-09-19', content: '缓存金句' });
   const changes = [];
   const stop = h.api.watchDailyWisdom(quote => changes.push(clone(quote)));
@@ -212,7 +212,7 @@ test('a watcher starting from persistent cache still schedules and performs the 
   assert.deepEqual(changes, [{ day: '2026-09-19', content: '缓存金句' }]);
   assert.equal(h.calls.length, 0);
   assert.equal(h.timers.size, 1);
-  await h.advanceTo('2026-09-20T04:00:00+08:00');
+  await h.advanceTo('2026-09-20T02:00:00+08:00');
   assert.deepEqual(changes[1], { day: '2026-09-20', content: '金句 1' });
   assert.equal(h.calls.length, 1);
   stop();
@@ -225,7 +225,7 @@ test('a delayed boundary timer refreshes the actual current day after suspension
   await flush();
   await h.advanceTo('2026-09-23T12:00:00+08:00');
   assert.equal(changes[1].day, '2026-09-23');
-  assert.deepEqual([...h.timers.values()].map(timer => timer.at), [Date.parse('2026-09-24T04:00:00+08:00')]);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.at), [Date.parse('2026-09-24T02:00:00+08:00')]);
   stop();
 });
 
@@ -247,14 +247,14 @@ test('switching pages during a pending request shares it and never calls the sto
   assert.equal(h.timers.size, 0);
 });
 
-test('watcher requests crossing 04:00 publish only the current response once', async () => {
+test('watcher requests crossing 02:00 publish only the current response once', async () => {
   const oldResponse = deferred(), newResponse = deferred();
-  const h = harness({ time: '2026-09-19T03:59:59+08:00', cloud: call =>
+  const h = harness({ time: '2026-09-19T01:59:59+08:00', cloud: call =>
     call === 1 ? oldResponse.promise : newResponse.promise });
   const changes = [];
   const stop = h.api.watchDailyWisdom(quote => changes.push(clone(quote)));
   await flush();
-  await h.advanceTo('2026-09-19T04:00:00+08:00');
+  await h.advanceTo('2026-09-19T02:00:00+08:00');
   assert.equal(h.calls.length, 2);
   newResponse.resolve(success('新日金句'));
   await flush();
@@ -270,7 +270,7 @@ test('stopping during the boundary refresh clears its next timer and suppresses 
   const changes = [];
   const stop = h.api.watchDailyWisdom(quote => changes.push(clone(quote)));
   await flush();
-  await h.advanceTo('2026-09-20T04:00:00+08:00');
+  await h.advanceTo('2026-09-20T02:00:00+08:00');
   stop();
   stop();
   response.resolve(success('明天'));

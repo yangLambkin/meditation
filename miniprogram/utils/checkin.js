@@ -5,6 +5,69 @@ const pendingBackups = new Map();
 const pendingDeletions = new Set();
 const userStorageRevisions = new Map();
 const pendingRefreshes = new Map();
+const pendingUploadDrains = new Map();
+const pendingCloudSyncs = new Map();
+const syncStateListeners = new Set();
+let uploadRetryTimer;
+let refreshRetryState;
+
+function currentUploadOpenid() {
+  const openid = wx.getStorageSync('userOpenId');
+  return typeof openid === 'string' && openid.startsWith('oz') ? openid : '';
+}
+
+// 自动补传仅认新版记录的显式标记；不把历史无云端 ID 的记录推断为待上传。
+function uploadEntries(userId) {
+  const stored = wx.getStorageSync(`meditation_checkin_${userId}`) || {};
+  const data = stored.checkinRecords || stored;
+  return Object.keys(data.dailyRecords || {}).flatMap(date =>
+    (data.dailyRecords[date].records || []).filter(Boolean).map(record => ({ date, record })));
+}
+
+function isPendingUpload(record, openid) {
+  return record.syncVersion === 1 && !record._id &&
+    (!record.syncOpenid || record.syncOpenid === openid);
+}
+
+function notifySyncState() {
+  syncStateListeners.forEach(listener => {
+    try { listener(); } catch (error) { console.warn('刷新上传状态失败:', error.message); }
+  });
+}
+
+function updateStoredUpload(userId, localId, update) {
+  const storageKey = `meditation_checkin_${userId}`;
+  const stored = wx.getStorageSync(storageKey);
+  if (!stored) return false;
+  const data = stored.checkinRecords || stored;
+  for (const day of Object.values(data.dailyRecords || {})) {
+    const record = (day.records || []).find(item => item && item.localId === localId);
+    if (!record) continue;
+    update(record);
+    wx.setStorageSync(storageKey, stored);
+    bumpUserStorageRevision(userId);
+    return true;
+  }
+  return false;
+}
+
+function scheduleUploadRetry(userId, openid) {
+  if (wx.getStorageSync('localUserId') !== userId || currentUploadOpenid() !== openid) return;
+  if (typeof clearTimeout === 'function') clearTimeout(uploadRetryTimer);
+  if (!openid || typeof setTimeout !== 'function') return;
+  const retries = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid) && !record.syncBlocked);
+  const deadlines = retries.map(({ record }) => record.syncNextRetryAt || Date.now() + 5000);
+  if (refreshRetryState && refreshRetryState.userId === userId && refreshRetryState.openid === openid) {
+    deadlines.push(refreshRetryState.nextRetryAt);
+  }
+  if (!deadlines.length) return;
+  const next = Math.min(...deadlines);
+  uploadRetryTimer = setTimeout(() => {
+    if (wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid) {
+      checkinManager.syncWithCloud().catch(error => console.warn('自动同步失败，保留本机记录:', error.message));
+    }
+  }, Math.max(1000, next - Date.now()));
+}
 
 function getUserStorageRevision(userId) {
   return userStorageRevisions.get(userId) || 0;
@@ -65,6 +128,15 @@ function resolveCheckinTimestamp(timestamp) {
     throw new Error('打卡时间无效或晚于当前时间');
   }
   return value;
+}
+
+function normalizeRecordOptions(options) {
+  const value = typeof options === 'string' ? { idempotencyKey: options } : (options || {});
+  const key = value.idempotencyKey || value.localId;
+  if (key !== undefined && (typeof key !== 'string' || !key.trim() || key.length > 200)) {
+    throw new Error('打卡记录标识无效');
+  }
+  return { ...value, idempotencyKey: key, source: value.source || 'timer' };
 }
 
 // 打卡管理系统 - 本地优先架构
@@ -158,11 +230,13 @@ const checkinManager = {
     
     // 尝试从统一存储获取数据
     const unifiedData = wx.getStorageSync(storageKey);
+    if (unifiedData) this.normalizeBusinessDates(unifiedData, storageKey);
     
     // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
     if (unifiedData && unifiedData.checkinRecords && unifiedData.checkinRecords.dailyRecords) {
       // 返回新的数据结构，转换为兼容格式
       return {
+        businessDayVersion: 2,
         dailyRecords: unifiedData.checkinRecords.dailyRecords || {},
         monthlyStats: unifiedData.checkinRecords.monthlyStats || {},
         userStats: unifiedData.checkinRecords.userStats || {}
@@ -177,6 +251,47 @@ const checkinManager = {
     
     // 如果没有统一数据，尝试从旧存储迁移数据
     return this.migrateOldCheckinData(userId);
+  },
+
+  normalizeBusinessDates: function(stored, storageKey) {
+    const data = stored.checkinRecords || stored;
+    if (!data.dailyRecords || data.businessDayVersion === 2) return;
+    const days = {};
+    // 无法还原时间的旧次数保留原日期，再移动有明细的记录；避免丢失部分明细的旧桶。
+    Object.keys(data.dailyRecords).forEach(oldDate => {
+      const oldDay = data.dailyRecords[oldDate] || {};
+      const details = Array.isArray(oldDay.records) ? oldDay.records.filter(Boolean) : [];
+      const unknownCount = Math.max(0, (Number(oldDay.count) || 0) - details.length);
+      if (unknownCount || !details.length) {
+        days[oldDate] = { ...oldDay, count: unknownCount, records: [] };
+      }
+    });
+    Object.keys(data.dailyRecords).forEach(oldDate => {
+      const oldDay = data.dailyRecords[oldDate] || {};
+      const records = Array.isArray(oldDay.records) ? oldDay.records : [];
+      records.forEach(record => {
+        if (!record) return;
+        const date = dateUtil.getRecordBusinessDate(record, oldDate);
+        record.date = date;
+        if (!days[date]) days[date] = { count: 0, lastCheckin: 0, records: [] };
+        days[date].records.push(record);
+        days[date].count++;
+        days[date].lastCheckin = Math.max(recordTime(days[date].lastCheckin) || 0, recordTime(record.timestamp) || 0);
+      });
+    });
+    data.dailyRecords = days;
+    const months = new Set([...Object.keys(data.monthlyStats || {}), ...Object.keys(days).map(date => date.slice(0, 7))]);
+    data.monthlyStats = {};
+    months.forEach(month => {
+      this.updateMonthlyStats(data, month);
+      data.monthlyStats[month].count = data.monthlyStats[month].total;
+      data.monthlyStats[month].totalDuration = Object.keys(days).filter(date => date.slice(0, 7) === month)
+        .reduce((total, date) => total + (days[date].records || []).reduce((sum, record) => sum + (Number(record.duration) || 0), 0), 0);
+    });
+    data.userStats = { ...(data.userStats || {}), ...this.getUserStats(data) };
+    data.businessDayVersion = 2;
+    wx.setStorageSync(storageKey, stored);
+    bumpUserStorageRevision(storageKey.slice('meditation_checkin_'.length));
   },
 
   // 迁移旧打卡数据到统一存储
@@ -397,6 +512,7 @@ const checkinManager = {
           wx.setStorageSync(`meditation_checkin_${userId}`, merged);
           bumpUserStorageRevision(userId);
           this.updateMonthlyStatsCache(merged.checkinRecords, 0, dateUtil.getBusinessMonth());
+          notifySyncState();
           return true;
         }
       } catch (error) {
@@ -444,11 +560,13 @@ const checkinManager = {
       let existing = record._id && byId.get(record._id);
       if (!existing && record.localId) {
         const candidate = byLocalId.get(record.localId);
-        if (candidate && !candidate._id && !matched.has(candidate)) existing = candidate;
+        if (candidate && !candidate._id && !matched.has(candidate) &&
+            (!candidate.syncOpenid || candidate.syncOpenid === (record._openid || currentUploadOpenid()))) existing = candidate;
       }
       if (!existing) {
         const key = `${recordTime(record.timestamp)}:${Number(record.duration) || 0}`;
         existing = (byTime.get(key) || []).find(candidate => !candidate._id && !matched.has(candidate) &&
+          candidate.syncVersion !== 1 &&
           !(candidate.localId && record.localId && candidate.localId !== record.localId));
       }
       if (existing) {
@@ -463,6 +581,13 @@ const checkinManager = {
         if (record._id) combined._id = record._id;
         if (record.localId) combined.localId = record.localId;
         combined.experience = mergeCheckinExperiences(existing.experience, record.experience);
+        if (combined._id) {
+          if (existing.syncVersion === 1) combined.syncStatus = 'synced';
+          ['syncError', 'syncErrorCode', 'syncAttempts', 'syncNextRetryAt', 'syncBlocked'].forEach(key => {
+            delete combined[key];
+            delete existing[key];
+          });
+        }
         Object.assign(existing, combined);
       } else {
         const added = { ...record, duration };
@@ -476,7 +601,7 @@ const checkinManager = {
     reconciled.forEach(record => {
       const time = recordTime(record.timestamp);
       if (Number.isFinite(time) && time > 0 && !Number.isNaN(new Date(time).getTime())) {
-        record.date = dateUtil.getBusinessDate(time);
+        record.date = dateUtil.getRecordBusinessDate(record);
       }
     });
     const merged = this.rebuildLocalCacheFromCloudRecords(reconciled);
@@ -596,7 +721,7 @@ const checkinManager = {
     for (const cloudRecord of cloudRecords) {
       if (!cloudRecord.date) continue;
       
-      const dateStr = cloudRecord.date;
+      const dateStr = dateUtil.getRecordBusinessDate(cloudRecord);
       const existingDayData = mergedData.checkinRecords.dailyRecords[dateStr];
       
       if (!existingDayData) {
@@ -624,8 +749,8 @@ const checkinManager = {
     
     // 检查是否已存在相同记录（基于时间戳和内容）
     const isDuplicate = existingRecords.some(existingRecord => 
-      existingRecord.timestamp === cloudRecord.timestamp &&
-      existingRecord.duration === cloudRecord.duration
+      (existingRecord._id && existingRecord._id === cloudRecord._id) ||
+      (existingRecord.localId && existingRecord.localId === cloudRecord.localId)
     );
     
     if (isDuplicate) {
@@ -644,6 +769,11 @@ const checkinManager = {
   formatCloudRecord: function(cloudRecord) {
     return {
       _id: cloudRecord._id,
+      localId: cloudRecord.localId,
+      idempotencyKey: cloudRecord.idempotencyKey,
+      source: cloudRecord.source,
+      dateSource: cloudRecord.dateSource,
+      date: dateUtil.getRecordBusinessDate(cloudRecord),
       timestamp: cloudRecord.timestamp,
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
@@ -728,7 +858,7 @@ const checkinManager = {
     for (const cloudRecord of cloudRecords) {
       if (!cloudRecord.date) continue;
       
-      const dateStr = cloudRecord.date;
+      const dateStr = dateUtil.getRecordBusinessDate(cloudRecord);
       const existingDayData = mergedData.checkinRecords.dailyRecords[dateStr];
       
       if (!existingDayData) {
@@ -756,8 +886,8 @@ const checkinManager = {
     
     // 检查是否已存在相同记录（基于时间戳和内容）
     const isDuplicate = existingRecords.some(existingRecord => 
-      existingRecord.timestamp === cloudRecord.timestamp &&
-      existingRecord.duration === cloudRecord.duration
+      (existingRecord._id && existingRecord._id === cloudRecord._id) ||
+      (existingRecord.localId && existingRecord.localId === cloudRecord.localId)
     );
     
     if (isDuplicate) {
@@ -776,6 +906,11 @@ const checkinManager = {
   formatCloudRecord: function(cloudRecord) {
     return {
       _id: cloudRecord._id,
+      localId: cloudRecord.localId,
+      idempotencyKey: cloudRecord.idempotencyKey,
+      source: cloudRecord.source,
+      dateSource: cloudRecord.dateSource,
+      date: dateUtil.getRecordBusinessDate(cloudRecord),
       timestamp: cloudRecord.timestamp,
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
@@ -832,6 +967,7 @@ const checkinManager = {
   rebuildLocalCacheFromCloudRecords(cloudRecords) {
     const localData = {
       checkinRecords: {
+        businessDayVersion: 2,
         dailyRecords: {},
         monthlyStats: {},
         userStats: {}
@@ -843,7 +979,7 @@ const checkinManager = {
     
     // 处理打卡记录（格式与本地打卡记录一致）
     cloudRecords.forEach(record => {
-      const dateStr = record.date;
+      const dateStr = dateUtil.getRecordBusinessDate(record);
       
       if (!localData.checkinRecords.dailyRecords[dateStr]) {
         localData.checkinRecords.dailyRecords[dateStr] = {
@@ -858,8 +994,17 @@ const checkinManager = {
       
       // 添加详细记录（格式与本地打卡记录一致）
       localData.checkinRecords.dailyRecords[dateStr].records.push({
+        // 重建缓存也必须保留未确认记录的补传状态，不能把它们变成历史脏数据。
+        ...Object.fromEntries(['syncVersion', 'syncStatus', 'syncOpenid', 'syncAttempts',
+          'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode']
+          .filter(key => record[key] !== undefined).map(key => [key, record[key]])),
+        ...(record._openid ? { syncOpenid: record._openid } : {}),
         _id: record._id,
         localId: record.localId,
+        idempotencyKey: record.idempotencyKey || record.localId,
+        source: record.source,
+        dateSource: record.dateSource,
+        date: dateStr,
         timestamp: record.timestamp,
         duration: record.duration || 0,
         emotion: record.emotion || [],
@@ -900,37 +1045,187 @@ const checkinManager = {
   },
   
   // === 核心数据操作（本地优先） ===
+
+  subscribeSyncState: function(listener) {
+    syncStateListeners.add(listener);
+    return () => syncStateListeners.delete(listener);
+  },
+
+  getPendingSyncSummary: function({ date } = {}) {
+    const openid = currentUploadOpenid();
+    const entries = uploadEntries(this.getUserId()).filter(entry =>
+      (!date || entry.date === date) && isPendingUpload(entry.record, openid));
+    return { total: entries.length, pending: entries.length,
+      failed: entries.filter(({ record }) => record.syncStatus === 'failed').length };
+  },
+
+  // 所有恢复联网入口共用：先补传，再读取云端完整快照校准本机。
+  // 上传和刷新分别有去重保护，此处额外串起两步，避免只改上传标记却一直显示旧快照。
+  syncWithCloud: function({ force = false } = {}) {
+    const userId = this.getUserId();
+    const openid = currentUploadOpenid();
+    const key = `${userId}:${openid}`;
+    const existing = pendingCloudSyncs.get(key);
+    if (existing) {
+      // 网络刚恢复/用户点重试时，不能被一个正在按退避跳过的普通同步吞掉。
+      if (force && !existing.forcingUpload) existing.forceRequested = true;
+      return existing.promise;
+    }
+    const state = { forceRequested: force, forcingUpload: false };
+    const sync = (async () => {
+      let uploaded = 0;
+      const sameAccount = () => wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid;
+      while (true) {
+        state.forcingUpload = state.forceRequested;
+        state.forceRequested = false;
+        // 兼容仍直接使用补传队列的调用方；显式重试不能被其普通退避轮次吞掉。
+        if (state.forcingUpload && pendingUploadDrains.has(key)) await pendingUploadDrains.get(key);
+        if (!sameAccount()) return { success: false, uploaded, refreshed: false, error: '账号已切换，已暂停同步' };
+        const result = await this.retryPendingBackups({ force: state.forcingUpload });
+        state.forcingUpload = false;
+        uploaded += result.uploaded || 0;
+        if (!sameAccount()) {
+          return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
+        }
+        if (!openid) return { ...result, uploaded, refreshed: false };
+        if (state.forceRequested) continue;
+        // 其他入口之前发出的读取可能早于本轮上传，等待它结束后再拿新的快照。
+        const previousRefresh = pendingRefreshes.get(key);
+        if (previousRefresh) await previousRefresh;
+        if (!sameAccount()) return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
+        const refreshed = await this.refreshFromCloud();
+        if (!sameAccount()) return { ...result, uploaded, success: false, refreshed: false, error: '账号已切换，已暂停同步' };
+        if (state.forceRequested) continue;
+        const remaining = this.getPendingSyncSummary();
+        if (refreshed) refreshRetryState = null;
+        else {
+          const attempts = refreshRetryState && refreshRetryState.userId === userId && refreshRetryState.openid === openid
+            ? refreshRetryState.attempts + 1 : 1;
+          refreshRetryState = { userId, openid, attempts,
+            nextRetryAt: Date.now() + Math.min(300000, 5000 * Math.pow(2, Math.min(attempts - 1, 6))) };
+        }
+        // 上传完但读取云端失败也要重试校准，不能等到用户下次进入首页才更新。
+        scheduleUploadRetry(userId, openid);
+        return { ...result, uploaded, refreshed, pending: remaining.pending, failed: remaining.failed,
+          success: remaining.pending === 0,
+          ...(remaining.pending === 0 ? { error: undefined } : {}) };
+      }
+    })();
+    state.promise = sync;
+    pendingCloudSyncs.set(key, state);
+    const clear = () => { if (pendingCloudSyncs.get(key) === state) pendingCloudSyncs.delete(key); };
+    sync.then(clear, clear);
+    return sync;
+  },
+
+  retryPendingBackups: function({ force = false } = {}) {
+    const userId = this.getUserId();
+    const openid = currentUploadOpenid();
+    const key = `${userId}:${openid}`;
+    if (pendingUploadDrains.has(key)) return pendingUploadDrains.get(key);
+    const drain = (async () => {
+      const entries = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid));
+      const summary = { success: false, total: entries.length, uploaded: 0, failed: 0, pending: entries.length };
+      if (!entries.length) return { ...summary, success: true };
+      if (!openid) return { ...summary, error: '请登录后上传本机记录' };
+      try {
+        for (const entry of entries) {
+          if (wx.getStorageSync('localUserId') !== userId || currentUploadOpenid() !== openid) {
+            summary.error = '账号已切换，已暂停上传';
+            break;
+          }
+          // 每次重读，跳过已删除/已确认记录，不上传队列开始时的过期快照。
+          const current = uploadEntries(userId).find(({ record }) => record.localId === entry.record.localId);
+          if (!current || !isPendingUpload(current.record, openid)) continue;
+          const { record, date } = current;
+          if (!force && (record.syncBlocked || record.syncNextRetryAt > Date.now())) continue;
+          const result = await this.asyncBackupToCloud(record.duration, record.emotion || [], record.experience,
+            record.timestamp, record.localId, { source: record.source, date });
+          if (result.success) summary.uploaded++;
+          else {
+            summary.failed++;
+            summary.error = result.error || '部分记录仍待上传';
+          }
+        }
+      } catch (error) {
+        summary.error = error.message || '上传失败，记录已保存在本机';
+      }
+      summary.pending = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid)).length;
+      summary.success = summary.pending === 0;
+      scheduleUploadRetry(userId, openid);
+      notifySyncState();
+      return summary;
+    })();
+    pendingUploadDrains.set(key, drain);
+    const clear = () => { if (pendingUploadDrains.get(key) === drain) pendingUploadDrains.delete(key); };
+    drain.then(clear, clear);
+    return drain;
+  },
+
+  // 保留先落本地的离线能力，但页面必须等云端返回记录 ID 才能显示上传成功。
+  recordCheckinWithSync: async function(...args) {
+    const userId = this.getUserId();
+    const local = this.recordCheckin(...args);
+    const pending = pendingBackups.get(backupKey(userId, args[3], local.localId));
+    const response = pending ? await pending : null;
+    const entry = uploadEntries(userId).find(({ record }) => record.localId === local.localId);
+    const synced = !!(wx.getStorageSync('localUserId') === userId && entry && entry.record._id &&
+      (!entry.record.syncOpenid || entry.record.syncOpenid === currentUploadOpenid()));
+    return { ...local, cloudSynced: synced,
+      ...(synced ? {} : {
+        syncError: response && response.error || entry && entry.record.syncError || '已保存在本机，等待上传',
+        syncErrorCode: response && response.code || entry && entry.record.syncErrorCode || 'UPLOAD_PENDING'
+      }) };
+  },
   
   // 记录打卡（本地优先，异步云端备份）
-  recordCheckin: function(duration, emotion, experience = "", timestamp) {
+  recordCheckin: function(duration, emotion, experience = "", timestamp, options) {
+    const metadata = normalizeRecordOptions(options);
     const recordTimestamp = resolveCheckinTimestamp(timestamp);
     
     // 1. 立即写入本地存储（保证响应速度）
-    const localResult = this.recordToLocal(duration, emotion, experience, recordTimestamp);
+    const localResult = this.recordToLocal(duration, emotion, experience, recordTimestamp, metadata);
     if (!localResult || !localResult.success) {
       throw new Error('本地打卡记录保存失败');
     }
     
     // 2. 异步备份到云端（如果已登录）
-    if (this.isUserLoggedIn()) {
-      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId);
+    const saved = uploadEntries(this.getUserId()).find(({ record }) => record.localId === localResult.localId);
+    if (this.isUserLoggedIn() && saved && saved.record.syncVersion === 1 && !saved.record._id) {
+      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId, metadata);
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
-    this.asyncCheckBadgeUnlock(duration);
+    if (!localResult.duplicate) this.asyncCheckBadgeUnlock(duration);
     
     return localResult;
   },
   
   // 本地存储记录
-  recordToLocal: function(duration, emotion, experience = "", timestamp) {
+  recordToLocal: function(duration, emotion, experience = "", timestamp, options) {
+    const metadata = normalizeRecordOptions(options);
     const recordTimestamp = resolveCheckinTimestamp(timestamp);
-    const dateStr = dateUtil.getBusinessDate(recordTimestamp);
+    const dateStr = metadata.source === 'manual' && metadata.date ? metadata.date : dateUtil.getBusinessDate(recordTimestamp);
     const monthStr = dateStr.substring(0, 7);
     
     // 获取本地数据
     const userData = this.getUserCheckinData();
     
+    if (metadata.idempotencyKey) {
+      for (const date of Object.keys(userData.dailyRecords || {})) {
+        const existing = (userData.dailyRecords[date].records || []).find(record =>
+          record.localId === metadata.idempotencyKey || record.idempotencyKey === metadata.idempotencyKey);
+        if (existing) return { success: true, duplicate: true, localId: existing.localId, date,
+          dailyCount: userData.dailyRecords[date].count,
+          monthlyTotal: (userData.monthlyStats[date.slice(0, 7)] || {}).total || 0 };
+      }
+    }
+    if (!Number.isInteger(duration) || duration < 1 || duration > 1440) {
+      throw new Error('静坐时长须为 1–1440 分钟的整数');
+    }
+    if (metadata.source === 'manual' && !dateUtil.isRecentBusinessDate(dateStr)) {
+      throw new Error('只能记录最近三天（含今天）的静坐');
+    }
     // 更新每日记录
     if (!userData.dailyRecords[dateStr]) {
       userData.dailyRecords[dateStr] = {
@@ -966,7 +1261,12 @@ const checkinManager = {
     
     // 添加打卡记录详情（与云端数据结构保持一致）
     const newRecord = {
-      localId: `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      localId: metadata.idempotencyKey || `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      syncVersion: 1,
+      syncStatus: 'pending',
+      syncOpenid: currentUploadOpenid(),
+      source: metadata.source,
+      date: dateStr,
       timestamp: recordTimestamp,
       duration: duration,
       emotion: emotion,
@@ -987,6 +1287,7 @@ const checkinManager = {
 
     // 保存成功后再从存储刷新当前月缓存，避免漏计本次记录或缓存未保存的数据。
     this.updateMonthlyStatsCache(userData, duration, monthStr);
+    notifySyncState();
     
     console.log('✅ 本地记录成功:', { date: dateStr, count: userData.dailyRecords[dateStr].count });
     
@@ -1000,55 +1301,90 @@ const checkinManager = {
   },
   
   // 异步备份到云端
-  asyncBackupToCloud: function(duration, emotion, experience = "", timestamp, localId) {
+  asyncBackupToCloud: function(duration, emotion, experience = "", timestamp, localId, metadata) {
     const userId = this.getUserId();
     const key = backupKey(userId, timestamp, localId);
     if (pendingDeletions.has(key)) return Promise.resolve({ success: false });
     if (pendingBackups.has(key)) return pendingBackups.get(key);
-    const backup = this.backupRecordToCloud(userId, duration, emotion, experience, timestamp, localId);
+    const backup = this.backupRecordToCloud(userId, duration, emotion, experience, timestamp, localId, metadata);
     pendingBackups.set(key, backup);
-    backup.finally(() => pendingBackups.delete(key));
+    const clear = () => { if (pendingBackups.get(key) === backup) pendingBackups.delete(key); };
+    backup.then(clear, clear);
     return backup;
   },
 
-  backupRecordToCloud: async function(userId, duration, emotion, experience, timestamp, localId) {
+  backupRecordToCloud: async function(userId, duration, emotion, experience, timestamp, localId, metadata) {
+    let managed = false;
+    let openid = '';
+    let result;
     try {
-      // 处理experience参数格式（确保与云端接口兼容）
-      let experienceToSend = experience;
-      if (Array.isArray(experience)) {
-        // 云函数期望experience为数组，直接传递
-        experienceToSend = experience;
-      } else if (typeof experience === 'string') {
-        // 如果是字符串，转换为单元素数组
-        experienceToSend = experience ? [experience] : [];
-      }
-      
-      const args = [duration, emotion, experienceToSend, timestamp];
-      if (localId) args.push(localId);
-      const result = await cloudApi.recordMeditation(...args);
-      if (result.success) {
-        // 保存云端身份，允许精确删除同一时间的多次补记。
-        if (result.data && result.data.recordId) {
-          const stored = this.getUserCheckinDataByUserId(userId);
-          const data = stored.checkinRecords || stored;
-          const date = dateUtil.getBusinessDate(timestamp);
-          const records = (data.dailyRecords[date] || {}).records || [];
-          const index = findRecordIndex(records, { localId, timestamp });
-          if (index !== -1) {
-            records[index]._id = result.data.recordId;
-            wx.setStorageSync(`meditation_checkin_${userId}`, stored);
-            bumpUserStorageRevision(userId);
+      const entry = localId && uploadEntries(userId).find(({ record }) => record.localId === localId);
+      managed = !!(entry && entry.record.syncVersion === 1);
+      if (managed) {
+        const record = entry.record;
+        openid = currentUploadOpenid();
+        if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请登录后上传本机记录' };
+        if (wx.getStorageSync('localUserId') !== userId || (record.syncOpenid && record.syncOpenid !== openid)) {
+          return { success: false, code: 'ACCOUNT_CHANGED', error: '请切换回保存该记录时的账号后重试' };
+        }
+        if (record._id) return { success: true, data: { recordId: record._id } };
+        // 游客记录先持久化归属；落盘失败时绝不发送无法追踪的上传。
+        if (!record.syncOpenid) {
+          if (!updateStoredUpload(userId, localId, item => { item.syncOpenid = openid; })) {
+            return { success: false, code: 'RECORD_NOT_FOUND', error: '本地记录已移除' };
           }
         }
-        console.log('☁️ 云端备份成功');
-      } else {
-        console.warn('⚠️ 云端备份失败（不影响本地使用）:', result.error);
+        // 同一身份始终使用第一次保存的内容，不能被重提表单的新内容覆盖。
+        duration = record.duration;
+        emotion = record.emotion || [];
+        experience = record.experience;
+        timestamp = record.timestamp;
+        metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid };
       }
-      return result;
+      const experienceToSend = typeof experience === 'string' ? (experience ? [experience] : []) : experience;
+      const args = [duration, emotion, experienceToSend, timestamp];
+      if (localId || metadata) args.push(localId);
+      if (metadata) args.push(metadata);
+      result = await cloudApi.recordMeditation(...args);
+      if (!result || (result.success && !(result.data && typeof result.data.recordId === 'string' && result.data.recordId.trim()))) {
+        result = { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认保存，请重试上传' };
+      }
     } catch (error) {
-      console.warn('⚠️ 云端备份异常（不影响本地使用）:', error.message);
-      return { success: false, error: error.message };
+      result = { success: false, code: error.code || 'UPLOAD_FAILED', error: error.message || '上传失败，记录已保存在本机' };
     }
+    try {
+      if (localId) updateStoredUpload(userId, localId, record => {
+        // 首页刷新可能先拿到云端确认，不能让迟到的失败响应覆盖成功状态。
+        if (record._id && !result.success) return;
+        if (result.success) {
+          record._id = result.data.recordId;
+          if (managed) record.syncStatus = 'synced';
+          delete record.syncError;
+          delete record.syncErrorCode;
+          delete record.syncAttempts;
+          delete record.syncNextRetryAt;
+          delete record.syncBlocked;
+        } else {
+          record.syncError = result.error || '云端同步失败';
+          record.syncErrorCode = result.code || 'SYNC_FAILED';
+          if (managed) {
+            record.syncStatus = 'failed';
+            record.syncAttempts = (Number(record.syncAttempts) || 0) + 1;
+            record.syncNextRetryAt = Date.now() + Math.min(300000, 5000 * Math.pow(2, Math.min(record.syncAttempts - 1, 6)));
+            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE'].includes(record.syncErrorCode);
+          }
+        }
+      });
+    } catch (error) {
+      // 云端已写入但本机确认落盘失败，也保留原身份重试，由云端幂等去重。
+      result = { success: false, code: 'STORAGE_FAILED', error: '上传状态保存失败，请重试' };
+      console.warn('保存上传状态失败:', error.message);
+    }
+    if (managed) {
+      try { scheduleUploadRetry(userId, openid); } catch (error) { console.warn('安排补传失败:', error.message); }
+      notifySyncState();
+    }
+    return result;
   },
 
   // 云端确认后再删除本地记录；失败保留列表，重试不会重复扣减统计。
@@ -1124,6 +1460,7 @@ const checkinManager = {
       bumpUserStorageRevision(userId);
       this.updateMonthlyStatsCache(data, 0, month);
       wx.removeStorageSync('cloud_ranking_cache');
+      notifySyncState();
       return { success: true };
     } catch (error) {
       console.error('删除静坐记录失败:', error);
@@ -1207,11 +1544,13 @@ const checkinManager = {
     const userKey = `meditation_checkin_${userId}`;
     
     const data = wx.getStorageSync(userKey);
-    
+    if (data) this.normalizeBusinessDates(data, userKey);
+
     // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
     if (data && data.checkinRecords && data.checkinRecords.dailyRecords) {
       // 返回新的数据结构，转换为兼容格式
       const result = {
+        businessDayVersion: 2,
         dailyRecords: data.checkinRecords.dailyRecords || {},
         monthlyStats: data.checkinRecords.monthlyStats || {},
         userStats: data.checkinRecords.userStats || {}
@@ -1314,7 +1653,7 @@ const checkinManager = {
       });
       
       // currentStreak = 以最后一个打卡日结尾的连续段长度
-      currentStreak = run;
+      currentStreak = activeDates.length && activeDates[activeDates.length - 1] >= dateUtil.addBusinessDays(dateUtil.getBusinessDate(), -1) ? run : 0;
       longestStreak = longestStreakCalc;
       totalDays = activeDates.length;
       totalCount = dates.reduce((sum, dateStr) => sum + (userData.dailyRecords[dateStr].count || 0), 0);
@@ -1340,6 +1679,9 @@ const checkinManager = {
       console.log('❌ 未登录，跳过同步');
       return;
     }
+
+    // 登录标记只控制旧恢复流程；本次新待上传记录每次登录都必须重新检查。
+    await this.syncWithCloud();
     
     // 检查是否已经执行过登录同步
     const hasSyncedOnLogin = wx.getStorageSync('hasSyncedOnLogin');
@@ -1400,8 +1742,9 @@ const checkinManager = {
     
     // 获取本地数据
     const storedData = this.getUserCheckinDataByUserId(localUserId);
+    this.normalizeBusinessDates(storedData, `meditation_checkin_${localUserId}`);
     const localData = storedData.checkinRecords || storedData;
-    
+
     if (!localData || Object.keys(localData.dailyRecords).length === 0) {
       console.log('✅ 本地没有数据，无需同步');
       return;
@@ -1409,35 +1752,27 @@ const checkinManager = {
     
     console.log('✅ 本地数据检查完成');
     
-    // 在本地优先架构下，数据同步是静默的异步操作
-    // 不需要复杂的逐条检查，云端会处理重复数据的检测
-    
-    // 异步批量同步最近7天的数据（简化策略）
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    for (const dateStr in localData.dailyRecords) {
-      const recordDate = new Date(dateStr);
-      if (recordDate >= sevenDaysAgo) {
-        const dayData = localData.dailyRecords[dateStr];
-        for (const localRecord of dayData.records) {
-          if (localRecord._id) continue;
-          // 异步记录到云端（失败不影响本地使用）
-          this.asyncBackupToCloud(
-            localRecord.duration, 
-            localRecord.emotion || [], 
-            localRecord.experience,
-            localRecord.timestamp,
-            localRecord.localId
-          ).then(() => {
-            console.log(`✅ 记录同步成功: ${dateStr}`);
-          }).catch(error => {
-            console.warn(`⚠️ 记录同步失败 ${dateStr}:`, error.message);
-          });
-        }
+    // 先将旧离线记录的身份持久化，再发请求；重启、超时重试复用同一身份。
+    let changed = false;
+    Object.values(localData.dailyRecords).forEach(day => (day.records || []).forEach(record => {
+      if (!record._id && !record.localId) {
+        record.localId = `record_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        changed = true;
+      }
+    }));
+    if (changed) {
+      wx.setStorageSync(`meditation_checkin_${localUserId}`, storedData);
+      bumpUserStorageRevision(localUserId);
+    }
+    // 计时/旧记录不设上传过期窗口；手动补录首次上传仍受云端三天限制，失败保留本地与syncError。
+    for (const dateStr of Object.keys(localData.dailyRecords)) {
+      for (const record of localData.dailyRecords[dateStr].records || []) {
+        if (record._id) continue;
+        await this.asyncBackupToCloud(record.duration, record.emotion || [], record.experience,
+          record.timestamp, record.localId, { source: record.source === 'manual' || record.dateSource === 'manual' ? 'manual' : 'timer', date: dateStr });
       }
     }
-    
+
     console.log('✅ 同步任务已提交');
   },
   
@@ -1517,10 +1852,11 @@ const checkinManager = {
   updateMonthlyStatsCache: function(data, duration, monthStr) {
     try {
       // 实时计算最新的当月总分钟数
-      const currentMinutes = this.calculateCurrentMonthMinutes();
+      const currentMonth = dateUtil.getBusinessMonth();
+      const currentMinutes = this.calculateCurrentMonthMinutes(currentMonth);
       
       // 更新缓存
-      this.updateMonthlyCache(currentMinutes);
+      this.updateMonthlyCache(currentMinutes, currentMonth);
       
       console.log(`📊 打卡后缓存更新完成: ${currentMinutes} 分钟 (月: ${monthStr})`);
       
@@ -1534,14 +1870,15 @@ const checkinManager = {
   // 获取当月总分钟数（智能缓存 + 实时计算）
   getCurrentMonthMinutes: function() {
     try {
+      const currentMonth = dateUtil.getBusinessMonth();
       // 先检查缓存是否有效
-      if (this.isMonthlyCacheValid()) {
+      if (this.isMonthlyCacheValid(currentMonth)) {
         return this.getCachedMonthlyMinutes();
       }
       
       // 缓存失效时实时计算并更新缓存
-      const minutes = this.calculateCurrentMonthMinutes();
-      this.updateMonthlyCache(minutes);
+      const minutes = this.calculateCurrentMonthMinutes(currentMonth);
+      this.updateMonthlyCache(minutes, currentMonth);
       return minutes;
     } catch (error) {
       console.error('获取当月总分钟数失败:', error);
@@ -1550,9 +1887,8 @@ const checkinManager = {
   },
 
   // 实时计算当月总分钟数
-  calculateCurrentMonthMinutes: function() {
+  calculateCurrentMonthMinutes: function(currentMonth = dateUtil.getBusinessMonth()) {
     try {
-      const currentMonth = dateUtil.getBusinessMonth();
       const userData = this.getUserCheckinData();
       
       const totalMinutes = Object.keys(userData.dailyRecords || {})
@@ -1573,14 +1909,14 @@ const checkinManager = {
   },
 
   // 检查月度统计缓存是否有效
-  isMonthlyCacheValid: function() {
+  isMonthlyCacheValid: function(currentMonth = dateUtil.getBusinessMonth()) {
     try {
       const userId = this.getUserId();
       const storageKey = `meditation_monthly_stats_${userId}`;
       const monthlyStatsCache = wx.getStorageSync(storageKey) || {};
+      if (monthlyStatsCache.businessDayVersion !== 2) return false;
       
       // 检查缓存月份是否匹配
-      const currentMonth = dateUtil.getBusinessMonth();
       if (monthlyStatsCache.currentMonth !== currentMonth) {
         console.log(`📊 缓存月份不匹配，需要重新计算 (缓存: ${monthlyStatsCache.currentMonth}, 当前: ${currentMonth})`);
         return false;
@@ -1618,13 +1954,13 @@ const checkinManager = {
   },
 
   // 更新月度统计缓存
-  updateMonthlyCache: function(minutes) {
+  updateMonthlyCache: function(minutes, currentMonth = dateUtil.getBusinessMonth()) {
     try {
       const userId = this.getUserId();
       const storageKey = `meditation_monthly_stats_${userId}`;
-      const currentMonth = dateUtil.getBusinessMonth();
-      
+      // 计算与写入使用同一月份，避免月初 02:00 跨界把旧月分钟数写入新月缓存。
       const monthlyStatsCache = {
+        businessDayVersion: 2,
         currentMonth: currentMonth,
         totalMinutes: minutes,
         lastUpdateTime: new Date().toISOString()

@@ -1,25 +1,68 @@
-// 业务日期工具：全应用唯一的"天/月"基准。
-// 原因：业务上的"今天/本月"此前用 new Date().toISOString().split('T')[0] 生成，
-// 该值基于 UTC，导致中国时区 00:00–08:00 期间归属前一天/上月（全局根因 ③）。
-// 解决：显式按东八区（中国时区 UTC+8）划分业务日期。采用"时间 +8h 后用 UTC 分量取值"
-// 的技巧，使结果不受运行环境本地时区影响，从而保证前端（用户手机）与云端
-// （云函数容器）使用完全一致的日期基准。
-
+// 全应用业务日：北京时间每日 02:00（含）至次日 02:00（不含）。
+// UTC+8 再减去两小时，使用 UTC 分量，避免手机/云函数所在时区影响。
+const DAY_MS = 86400000;
+function dateLabel(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
 function getBusinessDate(date) {
-  const d = date ? new Date(date) : new Date();
-  // 加 8 小时使其落在东八区，再用 UTC 分量读取，规避环境时区差异
-  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
-  const y = utc8.getUTCFullYear();
-  const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(utc8.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return dateLabel(new Date(date === undefined ? Date.now() : date).getTime() + 6 * 3600000);
 }
-
-function getBusinessMonth(date) {
-  return getBusinessDate(date).substring(0, 7);
+function getBusinessMonth(date) { return getBusinessDate(date).slice(0, 7); }
+function getCalendarDate(date) {
+  return dateLabel(new Date(date === undefined ? Date.now() : date).getTime() + 8 * 3600000);
 }
-
-module.exports = {
-  getBusinessDate,
-  getBusinessMonth
-};
+function isDateLabel(date) {
+  return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && dateLabel(Date.parse(`${date}T00:00:00Z`)) === date;
+}
+function addBusinessDays(date, days) {
+  if (!isDateLabel(date) || !Number.isInteger(days)) throw new Error('业务日期无效');
+  return dateLabel(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS);
+}
+function getBusinessDateWindow(date) {
+  if (!isDateLabel(date)) throw new Error('业务日期无效');
+  const start = Date.parse(`${date}T02:00:00+08:00`);
+  return { start, end: start + DAY_MS };
+}
+// 没有时区的旧字符串不能按设备时区猜测，保留记录原有日期。
+function getRecordTimestamp(value) {
+  let timestamp = NaN;
+  if (typeof value === 'number') timestamp = value;
+  else if (typeof value === 'string' && /^\d+$/.test(value)) timestamp = Number(value);
+  else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) timestamp = Date.parse(value);
+  else if (value && typeof value.getTime === 'function') timestamp = value.getTime();
+  return Number.isSafeInteger(timestamp) && timestamp > 0 && Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
+}
+function getRecordBusinessDate(record, fallbackDate) {
+  // 手动选择的是业务日期，不能因为补录/上传时刻重新归属。
+  if ((record.source === 'manual' || record.dateSource === 'manual') && isDateLabel(record.date || fallbackDate)) {
+    return record.date || fallbackDate;
+  }
+  const timestamp = getRecordTimestamp(record.timestamp);
+  return Number.isFinite(timestamp) && timestamp > 0 ? getBusinessDate(timestamp) : record.date || fallbackDate;
+}
+function isRecentBusinessDate(date, now) {
+  const today = getBusinessDate(now);
+  return isDateLabel(date) && date >= addBusinessDays(today, -2) && date <= today;
+}
+// 页面显示时订阅，在北京时间 02:00 精确刷新；隐藏/卸载时调用返回的 stop。
+function watchBusinessDate(onChange) {
+  let day = getBusinessDate();
+  let stopped = false;
+  let timer;
+  function schedule() {
+    const now = Date.now();
+    timer = setTimeout(() => {
+      if (stopped) return;
+      const nextDay = getBusinessDate();
+      const previousDay = day;
+      day = nextDay;
+      schedule();
+      if (nextDay !== previousDay) onChange(nextDay, previousDay);
+    }, Math.max(1, getBusinessDateWindow(getBusinessDate(now)).end - now));
+  }
+  schedule();
+  return () => { stopped = true; clearTimeout(timer); };
+}
+module.exports = { DAY_MS, getBusinessDate, getBusinessMonth, getCalendarDate, isDateLabel,
+  addBusinessDays, getBusinessDateWindow, getRecordTimestamp, getRecordBusinessDate, isRecentBusinessDate, watchBusinessDate };

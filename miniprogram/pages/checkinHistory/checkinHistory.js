@@ -1,5 +1,6 @@
 const checkinManager = require('../../utils/checkin.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
+const dateUtil = require('../../utils/dateUtil.js');
 const memberHistory = require('../../utils/memberHistory.js');
 
 function isValidMonth(month) {
@@ -37,12 +38,23 @@ Page({
 
   onShow() {
     this._unloaded = false;
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
+      this.showSelectedMonth(this.data.selectedMonth);
+    });
+    this.showSelectedMonth(this.data.selectedMonth);
     if (this.data.isMemberHistory) return this.refreshCheckinsFromCloud();
     this.refreshCheckinRecords();
     return this.refreshCheckinsFromCloud();
   },
 
+  onHide() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
+  },
+
   onUnload() {
+    this.onHide();
     this._unloaded = true;
   },
 
@@ -188,7 +200,7 @@ Page({
       const confirmation = await new Promise((resolve, reject) => {
         const modal = wx.showModal({
           title: '删除静坐记录',
-          content: `确定删除 ${record.date} ${record.time} 的 ${record.duration} 分钟静坐记录吗？\n删除后无法恢复。`,
+          content: `确定删除 ${record.dayDate} ${record.timeLabel} 的 ${record.duration} 分钟静坐记录吗？\n删除后无法恢复。`,
           confirmText: '删除',
           confirmColor: '#b45245',
           cancelText: '取消',

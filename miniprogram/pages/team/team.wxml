@@ -1,12 +1,15 @@
 <view class="team-page">
   <view class="team-hero">
     <view class="hero-decoration" aria-hidden="true">
-      <view class="hero-orbit hero-orbit-outer"></view>
-      <view class="hero-orbit hero-orbit-inner"></view>
-      <view class="hero-glow"></view>
+      <view class="hero-shape"></view>
+      <image class="hero-image" src="/images/bg_image.png" mode="aspectFill" />
     </view>
     <view class="hero-content">
-      <text class="hero-title">与伙伴一起，静心前行</text>
+      <view class="hero-welcome">欢迎回来，{{hasUserInfo ? userNickname : '静坐的朋友'}}</view>
+      <text class="hero-title">结伴静坐，共同成长</text>
+    </view>
+  </view>
+  <view class="team-summary-card">
       <view class="hero-footer">
         <view class="overview-summary">
           <view class="hero-stat"><text class="count-number">{{totalJoinedTeams}}</text><text class="count-label">已加入团队</text></view>
@@ -15,7 +18,6 @@
         </view>
         <button class="create-button" bindtap="createNewTeam" hover-class="create-button-hover">＋ 创建团队</button>
       </view>
-    </view>
   </view>
   <view class="tabs">
     <view class="tab {{currentTab === 'created' ? 'selected' : ''}}" bindtap="switchTab" data-tab="created">我的团队</view>
@@ -32,7 +34,7 @@
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
       </view>
-      <text class="team-description">{{item.description || '暂时没有团队描述'}}</text>
+      <text class="team-description">{{item.description || '每一次静坐，都有伙伴同行'}}</text>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
       <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长，通过邀请加入团队。
@@ -42,7 +44,7 @@
   </block>
 
   <block wx:if="{{currentTab === 'joined'}}">
-    <view class="list-caption">这里展示团队介绍，加入请联系团长获取邀请。</view>
+    <view class="list-caption">找到一起静坐的伙伴，联系团长获取邀请即可加入。</view>
     <view class="team-card" wx:for="{{allTeams}}" wx:key="_id">
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
@@ -52,9 +54,8 @@
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
       </view>
-      <text class="team-description">{{item.description || '暂时没有团队描述'}}</text>
+      <text class="team-description">{{item.description || '每一次静坐，都有伙伴同行'}}</text>
     </view>
     <view wx:if="{{!allTeams.length && !isLoading}}" class="empty-state"><view class="empty-symbol">◎</view><text class="empty-title">还没有公开团队</text><text class="empty-description">创建一个团队，邀请伙伴加入。</text></view>
   </block>
-  <view wx:if="{{isLoading}}" class="refresh-hint"><view class="loading-dot"></view><text>正在更新团队…</text></view>
 </view>

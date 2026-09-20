@@ -7,14 +7,39 @@ cloud.init({
 
 const db = cloud.database();
 
-// 业务日期工具：按东八区（中国时区 UTC+8）生成 YYYY-MM-DD，与前端/主云函数统一基准（根因③）
+// 业务日期与前端一致：北京时间每日 02:00 换日。
 function getBusinessDate(date) {
-  const d = date ? new Date(date) : new Date();
-  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const d = new Date(date === undefined ? Date.now() : date);
+  const utc8 = new Date(d.getTime() + 6 * 60 * 60 * 1000);
   const y = utc8.getUTCFullYear();
   const m = String(utc8.getUTCMonth() + 1).padStart(2, '0');
   const day = String(utc8.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function getRecordBusinessDate(record) {
+  const validDate = typeof record.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(record.date) &&
+    Number.isFinite(Date.parse(`${record.date}T00:00:00Z`)) && new Date(`${record.date}T00:00:00Z`).toISOString().slice(0, 10) === record.date;
+  if ((record.source === 'manual' || record.dateSource === 'manual') && validDate) return record.date;
+  const value = record.timestamp;
+  let timestamp = NaN;
+  if (typeof value === 'number') timestamp = value;
+  else if (typeof value === 'string' && /^\d+$/.test(value)) timestamp = Number(value);
+  else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) timestamp = Date.parse(value);
+  else if (value && typeof value.getTime === 'function') timestamp = value.getTime();
+  return Number.isSafeInteger(timestamp) && timestamp > 0 && Number.isFinite(new Date(timestamp).getTime())
+    ? getBusinessDate(timestamp) : validDate ? record.date : '';
+}
+
+async function readAllRecords(collectionName, filter = {}) {
+  const records = [];
+  const limit = 100;
+  while (true) {
+    const page = await db.collection(collectionName).where(filter).orderBy('_id', 'asc')
+      .skip(records.length).limit(limit).get();
+    records.push(...page.data);
+    if (page.data.length < limit) return records;
+  }
 }
 
 /**
@@ -99,7 +124,7 @@ async function safeCleanupTestData() {
     const today = new Date();
     const testPeriod = {
       startDate: '2026-01-01',  // 测试开始日期
-      endDate: getBusinessDate(today)  // 今天（东八区），包括今天的数据
+      endDate: getBusinessDate(today)  // 当前静坐业务日（北京时间 02:00 换日）
     };
     
     let totalDeleted = 0;
@@ -108,11 +133,11 @@ async function safeCleanupTestData() {
     
     // 清理冥想打卡记录
     console.log('\n📊 正在按日期范围清理 meditation_records...');
-    const meditationRecords = await db.collection('meditation_records')
-      .where({
-        date: db.command.gte(testPeriod.startDate).and(db.command.lte(testPeriod.endDate))
-      })
-      .get();
+    // 清理也按原始时间重归属，避免尚未迁移的 00:00–02:00 记录错删或漏删。
+    const meditationRecords = { data: (await readAllRecords('meditation_records')).filter(record => {
+      const date = getRecordBusinessDate(record);
+      return date >= testPeriod.startDate && date <= testPeriod.endDate;
+    }) };
     
     if (meditationRecords.data.length > 0) {
       console.log(`   - 找到 ${meditationRecords.data.length} 条测试期间的打卡记录`);
@@ -130,14 +155,12 @@ async function safeCleanupTestData() {
     
     // 清理体验记录
     console.log('\n📊 正在按时间范围清理 experience_records...');
-    const startTimestamp = new Date(testPeriod.startDate).getTime();
-    const endTimestamp = new Date(testPeriod.endDate).getTime();
+    const startTimestamp = Date.parse(`${testPeriod.startDate}T02:00:00+08:00`);
+    const endTimestamp = Date.parse(`${testPeriod.endDate}T02:00:00+08:00`) + 86400000;
     
-    const experienceRecords = await db.collection('experience_records')
-      .where({
-        timestamp: db.command.gte(startTimestamp).and(db.command.lte(endTimestamp))
-      })
-      .get();
+    const experienceRecords = { data: await readAllRecords('experience_records', {
+      timestamp: db.command.gte(startTimestamp).and(db.command.lt(endTimestamp))
+    }) };
     
     if (experienceRecords.data.length > 0) {
       console.log(`   - 找到 ${experienceRecords.data.length} 条测试期间的体验记录`);

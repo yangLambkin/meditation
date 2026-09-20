@@ -3,6 +3,7 @@ const checkinManager = require('../../utils/checkin.js');
 const imageConfig = require('../../config/images.js');
 const badgeManager = require('../../utils/badgeManager.js');
 const dateUtil = require('../../utils/dateUtil.js');
+const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
 
 Page({
@@ -43,8 +44,10 @@ Page({
     
     // 重新获取用户数据，确保显示最新的登录状态
     this.getUserData();
-    // 返回页面时刷新日期（跨天场景）
+    // 返回页面或保持前台跨过 02:00 时同时刷新日期和当日统计。
     this.setCurrentDateInfo();
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => this.setCurrentDateInfo());
     
     console.log('=== daily1页面onShow函数结束 ===');
   },
@@ -53,10 +56,8 @@ Page({
    * 设置当前日期信息
    */
   setCurrentDateInfo: function() {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = today.getMonth() + 1;
-    const day = today.getDate();
+    const [year, month, day] = dateUtil.getBusinessDate().split('-').map(Number);
+    const today = new Date(year, month - 1, day, 12);
     
     // 获取英文月份名称
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
@@ -406,24 +407,10 @@ Page({
     const checkinManager = require('../../utils/checkin.js');
     
     try {
-      // 获取今日所有打卡记录
-      const userData = checkinManager.getUserCheckinData();
-      const todayRecords = userData.dailyRecords[todayStr];
-      
-      if (!todayRecords || !todayRecords.records || todayRecords.records.length === 0) {
-        return 0; // 今天没有打卡记录
-      }
-      
-      // 取当天最后一次打卡的时长
-      const lastRecord = todayRecords.records[todayRecords.records.length - 1];
-      console.log('本次觉察时长 - 最后一条记录:', {
-        duration: lastRecord.duration,
-        timestamp: lastRecord.timestamp,
-        time: lastRecord.timestamp ? new Date(lastRecord.timestamp).toISOString() : 'N/A'
-      });
-      
-      return lastRecord.duration || 0;
-      
+      const records = homeCheckin.buildCheckinRecords(checkinManager.getUserCheckinData());
+      const lastRecord = records.find(record => record.dayDate === todayStr);
+      return lastRecord ? lastRecord.duration : 0;
+
     } catch (error) {
       console.warn('获取本次觉察时长失败:', error);
       return 0;
@@ -478,12 +465,16 @@ Page({
 
 
   onHide() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = null;
   },
 
   // 重写页面返回逻辑
   onUnload() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = null;
     // 页面返回时跳转到首页

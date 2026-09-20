@@ -39,8 +39,8 @@ function createPage(name, dailyWisdom) {
   const modules = {
     'dailyWisdom.js': dailyWisdom,
     'homeCheckin.js': { getCheckinDay: () => '2026-09-19' },
-    'checkin.js': {}, 'contentSec.js': {}, 'lunar.js': {},
-    'images.js': {}, 'badgeManager.js': {}, 'dateUtil.js': {}
+    'checkin.js': { subscribeSyncState: () => () => {}, syncWithCloud: async () => ({ success: true, pending: 0, refreshed: false }) }, 'contentSec.js': {}, 'lunar.js': {},
+    'images.js': {}, 'badgeManager.js': {}, 'dateUtil.js': { watchBusinessDate: () => () => {} }
   };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     Page(value) { definition = value; },

@@ -32,7 +32,8 @@ function buildRecords(records) {
     if (!dailyRecords[record.date]) dailyRecords[record.date] = { records: [] };
     // 成员页只呈现练习时间与时长，不合并个人体验缓存。
     dailyRecords[record.date].records.push({
-      _id: record._id, timestamp: record.timestamp, duration: record.duration
+      _id: record._id, timestamp: record.timestamp, duration: record.duration,
+      source: record.source, dateSource: record.dateSource
     });
   });
   return homeCheckin.buildCheckinRecords({ dailyRecords });

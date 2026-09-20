@@ -85,7 +85,7 @@
         </view>
       </view>
       <view class="team-form-note">
-        <text>练习日为北京时间 04:00 至次日 04:00。</text>
+        <text>练习日为北京时间 02:00 至次日 02:00。</text>
         <text>当日多次练习累计计算；未设置期望分钟时不判断达标。</text>
       </view>
     </view>

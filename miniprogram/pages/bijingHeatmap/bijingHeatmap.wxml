@@ -1,8 +1,33 @@
-<web-view wx:if="{{src && !errorMessage}}" src="{{src}}" binderror="onWebViewError"></web-view>
-<view wx:else class="heatmap-error">
-  <text class="heatmap-error-message">{{errorMessage}}</text>
-  <view wx:if="{{src}}" class="heatmap-error-actions">
-    <button class="heatmap-button" bindtap="retry">重试</button>
-    <button class="heatmap-button" bindtap="copyLink">复制链接</button>
+<view class="heatmap-page">
+  <view class="heatmap-heading">静坐热力图</view>
+  <text class="heatmap-subtitle">每一次安住，都留下时间的印记</text>
+  <view wx:if="{{loading}}" class="heatmap-state">正在加载静坐记录…</view>
+  <view wx:elif="{{errorMessage}}" class="heatmap-state">
+    <text>{{errorMessage}}</text>
+    <button class="heatmap-button" bindtap="retry">重新加载</button>
   </view>
+  <block wx:else>
+    <view class="heatmap-identity">{{nickname || '静心者'}} · {{studentNumber}}</view>
+    <view class="heatmap-card" wx:for="{{heatmaps}}" wx:for-item="chart" wx:key="year">
+      <view class="heatmap-card-heading">
+        <view class="heatmap-year">{{chart.year}} 年</view>
+        <text class="heatmap-year-summary">{{chart.totalDays}} 天 · {{chart.totalDuration}} 分钟</text>
+      </view>
+      <view class="heatmap-chart">
+        <view class="heatmap-weekdays"><text wx:for="{{weekdays}}" wx:key="*this">{{item}}</text></view>
+        <scroll-view scroll-x="{{true}}" class="heatmap-scroll" enhanced="{{true}}" show-scrollbar="{{false}}">
+          <view class="heatmap-weeks">
+            <view class="heatmap-week" wx:for="{{chart.weeks}}" wx:for-item="week" wx:key="id">
+              <text class="heatmap-month">{{week.monthLabel}}</text>
+              <view class="heatmap-day level-{{day.level}} {{day.empty ? 'heatmap-day-empty' : ''}} {{day.future ? 'heatmap-day-future' : ''}}" wx:for="{{week.days}}" wx:for-item="day" wx:key="date" bindtap="selectDay" data-year="{{chart.year}}" data-date="{{day.date}}" data-duration="{{day.duration}}" data-empty="{{day.empty}}" aria-label="{{day.date}} {{day.duration}}分钟"></view>
+            </view>
+          </view>
+        </scroll-view>
+      </view>
+      <view class="heatmap-legend"><text>少</text><view class="heatmap-day level-0"></view><view class="heatmap-day level-1"></view><view class="heatmap-day level-2"></view><view class="heatmap-day level-3"></view><text>多</text></view>
+      <text class="heatmap-hint">{{chart.selectedDay || '左右滑动查看全年，点击方格查看时长'}}</text>
+      <text wx:if="{{!chart.totalDays}}" class="heatmap-empty">这一年暂无静坐记录</text>
+    </view>
+    <text class="heatmap-note">展示必经之路已同步的记录，静坐归属日为北京时间凌晨 2 点至次日凌晨 2 点。</text>
+  </block>
 </view>

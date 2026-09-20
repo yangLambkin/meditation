@@ -7,6 +7,10 @@ const db = cloud.database();
 
 // 根据新的1对多关系设计数据库表结构
 const COLLECTION_SCHEMAS = {
+  meditation_locks: {
+    description: '静坐记录原子写入的用户版本锁（仅云函数访问）',
+    sampleData: { ownerOpenid: 'user_openid_123', revision: 0, updatedAt: new Date() }
+  },
   // users 表结构（用户信息表）
   users: {
     description: '用户信息表',
@@ -31,8 +35,10 @@ const COLLECTION_SCHEMAS = {
     description: '冥想打卡记录表',
     sampleData: {
       _openid: 'user_openid_123',           // 用户唯一标识
-      date: '2026-01-31',                   // 打卡日期 YYYY-MM-DD
-      timestamp: 1643625600000,             // 打卡时间戳
+      date: '2026-01-31',                   // 静坐业务日期 [当日02:00, 次日02:00)，北京时间
+      timestamp: Date.parse('2026-02-01T01:00:00+08:00'), // 凌晨记录归属前一天
+      source: 'timer',                      // manual 保留用户选择的业务日期
+      businessDayVersion: 2,
       duration: 25,                         // 静坐时长（分钟）
       emotion: ['不悲不喜'],                 // 情绪标签数组（字符串数组）
       experience: ['exp_123456789'],        // 关联的体验记录ID数组（可能为空数组）
@@ -47,7 +53,7 @@ const COLLECTION_SCHEMAS = {
     sampleData: {
       _openid: 'user_openid_123',           // 用户唯一标识
       text: '今天的冥想体验很好',            // 体验内容
-      timestamp: 1643625600000,             // 记录时间戳
+      timestamp: Date.parse('2026-02-01T01:00:00+08:00'), // 记录时间戳
       created_at: new Date(),               // 创建时间
       updated_at: new Date()                // 更新时间
     }
@@ -61,6 +67,7 @@ const COLLECTION_SCHEMAS = {
       totalDays: 1,                         // 总打卡天数
       totalCount: 1,                        // 总打卡次数
       totalDuration: 25,                    // 总静坐时长（分钟）
+      businessDayVersion: 2,                // 统计使用北京时间 02:00 换日
       currentStreak: 1,                     // 当前连续打卡天数
       longestStreak: 1,                     // 最长连续打卡天数
       lastCheckin: '2026-01-31',            // 最后打卡日期 YYYY-MM-DD

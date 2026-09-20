@@ -14,6 +14,7 @@ function createHarness() {
   const calls = [];
   const collections = {
     meditation_records: [],
+    meditation_locks: [],
     user_stats: [],
     users: [{ _id: 'bound-user', _openid: openid, bijingBound: true,
       bijingStudentNumber: '123456', bijingSyncedDates: {} }],
@@ -43,21 +44,28 @@ function createHarness() {
       if (value && value.op === 'inc') target[key] = (target[key] || 0) + value.value;
       else if (value && value.op === 'max') target[key] = Math.max(target[key] || 0, value.value);
       else if (value && value.op === 'push') target[key] = [...(target[key] || []), clone(value.value)];
+      else if (value && value.op === 'set') target[key] = clone(value.value);
       else target[key] = clone(value);
     }
   }
   const database = {
-    command: Object.fromEntries(['or', 'gte', 'lt', 'inc', 'max', 'push']
+    command: Object.fromEntries(['or', 'gte', 'lt', 'inc', 'max', 'push', 'set']
       .map(op => [op, value => operation(op, value)])),
+    async runTransaction(callback) { return callback({ collection(name) { return { doc: database.collection(name).doc }; } }); },
     collection(name) {
       assert.ok(Object.hasOwn(collections, name), `Unexpected collection: ${name}`);
       const rows = collections[name];
       return {
         async add({ data }) {
-          const _id = `${name}-${rows.length + 1}`;
+          const _id = data._id || `${name}-${rows.length + 1}`;
           rows.push({ ...clone(data), _id });
           return { _id };
         },
+        doc(id) { return {
+          async get() { return { data: clone(rows.find(row => row._id === id)) || null }; },
+          async set({ data }) { rows.push({ _id: id, ...clone(data) }); return { _id: id }; },
+          async update({ data }) { update(rows.find(row => row._id === id), data); return { stats: { updated: 1 } }; }
+        }; },
         where(filter) {
           let offset = 0, maximum = Infinity, fields, order;
           return {
@@ -95,6 +103,7 @@ function createHarness() {
     return module.exports;
   }
   function cloudRequire(name) {
+    if (name === 'crypto') return require('node:crypto');
     if (name === 'wx-server-sdk') return sdk;
     if (name === 'axios') return {
       async get() { throw new Error('Preview must not make external requests'); },
@@ -131,7 +140,7 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   const app = createHarness();
   const timestamp = Date.parse('2026-09-16T12:00:00+08:00');
   const experience = [{ text: '平静', uniqueId: String(timestamp) }];
-  const result = clone(await app.api.recordMeditation(15.25, ['平静'], experience, timestamp));
+  const result = clone(await app.api.recordMeditation(15, ['平静'], experience, timestamp));
   assert.equal(result.success, true);
   assert.equal(app.calls[0].data.data.timestamp, timestamp);
   assert.equal(result.data.date, '2026-09-16');
@@ -140,7 +149,7 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   const [stored] = app.collections.meditation_records;
   assert.equal(stored.timestamp, timestamp);
   assert.equal(stored.date, '2026-09-16');
-  assert.equal(stored.duration, 15.25);
+  assert.equal(stored.duration, 15);
   assert.deepEqual(stored.experience, experience);
   assert.equal(stored.createdAt, '2026-09-17T12:20:00.000Z');
   assert.equal(stored._id, result.data.recordId);
@@ -148,11 +157,11 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   const beforePreview = clone(app.collections);
   assert.deepEqual(await app.preview('2026-09-16'), {
     date: '2026-09-16',
-    records: [{ id: stored._id, timestamp, duration: 15.25 }],
-    count: 1, totalDuration: 15.25, syncDuration: 15, alreadySynced: false,
+    records: [{ id: stored._id, timestamp, duration: 15 }],
+    count: 1, totalDuration: 15, syncDuration: 15, alreadySynced: false,
   });
   // September 17 must finish before its preview is available.
-  app.setNow('2026-09-18T04:00:00+08:00');
+  app.setNow('2026-09-18T02:00:00+08:00');
   const nextDay = await app.preview('2026-09-17');
   assert.equal(nextDay.count, 0);
   assert.equal(nextDay.totalDuration, 0);
@@ -160,13 +169,13 @@ test('a September 17 backdated check-in reaches September 16 sync preview with i
   assert.deepEqual(app.calls.map(call => call.name), ['meditationManager', 'bijingSync', 'bijingSync']);
 });
 
-test('front-end check-ins around 04:00 belong to exactly one sync day while preserving natural storage dates', async () => {
+test('front-end check-ins around 02:00 belong to exactly one sync day with the same business storage dates', async () => {
   const app = createHarness();
   const cases = [
-    { time: '2026-09-16T03:59:59.999+08:00', duration: 5, storedDate: '2026-09-16', syncDate: '2026-09-15' },
-    { time: '2026-09-16T04:00:00.000+08:00', duration: 10.25, storedDate: '2026-09-16', syncDate: '2026-09-16' },
-    { time: '2026-09-17T03:59:59.999+08:00', duration: 20.5, storedDate: '2026-09-17', syncDate: '2026-09-16' },
-    { time: '2026-09-17T04:00:00.000+08:00', duration: 40, storedDate: '2026-09-17', syncDate: '2026-09-17' },
+    { time: '2026-09-16T01:59:59.999+08:00', duration: 5, storedDate: '2026-09-15', syncDate: '2026-09-15' },
+    { time: '2026-09-16T02:00:00.000+08:00', duration: 10, storedDate: '2026-09-16', syncDate: '2026-09-16' },
+    { time: '2026-09-17T01:59:59.999+08:00', duration: 20, storedDate: '2026-09-16', syncDate: '2026-09-16' },
+    { time: '2026-09-17T02:00:00.000+08:00', duration: 40, storedDate: '2026-09-17', syncDate: '2026-09-17' },
   ];
   for (const item of cases) {
     const result = await app.api.recordMeditation(item.duration, [], [], Date.parse(item.time));
@@ -175,7 +184,7 @@ test('front-end check-ins around 04:00 belong to exactly one sync day while pres
   }
   assert.deepEqual(app.collections.meditation_records.map(row => row.date), cases.map(item => item.storedDate));
 
-  app.setNow('2026-09-18T04:00:00+08:00');
+  app.setNow('2026-09-18T02:00:00+08:00');
   const allPreviewIds = [];
   for (const date of ['2026-09-15', '2026-09-16', '2026-09-17']) {
     const preview = await app.preview(date);

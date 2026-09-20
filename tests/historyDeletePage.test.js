@@ -82,6 +82,7 @@ function createPage(options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(utilsPath, filename), 'utf8'), {
       module, require: loadModule, wx, Date: FixedDate, console: silentConsole
     }, { filename });
+    if (filename === 'dateUtil.js') module.exports.watchBusinessDate = () => () => {};
     modules[filename] = module.exports;
     return module.exports;
   }
@@ -124,17 +125,17 @@ test('daily records render immediately from local data, retain stable identities
   await showing;
 });
 
-test('04:00 logical day includes midnight and next-day records across original storage buckets', async () => {
+test('02:00 logical day includes midnight and next-day records across original storage buckets', async () => {
   const { page } = createPage({
     route: { date: '2026-08-31' },
     dailyRecords: {
-      '2026-08-31': day(record('too-early', '2026-08-31T03:59:59+08:00'), record('start', '2026-08-31T04:00:00+08:00', 10)),
-      '2026-09-01': day(record('midnight', '2026-09-01T00:00:00+08:00', 20), record('late', '2026-09-01T03:59:59+08:00', 30), record('next-day', '2026-09-01T04:00:00+08:00'))
+      '2026-08-31': day(record('too-early', '2026-08-31T01:59:59+08:00'), record('start', '2026-08-31T02:00:00+08:00', 10)),
+      '2026-09-01': day(record('midnight', '2026-09-01T00:00:00+08:00', 20), record('late', '2026-09-01T01:59:59+08:00', 30), record('next-day', '2026-09-01T02:00:00+08:00'))
     }
   });
   await page.onShow();
   assert.deepEqual(plain(page.data.recordList.map(item => item._id)), ['late', 'midnight', 'start']);
-  assert.deepEqual(plain(page.data.recordList.map(item => item.timeLabel)), ['次日 03:59', '次日 00:00', '04:00']);
+  assert.deepEqual(plain(page.data.recordList.map(item => item.timeLabel)), ['次日 01:59', '次日 00:00', '02:00']);
   assert.equal(page.data.recordList[0].date, '2026-09-01');
   assert.equal(page.data.recordList[0].dayDate, '2026-08-31');
   assert.equal(page.data.totalDuration, 60);
@@ -154,9 +155,9 @@ test('daily experience and emotion preserve inline, unified and legacy values wi
   assert.deepEqual(plain(page.data.recordList[1].experienceTexts), ['呼吸', '身体', '觉察']);
 });
 
-test('invalid or future route dates default to the current 04:00 logical day', () => {
+test('invalid or future route dates default to the current 02:00 logical day', () => {
   for (const value of ['2026-02-30', 'not-a-date', '2026年9月17日', '2026-09-19', undefined]) {
-    const { page } = createPage({ route: { date: value }, now: '2026-09-19T03:59:59+08:00' });
+    const { page } = createPage({ route: { date: value }, now: '2026-09-19T01:59:59+08:00' });
     assert.equal(page.data.selectedDateKey, '2026-09-18');
     assert.equal(page.data.todayDate, '2026-09-18');
     assert.equal(page.data.canGoNext, false);
@@ -207,10 +208,10 @@ test('a failed read after changing date cannot display the previous day beneath 
 });
 
 test('showing or refreshing the page preserves the chosen historical day and updates the current-day bound', async () => {
-  const { page, setNow } = createPage({ now: '2026-09-19T03:59:59+08:00', route: { date: '2026-09-18' } });
+  const { page, setNow } = createPage({ now: '2026-09-19T01:59:59+08:00', route: { date: '2026-09-18' } });
   await page.onShow();
   assert.equal(page.data.isToday, true);
-  setNow('2026-09-19T04:00:00+08:00');
+  setNow('2026-09-19T02:00:00+08:00');
   await page.onShow();
   assert.equal(page.data.selectedDateKey, '2026-09-18');
   assert.equal(page.data.canGoNext, true);
@@ -243,7 +244,7 @@ test('cancelling the more menu or confirmation preserves records and releases th
 });
 
 test('deletion uses the original storage bucket and stable ID for a next-day record', async () => {
-  const late = record('late', '2026-09-01T03:30:00+08:00', 20, { localId: 'local-late' });
+  const late = record('late', '2026-09-01T01:30:00+08:00', 20, { localId: 'local-late' });
   const { page, calls } = createPage({
     route: { date: '2026-08-31' },
     dailyRecords: { '2026-09-01': day(late, record('keep', '2026-09-01T05:00:00+08:00', 30)) }
@@ -251,7 +252,7 @@ test('deletion uses the original storage bucket and stable ID for a next-day rec
   await page.onShow();
   await page.showRecordActions(eventFor(page.data.recordList[0]));
   assert.deepEqual(calls.deletes[0], ['2026-09-01', { recordId: 'late', timestamp: late.timestamp, localId: 'local-late' }]);
-  assert.match(calls.modals[0].content, /2026-08-31 次日 03:30/);
+  assert.match(calls.modals[0].content, /2026-08-31 次日 01:30/);
   assert.match(calls.modals[0].content, /20 分钟.*不可恢复/);
   assert.equal(page.data.selectedDateKey, '2026-08-31');
   assert.equal(page.data.recordCount, 0);

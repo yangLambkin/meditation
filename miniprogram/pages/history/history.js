@@ -1,12 +1,13 @@
 const checkinManager = require('../../utils/checkin.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
+const dateUtil = require('../../utils/dateUtil.js');
 const lunarUtil = require('../../utils/lunar.js');
 const memberHistory = require('../../utils/memberHistory.js');
 
 Page({
   data: {
     selectedDate: '',
-    selectedDateKey: '', // 北京时间 04:00 切分后的记录日期。
+    selectedDateKey: '', // 北京时间 02:00 切分后的记录日期。
     todayDate: '',
     isToday: false,
     canGoNext: false,
@@ -31,6 +32,11 @@ Page({
 
   onShow() {
     this._unloaded = false;
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
+      this.updateSelectedDate(this.data.selectedDateKey);
+      if (!this._deleteBusy) this.loadHistoryRecords();
+    });
     const today = homeCheckin.getCheckinDay();
     const selected = this.data.selectedDateKey;
     this.updateSelectedDate(selected && selected <= today ? selected : today);
@@ -40,7 +46,13 @@ Page({
     return this.refreshCheckinsFromCloud();
   },
 
+  onHide() {
+    if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
+    this._stopBusinessDayWatch = null;
+  },
+
   onUnload() {
+    this.onHide();
     this._unloaded = true;
   },
 

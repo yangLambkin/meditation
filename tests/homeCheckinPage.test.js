@@ -7,10 +7,12 @@ const vm = require('node:vm');
 const pagePath = path.join(__dirname, '../miniprogram/pages/index/index.js');
 const utilsPath = path.join(__dirname, '../miniprogram/utils');
 
-function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], legacyUserRecords = {}, record, checkText, refreshFromCloud } = {}) {
+function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, experiences = [], legacyExperiences = [], legacyUserRecords = {}, record, checkText, refreshFromCloud, pending = 0, retry, openid } = {}) {
   let currentTime = Date.parse(now);
   let definition;
-  const calls = { record: [], content: [], toast: [], navigation: [], refresh: 0, cloudRefresh: 0, userDataReads: 0, stopPullDownRefresh: 0 };
+  const calls = { record: [], retry: [], sync: [], content: [], toast: [], navigation: [], refresh: 0, cloudRefresh: 0, userDataReads: 0, stopPullDownRefresh: 0 };
+  let pendingCloudSync;
+  const subscribers = new Set();
   const intervals = new Map();
   let nextInterval = 1;
   class Clock extends Date {
@@ -18,21 +20,37 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     static now() { return currentTime; }
   }
   const checkinManager = {
+    getPendingSyncSummary: () => ({ total: pending, pending, failed: 0 }),
+    syncWithCloud: options => {
+      calls.sync.push(options);
+      if (pendingCloudSync) return pendingCloudSync;
+      calls.retry.push(options);
+      pendingCloudSync = (async () => {
+        const result = retry ? await retry(options) : { success: true, uploaded: 0, pending };
+        calls.cloudRefresh++;
+        const refreshed = refreshFromCloud ? await refreshFromCloud() : false;
+        return { ...result, refreshed };
+      })();
+      const request = pendingCloudSync;
+      const clear = () => { if (pendingCloudSync === request) pendingCloudSync = null; };
+      request.then(clear, clear);
+      return request;
+    },
+    subscribeSyncState(callback) {
+      subscribers.add(callback);
+      return () => subscribers.delete(callback);
+    },
     getUserCheckinData: () => { calls.userDataReads++; return { dailyRecords }; },
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
-    refreshFromCloud: () => {
-      calls.cloudRefresh++;
-      return refreshFromCloud ? refreshFromCloud() : false;
-    },
-    recordCheckin: (...args) => {
+    recordCheckinWithSync: (...args) => {
       calls.record.push(args);
-      return record ? record(...args) : { success: true };
+      return record ? record(...args) : { success: true, cloudSynced: true };
     }
   };
   const wx = {
     getStorageSync: key => key === 'meditationTextRecords' ? legacyExperiences
-      : key === 'meditationUserRecords' ? legacyUserRecords : undefined,
+      : key === 'meditationUserRecords' ? legacyUserRecords : key === 'userOpenId' ? openid : undefined,
     showToast: value => calls.toast.push(value),
     navigateTo: value => calls.navigation.push(value),
     showLoading() {},
@@ -57,6 +75,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     vm.runInNewContext(fs.readFileSync(path.join(utilsPath, filename), 'utf8'), {
       module, require: loadModule, Date: Clock, wx, console
     }, { filename });
+    if (filename === 'dateUtil.js') module.exports.watchBusinessDate = () => () => {};
     modules[filename] = module.exports;
     return module.exports;
   }
@@ -82,7 +101,10 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     },
     refreshPageData() { calls.refresh++; }
   };
-  return { page, calls, intervals, setNow: value => { currentTime = Date.parse(value); } };
+  return { page, calls, intervals, subscribers, setNow: value => { currentTime = Date.parse(value); },
+    setPending(value) { pending = value; },
+    publishSyncState() { for (const callback of subscribers) callback(); }
+  };
 }
 
 function change(page, field, value) {
@@ -102,19 +124,167 @@ function makeRecords(count, startAt = '2026-09-17T04:10:00+08:00') {
   return dailyRecords;
 }
 
-test('home form starts with seven minutes and the current Beijing date and time', () => {
+test('home waits for cloud confirmation and does not report success for a local-only record', async () => {
+  let completeUpload;
+  const { page, calls } = createPage({ record: () => new Promise(resolve => { completeUpload = resolve; }) });
+  page.openCheckinModal();
+  const saving = page.submitCheckin();
+  assert.equal(page.data.checkinSubmitting, true);
+  assert.equal(calls.toast.length, 0);
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 1);
+  completeUpload({ success: true, cloudSynced: false, syncError: '网络断开' });
+  await saving;
+  assert.equal(page.data.checkinSubmitting, false);
+  assert.equal(page.data.showCheckinModal, false);
+  assert.equal(calls.refresh, 1);
+  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
+  assert.equal(calls.toast.at(-1).icon, 'none');
+});
+
+test('home retry forces the existing upload queue, refreshes status and blocks double taps', async () => {
+  let completeUpload;
+  const app = createPage({ pending: 2, retry: () => new Promise(resolve => { completeUpload = resolve; }) });
+  const { page, calls, setPending } = app;
+  page.refreshCheckinRecords();
+  assert.equal(page.data.pendingCheckinCount, 2);
+  const uploading = page.retryCheckinUploads();
+  assert.equal(page.data.checkinRetrying, true);
+  await page.retryCheckinUploads();
+  assert.equal(calls.retry.length, 1);
+  assert.equal(calls.retry[0].force, true);
+  assert.equal(calls.record.length, 0, 'retry must not create another check-in');
+  setPending(0);
+  completeUpload({ success: true, uploaded: 2, pending: 0 });
+  await uploading;
+  assert.equal(page.data.pendingCheckinCount, 0);
+  assert.equal(page.data.checkinRetrying, false);
+  assert.equal(calls.toast.at(-1).title, '上传成功');
+});
+
+test('home retry failure retains the pending indicator and releases its button', async () => {
+  for (const retry of [async () => ({ success: false, uploaded: 0, pending: 1 }), async () => { throw new Error('网络不可用'); }]) {
+    const { page, calls } = createPage({ pending: 1, retry });
+    await page.retryCheckinUploads();
+    assert.equal(page.data.pendingCheckinCount, 1);
+    assert.equal(page.data.checkinRetrying, false);
+    assert.equal(calls.toast.at(-1).icon, 'none');
+    assert.match(calls.toast.at(-1).title, /待上传|本机/);
+    assert.equal(calls.record.length, 0);
+  }
+});
+
+test('home observes background upload changes in both calendar and list and unsubscribes on unload', async () => {
+  const { page, calls, setPending, publishSyncState, subscribers } = createPage({ pending: 1 });
+  calls.calendar = 0;
+  page.generateCalendar = () => { calls.calendar++; };
+  page.getUserOpenId = async () => {};
+  page.checkAndRecoverFromCloud = async () => {};
+  page.checkUserInfoStatus = () => {};
+  page.onLoad({});
+  assert.equal(subscribers.size, 1);
+  publishSyncState();
+  assert.equal(page.data.pendingCheckinCount, 1);
+  setPending(0);
+  publishSyncState();
+  assert.equal(page.data.pendingCheckinCount, 0);
+  assert.equal(calls.calendar, 2);
+  page.onUnload();
+  assert.equal(subscribers.size, 0);
+});
+
+test('home keeps legacy unconfirmed records and new pending records in the same list', () => {
+  const dailyRecords = { '2026-09-17': { records: [
+    { localId: 'old', duration: 7 },
+    { localId: 'new', duration: 8, syncVersion: 1, syncStatus: 'pending' },
+    { localId: 'cloud', _id: 'cloud-id', duration: 9 }
+  ] } };
+  const before = JSON.stringify(dailyRecords);
+  const { page } = createPage({ dailyRecords, pending: 1 });
+  page.refreshCheckinRecords();
+  assert.equal(page.data.checkinTotal, 3);
+  const byId = Object.fromEntries(page.data.checkinRecords.map(record => [record.localId, record]));
+  assert.equal(byId.old.syncStatusText, '本机记录，未确认上传');
+  assert.equal(byId.new.syncStatusText, '已存本机，待上传');
+  assert.equal(byId.cloud.syncStatusText, undefined);
+  assert.equal(page.data.pendingCheckinCount, 1, 'legacy records are not added to the retry count');
+  assert.equal(JSON.stringify(dailyRecords), before);
+});
+
+test('home keeps terminal upload failures explicit after a manual sync attempt', async () => {
+  const { page, calls } = createPage({ pending: 1, dailyRecords: { '2026-09-16': { records: [
+    { localId: 'expired', duration: 7, syncVersion: 1, syncStatus: 'failed',
+      syncErrorCode: 'DATE_OUT_OF_RANGE', syncBlocked: true }
+  ] } } });
+  await page.retryCheckinUploads();
+  assert.equal(calls.sync[0].force, true);
+  assert.equal(page.data.checkinRecords[0].syncStatusText, '已存本机，已超出补录期限，无法上传');
+  assert.equal(calls.toast.at(-1).title, '部分记录无法上传，请查看记录提示');
+  assert.equal(calls.toast.at(-1).icon, 'none');
+});
+
+test('home hides another known account from both the list and calendar without deleting local data', () => {
+  const dailyRecords = {
+    '2026-09-17': { count: 1, records: [{ localId: 'owner-a', syncOpenid: 'oz-account-a', syncVersion: 1, duration: 7 }] },
+    '2026-09-16': { count: 1, records: [{ localId: 'owner-b', _id: 'cloud-b', syncOpenid: 'oz-account-b', duration: 8 }] },
+    '2026-09-15': { count: 1, records: [{ localId: 'old-unowned', duration: 9 }] }
+  };
+  const before = JSON.stringify(dailyRecords);
+  const { page } = createPage({ dailyRecords, openid: 'oz-account-b' });
+  page.refreshCheckinRecords();
+  assert.deepEqual(Array.from(page.data.checkinRecords, record => record.localId), ['owner-b', 'old-unowned']);
+  const calendar = page.getCalendarCheckedDates();
+  assert.equal(calendar.has('2026-09-17'), false);
+  assert.equal(calendar.has('2026-09-16'), true);
+  assert.equal(calendar.has('2026-09-15'), true);
+  assert.equal(JSON.stringify(dailyRecords), before);
+});
+
+test('returning home syncs after refreshing login state and waits for upload before reading the cloud', async () => {
+  let loggedIn = false;
+  let completeUpload;
+  const { page, calls } = createPage({ pending: 1, retry: () => {
+    assert.equal(loggedIn, true);
+    return new Promise(resolve => { completeUpload = resolve; });
+  } });
+  page.checkUserInfoStatus = () => { loggedIn = true; };
+  page.generateCalendar = () => {};
+  const showing = page.onShow();
+  await Promise.resolve();
+  assert.equal(calls.retry.length, 1);
+  assert.equal(calls.retry[0], undefined, 'returning home must retain automatic retry backoff');
+  assert.equal(calls.cloudRefresh, 0, 'cloud calibration waits for the upload attempt');
+  assert.equal(calls.toast.length, 0, 'automatic retry stays quiet');
+  completeUpload({ success: false, uploaded: 0, pending: 1 });
+  await showing;
+  assert.equal(calls.cloudRefresh, 1);
+  page.onUnload();
+});
+
+test('home background retry errors do not reject the page show lifecycle', async () => {
+  const { page, calls } = createPage({ retry: async () => { throw new Error('offline'); } });
+  page.checkUserInfoStatus = () => {};
+  page.generateCalendar = () => {};
+  await page.onShow();
+  assert.equal(calls.retry.length, 1);
+  assert.equal(calls.cloudRefresh, 0);
+  assert.equal(calls.toast.length, 0);
+  page.onUnload();
+});
+
+test('home form starts with seven minutes and the current business date and Beijing time', () => {
   const { page } = createPage({ now: '2026-09-16T16:05:37.123Z' });
   page.refreshCheckinDefaults();
-  assert.equal(page.data.checkinDate, '2026-09-17');
+  assert.equal(page.data.checkinDate, '2026-09-16');
   assert.equal(page.data.checkinTime, '00:05');
-  assert.equal(page.data.maxCheckinDate, '2026-09-17');
+  assert.equal(page.data.maxCheckinDate, '2026-09-16');
   assert.equal(page.data.checkinDuration, '7');
   assert.equal(page.data.checkinExperience, '');
   assert.equal(page.data.checkinSubmitting, false);
 });
 
-test('home calendar and detail navigation agree on the day before 04:00 across a month boundary', () => {
-  const { page, calls } = createPage({ now: '2026-10-01T03:59:59+08:00', dailyRecords: {
+test('home calendar and detail navigation agree on the day before 02:00 across a month boundary', () => {
+  const { page, calls } = createPage({ now: '2026-10-01T01:59:59+08:00', dailyRecords: {
     '2026-10-01': { count: 1, records: [{ timestamp: Date.parse('2026-10-01T00:04:33+08:00'), duration: 15 }] }
   } });
   page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: 'local-user' });
@@ -129,7 +299,7 @@ test('home calendar and detail navigation agree on the day before 04:00 across a
   page.refreshCheckinRecords();
   const record = page.data.checkinRecords[0];
   const template = fs.readFileSync(pagePath.replace(/\.js$/, '.wxml'), 'utf8');
-  assert.match(template, /bindtap="openCheckinHistory" data-date="\{\{record\.dayDate\}\}"/);
+  assert.match(template, /bindtap="openCheckinHistory"[^>]*data-date="\{\{record\.dayDate\}\}"/);
   page.openCheckinHistory({ currentTarget: { dataset: { date: record.dayDate } } });
   assert.deepEqual(calls.navigation.map(item => item.url), [
     '/pages/history/history?date=2026-09-30', '/pages/history/history?date=2026-09-30'
@@ -147,7 +317,7 @@ test('calendar retains count-only legacy records without adding a midnight bucke
       'local-user': { dailyRecords: { '2026-09-17': { count: 1 }, '2026-09-11': { count: 1 } } },
       migrated: { migrated: true, migratedTo: 'local-user', dailyRecords: {
         '2026-09-10': { count: 1 },
-        '2026-09-09': { count: 1, records: [{ timestamp: '2026-09-09T03:59:59+08:00', duration: 7 }] }
+        '2026-09-09': { count: 1, records: [{ timestamp: '2026-09-09T01:59:59+08:00', duration: 7 }] }
       } },
       unrelated: { dailyRecords: { '2026-09-07': { count: 1 } } }
     }
@@ -159,14 +329,14 @@ test('calendar retains count-only legacy records without adding a midnight bucke
   ]);
 });
 
-test('home clock advances the calendar today marker at 04:00 together with the recent-day window', async () => {
-  const { page, intervals, setNow } = createPage({ now: '2026-10-01T03:59:30+08:00' });
+test('home clock advances the calendar today marker at 02:00 together with the recent-day window', async () => {
+  const { page, intervals, setNow } = createPage({ now: '2026-10-01T01:59:30+08:00' });
   page.setData({ currentYear: 2026, currentMonth: 10, userOpenId: 'local-user' });
   page.checkUserInfoStatus = () => {};
   await page.onShow();
   assert.equal(page.data.todayDate, '2026-09-30');
   assert.equal(page.data.calendarDays.flat().find(day => day.isToday).fullDate, '2026-09-30');
-  setNow('2026-10-01T04:00:00+08:00');
+  setNow('2026-10-01T02:00:00+08:00');
   Array.from(intervals.values())[0].callback();
   assert.equal(page.data.todayDate, '2026-10-01');
   assert.equal(page.data.calendarDays.flat().find(day => day.isToday).fullDate, '2026-10-01');
@@ -204,7 +374,7 @@ test('unedited fields submit the actual current instant even after Beijing midni
   assert.equal(calls.record[0][3], Date.parse('2026-09-18T00:02:37.456+08:00'));
   assert.equal(calls.content.length, 0);
   assert.equal(calls.refresh, 1);
-  assert.equal(page.data.checkinDate, '2026-09-18');
+  assert.equal(page.data.checkinDate, '2026-09-17');
   assert.equal(page.data.checkinTime, '00:02');
   assert.equal(page.data.checkinSubmitting, false);
   assert.ok(calls.toast.some(value => /成功/.test(value.title)));
@@ -339,15 +509,15 @@ test('rapid taps with an empty experience save once and allow a later check-in',
   assert.equal(calls.record.length, 2);
 });
 
-test('details show every record from the latest three 04:00 days, grouped newest first', () => {
+test('details show every record from the latest three 02:00 days, grouped newest first', () => {
   const dailyRecords = makeRecords(45);
   dailyRecords['2026-09-16'] = { count: 2, records: [
     { timestamp: Date.parse('2026-09-16T12:00:00+08:00'), duration: 7 },
-    { timestamp: Date.parse('2026-09-16T03:59:00+08:00'), duration: 8 }
+    { timestamp: Date.parse('2026-09-16T01:59:00+08:00'), duration: 8 }
   ] };
   dailyRecords['2026-09-15'] = { count: 2, records: [
-    { timestamp: Date.parse('2026-09-15T04:00:00+08:00'), duration: 9 },
-    { timestamp: Date.parse('2026-09-15T03:59:59+08:00'), duration: 10 }
+    { timestamp: Date.parse('2026-09-15T02:00:00+08:00'), duration: 9 },
+    { timestamp: Date.parse('2026-09-15T01:59:59+08:00'), duration: 10 }
   ] };
   dailyRecords['2026-09-14'] = { count: 1, records: [
     { timestamp: Date.parse('2026-09-14T20:00:00+08:00'), duration: 11 }
@@ -366,8 +536,8 @@ test('details show every record from the latest three 04:00 days, grouped newest
   const earlyMorning = page.data.checkinGroups[2].records[0];
   assert.equal(earlyMorning.date, '2026-09-16', 'retain the original storage bucket');
   assert.equal(earlyMorning.dayDate, '2026-09-15');
-  assert.equal(earlyMorning.time, '03:59');
-  assert.match(earlyMorning.timeLabel, /次日.*03:59/);
+  assert.equal(earlyMorning.time, '01:59');
+  assert.match(earlyMorning.timeLabel, /次日.*01:59/);
 
   page.onReachBottom();
   assert.equal(page.data.checkinRecords.length, 48, 'scrolling never expands older records');
@@ -466,7 +636,7 @@ test('showing the page restores a missing cloud check-in despite existing local 
   const dailyRecords = {
     '2026-09-17': {
       count: 1,
-      records: [{ timestamp: Date.parse('2026-09-17T03:39:00+08:00'), duration: 13 }]
+      records: [{ timestamp: Date.parse('2026-09-17T01:39:00+08:00'), duration: 13 }]
     }
   };
   const { page, calls } = createPage({
@@ -493,7 +663,7 @@ test('showing the page restores a missing cloud check-in despite existing local 
   assert.equal(page.data.checkinTotal, 2);
   assert.equal(page.data.calendarDays.flat().find(day => day.fullDate === '2026-09-16').isChecked, true);
   assert.deepEqual(Array.from(page.data.checkinRecords, record => [record.date, record.time, record.duration]), [
-    ['2026-09-17', '03:39', 13],
+    ['2026-09-17', '01:39', 13],
     ['2026-09-16', '20:39', 7]
   ]);
   page.onUnload();
@@ -533,14 +703,14 @@ test('returning from history and cloud refresh keep the homepage limited to the 
   page.onUnload();
 });
 
-test('the running clock rolls the recent-day window at 04:00', async () => {
+test('the running clock rolls the recent-day window at 02:00', async () => {
   const dailyRecords = {
-    ...makeRecords(1, '2026-09-15T04:00:00+08:00'),
-    ...makeRecords(1, '2026-09-16T04:00:00+08:00'),
-    ...makeRecords(1, '2026-09-17T04:00:00+08:00'),
-    ...makeRecords(1, '2026-09-18T03:59:00+08:00')
+    ...makeRecords(1, '2026-09-15T02:00:00+08:00'),
+    ...makeRecords(1, '2026-09-16T02:00:00+08:00'),
+    ...makeRecords(1, '2026-09-17T02:00:00+08:00'),
+    ...makeRecords(1, '2026-09-18T01:59:00+08:00')
   };
-  const { page, intervals, setNow } = createPage({ now: '2026-09-18T03:59:30+08:00', dailyRecords });
+  const { page, intervals, setNow } = createPage({ now: '2026-09-18T01:59:30+08:00', dailyRecords });
   page.checkUserInfoStatus = () => {};
   page.generateCalendar = () => {};
   await page.onShow();
@@ -548,13 +718,13 @@ test('the running clock rolls the recent-day window at 04:00', async () => {
   assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date),
     ['2026-09-17', '2026-09-16', '2026-09-15']);
 
-  setNow('2026-09-18T04:00:00+08:00');
+  setNow('2026-09-18T02:00:00+08:00');
   Array.from(intervals.values())[0].callback();
   assert.equal(page.data.checkinRecords.length, 3);
   assert.equal(page.data.hiddenCheckinCount, 1);
   assert.deepEqual(Array.from(page.data.checkinGroups, group => group.date),
     ['2026-09-17', '2026-09-16']);
-  assert.equal(page.data.checkinTime, '04:00');
+  assert.equal(page.data.checkinTime, '02:00');
   page.onUnload();
 });
 
@@ -573,6 +743,8 @@ test('concurrent page shows and pull-down share one cloud request and allow anot
   const secondShow = page.onShow();
   const pullDown = page.onPullDownRefresh();
   assert.equal(firstShow, secondShow);
+  assert.equal(calls.sync.length, 3, 'every entry reaches account-level deduplication');
+  assert.equal(calls.sync[2].force, true, 'a pending automatic sync cannot swallow the pull-down force request');
   await Promise.resolve();
   assert.equal(calls.cloudRefresh, 1);
   assert.equal(calls.stopPullDownRefresh, 0);
@@ -638,4 +810,48 @@ test('details resolve inline experiences and IDs from both local storage formats
   assert.deepEqual(Array.from(page.data.checkinRecords[0].experienceTexts), ['旧缓存体验']);
   assert.deepEqual(Array.from(page.data.checkinRecords[1].experienceTexts), ['统一缓存体验', '旧缓存体验']);
   assert.deepEqual(Array.from(page.data.checkinRecords[2].experienceTexts), ['直接存储的体验']);
+});
+
+test('manual entries accept only the last three business dates and preserve one retry identity', async () => {
+  const { page, calls, setNow } = createPage({ now: '2026-10-01T01:30:00+08:00' });
+  page.openCheckinModal();
+  assert.equal(page.data.checkinDate, '2026-09-30');
+  assert.equal(page.data.minCheckinDate, '2026-09-28');
+  assert.equal(page.data.maxCheckinDate, '2026-09-30');
+  change(page, 'Date', '2026-09-27');
+  change(page, 'Time', '23:00');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 0);
+  assert.match(calls.toast.at(-1).title, /最近三天/);
+  change(page, 'Date', '2026-09-28');
+  change(page, 'Time', '01:15');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 1);
+  assert.equal(calls.record[0][3], Date.parse('2026-09-29T01:15:00+08:00'));
+  assert.equal(calls.record[0][4].source, 'manual');
+  assert.equal(calls.record[0][4].date, '2026-09-28');
+  assert.ok(calls.record[0][4].idempotencyKey);
+  setNow('2026-10-01T02:00:00+08:00');
+  page.openCheckinModal();
+  change(page, 'Date', '2026-09-28');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 1, 'the third previous business date expires at 02:00');
+});
+
+test('failed manual saves retry with the same identity while a fresh modal creates a new identity', async () => {
+  let attempts = 0;
+  const { page, calls, setNow } = createPage({ record: () => {
+    if (++attempts === 1) throw new Error('storage temporarily unavailable');
+    return { success: true };
+  } });
+  page.openCheckinModal();
+  await page.submitCheckin();
+  setNow('2026-09-17T08:26:00+08:00');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 2);
+  assert.equal(calls.record[0][4].idempotencyKey, calls.record[1][4].idempotencyKey);
+  setNow('2026-09-17T08:27:00+08:00');
+  page.openCheckinModal();
+  await page.submitCheckin();
+  assert.notEqual(calls.record[1][4].idempotencyKey, calls.record[2][4].idempotencyKey);
 });

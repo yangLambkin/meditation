@@ -9,10 +9,10 @@ function parseTimestamp(value) {
   return Number.isFinite(new Date(timestamp).getTime()) ? timestamp : NaN;
 }
 
-// 打卡明细以北京时间 04:00 分日，不改变原有存储日期和表单日期。
+// 所有静坐记录统一以北京时间 02:00 分日。
 function getCheckinDay(timestamp = Date.now()) {
   const value = parseTimestamp(timestamp);
-  return Number.isFinite(value) ? dateUtil.getBusinessDate(new Date(value - 4 * HOUR)) : '';
+  return Number.isFinite(value) ? dateUtil.getBusinessDate(value) : '';
 }
 
 function isValidDateKey(value) {
@@ -52,19 +52,39 @@ function getDateTime(timestamp = Date.now()) {
   const utc8 = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   const hours = String(utc8.getUTCHours()).padStart(2, '0');
   const minutes = String(utc8.getUTCMinutes()).padStart(2, '0');
-  return { date: dateUtil.getBusinessDate(date), time: `${hours}:${minutes}` };
+  return { date: utc8.toISOString().slice(0, 10), time: `${hours}:${minutes}` };
 }
 
 function parseDateTime(date, time) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+  if (!isValidDateKey(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
     return NaN;
   }
-  const timestamp = new Date(`${date}T${time}:00+08:00`).getTime();
+  // 业务日中的 00:00–01:59 是次日凌晨。
+  const calendarDate = time < '02:00' ? shiftCheckinDate(date, 1) : date;
+  const timestamp = new Date(`${calendarDate}T${time}:00+08:00`).getTime();
   return Number.isFinite(timestamp) && dateUtil.getBusinessDate(timestamp) === date ? timestamp : NaN;
 }
 
+function getRecordSyncState(record) {
+  if (record._id) return {};
+  // 旧本机记录仅提示来源，不推断它应当补传或给它加上新版上传标记。
+  if (record.syncVersion !== 1) {
+    return { syncStatus: 'unconfirmed', syncStatusText: '本机记录，未确认上传' };
+  }
+  if (record.syncErrorCode === 'DATE_OUT_OF_RANGE') {
+    return { syncStatus: 'blocked', syncStatusText: '已存本机，已超出补录期限，无法上传' };
+  }
+  if (record.syncBlocked) {
+    return { syncStatus: 'blocked', syncStatusText: '已存本机，记录无法上传，请核对记录' };
+  }
+  return {
+    syncStatus: record.syncStatus || 'pending',
+    syncStatusText: record.syncStatus === 'uploading' ? '正在上传' : '已存本机，待上传'
+  };
+}
+
 // 将同一用户各日期下的明细合并，兼容体验对象和旧版体验 ID。
-function buildCheckinRecords(userData, experienceRecords = []) {
+function buildCheckinRecords(userData, experienceRecords = [], { openid } = {}) {
   const experienceMap = new Map();
   experienceRecords.forEach(record => {
     if (!record || !record.text) return;
@@ -79,10 +99,11 @@ function buildCheckinRecords(userData, experienceRecords = []) {
     const day = dailyRecords[date] || {};
     (Array.isArray(day.records) ? day.records : []).forEach((record, index) => {
       if (!record) return;
-      const timestamp = parseTimestamp(record.timestamp);
+      if (openid && record.syncOpenid && record.syncOpenid !== openid) return;
+      const timestamp = dateUtil.getRecordTimestamp(record.timestamp);
       const hasTime = Number.isFinite(timestamp) && timestamp > 0;
       const dateTime = hasTime ? getDateTime(timestamp) : null;
-      const dayDate = hasTime ? getCheckinDay(timestamp) : date;
+      const dayDate = dateUtil.getRecordBusinessDate(record, date);
       const time = hasTime ? dateTime.time : '时间未记录';
       const experiences = Array.isArray(record.experience) ? record.experience : [record.experience];
       const experienceTexts = experiences.map(experience => {
@@ -102,6 +123,8 @@ function buildCheckinRecords(userData, experienceRecords = []) {
         duration: Number(record.duration) || 0,
         emotion: Array.isArray(record.emotion) ? record.emotion : [],
         experienceTexts,
+        ...getRecordSyncState(record),
+        ...(record.syncError ? { syncError: record.syncError } : {}),
         order: index
       });
     });
@@ -133,7 +156,7 @@ function buildCheckinGroups(records, { now = Date.now(), showAll = false } = {})
 }
 
 // 首页与完整历史共用同一套体验文本读取逻辑，兼容两种本地缓存格式。
-function readCheckinRecords(checkinManager, legacyRecords = []) {
+function readCheckinRecords(checkinManager, legacyRecords = [], options = {}) {
   const userData = checkinManager.getUserCheckinData();
   const experienceIds = new Set();
   Object.keys(userData.dailyRecords || {}).forEach(date => {
@@ -149,14 +172,14 @@ function readCheckinRecords(checkinManager, legacyRecords = []) {
   const experiences = (Array.isArray(legacyRecords) ? legacyRecords : []).concat(
     experienceIds.size ? checkinManager.getExperienceRecordsFromLocal(Array.from(experienceIds)) : []
   );
-  return buildCheckinRecords(userData, experiences);
+  return buildCheckinRecords(userData, experiences, options);
 }
 
 function buildCheckinMonths(records) {
   const { groups } = buildCheckinGroups(records, { showAll: true });
   const months = [];
   groups.forEach(day => {
-    // 月份遵循 04:00 分日结果，如 10 月 1 日 03:00 仍属于 9 月。
+    // 月份遵循 02:00 分日结果，如 10 月 1 日 01:00 仍属于 9 月。
     const month = day.date.slice(0, 7);
     let group = months[months.length - 1];
     if (!group || group.month !== month) {
