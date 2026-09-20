@@ -202,14 +202,11 @@ test('timing starts immediately but 起坐 waits until exactly five seconds in e
   }
 });
 
-test('the guide waits until 起坐 finishes, including when the app goes into the background', () => {
-  const { page, players, plays, emitApp, advance } = createPage({ withGuide: true });
+test('the guide waits until 起坐 finishes', () => {
+  const { page, players, plays, advance } = createPage({ withGuide: true });
   page.startTimer();
   assert.deepEqual(plays(), []);
-  emitApp('hide');
-  advance(100);
-  assert.deepEqual(plays(), []);
-  advance(4899);
+  advance(4999);
   assert.deepEqual(plays(), [], 'the initial wait must also keep the guide silent');
   advance(1);
   assert.deepEqual(plays(), [START_AUDIO]);
@@ -769,6 +766,128 @@ test('closing an unfinished count-up shorter than one minute does not create a r
   assert.equal(page.data.isRunning, false);
 });
 
+test('exiting a running or paused countdown stops it immediately and records only completed minutes once', () => {
+  for (const pauseFirst of [false, true]) {
+    for (const pageHidesFirst of [false, true]) {
+      const { page, records, storage, advance, emitApp, toasts } = createPage();
+      page.startTimer();
+      const sessionId = page.sessionId;
+      advance(125000);
+      if (pauseFirst) { page.pauseTimer(); advance(120000); }
+      if (pageHidesFirst) page.onHide();
+      emitApp('hide');
+      if (!pageHidesFirst) page.onHide();
+      assert.equal(page.data.isRunning, false);
+      assert.equal(page.data.isPaused, false);
+      assert.equal(page.data.elapsedTime, 125);
+      assert.equal(page.data.remainingTime, 1675);
+      assert.equal(page.data.timerInterval, null);
+      assert.equal(page.startSoundTimer, null);
+      assert.equal(page.data.showStopButton, false);
+      assert.equal(page.data.showResetButton, false);
+      assert.equal(storage.get('timerState'), null);
+      assert.equal(records.length, 1);
+      assert.equal(records[0][0], 2);
+      assert.equal(records[0][4], sessionId);
+      const endedAt = records[0][3];
+      emitApp('hide');
+      advance(3600000);
+      emitApp('show');
+      page.onShow();
+      assert.equal(page.data.isRunning, false);
+      assert.equal(page.data.elapsedTime, 125);
+      assert.equal(page.data.remainingTime, 1675);
+      assert.match(toasts.at(-1).title, /倒计时已结束/);
+      assert.equal(records.length, 1);
+      assert.equal(records[0][3], endedAt);
+      page.onUnload();
+      assert.equal(records.length, 1);
+      const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
+      assert.equal(reopened.page.data.isRunning, false);
+      assert.equal(reopened.records.length, 0);
+    }
+  }
+});
+
+test('exiting a countdown silences pending 起坐, playing 起坐, and playing guide audio', () => {
+  for (const sound of ['waiting', 'start', 'guide']) {
+    const { page, players, plays, records, advance, emitApp } = createPage({ withGuide: true });
+    page.startTimer();
+    advance(sound === 'waiting' ? 2000 : 5000);
+    if (sound === 'guide') players[0].emitEnded();
+    const beforeExit = plays();
+    emitApp('hide');
+    assert.ok(players.every(player => player.paused), sound);
+    players[0].emitEnded();
+    advance(3600000);
+    emitApp('show');
+    page.onShow();
+    assert.deepEqual(plays(), beforeExit, 'exit must cancel pending cues without playing 收坐');
+    assert.equal(page.data.isRunning, false);
+    assert.equal(records.length, 0, 'less than a minute must not create a record');
+  }
+});
+
+test('unloading a countdown ends it and a fresh start has a new identity and full duration', () => {
+  const { page, records, storage, advance } = createPage();
+  page.startTimer();
+  const sessionId = page.sessionId;
+  advance(90000);
+  page.onUnload();
+  assert.equal(page.data.isRunning, false);
+  assert.equal(storage.get('timerState'), null);
+  assert.equal(records.length, 1);
+  assert.equal(records[0][0], 1);
+  const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
+  reopened.page.startTimer();
+  assert.equal(reopened.page.data.isRunning, true);
+  assert.equal(reopened.page.data.elapsedTime, 0);
+  assert.equal(reopened.page.data.remainingTime, 1800);
+  assert.notEqual(reopened.page.sessionId, sessionId);
+});
+
+test('countdown checkpoints recover only the last known duration after an exit without callbacks', () => {
+  const { page, storage, advance } = createPage();
+  page.startTimer();
+  advance(127000);
+  const state = storage.get('timerState');
+  assert.equal(state.elapsedTime, 125);
+  assert.equal(state.saveTime, state.startTimestamp + 125000);
+  for (const isPaused of [false, true]) {
+    const savedAt = Date.parse('2026-09-17T08:00:00+08:00');
+    const reopened = createPage({ initialStorage: {
+      timerState: {
+        ...state, isRunning: !isPaused, isPaused, saveTime: savedAt,
+        startTimestamp: savedAt - 125000, pauseTimestamp: isPaused ? savedAt : 0
+      }
+    } });
+    assert.equal(reopened.page.data.isRunning, false);
+    assert.equal(reopened.page.data.isPaused, false);
+    assert.equal(reopened.page.data.elapsedTime, 125);
+    assert.equal(reopened.page.data.remainingTime, 1675);
+    assert.equal(reopened.records.length, 1);
+    assert.equal(reopened.records[0][0], 2);
+    assert.equal(reopened.records[0][3], savedAt);
+    assert.equal(reopened.records[0][4], state.sessionId);
+    assert.equal(reopened.storage.get('timerState'), null);
+  }
+});
+
+test('a delayed countdown exit cannot record more than its configured duration', () => {
+  const { page, records, jump, emitApp } = createPage();
+  page.setData({ totalTime: 60, remainingTime: 60 });
+  page.startTimer();
+  const startedAt = page.data.startTimestamp;
+  jump(125000);
+  emitApp('hide');
+  assert.equal(page.data.isRunning, false);
+  assert.equal(page.data.elapsedTime, 60);
+  assert.equal(page.data.remainingTime, 0);
+  assert.equal(records.length, 1);
+  assert.equal(records[0][0], 1);
+  assert.equal(records[0][3], startedAt + 60000);
+});
+
 test('unloading a count-up records it once and ends the session', () => {
   const { page, records, advance } = createPage({ isCountdown: false });
   page.startTimer();
@@ -885,7 +1004,7 @@ test('custom time accepts only whole minutes within 1 to 180 and can be selected
 });
 
 
-test('an elapsed countdown restores its exact completion timestamp rather than the reopening time', async () => {
+test('reopening a countdown never fills the remaining duration with time spent outside the app', async () => {
   const startTimestamp = Date.parse('2026-09-18T01:59:00+08:00');
   const { page, records } = createPage({ initialStorage: {
     timerState: {
@@ -897,10 +1016,11 @@ test('an elapsed countdown restores its exact completion timestamp rather than t
   assert.equal(page.data.isRunning, false);
   assert.equal(page.data.showStopButton, false);
   assert.equal(page.data.showResetButton, false);
-  assert.equal(page.data.showCompletionDialog, true);
+  assert.equal(page.data.showCompletionDialog, false);
+  assert.equal(page.data.elapsedTime, 30);
+  assert.equal(page.data.remainingTime, 30);
   await page.confirmCompletion();
-  assert.equal(records[0][3], startTimestamp + 60000);
-  assert.equal(records[0][4], 'timer_countdown');
+  assert.equal(records.length, 0, 'only 30 seconds were completed before exiting');
 });
 
 test('count-up background completion notice survives restarting the page', () => {

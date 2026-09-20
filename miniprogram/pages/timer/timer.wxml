@@ -82,7 +82,7 @@
           />
         </view>
       </view>
-      <text wx:if="{{!isCountdown}}" class="timer-mode-hint">离开小程序或切到后台时，正计时会自动结束并记录。</text>
+      <text class="timer-mode-hint">离开小程序或切到后台时，{{isCountdown ? '倒计时' : '正计时'}}会自动结束并记录已完成的分钟数。</text>
         <view class="mt-12 flex-row justify-between items-center section_5" bindtap="showMusicPicker">
         <view class="flex-row items-center">
           <image

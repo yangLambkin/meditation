@@ -135,31 +135,15 @@ Page({
       if (this.isUnloaded) return;
       this.isPageVisible = false;
       this.restoreScreenSettings();
-      // 微信不区分关闭和切后台：正计时在此刻结束，不累计离线时间。
-      if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+      // 微信不区分关闭和切后台：两种计时都在此刻结束，不累计离线时间。
+      if (this.data.isRunning || this.data.isPaused) {
         this.finishSession(this.calculateElapsedTime(), { silent: true });
         return;
       }
       this.saveTimerState();
-      this.ensureBackgroundAudioPlayback();
     };
     wx.onAppShow(this.appShowHandler);
     wx.onAppHide(this.appHideHandler);
-  },
-
-  // 确保后台音频播放
-  ensureBackgroundAudioPlayback() {
-    // 如果计时器正在运行，确保背景音乐在后台继续播放
-    if (this.data.isRunning && this.backgroundMusicPlayer) {
-      console.log('🎵 确保后台音频继续播放');
-      
-      // 重新播放背景音乐（如果被系统暂停）
-      setTimeout(() => {
-        if (this.backgroundMusicPlayer && this.data.isRunning) {
-          this.playBackgroundMusic();
-        }
-      }, 100);
-    }
   },
 
   // 时间同步（屏幕重新打开时校正时间）
@@ -281,7 +265,7 @@ Page({
       this.handleTimerFinished();
     } else if (!this.data.isCountdown && elapsed >= MAX_SESSION_SECONDS) {
       this.finishSession(elapsed);
-    } else if (!this.data.isCountdown && elapsed % 5 === 0) {
+    } else if (elapsed % 5 === 0) {
       // 若系统没有派发退出回调，最多恢复到最后一个前台检查点。
       this.saveTimerState();
     }
@@ -309,9 +293,11 @@ Page({
 
   finishSession(elapsedSeconds, { silent = false, endedAt = Date.now() } = {}) {
     if (!this.data.isRunning && !this.data.isPaused) return;
-    if (elapsedSeconds >= MAX_SESSION_SECONDS) {
-      elapsedSeconds = MAX_SESSION_SECONDS;
-      endedAt = Math.min(endedAt, this.data.startTimestamp + this.data.totalPausedTime + MAX_SESSION_SECONDS * 1000);
+    const modeName = this.data.isCountdown ? '倒计时' : '正计时';
+    const sessionLimit = this.data.isCountdown ? Math.min(this.data.totalTime, MAX_SESSION_SECONDS) : MAX_SESSION_SECONDS;
+    if (elapsedSeconds >= sessionLimit) {
+      elapsedSeconds = sessionLimit;
+      endedAt = Math.min(endedAt, this.data.startTimestamp + this.data.totalPausedTime + sessionLimit * 1000);
     }
     const duration = Math.floor(Math.max(0, elapsedSeconds) / 60);
     const sessionId = this.sessionId || `timer_${this.data.startTimestamp}_${Math.random().toString(36).slice(2)}`;
@@ -327,7 +313,7 @@ Page({
     this.updateDisplay();
     if (duration < 1) {
       if (silent) {
-        this.setCompletionNotice('正计时已结束，不足1分钟未记录');
+        this.setCompletionNotice(`${modeName}已结束，不足1分钟未记录`);
       } else {
         wx.showToast({ title: '不足1分钟，本次不会记录', icon: 'none', duration: 2500 });
       }
@@ -336,11 +322,11 @@ Page({
     if (silent) {
       // 本地写入同步完成，系统随后挂起小程序也不会延长本次记录。
       const saved = this.saveCompletedSession('');
-      this.setCompletionNotice(saved ? `正计时已结束，${duration}分钟已存本机` : '正计时已结束，请确认保存记录');
+      this.setCompletionNotice(saved ? `${modeName}已结束，${duration}分钟已存本机` : `${modeName}已结束，请确认保存记录`);
       if (saved) saved.upload.then(result => {
         this.setCompletionNotice(result.cloudSynced
-          ? `正计时已结束，${duration}分钟已上传`
-          : `正计时已结束，${duration}分钟已存本机，请手动上传`);
+          ? `${modeName}已结束，${duration}分钟已上传`
+          : `${modeName}已结束，${duration}分钟已存本机，请手动上传`);
       });
     } else {
       this.showCompletion();
@@ -589,16 +575,8 @@ Page({
       elapsedTime: state.elapsedTime,
       remainingTime: Math.max(0, state.totalTime - state.elapsedTime)
     });
-    if (!state.isCountdown) {
-      this.finishSession(state.elapsedTime, { silent: true, endedAt: state.saveTime });
-      return;
-    }
-    if (state.isRunning) {
-      this.syncTimerTime();
-      if (this.data.isRunning) this.createForegroundTimer();
-    }
-    this.updateDisplay();
-    this.updateButtonStates();
+    // 重建页面说明上次计时已中断，只结算最后检查点，不恢复运行或补算关闭时间。
+    this.finishSession(state.elapsedTime, { silent: true, endedAt: state.saveTime });
   },
 
   // 设置屏幕常亮
@@ -663,7 +641,7 @@ Page({
   },
 
   onUnload() {
-    if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+    if (this.data.isRunning || this.data.isPaused) {
       this.finishSession(this.calculateElapsedTime(), { silent: true });
     }
     this.isUnloaded = true;
