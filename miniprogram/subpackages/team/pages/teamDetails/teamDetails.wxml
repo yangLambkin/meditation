@@ -7,7 +7,7 @@
           <text class="team-name">{{teamInfo.name}}</text>
           <button wx:if="{{isCreator}}" class="hero-edit" size="mini" bindtap="openSettings">编辑</button>
         </view>
-        <text class="team-description">{{teamInfo.description || '暂无团队介绍'}}</text>
+        <text class="team-description">{{teamInfo.description || ''}}</text>
       </view>
       <view class="team-stats">
         <view class="team-stat"><text class="team-stat-value">{{teamMembers.length}}</text><text class="team-stat-label">团队成员</text></view>
@@ -27,17 +27,15 @@
     </view>
 
     <view wx:if="{{currentTab === 'members'}}" class="members-view">
-      <view class="section-heading"><text class="section-title">一起练习的伙伴</text><text class="member-total">{{teamMembers.length}} 位成员</text></view>
-      <view class="roster-card" wx:for="{{teamMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的练习记录">
+      <view class="section-heading"><view><text class="section-title">一起练习的伙伴</text><text wx:if="{{isCreator}}" class="section-caption">长按成员可移除</text></view><text class="member-total">{{teamMembers.length}} 位成员</text></view>
+      <view class="roster-card" wx:for="{{teamMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" bindtap="openMemberRecords" catchlongpress="confirmRemoveMember" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的练习记录{{isCreator && !item.isCreator ? '，长按可移除成员' : ''}}">
         <image class="member-avatar" src="{{item.avatar}}" mode="aspectFill" />
         <view class="member-identity">
           <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view>
           <text wx:if="{{report && item.totalPracticeCount !== undefined}}" class="member-subtitle">练习 {{item.totalPracticeCount}} 次 · {{item.cumulativeMinutesLabel}} 分钟</text>
           <text wx:if="{{report}}" class="member-last-practice">{{item.lastPracticeLabel ? '最近练习 · ' + item.lastPracticeLabel : (item.totalPracticeCount === 0 ? '还没有练习记录' : '')}}</text>
+          <text wx:if="{{removingMemberId === item.openid}}" class="member-remove-status">正在移除…</text>
         </view>
-        <button wx:if="{{isCreator && !item.isCreator}}" class="remove-member-button" catchtap="confirmRemoveMember"
-          data-member-openid="{{item.openid}}" loading="{{removingMemberId === item.openid}}"
-          disabled="{{!!removingMemberId || isLoading || isSaving || isDeleting}}" aria-label="移除成员{{item.nickname}}">移除</button>
         <text class="member-card-chevron" aria-hidden="true">›</text>
       </view>
       <view wx:if="{{isLoading}}" class="member-load-note">正在同步成员练习数据…</view>

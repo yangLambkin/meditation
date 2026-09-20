@@ -7,7 +7,7 @@
       <image class="team-icon" src="{{teamInfo.icon || '/images/icons/team.png'}}"></image>
       <view class="team-details">
         <text class="team-name">{{teamInfo.name || '团队'}}</text>
-        <text class="team-description">{{teamInfo.description || '欢迎加入冥想团队'}}</text>
+        <text class="team-description">{{teamInfo.description || ''}}</text>
         <view class="team-stats">
           <text class="stat-item">{{members.length}} 成员</text>
           <text wx:if="{{statsAvailable}}" class="stat-item">{{teamTotalCheckins}} 次打卡</text>

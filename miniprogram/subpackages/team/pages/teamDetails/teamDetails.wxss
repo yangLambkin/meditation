@@ -44,8 +44,7 @@ button::after { border: none; }
 .main-tab.active { color: #ffffff; background: #b29764; }
 .roster-card { gap: 20rpx; padding: 26rpx 24rpx; border-radius: 22rpx; margin-bottom: 16rpx; background: #ffffff; }
 .roster-card .member-avatar { width: 86rpx; height: 86rpx; border-radius: 26rpx; }
-.remove-member-button { flex-shrink: 0; margin: 0; padding: 0 18rpx; line-height: 64rpx; font-size: 24rpx; color: #a4594e; background: #fbf3f1; border-radius: 12rpx; }
-.remove-member-button[disabled] { color: #b6a39e; background: #f6f3f2; }
+.member-remove-status { display: block; margin-top: 8rpx; font-size: 21rpx; line-height: 1.5; color: #a4594e; }
 .member-last-practice { display: block; margin-top: 8rpx; font-size: 21rpx; line-height: 1.5; color: #99a1ae; }
 .member-load-note { padding: 20rpx; text-align: center; color: #99a1ae; font-size: 23rpx; }
 .record-toolbar { flex-wrap: wrap; justify-content: space-between; gap: 16rpx; margin-top: 28rpx; }
