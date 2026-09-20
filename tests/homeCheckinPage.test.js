@@ -46,13 +46,11 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     getUserCheckinData: () => { calls.userDataReads++; return { dailyRecords }; },
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
-    recordCheckin: (...args) => {
+    recordCheckin: () => { throw new Error('page must await cloud confirmation'); },
+    recordCheckinWithSync: async (...args) => {
       calls.record.push(args);
-      return record ? record(...args) : { success: true };
-    },
-    recordCheckinWithSync: (...args) => {
       calls.blockingRecord.push(args);
-      return new Promise(() => {});
+      return record ? record(...args) : { success: true, cloudSynced: true };
     }
   };
   const wx = {
@@ -131,22 +129,37 @@ function makeRecords(count, startAt = '2026-09-17T04:10:00+08:00') {
   return dailyRecords;
 }
 
-test('home finishes local saving immediately without waiting for cloud confirmation', async () => {
-  const { page, calls } = createPage();
+test('home waits for cloud confirmation without flashing pending and blocks repeated taps', async () => {
+  let finish;
+  const { page, calls } = createPage({ record: () => new Promise(resolve => { finish = resolve; }) });
   page.openCheckinModal();
   const saving = page.submitCheckin();
-  assert.equal(page.data.checkinSubmitting, false);
-  assert.equal(page.data.showCheckinModal, false);
-  assert.equal(calls.blockingRecord.length, 0);
-  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
+  assert.equal(page.data.checkinSubmitting, true);
+  assert.equal(page.data.showCheckinModal, true);
+  assert.equal(calls.blockingRecord.length, 1);
+  assert.equal(calls.toast.length, 0);
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
+  finish({ success: true, cloudSynced: true });
   await saving;
   assert.equal(page.data.checkinSubmitting, false);
   assert.equal(page.data.showCheckinModal, false);
   assert.equal(calls.refresh, 1);
-  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
-  assert.equal(calls.toast.at(-1).icon, 'none');
+  assert.equal(calls.toast.at(-1).title, '打卡成功');
+  assert.equal(calls.toast.at(-1).icon, 'success');
+});
+
+test('home keeps failed or timed-out initial uploads local and offers only manual retry', async () => {
+  for (const code of ['NETWORK_ERROR', 'CLOUD_TIMEOUT']) {
+    const { page, calls } = createPage({ record: () => ({ success: true, cloudSynced: false, syncErrorCode: code }) });
+    page.openCheckinModal();
+    await page.submitCheckin();
+    assert.equal(page.data.checkinSubmitting, false);
+    assert.equal(page.data.showCheckinModal, false);
+    assert.equal(calls.toast.at(-1).title, code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : '已存本机，待上传');
+    assert.equal(calls.toast.at(-1).icon, 'none');
+    assert.equal(calls.retry.length, 0);
+  }
 });
 
 test('home retry forces the existing upload queue, refreshes status and blocks double taps', async () => {
@@ -398,7 +411,7 @@ test('unedited fields submit the actual current instant even after Beijing midni
   assert.equal(page.data.checkinDate, '2026-09-17');
   assert.equal(page.data.checkinTime, '00:02');
   assert.equal(page.data.checkinSubmitting, false);
-  assert.equal(calls.toast.at(-1).title, '已存本机，待上传');
+  assert.equal(calls.toast.at(-1).title, '打卡成功');
 });
 
 test('manual date/time and experience are submitted together after text approval', async () => {

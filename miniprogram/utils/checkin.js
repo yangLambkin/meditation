@@ -2,6 +2,7 @@
 const cloudApi = require('./cloudApi.js');
 const dateUtil = require('./dateUtil.js');
 const pendingBackups = new Map();
+const activeUploads = new Set();
 const pendingDeletions = new Set();
 const userStorageRevisions = new Map();
 const pendingRefreshes = new Map();
@@ -18,9 +19,34 @@ function currentUploadOpenid() {
 // 待上传队列仅认新版记录的显式标记；不把历史无云端 ID 的记录推断为待上传。
 function uploadEntries(userId) {
   const stored = wx.getStorageSync(`meditation_checkin_${userId}`) || {};
+  restoreInterruptedUploads(stored, userId);
   const data = stored.checkinRecords || stored;
   return Object.keys(data.dailyRecords || {}).flatMap(date =>
     (data.dailyRecords[date].records || []).filter(Boolean).map(record => ({ date, record })));
+}
+
+// 请求只在当前进程有效；重开后未确认的记录恢复为待手动上传，不能一直显示上传中。
+function restoreInterruptedUploads(stored, userId) {
+  const data = stored.checkinRecords || stored;
+  let changed = false;
+  Object.values(data.dailyRecords || {}).forEach(day => {
+    (day.records || []).filter(Boolean).forEach(record => {
+      if (record.syncVersion === 1 && !record._id && record.syncStatus === 'uploading' &&
+          !activeUploads.has(backupKey(userId, record.timestamp, record.localId))) {
+        record.syncStatus = 'pending';
+        changed = true;
+      }
+    });
+  });
+  if (changed) {
+    try {
+      wx.setStorageSync(`meditation_checkin_${userId}`, stored);
+      bumpUserStorageRevision(userId);
+    } catch (error) {
+      // 存储已满也要展示可手动处理的状态，不能让读取结果变成“保存失败”。
+      console.warn('恢复中断的上传状态失败:', error.message);
+    }
+  }
 }
 
 function isPendingUpload(record, openid) {
@@ -231,6 +257,7 @@ const checkinManager = {
     
     // 尝试从统一存储获取数据
     const unifiedData = wx.getStorageSync(storageKey);
+    if (unifiedData) restoreInterruptedUploads(unifiedData, userId);
     if (unifiedData) this.normalizeBusinessDates(unifiedData, storageKey);
     
     // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
@@ -1056,7 +1083,7 @@ const checkinManager = {
     const openid = currentUploadOpenid();
     const entries = uploadEntries(this.getUserId()).filter(entry =>
       (!date || entry.date === date) && isPendingUpload(entry.record, openid));
-    return { total: entries.length, pending: entries.length,
+    return { total: entries.length, pending: entries.filter(({ record }) => record.syncStatus !== 'uploading').length,
       failed: entries.filter(({ record }) => record.syncStatus === 'failed').length };
   },
 
@@ -1160,18 +1187,27 @@ const checkinManager = {
   recordCheckin: function(duration, emotion, experience = "", timestamp, options) {
     const metadata = normalizeRecordOptions(options);
     const recordTimestamp = resolveCheckinTimestamp(timestamp);
-    
-    // 1. 立即写入本地存储（保证响应速度）
-    const localResult = this.recordToLocal(duration, emotion, experience, recordTimestamp, metadata);
-    if (!localResult || !localResult.success) {
-      throw new Error('本地打卡记录保存失败');
-    }
-    
-    // 2. 异步备份到云端（如果已登录）
-    const saved = uploadEntries(this.getUserId()).find(({ record }) => record.localId === localResult.localId);
-    if (!localResult.duplicate && this.isUserLoggedIn() && saved && saved.record.syncVersion === 1 && !saved.record._id) {
-      this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId,
-        { ...metadata, uploadDeadlineAt: Date.now() + UPLOAD_TIMEOUT_MS });
+    const userId = this.getUserId();
+    metadata.idempotencyKey = metadata.idempotencyKey || `record_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const key = backupKey(userId, recordTimestamp, metadata.idempotencyKey);
+    const shouldUpload = this.isUserLoggedIn();
+    if (shouldUpload) activeUploads.add(key);
+    let localResult;
+    try {
+      // 1. 先落本机保障记录安全，首次请求结束前显示上传中。
+      localResult = this.recordToLocal(duration, emotion, experience, recordTimestamp, metadata);
+      if (!localResult || !localResult.success) {
+        throw new Error('本地打卡记录保存失败');
+      }
+
+      // 2. 只尝试这条新记录；重复提交不能重传已有的待上传记录。
+      const saved = uploadEntries(userId).find(({ record }) => record.localId === localResult.localId);
+      if (!localResult.duplicate && shouldUpload && saved && saved.record.syncVersion === 1 && !saved.record._id) {
+        this.asyncBackupToCloud(duration, emotion, experience, recordTimestamp, localResult.localId,
+          { ...metadata, uploadDeadlineAt: Date.now() + UPLOAD_TIMEOUT_MS });
+      }
+    } finally {
+      if (!pendingBackups.has(key)) activeUploads.delete(key);
     }
     
     // 3. 异步检查勋章解锁条件（基于本地统计数据）
@@ -1242,7 +1278,7 @@ const checkinManager = {
     const newRecord = {
       localId: metadata.idempotencyKey || `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       syncVersion: 1,
-      syncStatus: 'pending',
+      syncStatus: activeUploads.has(backupKey(this.getUserId(), recordTimestamp, metadata.idempotencyKey)) ? 'uploading' : 'pending',
       syncOpenid: currentUploadOpenid(),
       source: metadata.source,
       date: dateStr,
@@ -1285,9 +1321,16 @@ const checkinManager = {
     const key = backupKey(userId, timestamp, localId);
     if (pendingDeletions.has(key)) return Promise.resolve({ success: false });
     if (pendingBackups.has(key)) return pendingBackups.get(key);
+    activeUploads.add(key);
     const backup = this.backupRecordToCloud(userId, duration, emotion, experience, timestamp, localId, metadata);
     pendingBackups.set(key, backup);
-    const clear = () => { if (pendingBackups.get(key) === backup) pendingBackups.delete(key); };
+    const clear = () => {
+      if (pendingBackups.get(key) === backup) {
+        pendingBackups.delete(key);
+        activeUploads.delete(key);
+        notifySyncState();
+      }
+    };
     backup.then(clear, clear);
     return backup;
   },
@@ -1321,6 +1364,12 @@ const checkinManager = {
         experience = record.experience;
         timestamp = record.timestamp;
         metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid };
+        updateStoredUpload(userId, localId, item => {
+          item.syncStatus = 'uploading';
+          delete item.syncError;
+          delete item.syncErrorCode;
+        });
+        notifySyncState();
       }
       metadata = { ...metadata, uploadDeadlineAt };
       const experienceToSend = typeof experience === 'string' ? (experience ? [experience] : []) : experience;
@@ -1526,6 +1575,7 @@ const checkinManager = {
     const userKey = `meditation_checkin_${userId}`;
     
     const data = wx.getStorageSync(userKey);
+    if (data) restoreInterruptedUploads(data, userId);
     if (data) this.normalizeBusinessDates(data, userKey);
 
     // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}

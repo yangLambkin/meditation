@@ -336,14 +336,19 @@ Page({
     if (silent) {
       // 本地写入同步完成，系统随后挂起小程序也不会延长本次记录。
       const saved = this.saveCompletedSession('');
-      this.setCompletionNotice(saved ? `正计时已结束，${duration}分钟已存本机，待上传` : '正计时已结束，请确认保存记录');
+      this.setCompletionNotice(saved ? `正计时已结束，${duration}分钟已存本机` : '正计时已结束，请确认保存记录');
+      if (saved) saved.upload.then(result => {
+        this.setCompletionNotice(result.cloudSynced
+          ? `正计时已结束，${duration}分钟已上传`
+          : `正计时已结束，${duration}分钟已存本机，请手动上传`);
+      });
     } else {
       this.showCompletion();
     }
   },
 
   setCompletionNotice(notice) {
-    this.setData({ completionNotice: notice });
+    if (!this.isUnloaded) this.setData({ completionNotice: notice });
     wx.setStorageSync('timerCompletionNotice', notice);
   },
 
@@ -371,9 +376,18 @@ Page({
     const text = this.data.completionText.trim();
     try {
       if (text && !await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 })) return;
-      if (this.saveCompletedSession(text)) {
-        // 此处只确认同步本地写入；云端确认与失败重试由持久上传队列负责。
-        wx.showToast({ title: '已存本机，待上传', icon: 'none' });
+      const saved = this.saveCompletedSession(text);
+      if (saved) {
+        const result = await saved.upload;
+        if (!this.isUnloaded) this.setData({ showCompletionDialog: false, completionText: '' });
+        if (this.isPageVisible && !this.isUnloaded) {
+          wx.showToast({
+            title: result.cloudSynced ? '上传成功' : '已存本机，请手动上传',
+            icon: result.cloudSynced ? 'success' : 'none'
+          });
+        } else {
+          this.setCompletionNotice(result.cloudSynced ? '静坐记录已上传' : '静坐记录已存本机，请手动上传');
+        }
       }
     } finally {
       if (!this.isUnloaded) this.setData({ isSavingCompletion: false });
@@ -397,8 +411,15 @@ Page({
       if (!result || !result.success) throw new Error('本地保存失败');
       wx.setStorageSync('timerPendingCompletion', null);
       this.pendingCompletion = null;
-      this.setData({ showCompletionDialog: false, completionText: '' });
-      return true;
+      // 同一会话仅等待已开始的首次上传；重复身份不会重存或补传失败记录。
+      // 草稿先同步清除，避免后台挂起或页面重建后再次弹出保存表单。
+      const upload = Promise.resolve(checkinManager.recordCheckinWithSync(
+        completion.duration, [], experience, completion.endedAt, completion.sessionId
+      )).catch(error => {
+        console.warn('读取首次上传结果失败，记录已保存在本机:', error);
+        return { success: true, cloudSynced: false };
+      });
+      return { ...result, upload };
     } catch (error) {
       console.error('静坐保存失败，保留本次记录以便重试:', error);
       if (this.isPageVisible && !this.isUnloaded) {

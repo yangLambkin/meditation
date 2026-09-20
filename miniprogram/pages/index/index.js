@@ -119,7 +119,7 @@ Page({
         duration: `${duration}分钟`,
         emotion: []
       }] : [];
-      const result = checkinManager.recordCheckin(duration, [], experience, timestamp, {
+      const result = await checkinManager.recordCheckinWithSync(duration, [], experience, timestamp, {
         idempotencyKey: this._checkinSubmissionId, source: 'manual', date: recordDate
       });
       if (!result || !result.success) throw new Error('本地保存失败');
@@ -132,8 +132,9 @@ Page({
       this.refreshCheckinDefaults();
       this.refreshPageData();
       wx.showToast({
-        title: '已存本机，待上传',
-        icon: 'none'
+        title: result.cloudSynced ? '打卡成功'
+          : result.syncErrorCode === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : '已存本机，待上传',
+        icon: result.cloudSynced ? 'success' : 'none'
       });
     } catch (error) {
       console.error('首页打卡保存失败:', error);

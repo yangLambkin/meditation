@@ -12,7 +12,7 @@ const GUIDE_AUDIO = 'https://example.test/meditation-guide.mp3';
 
 function createPage({
   withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true,
-  recordCheckin, networkType, contentSecRequest = () => new Promise(() => {})
+  recordCheckin, recordCheckinWithSync, networkType, contentSecRequest = () => new Promise(() => {})
 } = {}) {
   let definition;
   let now = Date.parse('2026-09-18T08:00:00+08:00');
@@ -132,6 +132,10 @@ function createPage({
           if (recordCheckin) return recordCheckin(...args);
           records.push(args);
           return { success: true };
+        },
+        recordCheckinWithSync(...args) {
+          return recordCheckinWithSync ? recordCheckinWithSync(...args)
+            : Promise.resolve({ success: true, cloudSynced: networkType !== 'none' });
         }
       };
       if (request === '../../utils/contentSec') return contentSec;
@@ -514,9 +518,96 @@ test('completion saves an empty reflection without navigation and repeated confi
   assert.equal(records[0][4], sessionId);
   assert.deepEqual(navigations, []);
   assert.equal(page.data.showCompletionDialog, false);
-  assert.equal(toasts.at(-1).title, '已存本机，待上传');
-  assert.equal(toasts.at(-1).icon, 'none', 'local persistence does not confirm cloud upload');
+  assert.equal(toasts.at(-1).title, '上传成功');
+  assert.equal(toasts.at(-1).icon, 'success', 'success follows the confirmed upload');
   assert.equal(storage.get('timerPendingCompletion'), null, 'upload retry must not reopen completion for a second save');
+});
+
+test('both timer modes wait for the first upload without showing a pending-upload notice or accepting duplicate confirms', async () => {
+  for (const isCountdown of [false, true]) {
+    let resolveUpload;
+    const uploadCalls = [];
+    const { page, records, advance, toasts, storage } = createPage({
+      isCountdown,
+      recordCheckinWithSync(...args) {
+        uploadCalls.push(args);
+        return new Promise(resolve => { resolveUpload = resolve; });
+      }
+    });
+    page.setData({ totalTime: 60, remainingTime: 60 });
+    page.startTimer();
+    advance(60000);
+    if (!isCountdown) page.handleStop();
+    const saving = page.confirmCompletion();
+    await page.confirmCompletion();
+    page.startTimer();
+    assert.equal(page.data.isRunning, false, 'an upload in progress keeps the completion controls locked');
+    assert.equal(page.data.isSavingCompletion, true);
+    assert.equal(page.data.showCompletionDialog, true);
+    assert.equal(toasts.length, 0);
+    assert.equal(records.length, 1);
+    assert.equal(uploadCalls.length, 1);
+    assert.equal(uploadCalls[0][4], records[0][4]);
+    assert.equal(uploadCalls[0][3], records[0][3]);
+    assert.equal(storage.get('timerPendingCompletion'), null, 'the persisted local record owns recovery while upload is in flight');
+    resolveUpload({ success: true, cloudSynced: true });
+    await saving;
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.showCompletionDialog, false);
+    assert.equal(toasts.at(-1).title, '上传成功');
+    await page.confirmCompletion();
+    assert.equal(records.length, 1);
+    assert.equal(uploadCalls.length, 1);
+  }
+});
+
+test('timer upload timeout closes the saved completion and leaves retries to the manual-upload button', async () => {
+  let resolveUpload;
+  const { page, records, advance, toasts, storage } = createPage({
+    recordCheckinWithSync: () => new Promise(resolve => { resolveUpload = resolve; })
+  });
+  page.setData({ totalTime: 60, remainingTime: 60 });
+  page.startTimer();
+  advance(60000);
+  const saving = page.confirmCompletion();
+  advance(4999);
+  assert.equal(page.data.isSavingCompletion, true);
+  assert.equal(toasts.length, 0);
+  advance(1);
+  resolveUpload({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' });
+  await saving;
+  assert.equal(page.data.isSavingCompletion, false);
+  assert.equal(page.data.showCompletionDialog, false);
+  assert.equal(toasts.at(-1).title, '已存本机，请手动上传');
+  assert.equal(toasts.at(-1).icon, 'none');
+  page.onShow();
+  await page.confirmCompletion();
+  assert.equal(records.length, 1);
+  const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
+  await reopened.page.confirmCompletion();
+  assert.equal(reopened.records.length, 0);
+});
+
+test('a background timer completion only asks for manual upload after the first upload fails', async () => {
+  let resolveUpload;
+  const { page, records, advance, emitApp, storage } = createPage({
+    isCountdown: false,
+    recordCheckinWithSync: () => new Promise(resolve => { resolveUpload = resolve; })
+  });
+  page.startTimer();
+  advance(60000);
+  emitApp('hide');
+  assert.equal(records.length, 1);
+  assert.equal(storage.get('timerPendingCompletion'), null);
+  assert.equal(storage.get('timerCompletionNotice'), '正计时已结束，1分钟已存本机');
+  page.onUnload();
+  page.setData = () => { throw new Error('a completed upload cannot update an unloaded page'); };
+  resolveUpload({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(storage.get('timerCompletionNotice'), '正计时已结束，1分钟已存本机，请手动上传');
+  const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
+  assert.equal(reopened.records.length, 0);
+  assert.equal(reopened.toasts.at(-1).title, '正计时已结束，1分钟已存本机，请手动上传');
 });
 
 test('optional reflection is checked and recorded as text with no emotion', async () => {
@@ -572,7 +663,7 @@ test('count-up and countdown save offline reflections locally without contacting
     assert.equal(page.data.showCompletionDialog, false);
     assert.equal(page.pendingCompletion, null);
     assert.equal(storage.get('timerPendingCompletion'), null);
-    assert.equal(toasts.at(-1).title, '已存本机，待上传');
+    assert.equal(toasts.at(-1).title, '已存本机，请手动上传');
     await page.confirmCompletion();
     assert.equal(records.length, 1);
 
@@ -818,7 +909,7 @@ test('count-up background completion notice survives restarting the page', () =>
   advance(60000);
   emitApp('hide');
   const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
-  assert.equal(reopened.toasts.at(-1).title, '正计时已结束，1分钟已存本机，待上传');
+  assert.equal(reopened.toasts.at(-1).title, '正计时已结束，1分钟已存本机');
   assert.equal(reopened.toasts.at(-1).icon, 'none');
   assert.equal(reopened.records.length, 0);
   assert.equal(reopened.storage.get('timerCompletionNotice'), '');
@@ -833,7 +924,7 @@ test('a locally saved timer completion is not resubmitted by foreground or page 
   assert.equal(records.length, 1);
   assert.equal(page.pendingCompletion, null);
   assert.equal(storage.get('timerPendingCompletion'), null);
-  assert.equal(toasts.at(-1).icon, 'none');
+  assert.equal(toasts.at(-1).icon, 'success');
   emitApp('hide');
   emitApp('show');
   page.onShow();

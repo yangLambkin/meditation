@@ -570,14 +570,19 @@ Page({
     });
     try {
       // 查看同步明细不代替用户上传本机记录，避免预览触发后台补传。
-      const pendingCount = checkinManager.getPendingSyncSummary({ date: recordDate }).pending;
-      if (pendingCount > 0) {
-        throw new Error(`仍有 ${pendingCount} 条记录仅保存在本机，请到首页点击“手动上传”，再同步必经`);
+      const uploadSummary = checkinManager.getPendingSyncSummary({ date: recordDate });
+      if (uploadSummary.total > 0) {
+        throw new Error(uploadSummary.pending > 0
+          ? `仍有 ${uploadSummary.pending} 条记录仅保存在本机，请到首页点击“手动上传”，再同步必经`
+          : '当天记录正在上传，请稍后重试');
       }
       const res = await bijingApi.getBijingSyncDateDetails(recordDate);
       if (!isCurrent()) return;
-      if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
-        throw new Error('有记录尚未上传，请重试加载明细后再同步');
+      const latestUploadSummary = checkinManager.getPendingSyncSummary({ date: recordDate });
+      if (latestUploadSummary.total > 0) {
+        throw new Error(latestUploadSummary.pending > 0
+          ? '有记录尚未上传，请重试加载明细后再同步'
+          : '当天记录正在上传，请稍后重试');
       }
       if (!res.success) throw new Error(res.error || '获取明细失败');
       const details = res.data;
@@ -635,9 +640,14 @@ Page({
       wx.showToast({ title: '请先重试加载当天明细', icon: 'none' });
       return;
     }
-    if (checkinManager.getPendingSyncSummary({ date: recordDate }).pending > 0) {
-      this.setData({ bijingSyncDetailsError: '有记录尚未上传，请重试加载明细后再同步' });
-      wx.showToast({ title: '有记录待上传，请先重试加载明细', icon: 'none' });
+    const uploadSummary = checkinManager.getPendingSyncSummary({ date: recordDate });
+    if (uploadSummary.total > 0) {
+      this.setData({ bijingSyncDetailsError: uploadSummary.pending > 0
+        ? '有记录尚未上传，请重试加载明细后再同步'
+        : '当天记录正在上传，请稍后重试' });
+      wx.showToast({ title: uploadSummary.pending > 0
+        ? '有记录待上传，请先重试加载明细'
+        : '当天记录正在上传，请稍后重试', icon: 'none' });
       return;
     }
     if (!this.data.bijingSyncRecordCount || this.data.bijingSyncDuration <= 0) {

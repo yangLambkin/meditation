@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const pagePath = path.join(__dirname, '../miniprogram/pages/recorder/recorder.js');
 
-function createPage({ recordCheckin = () => ({ success: true }), checkText = async () => true, options = {} } = {}) {
+function createPage({ recordCheckin = () => ({ success: true, cloudSynced: true }), checkText = async () => true, options = {} } = {}) {
   let definition;
   let now = Date.parse('2026-09-20T09:00:00+08:00');
   const calls = { records: [], blockingRecords: [], texts: [], toasts: [], navigations: [] };
@@ -16,8 +16,8 @@ function createPage({ recordCheckin = () => ({ success: true }), checkText = asy
     wx: { showToast: value => calls.toasts.push(value), switchTab: value => calls.navigations.push(value) },
     require(request) {
       if (request === '../../utils/checkin.js') return {
-        recordCheckin: (...args) => { calls.records.push(args); return recordCheckin(...args); },
-        recordCheckinWithSync: (...args) => { calls.blockingRecords.push(args); return new Promise(() => {}); }
+        recordCheckin: () => { throw new Error('The recorder must wait for its first upload result'); },
+        recordCheckinWithSync: (...args) => { calls.records.push(args); return recordCheckin(...args); }
       };
       assert.equal(request, '../../utils/contentSec.js');
       return { checkText: (...args) => { calls.texts.push(args); return checkText(...args); } };
@@ -30,31 +30,34 @@ function createPage({ recordCheckin = () => ({ success: true }), checkText = asy
 
 function setText(page, value) { page.onTextInput({ detail: { value } }); }
 
-test('recorder completes local saving immediately and keeps local-only saves from being recorded twice', async () => {
-  const { page, calls } = createPage();
+test('recorder waits for the first upload and prevents repeated submits until it completes', async () => {
+  let resolveUpload;
+  const { page, calls } = createPage({ recordCheckin: () => new Promise(resolve => { resolveUpload = resolve; }) });
   const saving = page.completeCheckIn();
-  assert.equal(page.data.submitting, false);
-  assert.equal(page.data.completed, true);
-  assert.equal(calls.blockingRecords.length, 0);
-  assert.equal(calls.toasts.at(-1).title, '已存本机，待上传');
-  assert.equal(calls.navigations.length, 1);
+  assert.equal(page.data.submitting, true);
+  assert.equal(page.data.completed, false);
+  assert.equal(calls.toasts.length, 0);
+  assert.equal(calls.navigations.length, 0);
   await page.completeCheckIn();
   assert.equal(calls.records.length, 1);
+  resolveUpload({ success: true, cloudSynced: true });
   await saving;
   assert.equal(page.data.completed, true);
   assert.equal(page.data.submitting, false);
-  assert.equal(calls.toasts.at(-1).title, '已存本机，待上传');
-  assert.equal(calls.toasts.at(-1).icon, 'none');
+  assert.equal(calls.toasts.at(-1).title, '上传成功');
+  assert.equal(calls.toasts.at(-1).icon, 'success');
   assert.equal(calls.navigations.length, 1);
   await page.completeCheckIn();
   assert.equal(calls.records.length, 1);
 });
 
-test('recorder never claims a cloud upload from the local save response', async () => {
-  const { page, calls } = createPage({ recordCheckin: () => ({ success: true, cloudSynced: true }) });
+test('recorder keeps failed uploads local and directs the user to upload manually', async () => {
+  const { page, calls } = createPage({ recordCheckin: () => ({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' }) });
   await page.completeCheckIn();
-  assert.equal(calls.toasts.at(-1).title, '已存本机，待上传');
+  assert.equal(calls.toasts.at(-1).title, '已存本机，请手动上传');
   assert.equal(calls.toasts.at(-1).icon, 'none');
+  await page.completeCheckIn();
+  assert.equal(calls.records.length, 1, 'failed upload retries belong to the home manual-upload button');
 });
 
 test('recorder saves blank or whitespace-only reflection without requiring emotions', async () => {

@@ -13,7 +13,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // Only network boundaries are mocked: the page, local record store, queue,
 // reconciliation, and optional text check all execute their production code.
-function createApp({ online = false, uploadPending = false, moderationPending = false } = {}) {
+function createApp({ online = false, uploadPending = false, uploadDelay = 0, moderationPending = false } = {}) {
   let now = INITIAL_TIME;
   let connected = online;
   let nextTimer = 0;
@@ -60,6 +60,7 @@ function createApp({ online = false, uploadPending = false, moderationPending = 
     async recordMeditation(...args) {
       calls.uploads.push(clone(args));
       if (uploadPending) return new Promise(() => {});
+      if (uploadDelay) await new Promise(resolve => clock.setTimeout(resolve, uploadDelay));
       if (!connected) throw Object.assign(new Error('Network unavailable'), { code: 'NETWORK_ERROR' });
       const [duration, emotion, experience, timestamp, localId, options] = args;
       if (!cloudRows.has(localId)) cloudRows.set(localId, {
@@ -103,7 +104,15 @@ function createApp({ online = false, uploadPending = false, moderationPending = 
   };
   page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: OPENID });
   page.openCheckinModal();
+  const states = [];
+  const observe = () => {
+    page.refreshCheckinRecords();
+    states.push({ pending: page.data.pendingCheckinCount,
+      statuses: page._allCheckinRecords.map(record => record.syncStatus) });
+  };
+  dependencies.get('checkin.js').subscribeSyncState(observe);
   return {
+    states,
     page, calls, timers, cloudRows, manager: dependencies.get('checkin.js'),
     get now() { return now; },
     setConnected(value) { connected = value; },
@@ -165,14 +174,56 @@ for (const text of ['', '  离线时也能记下平静的呼吸  ']) {
 }
 
 for (const text of ['', '上传一直没有返回']) {
-  test(`home saves ${text ? 'approved text' : 'without text'} while the upload promise never settles`, async () => {
+  test(`home waits five seconds ${text ? 'with approved text' : 'without text'} before showing pending`, async () => {
     const app = createApp({ online: true, uploadPending: true });
-    await saveWithoutAdvancingClock(app, text);
+    app.page.onCheckinExperienceInput({ detail: { value: text } });
+    let completed = false;
+    const saving = app.page.submitCheckin().then(() => { completed = true; });
+    await flush();
     assert.equal(app.calls.uploads.length, 1);
     assert.equal(app.calls.moderation.length, text ? 1 : 0);
-    assert.equal(app.rows()[0].syncStatus, 'pending');
+    assert.equal(app.rows()[0].syncStatus, 'uploading');
+    assert.equal(app.manager.getPendingSyncSummary().pending, 0);
+    assert.equal(app.page.data.pendingCheckinCount, 0);
+    assert.equal(app.page._allCheckinRecords[0].syncStatusText, '正在上传');
+    await app.advance(4999);
+    assert.equal(completed, false);
+    assert.equal(app.page.data.checkinSubmitting, true);
+    assert.equal(app.calls.toasts.length, 0);
+    assert.ok(app.states.every(state => state.pending === 0));
+    await app.page.submitCheckin();
+    assert.equal(app.calls.uploads.length, 1);
+    await app.advance(1);
+    await saving;
+    assert.equal(completed, true);
+    assert.equal(app.page.data.checkinSubmitting, false);
+    assert.equal(app.rows()[0].syncStatus, 'failed');
     assert.equal(app.manager.getPendingSyncSummary().pending, 1);
+    assert.equal(app.page.data.pendingCheckinCount, 1);
+    assert.equal(app.calls.toasts.at(-1).title, '上传超时（5秒），请手动重试');
     assert.equal(app.cloudRows.size, 0);
+  });
+}
+
+for (const uploadDelay of [0, 4500]) {
+  test(`online upload confirmed after ${uploadDelay} ms never appears as pending`, async () => {
+    const app = createApp({ online: true, uploadDelay });
+    const saving = app.page.submitCheckin();
+    await flush();
+    if (uploadDelay) {
+      assert.equal(app.page.data.checkinSubmitting, true);
+      assert.equal(app.calls.toasts.length, 0);
+      await app.advance(uploadDelay);
+    }
+    await saving;
+    assert.equal(app.calls.toasts.length, 1);
+    assert.equal(app.calls.toasts[0].title, '打卡成功');
+    assert.equal(app.calls.toasts[0].icon, 'success');
+    assert.ok(app.states.length > 0);
+    assert.ok(app.states.every(state => state.pending === 0));
+    assert.ok(app.states.every(state => !state.statuses.includes('pending') && !state.statuses.includes('failed')));
+    assert.equal(app.rows()[0].syncStatus, 'synced');
+    assert.equal(app.cloudRows.size, 1);
   });
 }
 
@@ -187,13 +238,19 @@ test('home text check waits at most 1.5 seconds before saving even when both clo
   assert.equal(app.page.data.checkinSubmitting, true);
   assert.equal(app.rows().length, 0);
   await app.advance(1);
-  assert.equal(completed, true);
-  await saving;
-  assert.equal(app.page.data.checkinSubmitting, false);
+  assert.equal(completed, false);
   assert.equal(app.rows()[0].timestamp, INITIAL_TIME, 'moderation does not change the captured check-in instant');
   assert.equal(app.rows()[0].experience[0].text, '弱网下的体验');
+  assert.equal(app.manager.getPendingSyncSummary().pending, 0);
+  await app.advance(4999);
+  assert.equal(completed, false);
+  assert.equal(app.calls.toasts.length, 0);
+  await app.advance(1);
+  await saving;
+  assert.equal(completed, true);
+  assert.equal(app.page.data.checkinSubmitting, false);
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
-  assert.equal(app.calls.toasts.at(-1).title, '已存本机，待上传');
+  assert.equal(app.calls.toasts.at(-1).title, '上传超时（5秒），请手动重试');
 });
 
 test('restored network only reads until a home retry uploads once with the original date, time, duration and reflection', async () => {
@@ -245,8 +302,10 @@ test('restored network only reads until a home retry uploads once with the origi
 
 test('a hung initial upload and every manual retry each stop within five seconds and never retry on their own', async () => {
   const app = createApp({ online: true, uploadPending: true });
-  await saveWithoutAdvancingClock(app, '');
+  const saving = app.page.submitCheckin();
+  await flush();
   await app.advance(5000);
+  await saving;
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.calls.uploads.length, 1);
   await app.advance(60 * 60 * 1000);

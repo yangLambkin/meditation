@@ -24,7 +24,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, pending = 0, retry, pendingByDate } = {}) {
+function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, pending = 0, retry, pendingByDate, uploadingByDate = {} } = {}) {
   let currentTime = Date.parse(now);
   let isLoggedIn = loggedIn;
   let definition;
@@ -41,7 +41,9 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
         calls.summaries.push(options);
         const count = pendingByDate ? (options.date ? pendingByDate[options.date] || 0
           : Object.values(pendingByDate).reduce((sum, value) => sum + value, 0)) : pending;
-        return { total: count, pending: count, failed: 0 };
+        const uploading = options.date ? uploadingByDate[options.date] || 0
+          : Object.values(uploadingByDate).reduce((sum, value) => sum + value, 0);
+        return { total: count + uploading, pending: count, uploading, failed: 0 };
       },
       retryPendingBackups: async options => {
         calls.retry.push(options);
@@ -144,6 +146,66 @@ test('new pending records invalidate a preview both while loading and before con
   assert.equal(second.calls.sync.length, 0);
   assert.match(second.calls.toast.at(-1).title, /待上传/);
   assert.equal(second.page.data.bijingShowSyncDatePicker, true);
+});
+
+test('an initial upload on the selected day blocks preview without starting a backup retry', async () => {
+  const uploadingByDate = { '2026-09-16': 1 };
+  const { page, calls } = createPage({ uploadingByDate });
+  await page.syncBijingNow();
+  assert.equal(calls.preview.length, 0);
+  assert.equal(page.data.bijingSyncDetailsError, '当天记录正在上传，请稍后重试');
+  assert.equal(page.data.bijingSyncDetailsLoading, false);
+  await page.confirmBijingSyncDate();
+  assert.equal(calls.sync.length, 0);
+  assert.equal(calls.retry.length, 0);
+  assert.equal(calls.cloud.length, 0);
+
+  uploadingByDate['2026-09-16'] = 0;
+  await page.retryBijingSyncDetails();
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.preview, [['2026-09-16']]);
+  assert.deepEqual(calls.sync, [['2026-09-16']]);
+  assert.equal(calls.retry.length, 0);
+});
+
+test('an initial upload on the selected day invalidates loaded or in-flight previews', async () => {
+  for (const stage of ['during preview', 'before confirmation']) {
+    const response = deferred();
+    const uploadingByDate = {};
+    const { page, calls } = createPage({ uploadingByDate, preview: () => response.promise });
+    const opening = page.syncBijingNow();
+    if (stage === 'during preview') uploadingByDate['2026-09-16'] = 1;
+    response.resolve(previewResult('2026-09-16'));
+    await opening;
+    if (stage === 'before confirmation') {
+      assert.equal(page.data.bijingSyncRecordCount, 1);
+      uploadingByDate['2026-09-16'] = 1;
+    } else {
+      assert.equal(page.data.bijingSyncRecordCount, 0);
+    }
+    await page.confirmBijingSyncDate();
+    assert.equal(page.data.bijingSyncDetailsError, '当天记录正在上传，请稍后重试', stage);
+    if (stage === 'before confirmation') {
+      assert.equal(calls.toast.at(-1).title, '当天记录正在上传，请稍后重试');
+    }
+    assert.equal(page.data.bijingShowSyncDatePicker, true, stage);
+    assert.equal(calls.sync.length, 0, stage);
+    assert.equal(calls.retry.length, 0, stage);
+    assert.equal(calls.cloud.length, 0, stage);
+    assert.ok(calls.summaries.every(options => options.date === '2026-09-16'), stage);
+  }
+});
+
+test('initial uploads on other dates do not block the selected sync day', async () => {
+  const { page, calls } = createPage({ uploadingByDate: { '2026-09-15': 1 } });
+  await page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDetailsError, '');
+  assert.deepEqual(calls.preview, [['2026-09-16']]);
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-09-16']]);
+  assert.equal(calls.retry.length, 0);
+  assert.equal(calls.cloud.length, 0);
+  assert.ok(calls.summaries.every(options => options.date === '2026-09-16'));
 });
 
 test('canceling a preview with pending records cannot initiate an upload or later reopen it', async () => {

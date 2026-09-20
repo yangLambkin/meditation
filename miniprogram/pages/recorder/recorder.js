@@ -31,14 +31,14 @@ Page({
         text, uniqueId: this._submissionId, timestamp: this._timestamp,
         duration: `${this.data.duration}分钟`, emotion: []
       }] : [];
-      const result = checkinManager.recordCheckin(this.data.duration, [], experience, this._timestamp, {
+      const result = await checkinManager.recordCheckinWithSync(this.data.duration, [], experience, this._timestamp, {
         idempotencyKey: this._submissionId, source: 'manual'
       });
       if (!result || !result.success) throw new Error((result && result.error) || '保存失败，请重试');
       this.setData({ completed: true });
       wx.showToast({
-        title: '已存本机，待上传',
-        icon: 'none'
+        title: result.cloudSynced ? '上传成功' : '已存本机，请手动上传',
+        icon: result.cloudSynced ? 'success' : 'none'
       });
       wx.switchTab({ url: '/pages/index/index' });
     } catch (error) {

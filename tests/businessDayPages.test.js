@@ -27,9 +27,9 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
     'checkin.js': {
       getUserCheckinData: () => ({ dailyRecords }),
       getExperienceRecordsFromLocal: () => [],
-      getPendingSyncSummary: () => ({ pending: 0 }),
+      getPendingSyncSummary: () => ({ total: 0, pending: 0, failed: 0 }),
       isUserLoggedIn: () => false,
-      recordCheckin: (...args) => { calls.records.push(args); return { success: true }; }
+      recordCheckinWithSync: async (...args) => { calls.records.push(args); return { success: true, cloudSynced: true }; }
     },
     'contentSec.js': { checkText: async () => true },
     'dailyWisdom.js': { DEFAULT_QUOTE: '静心', watchDailyWisdom: () => () => {} },

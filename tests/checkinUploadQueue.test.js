@@ -342,7 +342,8 @@ test('manual uploads share one five-second budget and stop before untouched reco
 test('a first upload timeout is durable and repeated submission cannot start another background attempt', async () => {
   const app = harness({ backup: () => new Promise(() => {}) });
   const saving = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'first-timeout');
-  assert.equal(app.records()[0].syncStatus, 'pending');
+  assert.equal(app.records()[0].syncStatus, 'uploading');
+  assert.deepEqual(app.summary(), { total: 1, pending: 0, failed: 0 });
   await app.runTimers(5000);
   const result = await saving;
   assert.equal(result.success, true);
@@ -355,6 +356,41 @@ test('a first upload timeout is durable and repeated submission cannot start ano
   await app.runTimers(60000);
   assert.equal(app.calls.backups.length, 1);
   assert.equal(app.records().length, 1);
+});
+
+for (const nested of [false, true]) {
+  test(`interrupted ${nested ? 'nested' : 'flat'} uploading state becomes manual-only after a restart`, async () => {
+    const app = harness({ nested, backup: () => new Promise(() => {}) });
+    app.manager.recordCheckin(12, [], [], TIMESTAMP, 'interrupted-first-attempt');
+    assert.equal(app.records()[0].syncStatus, 'uploading');
+    assert.deepEqual(app.summary(), { total: 1, pending: 0, failed: 0 });
+    if (nested) app.storage.set(KEY, { checkinRecords: clone(app.data()), experienceRecords: {} });
+    const restarted = app.restart();
+    const record = restarted.getUserCheckinData().dailyRecords['2026-09-20'].records[0];
+    assert.equal(record.syncStatus, 'pending');
+    assert.deepEqual(app.summary(restarted), { total: 1, pending: 1, failed: 0 });
+    await restarted.syncWithCloud();
+    await app.runTimers(60000);
+    assert.equal(app.calls.backups.length, 1, 'reopening and refreshing do not restart the upload');
+    assert.equal(app.records()[0].syncStatus, 'pending');
+  });
+}
+
+test('cloud refresh during the initial upload preserves uploading without exposing a manual pending count', async () => {
+  const response = deferred();
+  const app = harness({ backup: () => response.promise });
+  const states = [];
+  app.manager.subscribeSyncState(() => states.push(app.summary()));
+  const saving = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'initial-upload-refresh');
+  await app.manager.syncWithCloud();
+  assert.equal(app.records()[0].syncStatus, 'uploading');
+  assert.equal(app.summary().pending, 0);
+  assert.equal(app.summary().total, 1);
+  response.resolve({ success: true, data: { recordId: 'confirmed-first-upload' } });
+  assert.equal((await saving).cloudSynced, true);
+  assert.ok(states.every(state => state.pending === 0));
+  assert.equal(app.records()[0].syncStatus, 'synced');
+  assert.equal(app.calls.backups.length, 1);
 });
 
 test('manual upload is independent of a suspended read and stops at the first failed record', async () => {
