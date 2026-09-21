@@ -212,7 +212,7 @@ test('manual upload timeout releases the button and tells the user to retry manu
   await page.retryCheckinUploads();
   assert.equal(page.data.checkinRetrying, false);
   assert.equal(page.data.pendingCheckinCount, 2);
-  assert.equal(calls.toast.at(-1).title, '上传超时（5秒），请手动重试');
+  assert.equal(calls.toast.at(-1).title, '上传超时，请手动重试');
   assert.equal(calls.retry.length, 1);
   assert.equal(calls.retry[0].uploadPending, true);
   assert.equal(calls.cloudRefresh, 0, 'upload completion must not wait for another cloud read');

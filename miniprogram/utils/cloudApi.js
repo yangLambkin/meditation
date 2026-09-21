@@ -1,8 +1,9 @@
 // 打卡同步请求不依赖 SDK 的最终回调解锁；其它云业务保留原有等待行为。
 const CLOUD_REQUEST_TIMEOUT_MS = 5000;
+const UPLOAD_TIMEOUT_MS = 3000;
 
-function cloudTimeoutError() {
-  const error = new Error('上传超时（5秒），请手动重试');
+function cloudTimeoutError(timeoutMs) {
+  const error = new Error(`上传超时（${timeoutMs / 1000}秒），请手动重试`);
   error.code = 'CLOUD_TIMEOUT';
   return error;
 }
@@ -11,11 +12,14 @@ function cloudTimeoutError() {
 const cloudApi = {
   // 调用云函数
   callCloudFunction: function(functionName, data, options = {}) {
+    const isUpload = data && ((functionName === 'meditationManager' && data.type === 'recordMeditation') ||
+      (functionName === 'contentSecCheck' && data.type === 'text' && options.isUpload === true));
+    const timeoutMs = isUpload ? UPLOAD_TIMEOUT_MS : CLOUD_REQUEST_TIMEOUT_MS;
     const needsTimeout = data && (
       (functionName === 'contentSecCheck' && data.type === 'text') ||
       (functionName === 'meditationManager' && ['recordMeditation', 'getAllRecords', 'getUserStats'].includes(data.type))
     );
-    const deadlineAt = needsTimeout ? Math.min(Date.now() + CLOUD_REQUEST_TIMEOUT_MS,
+    const deadlineAt = needsTimeout ? Math.min(Date.now() + timeoutMs,
       Number.isFinite(options.deadlineAt) ? options.deadlineAt : Infinity) : null;
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -27,12 +31,12 @@ const cloudApi = {
         callback(value);
       };
       if (needsTimeout && deadlineAt <= Date.now()) {
-        finish(reject, cloudTimeoutError());
+        finish(reject, cloudTimeoutError(timeoutMs));
         return;
       }
       if (needsTimeout && typeof setTimeout === 'function') {
         timeout = setTimeout(() => {
-          finish(reject, cloudTimeoutError());
+          finish(reject, cloudTimeoutError(timeoutMs));
         }, Math.max(0, deadlineAt - Date.now()));
       }
       try {
@@ -40,9 +44,9 @@ const cloudApi = {
           name: functionName,
           data: data,
           success: result => needsTimeout && Date.now() >= deadlineAt
-            ? finish(reject, cloudTimeoutError()) : finish(resolve, result),
+            ? finish(reject, cloudTimeoutError(timeoutMs)) : finish(resolve, result),
           fail: error => needsTimeout && Date.now() >= deadlineAt
-            ? finish(reject, cloudTimeoutError()) : finish(reject, error)
+            ? finish(reject, cloudTimeoutError(timeoutMs)) : finish(reject, error)
         });
       } catch (error) {
         finish(reject, error);
@@ -54,8 +58,8 @@ const cloudApi = {
   recordMeditation: async function(duration, emotion, experience = "", timestamp, localId, options = {}) {
     try {
       const now = Date.now();
-      // 同一条上传的文本检测与写入共用截止时间；队列传入的剩余预算只能缩短它。
-      const uploadDeadlineAt = Math.min(now + CLOUD_REQUEST_TIMEOUT_MS,
+      // 每次上传尝试的文本检测与写入共用三秒；传入的截止时间只能缩短这次预算。
+      const uploadDeadlineAt = Math.min(now + UPLOAD_TIMEOUT_MS,
         Number.isFinite(options.uploadDeadlineAt) ? options.uploadDeadlineAt : Infinity);
       const recordTimestamp = timestamp === undefined ? now : timestamp;
       if (!Number.isSafeInteger(recordTimestamp) || recordTimestamp <= 0 || recordTimestamp > now) {
@@ -79,7 +83,7 @@ const cloudApi = {
         let check;
         try {
           const response = await this.callCloudFunction('contentSecCheck', { type: 'text', content, scene: 2 },
-            { deadlineAt: uploadDeadlineAt });
+            { deadlineAt: uploadDeadlineAt, isUpload: true });
           check = response && response.result;
         } catch (error) {
           if (error && error.code === 'CLOUD_TIMEOUT') throw error;

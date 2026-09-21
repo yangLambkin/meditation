@@ -29,7 +29,10 @@ function createLocalHarness(options = {}) {
   const backups = [];
   const writes = [];
   const cloudApi = {
-    async recordMeditation(...args) { backups.push(clone(args)); return { success: true }; },
+    async recordMeditation(...args) {
+      backups.push(clone(args));
+      return { success: true, data: { recordId: `cloud-${backups.length}` } };
+    },
   };
   const dateUtil = loadModule('miniprogram/utils/dateUtil.js');
   const manager = loadModule('miniprogram/utils/checkin.js', {

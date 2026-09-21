@@ -113,11 +113,175 @@ function save(app, id = 'new-record', duration = 12, manager = app.manager) {
     { idempotencyKey: id, source: 'timer' });
 }
 
+async function settleWithRetries(app, promise) {
+  await flush();
+  await app.runTimers(300);
+  return promise;
+}
+
+function withoutAttemptDeadline(args) {
+  const payload = clone(args);
+  if (payload[5]) delete payload[5].uploadDeadlineAt;
+  return payload;
+}
+
 function uploadPayload(args) {
   const [duration, emotion, experience, timestamp, localId, options = {}] = args;
   return { duration, emotion, experience, timestamp, localId, source: options.source,
     date: options.source === 'manual' ? options.date : undefined, expectedOpenid: options.expectedOpenid };
 }
+
+test('transient failures wait exactly 100ms, stop after three retries and persist one failed round', async () => {
+  const app = harness({ backup: () => ({ success: false, code: 'NETWORK_ERROR', error: '暂时断网' }) });
+  const states = [];
+  app.manager.subscribeSyncState(() => states.push(app.summary()));
+  const saving = app.manager.recordCheckinWithSync(12, ['平静'], ['原始体验'], TIMESTAMP, 'retry-limit');
+  await flush();
+  assert.equal(app.calls.backups.length, 1);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await app.runTimers(99);
+    assert.equal(app.calls.backups.length, attempt, 'a retry cannot start before 100ms');
+    assert.equal(app.records()[0].syncStatus, 'uploading');
+    assert.equal(app.records()[0].syncAttempts, undefined);
+    assert.ok(states.every(state => state.failed === 0), 'intermediate failures stay within the active upload');
+    await app.runTimers(1);
+    assert.equal(app.calls.backups.length, attempt + 1);
+  }
+  const result = await saving;
+  assert.equal(result.cloudSynced, false);
+  assert.equal(app.records()[0].syncStatus, 'failed');
+  assert.equal(app.records()[0].syncAttempts, 1);
+  assert.equal(app.records()[0].syncErrorCode, 'NETWORK_ERROR');
+  for (const args of app.calls.backups) {
+    assert.deepEqual(withoutAttemptDeadline(args), withoutAttemptDeadline(app.calls.backups[0]));
+  }
+  assert.deepEqual(app.calls.backups.map(args => args[5].uploadDeadlineAt),
+    [NOW + 3000, NOW + 3100, NOW + 3200, NOW + 3300]);
+  assert.equal(app.timers.size, 0);
+  await app.runTimers(60000);
+  assert.equal(app.calls.backups.length, 4, 'exhausting a round never starts a later background upload');
+});
+
+for (const failures of [1, 2, 3]) {
+  test(`upload stops retrying as soon as retry ${failures} succeeds`, async () => {
+    const app = harness({ backup: (args, index) => index < failures
+      ? { success: false, code: 'OFFLINE', error: '网络不可用' }
+      : { success: true, data: { recordId: 'retry-confirmed' } } });
+    const saving = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, `early-success-${failures}`);
+    const result = await settleWithRetries(app, saving);
+    assert.equal(result.cloudSynced, true);
+    assert.equal(app.calls.backups.length, failures + 1);
+    assert.equal(app.records()[0].syncStatus, 'synced');
+    assert.equal(app.records()[0]._id, 'retry-confirmed');
+    assert.equal(app.records()[0].syncAttempts, undefined);
+    assert.equal(app.timers.size, 0);
+    await app.runTimers(60000);
+    assert.equal(app.calls.backups.length, failures + 1);
+  });
+}
+
+for (const code of ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD',
+  'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH']) {
+  test(`${code} stops the upload without scheduling a retry`, async () => {
+    const app = harness({ backup: () => ({ success: false, code, error: code }) });
+    save(app, `terminal-${code}`);
+    const result = await app.manager.asyncBackupToCloud(12, [], [], TIMESTAMP, `terminal-${code}`);
+    assert.equal(result.success, false);
+    assert.equal(result.code, code);
+    assert.equal(app.records()[0].syncAttempts, 1);
+    assert.equal(app.timers.size, 0);
+    await app.runTimers(60000);
+    assert.equal(app.calls.backups.length, 1);
+  });
+}
+
+test('concurrent submissions share the same active upload while it waits to retry', async () => {
+  const app = harness({ backup: (args, index) => index === 0
+    ? { success: false, code: 'OFFLINE', error: '断网' }
+    : { success: true, data: { recordId: 'shared-retry' } } });
+  save(app, 'shared-retry');
+  const upload = app.manager.asyncBackupToCloud(12, [], [], TIMESTAMP, 'shared-retry');
+  await flush();
+  const concurrent = app.manager.asyncBackupToCloud(90, ['修改'], ['修改'], TIMESTAMP, 'shared-retry');
+  assert.strictEqual(concurrent, upload);
+  const queue = app.manager.retryPendingBackups();
+  await app.runTimers(100);
+  await Promise.all([upload, concurrent, queue]);
+  assert.equal(app.calls.backups.length, 2);
+  assert.deepEqual(withoutAttemptDeadline(app.calls.backups[1]), withoutAttemptDeadline(app.calls.backups[0]));
+  assert.equal(app.records().length, 1);
+});
+
+for (const switchedKey of ['userOpenId', 'localUserId']) {
+  test(`changing ${switchedKey} during the retry delay stops further uploads`, async () => {
+    const app = harness({ backup: () => ({ success: false, code: 'OFFLINE', error: '断网' }) });
+    const upload = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, `switched-${switchedKey}`);
+    await flush();
+    app.storage.set(switchedKey, switchedKey === 'userOpenId' ? 'oz-another-account' : 'another-local-account');
+    await app.runTimers(100);
+    await upload;
+    assert.equal(app.calls.backups.length, 1);
+    assert.equal(app.records()[0].syncOpenid, OPENID);
+    assert.equal(app.timers.size, 0);
+  });
+}
+
+test('deleting a record during the retry delay cancels further uploads', async () => {
+  const app = harness({ backup: () => ({ success: false, code: 'OFFLINE', error: '断网' }),
+    remove: () => ({ success: false, code: 'RECORD_NOT_FOUND' }) });
+  const record = save(app, 'delete-during-retry');
+  const upload = app.manager.retryPendingBackups();
+  await flush();
+  const deletion = app.manager.deleteCheckin(record.date, { localId: record.localId });
+  await app.runTimers(100);
+  assert.equal((await deletion).success, true);
+  await upload;
+  assert.equal(app.calls.backups.length, 1);
+  assert.deepEqual(app.records(), []);
+  assert.equal(app.timers.size, 0);
+});
+
+test('cloud confirmation during the retry delay prevents another upload', async () => {
+  const app = harness({ backup: () => ({ success: false, code: 'TIMEOUT', error: '响应丢失' }), cloud: [{
+    _id: 'retry-found-by-refresh', _openid: OPENID, localId: 'refresh-during-retry',
+    duration: 12, timestamp: TIMESTAMP, date: '2026-09-20', experience: []
+  }] });
+  const upload = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'refresh-during-retry');
+  await flush();
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  await app.runTimers(100);
+  assert.equal((await upload).cloudSynced, true);
+  assert.equal(app.records()[0]._id, 'retry-found-by-refresh');
+  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.timers.size, 0);
+});
+
+test('a failure near the deadline gives its retry a fresh full three-second timeout', async () => {
+  const first = deferred();
+  const second = deferred();
+  const app = harness({ backup: (args, index) => index === 0 ? first.promise : second.promise });
+  save(app, 'retry-near-deadline');
+  let settled = false;
+  const upload = app.manager.syncWithCloud({ uploadPending: true });
+  upload.then(() => { settled = true; });
+  await app.runTimers(2950);
+  first.resolve({ success: false, code: 'OFFLINE', error: '断网' });
+  await flush();
+  await app.runTimers(99);
+  assert.equal(app.calls.backups.length, 1);
+  await app.runTimers(1);
+  assert.equal(app.calls.backups.length, 2);
+  assert.equal(app.calls.backups[0][5].uploadDeadlineAt, NOW + 3000);
+  assert.equal(app.calls.backups[1][5].uploadDeadlineAt, NOW + 6050);
+  await app.runTimers(2999);
+  assert.equal(settled, false);
+  assert.equal(app.records()[0].syncStatus, 'uploading');
+  second.resolve({ success: true, data: { recordId: 'fresh-timeout-success' } });
+  assert.equal((await upload).success, true);
+  assert.equal(app.calls.backups.length, 2);
+  assert.equal(app.records()[0].syncStatus, 'synced');
+  assert.equal(app.timers.size, 0);
+});
 
 for (const nested of [false, true]) {
   test(`new ${nested ? 'nested' : 'flat'} records persist upload state before a cloud request`, () => {
@@ -137,7 +301,9 @@ for (const nested of [false, true]) {
 
 test('missing-lock upload failure is durable while local completion and the original record survive', async () => {
   const app = harness({ backup: () => ({ success: false, code: 'DATABASE_COLLECTION_NOT_EXIST', error: 'meditation_locks 集合不存在' }) });
-  const result = await app.manager.recordCheckinWithSync(12, ['平静'], ['记录体验'], TIMESTAMP, 'lock-failure');
+  const result = await settleWithRetries(app,
+    app.manager.recordCheckinWithSync(12, ['平静'], ['记录体验'], TIMESTAMP, 'lock-failure'));
+  assert.equal(app.calls.backups.length, 4);
   assert.equal(result.success, true);
   assert.equal(result.cloudSynced, false);
   assert.equal(result.syncErrorCode, 'DATABASE_COLLECTION_NOT_EXIST');
@@ -156,10 +322,11 @@ test('missing-lock upload failure is durable while local completion and the orig
 
 test('a rejected network request also persists failure and can be retried after a fresh manager loads', async () => {
   const app = harness({ backup: (args, index) => {
-    if (index === 0) throw new Error('request:fail timeout');
+    if (index < 4) throw new Error('request:fail timeout');
     return { success: true, data: { recordId: 'recovered-record' } };
   } });
-  const result = await app.manager.recordCheckinWithSync(18, ['平静'], ['体验'], TIMESTAMP, 'restart-record');
+  const result = await settleWithRetries(app,
+    app.manager.recordCheckinWithSync(18, ['平静'], ['体验'], TIMESTAMP, 'restart-record'));
   assert.equal(result.cloudSynced, false);
   assert.equal(app.records()[0].syncStatus, 'failed');
   assert.ok(app.records()[0].syncError);
@@ -171,9 +338,9 @@ test('a rejected network request also persists failure and can be retried after 
   assert.equal(retried.uploaded, 1);
   assert.equal(retried.failed, 0);
   assert.equal(retried.pending, 0);
-  assert.equal(app.calls.backups.length, 2);
-  assert.deepEqual(uploadPayload(app.calls.backups[1]), uploadPayload(app.calls.backups[0]), 'retry reuses timestamp, local ID and payload');
-  assert.equal(app.calls.backups[1][5].expectedOpenid, OPENID);
+  assert.equal(app.calls.backups.length, 5);
+  assert.deepEqual(uploadPayload(app.calls.backups[4]), uploadPayload(app.calls.backups[0]), 'retry reuses timestamp, local ID and payload');
+  assert.equal(app.calls.backups[4][5].expectedOpenid, OPENID);
   const record = app.records()[0];
   assert.equal(record.localId, persisted.localId);
   assert.equal(record.timestamp, persisted.timestamp);
@@ -183,27 +350,28 @@ test('a rejected network request also persists failure and can be retried after 
   assert.ok(!record.syncErrorCode);
   assert.deepEqual(app.summary(restarted), { total: 0, pending: 0, failed: 0 });
   await restarted.retryPendingBackups({ force: true });
-  assert.equal(app.calls.backups.length, 2, 'confirmed uploads must not be resent');
+  assert.equal(app.calls.backups.length, 5, 'confirmed uploads must not be resent');
 });
 
 test('background reads and legacy force never retry pending uploads, including after restarting', async () => {
   const app = harness({ backup: () => ({ success: false, code: 'OFFLINE', error: '网络不可用' }) });
-  await app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'backoff-record');
-  assert.equal(app.calls.backups.length, 1);
+  await settleWithRetries(app, app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'backoff-record'));
+  assert.equal(app.calls.backups.length, 4);
   assert.equal(app.records()[0].syncNextRetryAt, undefined);
   await app.manager.syncWithCloud();
   await app.manager.syncWithCloud({ force: true });
   await app.restart().syncWithCloud({ force: true });
   await app.runTimers(10 * 60 * 1000);
-  assert.equal(app.calls.backups.length, 1, 'reads, restarts and elapsed time cannot upload');
+  assert.equal(app.calls.backups.length, 4, 'reads, restarts and elapsed time cannot upload');
   assert.equal(app.timers.size, 0, 'failed uploads and reads schedule no automatic retries');
-  const forced = await app.manager.syncWithCloud({ force: true, uploadPending: true });
-  assert.equal(app.calls.backups.length, 2);
+  const forced = await settleWithRetries(app, app.manager.syncWithCloud({ force: true, uploadPending: true }));
+  assert.equal(app.calls.backups.length, 8);
   assert.equal(forced.failed, 1);
   assert.equal(forced.pending, 1);
   assert.equal(forced.refreshed, false);
-  await app.manager.retryPendingBackups();
-  assert.equal(app.calls.backups.length, 3);
+  await settleWithRetries(app, app.manager.retryPendingBackups());
+  assert.equal(app.calls.backups.length, 12);
+  assert.equal(app.records()[0].syncAttempts, 3, 'attempt count tracks complete upload rounds');
 });
 
 test('deferred content rejection keeps the local check-in and stops automatic upload retries', async () => {
@@ -431,7 +599,7 @@ test('several retry entry points share one serial queue and do not inflate stati
   assert.equal(app.manager.getCurrentMonthMinutes(), 30);
 });
 
-test('manual uploads share one five-second budget and stop before untouched records after a timeout', async () => {
+test('manual uploads give subsequent records fresh timeouts and stop after one record exhausts its retries', async () => {
   const first = deferred();
   const hung = deferred();
   const app = harness({ backup: (args, index) => index === 0 ? first.promise : hung.promise });
@@ -442,14 +610,15 @@ test('manual uploads share one five-second budget and stop before untouched reco
   const upload = app.manager.syncWithCloud({ uploadPending: true });
   assert.strictEqual(app.manager.syncWithCloud({ force: true, uploadPending: true }), upload);
   upload.then(() => { settled = true; });
-  await app.runTimers(4000);
+  await app.runTimers(2500);
   first.resolve({ success: true, data: { recordId: 'first-finished' } });
   await flush();
   assert.equal(app.calls.backups.length, 2);
-  assert.equal(app.calls.backups[0][5].uploadDeadlineAt, NOW + 5000);
-  assert.equal(app.calls.backups[1][5].uploadDeadlineAt, NOW + 5000);
-  await app.runTimers(999);
+  assert.equal(app.calls.backups[0][5].uploadDeadlineAt, NOW + 3000);
+  assert.equal(app.calls.backups[1][5].uploadDeadlineAt, NOW + 5500);
+  await app.runTimers(12299);
   assert.equal(settled, false);
+  assert.equal(app.records()[1].syncStatus, 'uploading');
   await app.runTimers(1);
   assert.equal(settled, true);
   const result = await upload;
@@ -459,33 +628,57 @@ test('manual uploads share one five-second budget and stop before untouched reco
   assert.equal(result.failed, 1);
   assert.equal(result.pending, 2);
   assert.equal(app.calls.reads, 0, 'manual upload never adds a serial cloud refresh');
-  assert.equal(app.calls.backups.length, 2);
+  assert.deepEqual(app.calls.backups.map(args => args[4]),
+    ['budget-first', 'budget-timeout', 'budget-timeout', 'budget-timeout', 'budget-timeout']);
+  assert.deepEqual(app.calls.backups.map(args => args[5].uploadDeadlineAt),
+    [NOW + 3000, NOW + 5500, NOW + 8600, NOW + 11700, NOW + 14800]);
   assert.equal(app.records()[1].syncStatus, 'failed');
   assert.equal(app.records()[1].syncErrorCode, 'CLOUD_TIMEOUT');
+  assert.equal(app.records()[1].syncAttempts, 1);
   assert.equal(app.records()[2].syncStatus, 'pending');
   assert.equal(app.records()[2].syncAttempts, undefined);
   assert.equal(app.timers.size, 0);
   hung.resolve({ success: true, data: { recordId: 'late-result' } });
   await flush();
-  assert.equal(app.records()[1].syncStatus, 'failed', 'late results cannot overwrite the timed-out attempt');
+  assert.equal(app.records()[1].syncStatus, 'failed', 'late results cannot overwrite an exhausted upload');
+  assert.equal(app.records()[1]._id, undefined);
 });
 
-test('a first upload timeout is durable and repeated submission cannot start another background attempt', async () => {
+test('four hung attempts each time out after three seconds and persist one failure at 12300ms', async () => {
   const app = harness({ backup: () => new Promise(() => {}) });
+  let settled = false;
   const saving = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'first-timeout');
+  saving.then(() => { settled = true; });
   assert.equal(app.records()[0].syncStatus, 'uploading');
   assert.deepEqual(app.summary(), { total: 1, pending: 0, failed: 0 });
-  await app.runTimers(5000);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await app.runTimers(2999);
+    assert.equal(settled, false);
+    assert.equal(app.calls.backups.length, attempt + 1);
+    assert.equal(app.records()[0].syncStatus, 'uploading');
+    await app.runTimers(1);
+    if (attempt < 3) {
+      assert.equal(settled, false);
+      await app.runTimers(99);
+      assert.equal(app.calls.backups.length, attempt + 1);
+      await app.runTimers(1);
+      assert.equal(app.calls.backups.length, attempt + 2);
+    }
+  }
   const result = await saving;
+  assert.equal(settled, true);
   assert.equal(result.success, true);
   assert.equal(result.cloudSynced, false);
   assert.equal(result.syncErrorCode, 'CLOUD_TIMEOUT');
   assert.equal(app.records()[0].syncStatus, 'failed');
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.records()[0].syncAttempts, 1);
+  assert.deepEqual(app.calls.backups.map(args => args[5].uploadDeadlineAt),
+    [NOW + 3000, NOW + 6100, NOW + 9200, NOW + 12300]);
+  assert.equal(app.timers.size, 0);
   const restarted = app.restart();
   await restarted.recordCheckinWithSync(12, [], [], TIMESTAMP, 'first-timeout');
   await app.runTimers(60000);
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.calls.backups.length, 4, 'repeated submission cannot start a new upload round');
   assert.equal(app.records().length, 1);
 });
 
@@ -532,18 +725,18 @@ test('manual upload is independent of a suspended read and stops at the first fa
   save(app, 'unattempted-second');
   const read = app.manager.syncWithCloud({ force: true });
   assert.equal(app.calls.reads, 1);
-  const result = await app.manager.syncWithCloud({ uploadPending: true });
+  const result = await settleWithRetries(app, app.manager.syncWithCloud({ uploadPending: true }));
   assert.equal(result.success, false);
   assert.equal(result.code, 'NETWORK_ERROR');
   assert.equal(result.failed, 1);
   assert.equal(result.pending, 2);
   assert.equal(result.refreshed, false);
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.calls.backups.length, 4);
   assert.equal(app.records()[1].syncStatus, 'pending');
   reading.resolve({ success: false, code: 'NETWORK_ERROR' });
   await read;
   await app.runTimers(60000);
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.calls.backups.length, 4);
   assert.equal(app.calls.reads, 1);
 });
 
@@ -568,18 +761,52 @@ test('already blocked and newly rejected rows do not prevent manual upload of th
   assert.equal(app.calls.backups.length, 2, 'terminal failures stay local without repeatedly blocking the queue');
 });
 
-test('a success arriving at the deadline before its timer callback still times out', async () => {
+test('a success arriving at exactly three seconds before its timer callback still requires a retry', async () => {
   const response = deferred();
-  const app = harness({ backup: () => response.promise });
+  const app = harness({ backup: (args, index) => index === 0 ? response.promise
+    : { success: true, data: { recordId: 'boundary-retry-confirmed' } } });
   save(app, 'boundary-response');
   const saving = app.manager.syncWithCloud({ uploadPending: true });
-  app.advance(5000);
+  app.advance(3000);
   response.resolve({ success: true, data: { recordId: 'too-late' } });
-  const result = await saving;
-  assert.equal(result.code, 'CLOUD_TIMEOUT');
-  assert.equal(result.pending, 1);
-  assert.equal(app.records()[0].syncStatus, 'failed');
+  await flush();
+  assert.equal(app.records()[0].syncStatus, 'uploading');
   assert.equal(app.records()[0]._id, undefined);
+  await app.runTimers(99);
+  assert.equal(app.calls.backups.length, 1);
+  await app.runTimers(1);
+  const result = await saving;
+  assert.equal(result.success, true);
+  assert.equal(result.pending, 0);
+  assert.equal(app.calls.backups.length, 2);
+  assert.equal(app.records()[0]._id, 'boundary-retry-confirmed');
+  assert.equal(app.timers.size, 0);
+});
+
+test('a first-attempt timeout can recover on the second attempt and ignores the first late success', async () => {
+  const first = deferred();
+  const second = deferred();
+  const app = harness({ backup: (args, index) => index === 0 ? first.promise : second.promise });
+  const saving = app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'timeout-then-success');
+  await app.runTimers(3000);
+  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.records()[0].syncStatus, 'uploading');
+  await app.runTimers(99);
+  assert.equal(app.calls.backups.length, 1);
+  await app.runTimers(1);
+  assert.equal(app.calls.backups.length, 2);
+  assert.equal(app.calls.backups[1][5].uploadDeadlineAt, NOW + 6100);
+  first.resolve({ success: true, data: { recordId: 'late-first-attempt' } });
+  await flush();
+  assert.equal(app.records()[0].syncStatus, 'uploading');
+  assert.equal(app.records()[0]._id, undefined, 'a timed-out request cannot acknowledge an active retry');
+  second.resolve({ success: true, data: { recordId: 'second-attempt-confirmed' } });
+  assert.equal((await saving).cloudSynced, true);
+  assert.equal(app.records()[0]._id, 'second-attempt-confirmed');
+  assert.equal(app.records()[0].syncAttempts, undefined);
+  assert.equal(app.timers.size, 0);
+  await app.runTimers(60000);
+  assert.equal(app.calls.backups.length, 2);
 });
 
 test('login and the legacy local sync entry point read cloud state without uploading guest records', async () => {
@@ -597,18 +824,19 @@ test('login and the legacy local sync entry point read cloud state without uploa
 });
 
 test('a timed-out stable identity is retried from its saved payload even if the submit form has changed', async () => {
-  const app = harness({ backup: (args, index) => index === 0
+  const app = harness({ backup: (args, index) => index < 4
     ? { success: false, code: 'TIMEOUT', error: '结果未知' }
     : { success: true, data: { recordId: 'server-already-saved', duplicate: true } } });
-  await app.manager.recordCheckinWithSync(12, ['平静'], ['原始体验'], TIMESTAMP, 'stable-timeout');
+  await settleWithRetries(app,
+    app.manager.recordCheckinWithSync(12, ['平静'], ['原始体验'], TIMESTAMP, 'stable-timeout'));
   const result = await app.manager.recordCheckinWithSync(90, ['疲倦'], ['修改过的表单'], NOW, 'stable-timeout');
   assert.equal(result.success, true);
   assert.equal(result.cloudSynced, false);
-  assert.equal(app.calls.backups.length, 1, 'resubmitting a saved record cannot implicitly retry its upload');
+  assert.equal(app.calls.backups.length, 4, 'resubmitting a saved record cannot implicitly retry its upload');
   const retry = await app.manager.syncWithCloud({ uploadPending: true });
   assert.equal(retry.success, true);
-  assert.equal(app.calls.backups.length, 2);
-  assert.deepEqual(uploadPayload(app.calls.backups[1]), uploadPayload(app.calls.backups[0]));
+  assert.equal(app.calls.backups.length, 5);
+  assert.deepEqual(uploadPayload(app.calls.backups[4]), uploadPayload(app.calls.backups[0]));
   assert.equal(app.records().length, 1);
   assert.equal(app.records()[0].timestamp, TIMESTAMP);
   assert.equal(app.records()[0].duration, 12);
@@ -627,19 +855,20 @@ test('repeated successful submission of the same identity returns confirmation w
 });
 
 test('manual check-in retry preserves its selected date, source, experience and original timestamp', async () => {
-  const app = harness({ backup: (args, index) => index === 0
+  const app = harness({ backup: (args, index) => index < 4
     ? { success: false, code: 'OFFLINE', error: '网络不可用' }
     : { success: true, data: { recordId: 'manual-confirmed' } } });
   const timestamp = TIMESTAMP - 86400000;
   const options = { source: 'manual', date: '2026-09-19', idempotencyKey: 'manual-retry' };
-  const result = await app.manager.recordCheckinWithSync(23, ['平静'], ['补记体验'], timestamp, options);
+  const result = await settleWithRetries(app,
+    app.manager.recordCheckinWithSync(23, ['平静'], ['补记体验'], timestamp, options));
   assert.equal(result.cloudSynced, false);
   await app.restart().retryPendingBackups({ force: true });
-  assert.equal(app.calls.backups.length, 2);
-  assert.deepEqual(uploadPayload(app.calls.backups[1]), uploadPayload(app.calls.backups[0]));
-  assert.equal(app.calls.backups[1][3], timestamp);
-  assert.equal(app.calls.backups[1][5].source, 'manual');
-  assert.equal(app.calls.backups[1][5].date, '2026-09-19');
+  assert.equal(app.calls.backups.length, 5);
+  assert.deepEqual(uploadPayload(app.calls.backups[4]), uploadPayload(app.calls.backups[0]));
+  assert.equal(app.calls.backups[4][3], timestamp);
+  assert.equal(app.calls.backups[4][5].source, 'manual');
+  assert.equal(app.calls.backups[4][5].date, '2026-09-19');
   assert.equal(app.records()[0].date, '2026-09-19');
   assert.equal(app.records()[0].syncStatus, 'synced');
 });
@@ -723,7 +952,9 @@ test('guest owner binding storage failure prevents sending an untracked cloud up
 for (const response of [{ success: true }, { success: true, data: {} }]) {
   test(`a success response without recordId cannot mark a record synced (${JSON.stringify(response)})`, async () => {
     const app = harness({ backup: () => response });
-    const result = await app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'missing-cloud-id');
+    const result = await settleWithRetries(app,
+      app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'missing-cloud-id'));
+    assert.equal(app.calls.backups.length, 4);
     assert.equal(result.success, true);
     assert.equal(result.cloudSynced, false);
     assert.ok(result.syncError);
@@ -768,12 +999,12 @@ test('deleting an in-flight pending record waits for upload and removes its exac
 });
 
 test('sync subscribers observe persisted failure and recovery, and unsubscribe stops later notifications', async () => {
-  const app = harness({ backup: (args, index) => index === 0
+  const app = harness({ backup: (args, index) => index < 4
     ? { success: false, code: 'OFFLINE', error: '离线' }
     : { success: true, data: { recordId: `subscribed-${index}` } } });
   const snapshots = [];
   const unsubscribe = app.manager.subscribeSyncState(() => snapshots.push(app.summary()));
-  await app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'subscription-record');
+  await settleWithRetries(app, app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'subscription-record'));
   assert.ok(snapshots.some(summary => summary.pending === 1 && summary.failed === 1));
   await app.manager.retryPendingBackups({ force: true });
   assert.deepEqual(snapshots.at(-1), { total: 0, pending: 0, failed: 0 });
@@ -785,10 +1016,10 @@ test('sync subscribers observe persisted failure and recovery, and unsubscribe s
 
 for (const method of ['refreshFromCloud', 'safeRecoverFromCloud', 'recoverUserDataFromCloud']) {
   test(`${method} with an empty cloud preserves pending owner, failure details and retry eligibility`, async () => {
-    const app = harness({ backup: (args, index) => index === 0
+    const app = harness({ backup: (args, index) => index < 4
       ? { success: false, code: 'NETWORK_ERROR', error: '断网' }
       : { success: true, data: { recordId: 'recovered-after-refresh' } } });
-    await app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'refresh-pending');
+    await settleWithRetries(app, app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'refresh-pending'));
     const before = clone(app.records()[0]);
     assert.equal(await app.manager[method](LOCAL_USER), true);
     const after = app.records()[0];
@@ -799,7 +1030,7 @@ for (const method of ['refreshFromCloud', 'safeRecoverFromCloud', 'recoverUserDa
     assert.deepEqual(app.summary(), { total: 1, pending: 1, failed: 1 });
     const restarted = app.restart();
     await restarted.retryPendingBackups({ force: true });
-    assert.equal(app.calls.backups.length, 2);
+    assert.equal(app.calls.backups.length, 5);
     assert.equal(app.records()[0].syncStatus, 'synced');
     assert.equal(app.manager.getUserStats().totalCount, 1);
   });
@@ -807,13 +1038,13 @@ for (const method of ['refreshFromCloud', 'safeRecoverFromCloud', 'recoverUserDa
 
 test('refresh discovers a timed-out cloud commit by local identity and clears all retry state without another upload', async () => {
   const cloud = [];
-  const app = harness({ cloud, backup: args => {
+  const app = harness({ cloud, backup: (args, index) => {
     const [duration, emotion, experience, timestamp, localId] = args;
-    cloud.push({ _id: 'timeout-actually-committed', _openid: OPENID, duration, emotion, experience,
+    if (index === 0) cloud.push({ _id: 'timeout-actually-committed', _openid: OPENID, duration, emotion, experience,
       timestamp, localId, date: '2026-09-20' });
     return { success: false, code: 'TIMEOUT', error: '服务器已保存，但客户端没收到结果' };
   } });
-  await app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'found-by-refresh');
+  await settleWithRetries(app, app.manager.recordCheckinWithSync(12, [], [], TIMESTAMP, 'found-by-refresh'));
   assert.equal(app.records()[0].syncStatus, 'failed');
   assert.equal(await app.manager.refreshFromCloud(), true);
   const record = app.records()[0];
@@ -827,7 +1058,7 @@ test('refresh discovers a timed-out cloud commit by local identity and clears al
   }
   assert.deepEqual(app.summary(), { total: 0, pending: 0, failed: 0 });
   await app.restart().retryPendingBackups({ force: true });
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.calls.backups.length, 4);
   assert.equal(app.manager.getUserStats().totalCount, 1);
   assert.equal(app.manager.getCurrentMonthMinutes(), 12);
 });

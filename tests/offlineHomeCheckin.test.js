@@ -189,6 +189,14 @@ for (const text of ['', '  离线时也能记下平静的呼吸  ']) {
     await saveWithoutAdvancingClock(app, text);
     assert.equal(app.calls.moderation.length, 0, 'known offline state skips the remote text check');
     assert.equal(app.calls.network, text ? 1 : 0);
+    assert.equal(app.rows()[0].syncStatus, 'uploading');
+    assert.equal(app.manager.getPendingSyncSummary().pending, 0);
+    await app.advance(299);
+    assert.equal(app.calls.uploads.length, 3);
+    assert.equal(app.rows()[0].syncStatus, 'uploading', 'short retries keep the upload in progress');
+    assert.ok(app.states.every(state => state.pending === 0));
+    await app.advance(1);
+    assert.equal(app.calls.uploads.length, 4, 'the initial request gets at most three automatic retries');
     assert.equal(app.manager.getPendingSyncSummary().pending, 1);
     assert.equal(app.rows()[0].syncStatus, 'failed');
     assert.equal(app.rows()[0].timestamp, INITIAL_TIME);
@@ -214,9 +222,21 @@ for (const text of ['', '上传一直没有返回']) {
     assert.equal(app.calls.uploads.length, 1);
     assert.equal(app.rows().length, 1, 'a repeat tap cannot duplicate the locally completed check-in');
     const nextSubmissionId = openAnotherForm(app);
-    await app.advance(4999);
+    await app.advance(2999);
     assertAnotherFormUnchanged(app, nextSubmissionId);
     assert.ok(app.states.every(state => state.pending === 0));
+    await app.advance(1);
+    assert.equal(app.rows()[0].syncStatus, 'uploading', 'one attempt timing out keeps the upload active');
+    assert.equal(app.calls.uploads.length, 1);
+    await app.advance(99);
+    assert.equal(app.calls.uploads.length, 1, 'a timed-out attempt waits 100ms before retrying');
+    await app.advance(1);
+    assert.equal(app.calls.uploads.length, 2);
+    await app.advance(9199);
+    assert.equal(app.calls.uploads.length, 4);
+    assert.equal(app.rows()[0].syncStatus, 'uploading');
+    assert.ok(app.states.every(state => state.pending === 0));
+    assertAnotherFormUnchanged(app, nextSubmissionId);
     await app.advance(1);
     assertAnotherFormUnchanged(app, nextSubmissionId);
     assert.equal(app.rows()[0].syncStatus, 'failed');
@@ -228,7 +248,7 @@ for (const text of ['', '上传一直没有返回']) {
   });
 }
 
-for (const uploadDelay of [0, 4500]) {
+for (const uploadDelay of [0, 2999]) {
   test(`local completion is independent of an online upload confirmed after ${uploadDelay} ms`, async () => {
     const app = createApp({ online: true, uploadDelay });
     await saveWithoutAdvancingClock(app, '');
@@ -273,8 +293,9 @@ test('home text check waits at most 1.5 seconds before saving even when both clo
   assert.equal(app.calls.uploadStorageSnapshots[0][0].localId, app.calls.uploads[0][4],
     'the reflection must be saved locally before its upload begins');
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
-  await app.advance(4999);
+  await app.advance(12299);
   assert.equal(app.calls.toasts.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   assert.equal(app.rows()[0].syncStatus, 'uploading');
   await app.advance(1);
   assert.equal(app.page.data.checkinSubmitting, false);
@@ -289,6 +310,7 @@ test('restored network only reads until a home retry uploads once with the origi
   app.page.onCheckinTimeChange({ detail: { value: '06:32' } });
   app.page.onCheckinDurationInput({ detail: { value: '35' } });
   await saveWithoutAdvancingClock(app, '  静坐后更能觉察呼吸。  ');
+  await app.advance(300);
   const before = app.rows()[0];
   assert.equal(before.date, '2026-09-19');
   assert.equal(before.timestamp, Date.parse('2026-09-19T06:32:00+08:00'));
@@ -298,7 +320,7 @@ test('restored network only reads until a home retry uploads once with the origi
   const result = await app.manager.syncWithCloud({ force: true });
   assert.equal(result.refreshed, true);
   assert.equal(result.uploaded || 0, 0);
-  assert.equal(app.calls.uploads.length, 1, 'network recovery and refresh must not retry failed uploads');
+  assert.equal(app.calls.uploads.length, 4, 'network recovery and refresh must not retry exhausted uploads');
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
   assert.equal(app.cloudRows.size, 0);
   await app.page.refreshCheckinsFromCloud({ force: true });
@@ -306,9 +328,9 @@ test('restored network only reads until a home retry uploads once with the origi
   app.page.refreshCheckinRecords();
   assert.equal(app.page.data.checkinRecords.length, 0, 'older dates can leave the recent home list');
   assert.equal(app.page.data.pendingCheckinCount, 1, 'older dates still appear in the upload reminder');
-  assert.equal(app.calls.uploads.length, 1, 'waiting and refreshing cannot replace a manual retry');
+  assert.equal(app.calls.uploads.length, 4, 'waiting and refreshing cannot replace a manual retry');
   await app.page.retryCheckinUploads();
-  assert.equal(app.calls.uploads.length, 1, 'confirmation without opening a preview cannot upload');
+  assert.equal(app.calls.uploads.length, 4, 'confirmation without opening a preview cannot upload');
   app.page.openCheckinUploadPreview();
   assert.equal(app.page.data.showCheckinUploadPreview, true);
   assert.equal(app.page.data.checkinUploadCount, 1);
@@ -322,11 +344,11 @@ test('restored network only reads until a home retry uploads once with the origi
   assert.equal(preview.timeLabel, '06:32');
   assert.equal(preview.duration, before.duration);
   assert.deepEqual(clone(preview.experienceTexts), ['静坐后更能觉察呼吸。']);
-  assert.equal(app.calls.uploads.length, 1, 'opening the preview only displays saved records');
+  assert.equal(app.calls.uploads.length, 4, 'opening the preview only displays saved records');
   app.page.closeCheckinUploadPreview();
   assert.equal(app.page.data.showCheckinUploadPreview, false);
   await app.page.retryCheckinUploads();
-  assert.equal(app.calls.uploads.length, 1, 'cancelling the preview cannot upload records');
+  assert.equal(app.calls.uploads.length, 4, 'cancelling the preview cannot upload records');
   assert.equal(app.rows()[0].syncStatus, 'failed');
   app.page.openCheckinUploadPreview();
   await app.page.retryCheckinUploads();
@@ -340,7 +362,7 @@ test('restored network only reads until a home retry uploads once with the origi
   const after = app.rows()[0];
   assert.equal(app.rows().length, 1);
   assert.equal(app.cloudRows.size, 1);
-  assert.equal(app.calls.uploads.length, 2, 'one offline failure followed by one successful retry');
+  assert.equal(app.calls.uploads.length, 5, 'four offline attempts are followed by one successful manual retry');
   assert.equal(after.localId, before.localId);
   assert.equal(after.date, before.date);
   assert.equal(after.timestamp, before.timestamp);
@@ -357,23 +379,25 @@ test('restored network only reads until a home retry uploads once with the origi
   }
 });
 
-test('a hung initial upload and every manual retry each stop within five seconds and never retry on their own', async () => {
+test('a hung initial upload and each manual round stop after four three-second attempts without later retries', async () => {
   const app = createApp({ online: true, uploadPending: true });
   const saving = app.page.submitCheckin();
   await flush();
-  await app.advance(5000);
+  await app.advance(12300);
   await saving;
   assert.equal(app.rows()[0].syncStatus, 'failed');
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   await app.advance(60 * 60 * 1000);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
 
   let complete = false;
   app.page.openCheckinUploadPreview();
   const manual = app.page.retryCheckinUploads().then(() => { complete = true; });
   await flush();
-  assert.equal(app.calls.uploads.length, 2);
-  await app.advance(4999);
+  assert.equal(app.calls.uploads.length, 5);
+  await app.advance(12299);
+  assert.equal(app.calls.uploads.length, 8);
+  assert.equal(app.rows()[0].syncStatus, 'uploading');
   assert.equal(complete, false);
   assert.equal(app.page.data.checkinRetrying, true);
   assert.equal(app.page.data.showCheckinUploadPreview, true, 'the upload list remains visible during the request');
@@ -386,13 +410,14 @@ test('a hung initial upload and every manual retry each stop within five seconds
   assert.equal(app.rows().length, 1);
   await app.advance(24 * 60 * 60 * 1000);
   await app.page.refreshCheckinsFromCloud();
-  assert.equal(app.calls.uploads.length, 2, 'failed manual retries also remain manual-only');
+  assert.equal(app.calls.uploads.length, 8, 'exhausted manual rounds also remain manual-only');
   assert.equal(app.rows().length, 1);
 });
 
 test('saving a new check-in uploads only that new record and leaves previous failures for a manual retry', async () => {
   const app = createApp();
   await saveWithoutAdvancingClock(app, '');
+  await app.advance(300);
   const originalId = app.rows()[0].localId;
   app.setConnected(true);
   await app.advance(1000);
@@ -400,15 +425,15 @@ test('saving a new check-in uploads only that new record and leaves previous fai
   await app.page.submitCheckin();
   await flush();
   assert.equal(app.rows().length, 2);
-  assert.equal(app.calls.uploads.length, 2);
-  assert.notEqual(app.calls.uploads[1][4], originalId);
+  assert.equal(app.calls.uploads.length, 5);
+  assert.notEqual(app.calls.uploads[4][4], originalId);
   assert.equal(app.rows().find(record => record.localId === originalId).syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 1);
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
   app.page.openCheckinUploadPreview();
   await app.page.retryCheckinUploads();
-  assert.equal(app.calls.uploads.length, 3);
-  assert.equal(app.calls.uploads[2][4], originalId);
+  assert.equal(app.calls.uploads.length, 6);
+  assert.equal(app.calls.uploads[5][4], originalId);
   assert.equal(app.cloudRows.size, 2);
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
 });

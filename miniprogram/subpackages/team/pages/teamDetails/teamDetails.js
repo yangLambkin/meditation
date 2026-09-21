@@ -1,7 +1,8 @@
 const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
-const { buildReminderText } = require('../../utils/reminderText.js');
+const { selectReminderMembers } = require('../../utils/reminderText.js');
+const { createReminderImage } = require('../../utils/reminderImage.js');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const statusLabels = { not_practiced: '尚未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 
@@ -31,8 +32,8 @@ Page({
     settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '',
     isPreparingInvite: false, inviteReady: false, inviteError: '',
     inviteDialogOpen: false, inviteExpiresLabel: '',
-    isPreparingReminder: false, isCopyingReminder: false,
-    reminderDialogOpen: false, reminderText: '', reminderCount: 0, reminderDate: ''
+    isPreparingReminder: false,
+    reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: ''
   },
 
   onLoad(options = {}) {
@@ -287,18 +288,29 @@ Page({
   cancelReminder() {
     this._reminderVersion = (this._reminderVersion || 0) + 1;
     this._reminderContext = null;
-    if (!this._unloaded) this.setData({ isPreparingReminder: false, isCopyingReminder: false,
-      reminderDialogOpen: false, reminderText: '', reminderCount: 0, reminderDate: '' });
+    if (!this._unloaded) this.setData({ isPreparingReminder: false,
+      reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: '' });
   },
 
   closeReminderDialog() {
     this.cancelReminder();
   },
 
+  getReminderCanvas() {
+    return new Promise((resolve, reject) => {
+      wx.createSelectorQuery().in(this).select('#reminderCanvas').fields({ node: true }).exec(results => {
+        const canvas = results && results[0] && results[0].node;
+        if (canvas) resolve(canvas);
+        else reject(new Error('图片画布暂时无法使用，请重试'));
+      });
+    });
+  },
+
   async showReminderList() {
-    const { teamId, teamInfo, isMember } = this.data;
+    const { teamId, teamInfo, isMember, isCreator } = this.data;
     const openid = wx.getStorageSync('userOpenId');
-    if (this._unloaded || !this._isVisible || !isMember || !teamInfo || teamInfo._id !== teamId ||
+    if (this._unloaded || !this._isVisible || !isMember || !isCreator || !teamInfo ||
+        teamInfo._id !== teamId || teamInfo.creator !== openid ||
         !openid || this._viewerOpenid !== openid || this._viewerTeamId !== teamId ||
         !this.data.report || this.data.isLoading || this.data.isPreparingReminder ||
         this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
@@ -307,41 +319,45 @@ Page({
     const loadVersion = this._loadVersion;
     const isCurrent = () => !this._unloaded && this._isVisible && version === this._reminderVersion &&
       loadVersion === this._loadVersion && this.data.teamId === teamId && this.data.isMember &&
+      this.data.isCreator && this.data.teamInfo && this.data.teamInfo.creator === openid &&
       wx.getStorageSync('userOpenId') === openid && !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId;
     this.setData({ isPreparingReminder: true });
     try {
-      // 名单包含全体待提醒成员，不受当前列表筛选影响；打开前重新获取云端统计。
+      // 长图包含全体未达标成员，不受当前列表筛选影响；生成前重新获取云端统计。
       const report = await this.callTeam('getTeamPracticeReport', { teamId });
       if (!isCurrent()) return;
       this.applyReport(report);
       this.scheduleReset(report.nextResetAt);
       const hasGoal = report.settings.dailyGoalMinutes !== null;
-      const members = report.members.filter(member => member.todayStatus === 'not_practiced' ||
-        (hasGoal && member.todayStatus === 'below_goal'));
+      const members = selectReminderMembers({ ...report, members: this._reportMembers });
       if (!members.length) {
         wx.showToast({ title: hasGoal ? '今天大家都已达标' : '今天大家都已练习', icon: 'none' });
         return;
       }
-      const reminder = buildReminderText({ report });
+      const canvas = await this.getReminderCanvas();
+      if (!isCurrent()) return;
+      const reminder = await createReminderImage({ canvas, report, members, isCurrent });
+      if (!isCurrent()) return;
       if (report.nextResetAt <= Date.now()) {
         wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });
         await this.loadTeamData();
         return;
       }
       this._reminderContext = { teamId, openid, nextResetAt: report.nextResetAt };
-      this.setData({ reminderDialogOpen: true, reminderText: reminder.text,
-        reminderCount: reminder.memberCount, reminderDate: report.businessDate });
+      this.setData({ reminderDialogOpen: true, reminderImagePath: reminder.tempFilePath,
+        reminderCount: members.length, reminderDate: report.businessDate });
     } catch (error) {
-      if (isCurrent()) wx.showModal({ title: '名单加载失败', content: error.message || '请稍后重试', showCancel: false });
+      if (isCurrent()) wx.showModal({ title: '长图生成失败', content: error.message || '请稍后重试', showCancel: false });
     } finally {
       if (!this._unloaded && version === this._reminderVersion) this.setData({ isPreparingReminder: false });
     }
   },
 
-  async copyReminderList() {
+  async previewReminderImage() {
     const context = this._reminderContext;
     if (!context || this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
-        !this.data.reminderText || this.data.isCopyingReminder || !this.data.isMember ||
+        !this.data.reminderImagePath || !this.data.isMember || !this.data.isCreator ||
+        !this.data.teamInfo || this.data.teamInfo.creator !== context.openid ||
         this.data.teamId !== context.teamId || this._viewerOpenid !== context.openid ||
         wx.getStorageSync('userOpenId') !== context.openid || this.data.isLoading ||
         this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
@@ -351,18 +367,13 @@ Page({
       await this.loadTeamData();
       return;
     }
-    const isCurrent = () => !this._unloaded && this._isVisible && this._reminderContext === context &&
-      this.data.teamId === context.teamId && wx.getStorageSync('userOpenId') === context.openid;
-    this.setData({ isCopyingReminder: true });
-    try {
-      await new Promise((resolve, reject) => wx.setClipboardData({
-        data: this.data.reminderText, success: resolve, fail: reject
-      }));
-    } catch (error) {
-      if (isCurrent()) wx.showToast({ title: '复制失败，请重试', icon: 'none' });
-    } finally {
-      if (isCurrent()) this.setData({ isCopyingReminder: false });
-    }
+    wx.previewImage({ current: this.data.reminderImagePath, urls: [this.data.reminderImagePath],
+      fail: () => {
+        if (!this._unloaded && this._isVisible && this._reminderContext === context) {
+          wx.showToast({ title: '图片预览失败，请重试', icon: 'none' });
+        }
+      }
+    });
   },
 
   openHistoryDetails(event) {

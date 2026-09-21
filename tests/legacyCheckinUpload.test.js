@@ -10,6 +10,7 @@ const LOCAL_USER = 'local-legacy-recovery';
 const OPENID = 'oz-legacy-recovery';
 const KEY = `meditation_checkin_${LOCAL_USER}`;
 const clone = value => value === undefined ? undefined : structuredClone(value);
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function legacy(overrides = {}) {
   return {
@@ -25,6 +26,7 @@ function identity(record) {
 
 function harness({ records = [legacy()], nested = false, loggedIn = true, backup } = {}) {
   let failStorage = false;
+  let now = NOW;
   let nextTimer = 0;
   const timers = new Map();
   const cache = { businessDayVersion: 2, dailyRecords: {}, monthlyStats: {}, userStats: {} };
@@ -50,8 +52,8 @@ function harness({ records = [legacy()], nested = false, loggedIn = true, backup
     async getUserStats() { return { success: true, data: {} }; }
   };
   class ClockDate extends Date {
-    constructor(...args) { super(...(args.length ? args : [NOW])); }
-    static now() { return NOW; }
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
   }
   function load(name, globals = {}) {
     const module = { exports: {} };
@@ -65,7 +67,11 @@ function harness({ records = [legacy()], nested = false, loggedIn = true, backup
     timers.clear();
     const dateUtil = load('dateUtil.js');
     return load('checkin.js', {
-      setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
+      setTimeout(callback, milliseconds) {
+        const id = ++nextTimer;
+        timers.set(id, { callback, at: now + Number(milliseconds || 0) });
+        return id;
+      },
       clearTimeout(id) { timers.delete(id); },
       wx: {
         getStorageSync: key => clone(storage.get(key)),
@@ -87,7 +93,25 @@ function harness({ records = [legacy()], nested = false, loggedIn = true, backup
     manager: restart(), restart, storage, calls, timers,
     failStorage(value) { failStorage = value; },
     data() { const stored = storage.get(KEY); return stored.checkinRecords || stored; },
-    records() { return Object.values(this.data().dailyRecords).flatMap(day => day.records); }
+    records() { return Object.values(this.data().dailyRecords).flatMap(day => day.records); },
+    async advance(milliseconds) {
+      await flush();
+      const end = now + milliseconds;
+      let count = 0;
+      while (true) {
+        const due = [...timers.entries()].filter(([, value]) => value.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        assert.ok(++count < 100, 'retry timers must not spin');
+        const [id, timer] = due;
+        timers.delete(id);
+        now = timer.at;
+        timer.callback();
+        await flush();
+      }
+      now = end;
+      await flush();
+    }
   };
 }
 
@@ -156,12 +180,22 @@ test('recovery reuses an old idempotency key when localId is missing', async () 
 test('a generated identity survives a failed upload, cache rebuild and process restart', async () => {
   const selected = legacy({ localId: undefined, dateSource: 'manual', date: '2026-09-18' });
   const untouched = legacy({ localId: 'unselected-legacy', timestamp: TIMESTAMP + 60000 });
-  const app = harness({ records: [selected, untouched], backup: (args, index) => index === 0
+  const app = harness({ records: [selected, untouched], backup: (args, index) => index < 4
     ? { success: false, code: 'OFFLINE', error: '网络不可用' }
     : { success: true, data: { recordId: 'recovered-after-restart' } } });
-  const failed = await app.manager.retryUnconfirmedRecord(identity(selected));
+  const uploading = app.manager.retryUnconfirmedRecord(identity(selected));
+  await app.advance(300);
+  const failed = await uploading;
   assert.equal(failed.success, false);
-  assert.equal(app.calls.backups.length, 1);
+  assert.equal(app.calls.backups.length, 4);
+  const payload = args => [...args.slice(0, 5), Object.fromEntries(Object.entries(args[5])
+    .filter(([key]) => key !== 'uploadDeadlineAt'))];
+  for (const [index, args] of app.calls.backups.entries()) {
+    assert.deepEqual(payload(args), payload(app.calls.backups[0]),
+      'automatic retries preserve the generated identity and original payload');
+    assert.equal(args[5].uploadDeadlineAt, NOW + index * 100 + 3000,
+      'each retry gets its own three-second timeout');
+  }
   const generatedId = app.records()[0].localId;
   assert.ok(generatedId);
   assert.equal(app.records()[0].syncStatus, 'failed');
@@ -170,15 +204,16 @@ test('a generated identity survives a failed upload, cache rebuild and process r
   assert.equal(app.records().length, 2);
 
   await app.manager.syncWithCloud();
-  assert.equal(app.calls.backups.length, 1, 'read refresh must not retry a failed upload');
+  assert.equal(app.calls.backups.length, 4, 'read refresh must not retry a failed upload');
   assert.equal(app.records().find(record => record.localId === generatedId).syncLegacyRecovery, true);
   assert.equal(app.timers.size, 0, 'failed recovery cannot schedule background uploads');
   const restarted = app.restart();
   const retried = await restarted.retryPendingBackups();
   assert.equal(retried.success, true);
   assert.equal(retried.uploaded, 1);
-  assert.equal(app.calls.backups.length, 2);
-  assert.deepEqual(app.calls.backups[1], app.calls.backups[0], 'retry sends the same identity, content and recovery metadata');
+  assert.equal(app.calls.backups.length, 5);
+  assert.deepEqual(payload(app.calls.backups[4]), payload(app.calls.backups[0]),
+    'retry sends the same identity, content and recovery metadata');
   const recovered = app.records().find(record => record.localId === generatedId);
   assert.equal(recovered._id, 'recovered-after-restart');
   assert.equal(recovered.timestamp, selected.timestamp);
@@ -470,8 +505,10 @@ test('failed unified recovery preserves all rows and uses the same single entry 
     ? { success: false, code: 'OFFLINE', error: '网络不可用' }
     : { success: true, data: { recordId: 'confirmed-after-retry' } } });
   app.page.openCheckinUploadPreview();
-  await app.page.retryCheckinUploads();
-  assert.equal(app.calls.backups.length, 1, 'a network failure pauses the remaining queue');
+  const uploading = app.page.retryCheckinUploads();
+  await app.advance(300);
+  await uploading;
+  assert.equal(app.calls.backups.length, 4, 'exhausted network retries pause the remaining queue');
   assert.equal(app.records().length, 4);
   assert.equal(app.records().filter(record => record.syncStatus === 'failed').length, 1);
   assert.equal(app.records().filter(record => record.syncStatus === 'pending').length, 3);
@@ -482,7 +519,7 @@ test('failed unified recovery preserves all rows and uses the same single entry 
   fail = false;
   app.page.openCheckinUploadPreview();
   await app.page.retryCheckinUploads();
-  assert.equal(app.calls.backups.length, 5);
+  assert.equal(app.calls.backups.length, 8);
   assert.equal(app.pageCalls.sync.length, 2);
   assert.equal(app.pageCalls.sync[1].unconfirmedRecords, undefined, 'enrolled rows use the normal queue on retry');
   assert.equal(app.pageCalls.sync[1].localIds.length, 4);

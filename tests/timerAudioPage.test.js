@@ -704,7 +704,7 @@ test('timer upload timeout stays silent after local completion and reopening doe
   advance(60000);
   await page.confirmCompletion();
   page.onShow();
-  advance(4999);
+  advance(12299);
   assert.equal(page.data.isSavingCompletion, false);
   assert.equal(page.data.showCompletionDialog, false);
   assert.equal(toasts.length, 0);

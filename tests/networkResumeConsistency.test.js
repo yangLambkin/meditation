@@ -10,8 +10,10 @@ const OPENID = 'oz-network-resume';
 const KEY = `meditation_checkin_${LOCAL_USER}`;
 const clone = value => value === undefined ? value : structuredClone(value);
 const flush = () => new Promise(resolve => setImmediate(resolve));
+const uploadPayload = args => [...args.slice(0, 5), Object.fromEntries(Object.entries(args[5])
+  .filter(([key]) => key !== 'uploadDeadlineAt'))];
 
-function harness({ loggedIn = true, online = true, missingLocks = false } = {}) {
+function harness({ loggedIn = true, online = true, missingLocks = false, uploadDelay = 0 } = {}) {
   let now = INITIAL_TIME;
   let connected = online;
   let locksMissing = missingLocks;
@@ -56,6 +58,7 @@ function harness({ loggedIn = true, online = true, missingLocks = false } = {}) 
       calls.uploads.push({ time: now, args: clone(args) });
       calls.operations.push('upload');
       if (uploadHook) return uploadHook(args, calls.uploads.length - 1);
+      if (uploadDelay) await new Promise(resolve => clockApi.setTimeout(resolve, uploadDelay));
       if (!connected) return { success: false, code: 'NETWORK_ERROR', error: '网络不可用' };
       if (locksMissing) return { success: false, code: 'MISSING_COLLECTION', error: 'meditation_locks 集合不存在' };
       const [duration, emotion, experience, timestamp, localId, options = {}] = args;
@@ -137,6 +140,11 @@ function harness({ loggedIn = true, online = true, missingLocks = false } = {}) 
   restart();
   return {
     calls, storage, timers, cloudRows, advance, restart,
+    async finishRetries(request) {
+      await flush();
+      await advance(300);
+      return request;
+    },
     get manager() { return manager; }, get app() { return app; }, get home() { return home; },
     get now() { return now; },
     setUploadHook(hook) { uploadHook = hook; },
@@ -158,10 +166,11 @@ function harness({ loggedIn = true, online = true, missingLocks = false } = {}) 
 
 test('restored network only refreshes cloud records and pending uploads wait for the home retry button', async () => {
   const app = harness({ online: false });
-  assert.equal((await app.record()).cloudSynced, false);
+  assert.equal((await app.finishRetries(app.record())).cloudSynced, false);
   const original = clone(app.rows()[0]);
   await app.setConnected(true);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
+  assert.deepEqual(app.calls.uploads.map(call => call.time - INITIAL_TIME), [0, 100, 200, 300]);
   assert.ok(app.calls.reads > 0, 'network recovery still refreshes the cloud snapshot');
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
@@ -169,30 +178,53 @@ test('restored network only refreshes cloud records and pending uploads wait for
   app.home.openCheckinUploadPreview();
   assert.equal(app.home.data.showCheckinUploadPreview, true);
   assert.equal(app.home.data.checkinUploadCount, 1);
-  assert.equal(app.calls.uploads.length, 1, 'the retry button previews the queue before upload');
+  assert.equal(app.calls.uploads.length, 4, 'the retry button previews the queue before upload');
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.rows()[0].localId, original.localId);
   assert.equal(app.rows()[0].timestamp, original.timestamp);
   assert.equal(app.cloudRows.size, 1);
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
   assert.equal(app.home.data.checkinRetrying, false);
   assert.equal(app.home.data.showCheckinUploadPreview, false);
 });
 
+test('network recovery during the retry delay completes the same upload without a manual retry', async () => {
+  const app = harness({ online: false });
+  let completed = false;
+  const saving = app.record('brief-disconnection').then(result => { completed = true; return result; });
+  await flush();
+  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.rows()[0].syncStatus, 'uploading');
+  await app.advance(99);
+  await app.setConnected(true);
+  assert.equal(app.calls.uploads.length, 1, 'network recovery only refreshes during the retry delay');
+  assert.equal(completed, false);
+  await app.advance(1);
+  assert.equal((await saving).cloudSynced, true);
+  assert.equal(app.calls.uploads.length, 2);
+  assert.deepEqual(uploadPayload(app.calls.uploads[1].args), uploadPayload(app.calls.uploads[0].args));
+  for (const call of app.calls.uploads) assert.equal(call.args[5].uploadDeadlineAt, call.time + 3000);
+  assert.equal(app.rows()[0].syncStatus, 'synced');
+  assert.equal(app.cloudRows.size, 1);
+  assert.equal(app.manager.getUserStats().totalCount, 1);
+  await app.advance(1000);
+  assert.equal(app.calls.uploads.length, 2, 'successful retry cancels the remaining attempts');
+});
+
 test('repeated app visibility, disconnected events and elapsed time never retry a failed upload', async () => {
   const app = harness({ online: false });
-  await app.record('bounded-offline');
+  await app.finishRetries(app.record('bounded-offline'));
   for (let attempt = 0; attempt < 3; attempt++) {
     await app.app.onShow();
     await app.setConnected(false);
-    assert.equal(app.calls.uploads.length, 1);
+    assert.equal(app.calls.uploads.length, 4);
   }
   await app.advance(24 * 60 * 60 * 1000);
   await app.setConnected(true);
   await app.advance(24 * 60 * 60 * 1000);
-  assert.equal(app.calls.uploads.length, 1, 'no timer may retransmit a failed local record');
+  assert.equal(app.calls.uploads.length, 4, 'no timer may retransmit a failed local record');
   assert.equal(app.cloudRows.size, 0);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
@@ -200,7 +232,7 @@ test('repeated app visibility, disconnected events and elapsed time never retry 
 
 test('quick reopening and pulling down the home page only read cloud state', async () => {
   const app = harness({ online: false });
-  await app.record('quick-reopen');
+  await app.finishRetries(app.record('quick-reopen'));
   app.suspendFor(1000);
   app.setOnlineWithoutEvent(true);
   await app.app.onShow();
@@ -208,7 +240,7 @@ test('quick reopening and pulling down the home page only read cloud state', asy
   await app.home.onPullDownRefresh();
   assert.equal(app.calls.stoppedPullRefresh, 1);
   assert.ok(app.calls.reads >= 1);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.home.data.pendingCheckinCount, 1);
   assert.equal(app.cloudRows.size, 0);
@@ -217,14 +249,14 @@ test('quick reopening and pulling down the home page only read cloud state', asy
 for (const firstEntry of ['app', 'home']) {
   test(`app and home visibility overlap with ${firstEntry} first and share a read without uploading`, async () => {
     const app = harness({ online: false });
-    await app.record('overlapping-open');
+    await app.finishRetries(app.record('overlapping-open'));
     app.setOnlineWithoutEvent(true);
     let resolveRead;
     app.setReadHook(() => new Promise(resolve => { resolveRead = resolve; }));
     const first = app[firstEntry].onShow();
     const second = app[firstEntry === 'app' ? 'home' : 'app'].onShow();
     await flush();
-    assert.equal(app.calls.uploads.length, 1);
+    assert.equal(app.calls.uploads.length, 4);
     assert.equal(app.calls.reads, 1);
     assert.equal(app.home.data.checkinSubmitting, false);
     resolveRead({ success: true, data: [] });
@@ -234,29 +266,29 @@ for (const firstEntry of ['app', 'home']) {
     assert.equal(app.manager.getUserStats().totalCount, 1);
     app.home.openCheckinUploadPreview();
     await app.home.retryCheckinUploads();
-    assert.equal(app.calls.uploads.length, 2);
+    assert.equal(app.calls.uploads.length, 5);
     assert.equal(app.cloudRows.size, 1);
   });
 }
 
 test('resuming after suspended timers preserves failed records until manual upload', async () => {
   const app = harness({ online: false });
-  await app.record('sleep-resume');
+  await app.finishRetries(app.record('sleep-resume'));
   app.suspendFor(10 * 60 * 1000);
   app.setOnlineWithoutEvent(true);
   await app.app.onShow();
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 0);
   app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
 });
 
 test('restarting after OS eviction retains pending identity and never reconstructs an automatic upload timer', async () => {
   const app = harness({ online: false });
-  await app.record('evicted-process');
+  await app.finishRetries(app.record('evicted-process'));
   const before = clone(app.rows()[0]);
   app.suspendFor(10 * 60 * 1000);
   app.restart();
@@ -268,12 +300,12 @@ test('restarting after OS eviction retains pending identity and never reconstruc
   assert.equal(app.rows()[0].timestamp, before.timestamp);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 0);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.cloudRows.size, 1);
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
 });
 
 for (const entry of ['home', 'login']) {
@@ -298,23 +330,23 @@ for (const entry of ['home', 'login']) {
 
 test('missing lock failures stay local through time and dependency repair until another manual attempt', async () => {
   const app = harness({ missingLocks: true });
-  await app.record('missing-lock-retry');
+  await app.finishRetries(app.record('missing-lock-retry'));
   assert.equal(app.rows()[0].syncErrorCode, 'MISSING_COLLECTION');
   await app.advance(24 * 60 * 60 * 1000);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   app.home.openCheckinUploadPreview();
-  await app.home.retryCheckinUploads();
-  assert.equal(app.calls.uploads.length, 2);
+  await app.finishRetries(app.home.retryCheckinUploads());
+  assert.equal(app.calls.uploads.length, 8);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.home.data.checkinRetrying, false);
   app.repairLocks();
   await app.app.onShow();
   await app.advance(24 * 60 * 60 * 1000);
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 8);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
-  assert.equal(app.calls.uploads.length, 3);
+  assert.equal(app.calls.uploads.length, 9);
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.cloudRows.size, 1);
   assert.equal(app.manager.getUserStats().totalCount, 1);
@@ -367,7 +399,7 @@ test('concurrent read-only entry points share one refresh without draining pendi
 
 test('manual upload completes independently of an already pending cloud read', async () => {
   const app = harness({ online: false });
-  await app.record('manual-during-read');
+  await app.finishRetries(app.record('manual-during-read'));
   app.setOnlineWithoutEvent(true);
   let resolveRead;
   app.setReadHook(() => new Promise(resolve => { resolveRead = resolve; }));
@@ -380,7 +412,7 @@ test('manual upload completes independently of an already pending cloud read', a
   assert.equal(completed, true, 'a cloud refresh cannot hold the manual-upload button open');
   await manual;
   assert.equal(app.home.data.checkinRetrying, false);
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
   assert.equal(app.rows()[0].syncStatus, 'synced');
   app.setReadHook(undefined);
   resolveRead({ success: true, data: [] });
@@ -390,12 +422,12 @@ test('manual upload completes independently of an already pending cloud read', a
 
 test('failed read-only refresh preserves pending fields and does not repeat the original failed upload', async () => {
   const app = harness({ online: false });
-  await app.record('offline-read');
+  await app.finishRetries(app.record('offline-read'));
   const before = clone(app.rows()[0]);
   const result = await app.manager.syncWithCloud({ force: true });
   assert.equal(result.refreshed, false);
   assert.equal(result.pending, 1);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   assert.deepEqual(app.rows()[0], before);
 });
 
@@ -423,7 +455,7 @@ test('a late old-account upload failure leaves both accounts local until their o
   app.setUploadHook(args => {
     if (args[4] === 'old-account-inflight') return oldUpload;
     currentAttempts++;
-    if (currentAttempts === 1) return { success: false, code: 'NETWORK_ERROR', error: '新账号首次上传失败' };
+    if (currentAttempts <= 4) return { success: false, code: 'NETWORK_ERROR', error: '新账号首次上传失败' };
     const row = { _id: 'current-account-cloud', _openid: args[5].expectedOpenid, localId: args[4],
       timestamp: args[3], date: '2026-09-20', duration: args[0], emotion: args[1], experience: args[2] };
     app.cloudRows.set(args[4], row);
@@ -434,16 +466,16 @@ test('a late old-account upload failure leaves both accounts local until their o
   const previous = app.record('old-account-inflight');
   await flush();
   app.storage.set('userOpenId', 'oz-current-account');
-  await app.record('current-account-pending');
+  await app.finishRetries(app.record('current-account-pending'));
   resolveOldUpload({ success: false, code: 'NETWORK_ERROR', error: '旧账号迟到的失败回调' });
-  await previous;
+  await app.finishRetries(previous);
   await app.advance(60 * 60 * 1000);
-  assert.equal(currentAttempts, 1);
+  assert.equal(currentAttempts, 4);
   await app.app.onShow();
-  assert.equal(currentAttempts, 1);
+  assert.equal(currentAttempts, 4);
   app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
-  assert.equal(currentAttempts, 2);
+  assert.equal(currentAttempts, 5);
   assert.equal(app.rows().find(record => record.localId === 'current-account-pending').syncStatus, 'synced');
   const old = app.rows().find(record => record.localId === 'old-account-inflight');
   assert.equal(old.syncOpenid, OPENID);
@@ -458,20 +490,20 @@ test('a read-only refresh can confirm a previously committed timed-out upload wi
       timestamp: args[3], date: '2026-09-20', duration: args[0], emotion: args[1], experience: args[2] });
     return { success: false, code: 'NETWORK_ERROR', error: '确认超时' };
   });
-  assert.equal((await app.record('timeout-confirmed-on-read')).cloudSynced, false);
+  assert.equal((await app.finishRetries(app.record('timeout-confirmed-on-read'))).cloudSynced, false);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   const result = await app.manager.syncWithCloud();
   assert.equal(result.refreshed, true);
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
   assert.equal(result.pending, 0);
-  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploads.length, 4);
   assert.equal(app.rows().length, 1);
 });
 
 test('concurrent manual retry taps create one upload and never reopen an automatic retry loop', async () => {
   const app = harness({ online: false });
-  await app.record('manual-double-tap');
+  await app.finishRetries(app.record('manual-double-tap'));
   app.setOnlineWithoutEvent(true);
   let resolveUpload;
   app.setUploadHook(args => {
@@ -484,7 +516,7 @@ test('concurrent manual retry taps create one upload and never reopen an automat
   app.home.openCheckinUploadPreview();
   const second = app.home.retryCheckinUploads();
   await flush();
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
   assert.equal(app.home.data.checkinRetrying, true);
   app.home.closeCheckinUploadPreview();
   assert.equal(app.home.data.showCheckinUploadPreview, true, 'repeat taps cannot close or replace an active upload preview');
@@ -495,13 +527,39 @@ test('concurrent manual retry taps create one upload and never reopen an automat
   app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   await app.advance(60 * 60 * 1000);
-  assert.equal(app.calls.uploads.length, 2);
+  assert.equal(app.calls.uploads.length, 5);
   assert.equal(app.rows().length, 1);
   assert.equal(app.cloudRows.size, 1);
   assert.equal(app.home.data.checkinRetrying, false);
 });
 
-test('manual upload of several pending records has one five-second budget and failure never schedules another request', async () => {
+test('manual upload gives each pending record its own timeout even when the batch lasts more than five seconds', async () => {
+  const app = harness({ uploadDelay: 2999 });
+  for (let index = 0; index < 3; index++) {
+    app.manager.recordToLocal(12 + index, [], [], INITIAL_TIME - 1000 - index, `slow-batch-${index}`);
+  }
+  app.home.openCheckinUploadPreview();
+  let completed = false;
+  const manual = app.home.retryCheckinUploads().then(() => { completed = true; });
+  await flush();
+  await app.advance(5000);
+  assert.equal(completed, false, 'a batch has no shared five-second cutoff');
+  assert.equal(app.home.data.checkinRetrying, true);
+  assert.equal(app.calls.uploads.length, 2);
+  await app.advance(3997);
+  await manual;
+  assert.equal(completed, true);
+  assert.equal(app.home.data.checkinRetrying, false);
+  assert.equal(app.home.data.showCheckinUploadPreview, false);
+  assert.equal(app.calls.toasts.at(-1).title, '上传成功');
+  assert.deepEqual(app.calls.uploads.map(call => call.time - INITIAL_TIME), [0, 2999, 5998]);
+  for (const call of app.calls.uploads) assert.equal(call.args[5].uploadDeadlineAt, call.time + 3000);
+  assert.ok(app.rows().every(record => record.syncStatus === 'synced'));
+  assert.equal(app.cloudRows.size, 3);
+  assert.equal(app.manager.getPendingSyncSummary().pending, 0);
+});
+
+test('manual upload pauses the remaining queue after four three-second timeouts and never starts another round', async () => {
   const app = harness();
   for (let index = 0; index < 3; index++) {
     app.manager.recordToLocal(12 + index, [], [], INITIAL_TIME - 1000 - index, `batch-timeout-${index}`);
@@ -511,14 +569,30 @@ test('manual upload of several pending records has one five-second budget and fa
   app.home.openCheckinUploadPreview();
   const manual = app.home.retryCheckinUploads().then(() => { complete = true; });
   await flush();
-  await app.advance(4999);
+  await app.advance(3000);
+  assert.equal(complete, false);
+  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.rows()[0].syncStatus, 'uploading');
+  await app.advance(100);
+  assert.equal(app.calls.uploads.length, 2);
+  await app.advance(9199);
   assert.equal(complete, false);
   assert.equal(app.home.data.checkinRetrying, true);
+  assert.equal(app.rows()[0].syncStatus, 'uploading');
+  assert.equal(app.calls.uploads.length, 4);
+  assert.deepEqual(app.calls.uploads.map(call => call.time - INITIAL_TIME), [0, 3100, 6200, 9300]);
+  for (const call of app.calls.uploads) {
+    assert.equal(call.args[5].uploadDeadlineAt, call.time + 3000);
+    assert.deepEqual(uploadPayload(call.args), uploadPayload(app.calls.uploads[0].args));
+  }
   await app.advance(1);
   await manual;
   assert.equal(complete, true);
   assert.equal(app.home.data.checkinRetrying, false);
   assert.equal(app.manager.getPendingSyncSummary().pending, 3);
+  assert.equal(app.rows()[0].syncStatus, 'failed');
+  assert.equal(app.rows()[0].syncErrorCode, 'CLOUD_TIMEOUT');
+  assert.ok(app.rows().slice(1).every(record => record.syncStatus === 'pending'));
   const attempts = app.calls.uploads.length;
   await app.advance(60 * 60 * 1000);
   await app.app.onShow();

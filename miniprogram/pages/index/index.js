@@ -240,7 +240,7 @@ Page({
       const blocked = (this._allCheckinRecords || []).some(record => record.syncStatus === 'blocked');
       wx.showToast({
         title: pending > 0 ? (blocked ? '部分记录无法上传，请查看记录提示'
-          : result.code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试'
+          : result.code === 'CLOUD_TIMEOUT' ? '上传超时，请手动重试'
             : result.error || `仍有 ${pending} 条未上传，请手动重试`)
           : result.error || (result.uploaded > 0 ? '上传成功' : '暂无待上传记录'),
         icon: pending === 0 && result.uploaded > 0 ? 'success' : 'none'

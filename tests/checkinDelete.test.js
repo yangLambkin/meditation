@@ -24,6 +24,13 @@ function deferred() {
   return { promise, resolve };
 }
 function harness(data = {}, options = {}) {
+  const timers = new Map();
+  let nextTimer = 0;
+  let now = NOW;
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
   const storage = new Map(Object.entries({
     localUserId: 'local-test', userOpenId: options.loggedIn === false ? '' : 'oz-test',
     [KEY]: clone(data), cloud_ranking_cache: { old: true }
@@ -32,7 +39,13 @@ function harness(data = {}, options = {}) {
   const backups = [];
   let failSave = false;
   const manager = load('miniprogram/utils/checkin.js', {
-    setTimeout() {},
+    Date: ClockDate,
+    setTimeout(callback, milliseconds) {
+      const id = ++nextTimer;
+      timers.set(id, { callback, at: now + milliseconds });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
     wx: {
       getStorageSync: key => clone(storage.get(key)),
       setStorageSync(key, value) {
@@ -43,6 +56,7 @@ function harness(data = {}, options = {}) {
     },
     require(name) {
       if (name === './dateUtil.js') return load('miniprogram/utils/dateUtil.js');
+      if (name === './badgeManager.js') return { checkBadgeUnlock: () => ({ hasNewUnlock: false }) };
       if (name === './cloudApi.js') return {
         async recordMeditation(...args) {
           backups.push(clone(args));
@@ -56,7 +70,24 @@ function harness(data = {}, options = {}) {
       throw new Error(`Unexpected require: ${name}`);
     }
   });
-  return { manager, storage, calls, backups, failSave(value) { failSave = value; } };
+  return {
+    manager, storage, calls, backups, failSave(value) { failSave = value; },
+    async advance(milliseconds) {
+      await new Promise(resolve => setImmediate(resolve));
+      const until = now + milliseconds;
+      while (true) {
+        const next = [...timers.entries()].filter(([, timer]) => timer.at <= until)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) break;
+        const [id, timer] = next;
+        timers.delete(id);
+        now = timer.at;
+        timer.callback();
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      now = until;
+    }
+  };
 }
 const record = (id, timestamp = NOW, duration = 10) => ({ _id: id, timestamp, duration, experience: [] });
 const day = records => ({ count: records.length, records, lastCheckin: records[records.length - 1].timestamp });
@@ -184,8 +215,11 @@ test('failed backups still delete by local identity rather than another cloud re
     }
   });
   const saved = app.manager.recordCheckin(10, [], [], NOW);
-  assert.equal((await app.manager.deleteCheckin('2026-09-17', { localId: saved.localId })).success, true);
+  const deletion = app.manager.deleteCheckin('2026-09-17', { localId: saved.localId });
+  await app.advance(300);
+  assert.equal((await deletion).success, true);
   assert.equal(app.calls[0].localId, saved.localId);
+  assert.equal(app.backups.length, 1, 'deletion cancels retries of the failed upload');
   assert.equal(app.backups[0][4], saved.localId);
 });
 

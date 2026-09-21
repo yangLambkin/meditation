@@ -47,13 +47,13 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
   title: `邀请您加入${team.name}团队`
 });
 
-function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, checkText, checkImage, setClipboard, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -75,6 +75,12 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, check
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
       if (name.endsWith('/reminderText.js')) return require('../miniprogram/subpackages/team/utils/reminderText.js');
+      if (name.endsWith('/reminderImage.js')) return {
+        async createReminderImage(options) {
+          calls.reminderImages.push(options);
+          return reminderImage ? reminderImage(options) : { tempFilePath: '/tmp/reminder.png', width: 750, height: 500 };
+        }
+      };
       if (name.endsWith('/contentSec.js')) return {
         async checkText(text, scene) {
           calls.text.push([text, scene]);
@@ -104,11 +110,23 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, check
       hideShareMenu: options => calls.shareMenus.push({ action: 'hide', ...options }),
       showShareMenu: options => calls.shareMenus.push({ action: 'show', ...options }),
       showToast: options => calls.toasts.push(options),
-      setClipboardData(options) {
-        calls.clipboard.push(options);
-        if (setClipboard) return setClipboard(options);
-        options.success({ errMsg: 'setClipboardData:ok' });
+      createSelectorQuery() {
+        const query = {};
+        const chain = {
+          in(page) { query.page = page; return chain; },
+          select(selector) { query.selector = selector; return chain; },
+          fields(options) { query.fields = options; return chain; },
+          exec(callback) {
+            calls.canvasQueries.push(query);
+            if (canvasQuery) return canvasQuery(callback, query);
+            callback([{ node: canvasNode }]);
+          }
+        };
+        return chain;
       },
+      setClipboardData(options) { calls.clipboard.push(options); },
+      saveImageToPhotosAlbum(options) { calls.albums.push(options); },
+      previewImage(options) { calls.previews.push(options); },
       chooseMedia: options => calls.media.push(options),
       showActionSheet: options => calls.actionSheets.push(options),
       showModal(options) {
@@ -1578,12 +1596,13 @@ test('practice rule switch cannot change member views, locked saves, or closed s
   }
 });
 
-test('reminder dialog refreshes the full report and only explicit copy writes its displayed names', async () => {
+test('creator reminder refreshes the full report and renders all unqualified member cards regardless of filter', async () => {
   let reports = 0;
   const latest = structuredClone(report);
   latest.members[1].todayMinutes = 18;
   latest.members[1].nickname = '长名字 冥想伙伴 👩🏽‍💻';
-  const { page, calls } = createPage({ openid: 'member', cloud: type => {
+  const canvasNode = { id: 'reminder-canvas-node' };
+  const { page, calls } = createPage({ canvasNode, cloud: type => {
     if (type === 'getTeamInfo') return success(team);
     return success(++reports === 1 ? report : latest);
   } });
@@ -1594,30 +1613,54 @@ test('reminder dialog refreshes the full report and only explicit copy writes it
   assert.equal(page.data.report.members[1].todayMinutes, 18);
   assert.equal(page.data.todayFilter, 'qualified');
   assert.equal(page.data.reminderDialogOpen, true);
-  assert.equal(page.data.reminderText, 'third\n长名字 冥想伙伴 👩🏽‍💻');
+  assert.equal(page.data.reminderImagePath, '/tmp/reminder.png');
   assert.equal(page.data.reminderCount, 2);
   assert.equal(page.data.reminderDate, report.businessDate);
   assert.equal(page.data.isPreparingReminder, false);
+  assert.equal(calls.canvasQueries.length, 1);
+  assert.equal(calls.canvasQueries[0].page, page);
+  assert.equal(calls.canvasQueries[0].selector, '#reminderCanvas');
+  assert.equal(calls.canvasQueries[0].fields.node, true);
+  assert.equal(calls.reminderImages.length, 1);
+  const image = calls.reminderImages[0];
+  assert.equal(image.canvas, canvasNode);
+  assert.deepEqual(Array.from(image.members, item => item.openid), ['third', 'member']);
+  assert.equal(image.members[1].nickname, latest.members[1].nickname);
+  assert.equal(image.members[1].todayMinutes, 18);
+  assert.equal(image.report.businessDate, latest.businessDate);
+  assert.equal(image.isCurrent(), true);
   assert.equal(calls.clipboard.length, 0);
-  const displayedText = page.data.reminderText;
-  await page.copyReminderList();
-  assert.equal(calls.clipboard.length, 1);
-  assert.equal(calls.clipboard[0].data, displayedText);
-  assert.equal(page.data.isCopyingReminder, false);
+  assert.equal(calls.albums.length, 0);
   assert.equal(calls.toasts.length, 0);
 });
 
-test('reminder dialog without a daily goal contains only unpracticed members', async () => {
+test('ordinary members and a forged creator flag cannot request reminder images', async () => {
+  for (const forgedFlag of [false, true]) {
+    const { page, calls } = createPage({ openid: 'member' });
+    await page.onShow();
+    page.setData({ isCreator: forgedFlag });
+    await page.showReminderList();
+    assert.equal(calls.cloud.length, 2);
+    assert.equal(calls.canvasQueries.length, 0);
+    assert.equal(calls.reminderImages.length, 0);
+    assert.equal(page.data.reminderDialogOpen, false);
+    assert.equal(page.data.reminderImagePath, '');
+  }
+});
+
+test('reminder image without a daily goal contains only unpracticed members', async () => {
   const { page, calls } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : optionalReport) });
   await page.onShow();
   await page.showReminderList();
   assert.equal(page.data.reminderDialogOpen, true);
-  assert.equal(page.data.reminderText, 'third');
   assert.equal(page.data.reminderCount, 1);
+  assert.equal(calls.reminderImages.length, 1);
+  assert.deepEqual(Array.from(calls.reminderImages[0].members, item => item.openid), ['third']);
   assert.equal(calls.clipboard.length, 0);
+  assert.equal(calls.albums.length, 0);
 });
 
-test('fresh reports with no reminder members show a message instead of an empty dialog', async () => {
+test('fresh reports with no reminder members show a message instead of generating an empty image', async () => {
   for (const hasGoal of [true, false]) {
     let reports = 0;
     const latest = structuredClone(hasGoal ? report : optionalReport);
@@ -1627,38 +1670,45 @@ test('fresh reports with no reminder members show a message instead of an empty 
     await page.onShow();
     await page.showReminderList();
     assert.equal(page.data.reminderDialogOpen, false);
-    assert.equal(page.data.reminderText, '');
+    assert.equal(page.data.reminderImagePath, '');
     assert.equal(page.data.reminderCount, 0);
     assert.equal(page.data.attentionCount, 0);
-    assert.equal(calls.clipboard.length, 0);
+    assert.equal(calls.reminderImages.length, 0);
     assert.equal(calls.toasts.at(-1).title, hasGoal ? '今天大家都已达标' : '今天大家都已练习');
     assert.equal(page.data.isPreparingReminder, false);
   }
 });
 
-test('duplicate reminder taps request only one current report', async () => {
-  let finish;
+test('duplicate reminder taps request only one report and render only one image', async () => {
+  let finishReport;
+  let finishImage;
   let reports = 0;
   const { page, calls } = createPage({ cloud: type => {
     if (type === 'getTeamInfo') return success(team);
-    return ++reports === 1 ? success(report) : new Promise(resolve => { finish = resolve; });
-  } });
+    return ++reports === 1 ? success(report) : new Promise(resolve => { finishReport = resolve; });
+  }, reminderImage: () => new Promise(resolve => { finishImage = resolve; }) });
   await page.onShow();
   const first = page.showReminderList();
   await page.showReminderList();
   assert.equal(reports, 2);
   assert.equal(page.data.isPreparingReminder, true);
   assert.equal(page.data.reminderDialogOpen, false);
-  finish(success(report));
+  finishReport(success(report));
+  await flushPromises();
+  assert.equal(calls.reminderImages.length, 1);
+  await page.showReminderList();
+  assert.equal(reports, 2);
+  assert.equal(calls.reminderImages.length, 1);
+  assert.equal(page.data.isPreparingReminder, true);
+  finishImage({ tempFilePath: '/tmp/current.png', width: 750, height: 500 });
   await first;
   assert.equal(page.data.reminderDialogOpen, true);
-  assert.equal(page.data.reminderText, 'third\nmember');
+  assert.equal(page.data.reminderImagePath, '/tmp/current.png');
   assert.equal(page.data.isPreparingReminder, false);
-  assert.equal(calls.clipboard.length, 0);
 });
 
 test('late reminder reports cannot reopen a closed, hidden, replaced or refreshed dialog', async () => {
-  for (const change of ['closeReminderDialog', 'onHide', 'onUnload', 'account', 'team', 'refresh']) {
+  for (const change of ['closeReminderDialog', 'onHide', 'onUnload', 'account', 'team', 'creator', 'refresh']) {
     let finish;
     let reports = 0;
     const { page, calls, storage } = createPage({ cloud: type => {
@@ -1670,19 +1720,45 @@ test('late reminder reports cannot reopen a closed, hidden, replaced or refreshe
     const request = page.showReminderList();
     if (change === 'account') storage.set('userOpenId', 'other');
     else if (change === 'team') page.setData({ teamId: 'other-team' });
+    else if (change === 'creator') page.setData({ teamInfo: { ...page.data.teamInfo, creator: 'other' } });
     else if (change === 'refresh') await page.loadTeamData();
     else page[change]();
     finish(success(report));
     await request;
     assert.equal(page.data.reminderDialogOpen, false, change);
-    assert.equal(page.data.reminderText, '', change);
+    assert.equal(page.data.reminderImagePath, '', change);
     assert.equal(page.data.isPreparingReminder, false, change);
-    assert.equal(calls.clipboard.length, 0, change);
+    assert.equal(calls.reminderImages.length, 0, change);
     assert.equal(calls.modals.length, 0, change);
   }
 });
 
-test('a reminder report arriving after its practice day ends cannot expose yesterday names', async () => {
+test('late generated reminder images cannot survive cancellation, account changes or permission loss', async () => {
+  for (const change of ['closeReminderDialog', 'onHide', 'onUnload', 'account', 'team', 'creator', 'refresh']) {
+    let finishImage;
+    const { page, calls, storage } = createPage({ reminderImage: () => new Promise(resolve => { finishImage = resolve; }) });
+    await page.onShow();
+    const request = page.showReminderList();
+    await flushPromises();
+    assert.equal(calls.reminderImages.length, 1, change);
+    const image = calls.reminderImages[0];
+    assert.equal(image.isCurrent(), true, change);
+    if (change === 'account') storage.set('userOpenId', 'other');
+    else if (change === 'team') page.setData({ teamId: 'other-team' });
+    else if (change === 'creator') page.setData({ teamInfo: { ...page.data.teamInfo, creator: 'other' } });
+    else if (change === 'refresh') await page.loadTeamData();
+    else page[change]();
+    assert.equal(image.isCurrent(), false, change);
+    finishImage({ tempFilePath: '/tmp/stale.png', width: 750, height: 500 });
+    await request;
+    assert.equal(page.data.reminderDialogOpen, false, change);
+    assert.equal(page.data.reminderImagePath, '', change);
+    assert.equal(page.data.isPreparingReminder, false, change);
+    assert.equal(calls.modals.length, 0, change);
+  }
+});
+
+test('a reminder report arriving after its practice day ends cannot generate yesterday cards', async () => {
   let finish;
   let reports = 0;
   const { page, calls, setNow } = createPage({ cloud: type => {
@@ -1695,13 +1771,29 @@ test('a reminder report arriving after its practice day ends cannot expose yeste
   finish(success(report));
   await request;
   assert.equal(page.data.reminderDialogOpen, false);
-  assert.equal(page.data.reminderText, '');
+  assert.equal(page.data.reminderImagePath, '');
   assert.equal(page.data.isPreparingReminder, false);
-  assert.equal(calls.clipboard.length, 0);
+  assert.equal(calls.reminderImages.length, 0);
   assert.match(calls.modals.at(-1).content, /练习日已更新/);
 });
 
-test('failed or malformed reminder refresh never exposes old names and permits retry', async () => {
+test('a reminder image completing across the practice-day boundary never displays stale cards', async () => {
+  let finishImage;
+  const { page, calls, setNow } = createPage({ reminderImage: () => new Promise(resolve => { finishImage = resolve; }) });
+  await page.onShow();
+  const request = page.showReminderList();
+  await flushPromises();
+  assert.equal(calls.reminderImages.length, 1);
+  setNow(nextResetAt);
+  finishImage({ tempFilePath: '/tmp/yesterday.png', width: 750, height: 500 });
+  await request;
+  assert.equal(page.data.reminderDialogOpen, false);
+  assert.equal(page.data.reminderImagePath, '');
+  assert.equal(page.data.reminderCount, 0);
+  assert.equal(page.data.isPreparingReminder, false);
+});
+
+test('failed or malformed reminder refresh clears the prior image and permits retry', async () => {
   for (const failure of ['network', 'malformed']) {
     let failed = false;
     const { page, calls } = createPage({ cloud: type => {
@@ -1715,108 +1807,145 @@ test('failed or malformed reminder refresh never exposes old names and permits r
     failed = true;
     await page.showReminderList();
     assert.equal(page.data.reminderDialogOpen, false, failure);
-    assert.equal(page.data.reminderText, '', failure);
+    assert.equal(page.data.reminderImagePath, '', failure);
     assert.equal(page.data.isPreparingReminder, false, failure);
-    assert.equal(calls.modals.at(-1).title, '名单加载失败', failure);
-    assert.equal(calls.clipboard.length, 0, failure);
+    assert.match(calls.modals.at(-1).title, /失败/, failure);
+    assert.equal(calls.reminderImages.length, 1, failure);
     failed = false;
     await page.showReminderList();
     assert.equal(page.data.reminderDialogOpen, true, failure);
-    assert.equal(page.data.reminderText, 'third\nmember', failure);
+    assert.equal(page.data.reminderImagePath, '/tmp/reminder.png', failure);
+    assert.equal(calls.reminderImages.length, 2, failure);
   }
 });
 
-test('reminders cannot be requested without current membership or during team mutations', async () => {
-  for (const flag of ['isLoading', 'isSaving', 'isDeleting', 'removingMemberId', 'isMember', 'account', 'team', 'hidden', 'report']) {
+test('failed canvas lookup or image export leaves no stale image and allows a fresh retry', async () => {
+  for (const failure of ['canvas', 'export']) {
+    let failed = false;
+    const { page, calls } = createPage({
+      canvasQuery: callback => callback(failed && failure === 'canvas' ? [] : [{ node: {} }]),
+      reminderImage: async () => {
+        if (failed && failure === 'export') throw new Error('长图生成失败');
+        return { tempFilePath: '/tmp/retry.png', width: 750, height: 500 };
+      }
+    });
+    await page.onShow();
+    await page.showReminderList();
+    assert.equal(page.data.reminderDialogOpen, true, failure);
+    failed = true;
+    await page.showReminderList();
+    assert.equal(page.data.reminderDialogOpen, false, failure);
+    assert.equal(page.data.reminderImagePath, '', failure);
+    assert.equal(page.data.isPreparingReminder, false, failure);
+    assert.match(calls.modals.at(-1).title, /失败/, failure);
+    failed = false;
+    await page.showReminderList();
+    assert.equal(page.data.reminderDialogOpen, true, failure);
+    assert.equal(page.data.reminderImagePath, '/tmp/retry.png', failure);
+  }
+});
+
+test('reminders require current creator membership and are blocked during team mutations', async () => {
+  for (const flag of ['isLoading', 'isSaving', 'isDeleting', 'removingMemberId', 'isMember', 'isCreator', 'account', 'team', 'hidden', 'report']) {
     const { page, calls, storage } = createPage();
     await page.onShow();
     if (flag === 'account') storage.set('userOpenId', 'other');
     else if (flag === 'team') page.setData({ teamId: 'other-team' });
     else if (flag === 'hidden') page.onHide();
     else if (flag === 'report') page.setData({ report: null });
-    else page.setData({ [flag]: flag === 'isMember' ? false : flag === 'removingMemberId' ? 'member' : true });
+    else page.setData({ [flag]: ['isMember', 'isCreator'].includes(flag) ? false : flag === 'removingMemberId' ? 'member' : true });
     await page.showReminderList();
     assert.equal(calls.cloud.length, 2, flag);
     assert.equal(page.data.reminderDialogOpen, false, flag);
-    assert.equal(calls.clipboard.length, 0, flag);
+    assert.equal(calls.reminderImages.length, 0, flag);
   }
 });
 
-test('closing, hiding, unloading or refreshing clears the displayed reminder and copy context', async () => {
-  for (const action of ['closeReminderDialog', 'onHide', 'onUnload', 'loadTeamData']) {
+test('closing, hiding, unloading or refreshing clears the displayed reminder image', async () => {
+  for (const action of ['cancelReminder', 'closeReminderDialog', 'onHide', 'onUnload', 'loadTeamData']) {
     const { page, calls } = createPage();
     await page.onShow();
     await page.showReminderList();
     assert.equal(page.data.reminderDialogOpen, true, action);
     await page[action]();
     assert.equal(page.data.reminderDialogOpen, false, action);
-    assert.equal(page.data.reminderText, '', action);
+    assert.equal(page.data.reminderImagePath, '', action);
     assert.equal(page.data.reminderCount, 0, action);
     assert.equal(page.data.reminderDate, '', action);
     assert.equal(page.data.isPreparingReminder, false, action);
-    assert.equal(page.data.isCopyingReminder, false, action);
-    await page.copyReminderList();
+    assert.equal(calls.reminderImages[0].isCurrent(), false, action);
     assert.equal(calls.clipboard.length, 0, action);
+    assert.equal(calls.albums.length, 0, action);
   }
 });
 
-test('copying a reminder is single-flight and retains exactly the displayed text', async () => {
-  const { page, calls } = createPage({ setClipboard() {} });
-  await page.onShow();
-  await page.showReminderList();
-  const displayedText = page.data.reminderText;
-  const first = page.copyReminderList();
-  assert.equal(page.data.isCopyingReminder, true);
-  await page.copyReminderList();
-  assert.equal(calls.clipboard.length, 1);
-  assert.equal(calls.clipboard[0].data, displayedText);
-  assert.equal(page.data.reminderDialogOpen, true);
-  calls.clipboard[0].success({ errMsg: 'setClipboardData:ok' });
-  await first;
-  assert.equal(page.data.isCopyingReminder, false);
-  assert.equal(page.data.reminderText, displayedText);
-  assert.equal(calls.toasts.length, 0);
+test('late image failure cannot revive a closed reminder or affect a newly generated image', async () => {
+  for (const action of ['closeReminderDialog', 'onHide', 'onUnload', 'loadTeamData', 'reopen']) {
+    let failImage;
+    let renders = 0;
+    const { page, calls } = createPage({ reminderImage: () => ++renders === 1
+      ? new Promise((resolve, reject) => { failImage = reject; })
+      : { tempFilePath: '/tmp/new.png', width: 750, height: 500 }
+    });
+    await page.onShow();
+    const oldImage = page.showReminderList();
+    await flushPromises();
+    assert.equal(calls.reminderImages.length, 1, action);
+    if (action === 'reopen') {
+      page.closeReminderDialog();
+      await page.showReminderList();
+    } else await page[action]();
+    failImage(new Error('过期任务生成失败'));
+    await oldImage;
+    assert.equal(calls.modals.length, 0, action);
+    assert.equal(page.data.reminderDialogOpen, action === 'reopen', action);
+    assert.equal(page.data.reminderImagePath, action === 'reopen' ? '/tmp/new.png' : '', action);
+    assert.equal(page.data.isPreparingReminder, false, action);
+  }
 });
 
-test('clipboard failures keep the reminder open and allow explicit retry', async () => {
-  let shouldFail = true;
-  const { page, calls } = createPage({ setClipboard: options => shouldFail
-    ? options.fail({ errMsg: 'setClipboardData:fail' })
-    : options.success({ errMsg: 'setClipboardData:ok' }) });
-  await page.onShow();
-  await page.showReminderList();
-  await page.copyReminderList();
-  assert.equal(calls.toasts.length, 1);
-  assert.equal(calls.toasts[0].title, '复制失败，请重试');
-  assert.equal(page.data.reminderDialogOpen, true);
-  assert.equal(page.data.reminderText, 'third\nmember');
-  assert.equal(page.data.isCopyingReminder, false);
-  shouldFail = false;
-  await page.copyReminderList();
-  assert.equal(calls.clipboard.length, 2);
-  assert.equal(calls.clipboard[1].data, page.data.reminderText);
-  assert.equal(calls.toasts.length, 1);
-  assert.equal(page.data.isCopyingReminder, false);
+test('reminder controls are creator-only and expose the generated image for manual preview and saving', () => {
+  const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
+  const reminderButton = template.match(/<button[^>]*bindtap="showReminderList"[^>]*>/)[0];
+  assert.match(reminderButton, /wx:if="{{isCreator}}"/);
+  const reminderImage = template.match(/<image[^>]*src="{{reminderImagePath}}"[^>]*>/)[0];
+  assert.match(reminderImage, /show-menu-by-longpress="{{true}}"/);
+  assert.match(reminderImage, /bindtap="previewReminderImage"/);
+  assert.doesNotMatch(template, /copyReminderList|reminderText/);
 });
 
-test('clipboard writes require an open current reminder and are blocked during team mutations', async () => {
-  for (const flag of ['isLoading', 'isSaving', 'isDeleting', 'removingMemberId', 'isMember', 'account', 'team', 'viewer', 'hidden', 'closed', 'empty']) {
+test('explicit preview opens exactly the generated reminder image without clipboard or album writes', async () => {
+  const { page, calls } = createPage();
+  await page.onShow();
+  await page.showReminderList();
+  assert.equal(calls.previews.length, 0);
+  await page.previewReminderImage();
+  assert.equal(calls.previews.length, 1);
+  assert.equal(calls.previews[0].current, '/tmp/reminder.png');
+  assert.deepEqual(Array.from(calls.previews[0].urls), ['/tmp/reminder.png']);
+  assert.equal(calls.clipboard.length, 0);
+  assert.equal(calls.albums.length, 0);
+});
+
+test('reminder preview requires the same creator and an open current image outside team mutations', async () => {
+  for (const flag of ['isLoading', 'isSaving', 'isDeleting', 'removingMemberId', 'isMember', 'isCreator', 'account', 'team', 'creator', 'viewer', 'hidden', 'closed', 'empty']) {
     const { page, calls, storage } = createPage();
     await page.onShow();
     await page.showReminderList();
     if (flag === 'account') storage.set('userOpenId', 'other');
     else if (flag === 'team') page.setData({ teamId: 'other-team' });
+    else if (flag === 'creator') page.setData({ teamInfo: { ...page.data.teamInfo, creator: 'other' } });
     else if (flag === 'viewer') page._viewerOpenid = 'other';
     else if (flag === 'hidden') page.onHide();
     else if (flag === 'closed') page.closeReminderDialog();
-    else if (flag === 'empty') page.setData({ reminderText: '' });
-    else page.setData({ [flag]: flag === 'isMember' ? false : flag === 'removingMemberId' ? 'member' : true });
-    await page.copyReminderList();
-    assert.equal(calls.clipboard.length, 0, flag);
+    else if (flag === 'empty') page.setData({ reminderImagePath: '' });
+    else page.setData({ [flag]: ['isMember', 'isCreator'].includes(flag) ? false : flag === 'removingMemberId' ? 'member' : true });
+    await page.previewReminderImage();
+    assert.equal(calls.previews.length, 0, flag);
   }
 });
 
-test('copying after the practice day ends closes stale names and refreshes instead of copying', async () => {
+test('preview after the practice day ends closes the stale image and refreshes current statistics', async () => {
   const tomorrow = { ...structuredClone(report), businessDate: '2026-09-20', nextResetAt: nextResetAt + 24 * 60 * 60 * 1000 };
   let currentReport = report;
   const { page, calls, setNow } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : currentReport) });
@@ -1824,37 +1953,17 @@ test('copying after the practice day ends closes stale names and refreshes inste
   await page.showReminderList();
   currentReport = tomorrow;
   setNow(nextResetAt);
-  await page.copyReminderList();
-  assert.equal(calls.clipboard.length, 0);
+  await page.previewReminderImage();
+  assert.equal(calls.previews.length, 0);
   assert.equal(calls.toasts.at(-1).title, '练习日已更新，请重新查看');
   assert.equal(page.data.reminderDialogOpen, false);
-  assert.equal(page.data.reminderText, '');
+  assert.equal(page.data.reminderImagePath, '');
   assert.equal(page.data.report.businessDate, '2026-09-20');
   assert.equal(calls.cloud.length, 5);
   await page.showReminderList();
   assert.equal(page.data.reminderDate, '2026-09-20');
-  await page.copyReminderList();
-  assert.equal(calls.clipboard.length, 1);
-});
-
-test('late clipboard failure cannot revive closed names or affect a newly opened reminder', async () => {
-  for (const action of ['closeReminderDialog', 'onHide', 'onUnload', 'loadTeamData', 'reopen']) {
-    const { page, calls } = createPage({ setClipboard() {} });
-    await page.onShow();
-    await page.showReminderList();
-    const oldCopy = page.copyReminderList();
-    assert.equal(calls.clipboard.length, 1, action);
-    if (action === 'reopen') {
-      page.closeReminderDialog();
-      await page.showReminderList();
-    } else await page[action]();
-    calls.clipboard[0].fail({ errMsg: 'setClipboardData:fail' });
-    await oldCopy;
-    assert.equal(calls.toasts.length, 0, action);
-    assert.equal(page.data.reminderDialogOpen, action === 'reopen', action);
-    assert.equal(page.data.reminderText, action === 'reopen' ? 'third\nmember' : '', action);
-    assert.equal(page.data.isCopyingReminder, false, action);
-  }
+  await page.previewReminderImage();
+  assert.equal(calls.previews.length, 1);
 });
 
 test('member removal requires a creator, current non-self member and confirmation', async () => {

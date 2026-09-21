@@ -87,7 +87,7 @@
           <view class="filter-chip {{todayFilter === 'attention' ? 'active' : ''}}" data-filter="attention" bindtap="changeTodayFilter">待关注 <text class="filter-count">{{attentionCount}}</text></view>
           <view class="filter-chip {{todayFilter === (hasGoal ? 'qualified' : 'practiced') ? 'active' : ''}}" data-filter="{{hasGoal ? 'qualified' : 'practiced'}}" bindtap="changeTodayFilter">{{hasGoal ? '已达标' : '已练习'}}</view>
           <view class="filter-chip {{todayFilter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeTodayFilter">全部</view>
-          <button class="reminder-button" bindtap="showReminderList" loading="{{isPreparingReminder}}" disabled="{{isPreparingReminder || isSaving || isDeleting || removingMemberId}}" aria-label="{{hasGoal ? '查看今日未达标名单' : '查看今日未练习名单'}}">提醒</button>
+          <button wx:if="{{isCreator}}" class="reminder-button" bindtap="showReminderList" loading="{{isPreparingReminder}}" disabled="{{isPreparingReminder || isSaving || isDeleting || removingMemberId}}" aria-label="{{hasGoal ? '生成今日未达标同学的卡片长图' : '生成今日未练习同学的卡片长图'}}">提醒</button>
         </view>
         <text class="list-note">{{todayFilter === 'attention' ? (hasGoal ? '先显示尚未练习的成员，再显示时长不足的成员' : '本练习日尚无练习记录的成员') : (todayFilter === 'not_practiced' ? '本练习日尚无练习记录的成员' : (todayFilter === 'below_goal' ? '本练习日累计时长未达目标的成员' : (todayFilter === 'qualified' ? '已完成本练习日目标的成员' : (todayFilter === 'practiced' ? '本练习日已有练习记录的成员' : '全体成员的当日累计练习情况'))))}}</text>
 
@@ -175,18 +175,21 @@
     <button wx:if="{{!isLoading}}" class="text-button" bindtap="goToTeamList">返回团队列表</button>
   </view>
 
-  <view wx:if="{{reminderDialogOpen}}" class="invite-overlay" bindtap="closeReminderDialog" catchtouchmove="noop">
-    <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasGoal ? '今日未达标名单' : '今日未练习名单'}}">
+  <canvas type="2d" id="reminderCanvas" class="reminder-canvas" aria-hidden="true"></canvas>
+
+  <view wx:if="{{isCreator && reminderDialogOpen}}" class="invite-overlay" bindtap="closeReminderDialog" catchtouchmove="noop">
+    <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasGoal ? '今日未达标长图' : '今日未练习长图'}}">
       <view class="invite-dialog-heading">
-        <text class="invite-dialog-title">{{hasGoal ? '今日未达标名单' : '今日未练习名单'}}</text>
-        <button class="invite-dialog-close" bindtap="closeReminderDialog" aria-label="关闭名单">×</button>
+        <text class="invite-dialog-title">{{hasGoal ? '今日未达标长图' : '今日未练习长图'}}</text>
+        <button class="invite-dialog-close" bindtap="closeReminderDialog" aria-label="关闭长图">×</button>
       </view>
       <text class="reminder-caption">{{reminderDate}} · {{reminderCount}} 位同学</text>
-      <scroll-view class="reminder-list" scroll-y="true" style="height: {{(reminderCount > 8 ? 8 : reminderCount) * 52 + 32}}rpx;">
-        <text class="reminder-names" user-select="{{true}}">{{reminderText}}</text>
+      <scroll-view class="reminder-image-scroll" scroll-y="true">
+        <image class="reminder-image" src="{{reminderImagePath}}" mode="widthFix" show-menu-by-longpress="{{true}}" bindtap="previewReminderImage" aria-label="未达标同学的练习卡片长图，点击查看大图" />
       </scroll-view>
+      <text class="reminder-image-tip">长按图片可保存或转发</text>
       <view class="invite-dialog-actions">
-        <button class="invite-dialog-share" bindtap="copyReminderList" loading="{{isCopyingReminder}}" disabled="{{isCopyingReminder}}">复制名单</button>
+        <button class="invite-dialog-share" bindtap="previewReminderImage">查看大图</button>
       </view>
     </view>
   </view>
