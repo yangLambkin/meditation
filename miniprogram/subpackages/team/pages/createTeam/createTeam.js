@@ -26,7 +26,7 @@ Page({
   data: {
     // 团队头像列表 - 只保留上传选项
     teamIcons: [
-      { id: 1, path: '/subpackages/team/images/icons/upload.png', selected: false, type: 'upload' },
+      { id: 1, path: '/subpackages/team/images/icons/upload.svg', selected: false, type: 'upload' },
     ],
     // 当前选中的团队头像
     selectedIcon: null,

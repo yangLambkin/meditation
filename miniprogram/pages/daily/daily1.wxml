@@ -34,6 +34,7 @@
           <image 
             class="main-image" 
             src="{{displayImage}}" 
+            binderror="fallbackToDefaultImage"
             show-menu-by-longpress="{{true}}"
           />
         </view>
@@ -101,7 +102,8 @@
         <view class="mt-12 flex-row justify-center items-center section" bindtap="shareToWechat">
           <image
             class="image_3"
-            src="/images/icons/share.png"
+            src="/images/icons/share.svg"
+            mode="aspectFit"
           />
           <text class="share-text ml-9">立即分享</text>
         </view>

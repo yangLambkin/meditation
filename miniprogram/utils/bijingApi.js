@@ -28,7 +28,7 @@ async function checkBijing(studentNumber) {
   return callBijingSync({ type: 'checkStudentNumber', studentNumber });
 }
 
-// 同步选中的一天；云端限制为北京时间 02:00 切日后的最近三个已结束同步日
+// 同步选中的一天；云端限制为北京时间 02:00 切日后的最近七个已结束同步日
 // 使用独立操作名，避免旧版云函数忽略日期参数后执行批量同步
 async function syncBijingDate(recordDate) {
   return callBijingSync({ type: 'syncSelectedDate', recordDate });

@@ -166,6 +166,79 @@ function normalizeRecordOptions(options) {
   return { ...value, idempotencyKey: key, source: value.source || 'timer' };
 }
 
+// 仅处理用户确认的旧记录名单：在独立快照中校验整批，再一次落盘。
+function prepareUnconfirmedUploads(userId, openid, identities) {
+  const fail = (code, message) => { const error = new Error(message); error.code = code; throw error; };
+  if (!Array.isArray(identities)) fail('INVALID_RECORD', '待上传记录名单无效，记录已保留在本机');
+  if (!identities.length) return { localIds: [], total: 0, alreadySynced: 0 };
+  if (!openid) fail('AUTH_REQUIRED', '请登录后上传本机记录');
+  const storageKey = `meditation_checkin_${userId}`;
+  const original = wx.getStorageSync(storageKey) || {};
+  const originalData = original.checkinRecords || original;
+  const data = { ...originalData, dailyRecords: Object.fromEntries(
+    Object.entries(originalData.dailyRecords || {}).map(([date, day]) => [date, {
+      ...day, records: (day.records || []).map(record => record && { ...record })
+    }])
+  ) };
+  const stored = original.checkinRecords ? { ...original, checkinRecords: data } : data;
+  const entries = Object.entries(data.dailyRecords).flatMap(([date, day]) =>
+    day.records.filter(Boolean).map(record => ({ date, record })));
+  const selected = new Set();
+  const localIds = [];
+  let changed = false;
+  let alreadySynced = 0;
+  for (const identity of identities) {
+    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
+      fail('INVALID_RECORD', '待上传记录名单无效，记录已保留在本机');
+    }
+    const matches = entries.filter(({ date, record }) => identity.localId
+      ? record.localId === identity.localId
+      : dateUtil.getRecordTimestamp(record.timestamp) === dateUtil.getRecordTimestamp(identity.timestamp) &&
+        Number(record.duration) === Number(identity.duration) &&
+        dateUtil.getRecordBusinessDate(record, date) === identity.date);
+    if (matches.length !== 1) fail('INVALID_RECORD', '记录已变更或无法唯一识别，请刷新后重试；记录已保留在本机');
+    const { record, date } = matches[0];
+    if (selected.has(record)) continue;
+    selected.add(record);
+    if ((record.syncOpenid && record.syncOpenid !== openid) || (record._openid && record._openid !== openid)) {
+      fail('ACCOUNT_CHANGED', '请切换回保存该记录时的账号后重试');
+    }
+    if (record._id) { alreadySynced++; continue; }
+    if (record.syncVersion !== 1) {
+      const timestamp = dateUtil.getRecordTimestamp(record.timestamp);
+      const duration = Number(record.duration);
+      if (!Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > Date.now() ||
+          !Number.isInteger(duration) || duration < 1 || duration > 1440) {
+        fail('INVALID_RECORD', '记录的时间或时长不完整，无法上传；记录已保留在本机');
+      }
+      const localId = record.localId || record.idempotencyKey || `legacy_${timestamp}_${Math.random().toString(36).slice(2)}`;
+      if (typeof localId !== 'string' || !localId.trim() || localId.length > 200 ||
+          entries.some(entry => entry.record !== record &&
+            (entry.record.localId === localId || entry.record.idempotencyKey === localId))) {
+        fail('INVALID_RECORD', '记录标识冲突，无法上传；记录已保留在本机');
+      }
+      Object.assign(record, {
+        localId, timestamp, duration, syncVersion: 1, syncStatus: 'pending',
+        syncOpenid: openid, syncLegacyRecovery: true,
+        source: record.source === 'manual' || record.dateSource === 'manual' ? 'manual' : 'timer',
+        date: dateUtil.getRecordBusinessDate(record, date)
+      });
+      ['syncError', 'syncErrorCode', 'syncBlocked', 'syncNextRetryAt'].forEach(key => { delete record[key]; });
+      changed = true;
+    }
+    localIds.push(record.localId);
+  }
+  if (wx.getStorageSync('localUserId') !== userId || currentUploadOpenid() !== openid) {
+    fail('ACCOUNT_CHANGED', '账号已切换，已暂停上传');
+  }
+  if (changed) {
+    wx.setStorageSync(storageKey, stored);
+    bumpUserStorageRevision(userId);
+    notifySyncState();
+  }
+  return { localIds, total: selected.size, alreadySynced };
+}
+
 // 打卡管理系统 - 本地优先架构
 const checkinManager = {
   
@@ -1024,7 +1097,7 @@ const checkinManager = {
       localData.checkinRecords.dailyRecords[dateStr].records.push({
         // 重建缓存也必须保留未确认记录的补传状态，不能把它们变成历史脏数据。
         ...Object.fromEntries(['syncVersion', 'syncStatus', 'syncOpenid', 'syncAttempts',
-          'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode']
+          'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode', 'syncLegacyRecovery']
           .filter(key => record[key] !== undefined).map(key => [key, record[key]])),
         ...(record._openid ? { syncOpenid: record._openid } : {}),
         _id: record._id,
@@ -1079,6 +1152,22 @@ const checkinManager = {
     return () => syncStateListeners.delete(listener);
   },
 
+  // 单条兼容入口与首页整批上传共用同一套显式准备规则。
+  retryUnconfirmedRecord: async function(identity = {}) {
+    const userId = this.getUserId();
+    const openid = currentUploadOpenid();
+    try {
+      const prepared = prepareUnconfirmedUploads(userId, openid, [identity]);
+      if (!prepared.localIds.length) return { success: true, uploaded: 0, alreadySynced: true };
+      const result = await this.retryPendingBackups({ localIds: prepared.localIds });
+      const confirmed = uploadEntries(userId).some(entry => prepared.localIds.includes(entry.record.localId) && entry.record._id);
+      return { ...result, success: confirmed,
+        ...(!confirmed && !result.error ? { error: '记录尚未确认上传，请稍后重试' } : {}) };
+    } catch (error) {
+      return { success: false, code: error.code, error: error.message || '记录仍在本机，请稍后重试上传' };
+    }
+  },
+
   getPendingSyncSummary: function({ date } = {}) {
     const openid = currentUploadOpenid();
     const entries = uploadEntries(this.getUserId()).filter(entry =>
@@ -1087,17 +1176,55 @@ const checkinManager = {
       failed: entries.filter(({ record }) => record.syncStatus === 'failed').length };
   },
 
+  // 预览与实际补传使用同一资格规则，包含需单独说明的不可重试记录。
+  getPendingUploadEntries: function({ date } = {}) {
+    const openid = currentUploadOpenid();
+    return uploadEntries(this.getUserId()).filter(entry =>
+      (!date || entry.date === date) && isPendingUpload(entry.record, openid) &&
+      entry.record.syncStatus !== 'uploading');
+  },
+
   // 自动入口只读云端；只有用户明确点补传按钮才会上传待处理记录。
   // 读请求与手动上传分别去重，慢读请求不能延长补传按钮的五秒期限。
-  syncWithCloud: function({ uploadPending = false } = {}) {
+  syncWithCloud: function({ uploadPending = false, localIds, unconfirmedRecords } = {}) {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
     const key = `${userId}:${openid}:${uploadPending ? 'upload' : 'read'}`;
-    if (pendingCloudSyncs.has(key)) return pendingCloudSyncs.get(key);
+    const hasLegacySelection = uploadPending && unconfirmedRecords !== undefined;
+    if (hasLegacySelection && !Array.isArray(unconfirmedRecords)) {
+      return Promise.resolve({ success: false, uploaded: 0, refreshed: false, code: 'INVALID_RECORD',
+        error: '待上传记录名单无效，记录已保留在本机' });
+    }
+    const legacySelection = hasLegacySelection ? unconfirmedRecords.map(record => record && { ...record }) : [];
+    const selectedLocalIds = Array.isArray(localIds) ? localIds.slice() : localIds;
+    // 空预览始终是无操作，不能复用另一批正在上传的结果。
+    if (uploadPending && Array.isArray(selectedLocalIds) && !selectedLocalIds.length && !legacySelection.length) {
+      return this.retryPendingBackups({ localIds }).then(result => ({ ...result, refreshed: false }));
+    }
+    if (pendingCloudSyncs.has(key)) {
+      if (legacySelection.length) return Promise.resolve({ success: false, uploaded: 0, refreshed: false,
+        code: 'UPLOAD_IN_PROGRESS', error: '正在上传另一批记录，请稍后重试；记录已保留在本机' });
+      return pendingCloudSyncs.get(key);
+    }
     const sync = (async () => {
       if (uploadPending) {
-        const result = await this.retryPendingBackups();
-        return { ...result, refreshed: false };
+        try {
+          const prepared = prepareUnconfirmedUploads(userId, openid, legacySelection);
+          const selection = hasLegacySelection
+            ? Array.from(new Set([...(Array.isArray(selectedLocalIds) ? selectedLocalIds : []), ...prepared.localIds]))
+            : selectedLocalIds;
+          if (wx.getStorageSync('localUserId') !== userId || currentUploadOpenid() !== openid) {
+            return { success: false, uploaded: 0, refreshed: false, code: 'ACCOUNT_CHANGED', error: '账号已切换，已暂停上传' };
+          }
+          const result = await this.retryPendingBackups({ localIds: selection });
+          const unconfirmed = hasLegacySelection && uploadEntries(userId).some(({ record }) =>
+            selection.includes(record.localId) && !record._id);
+          return { ...result, refreshed: false, ...(unconfirmed ? { success: false,
+            error: result.error || '部分记录尚未确认上传，请稍后重试' } : {}) };
+        } catch (error) {
+          return { success: false, uploaded: 0, refreshed: false, code: error.code,
+            error: error.message || '记录仍在本机，请稍后重试上传' };
+        }
       }
       const refreshed = await this.refreshFromCloud();
       const sameAccount = wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid;
@@ -1112,14 +1239,20 @@ const checkinManager = {
   },
 
   // 此方法仅供显式手动补传；一次操作中的所有记录共用一个五秒截止时间。
-  retryPendingBackups: function() {
+  retryPendingBackups: function({ localIds } = {}) {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
+    // 确认后固定上传名单；预览期间新产生的记录留给下次确认。
+    const selectedIds = Array.isArray(localIds) ? new Set(localIds) : null;
+    if (selectedIds && !selectedIds.size) {
+      return Promise.resolve({ success: true, total: 0, uploaded: 0, failed: 0, pending: 0 });
+    }
     const key = `${userId}:${openid}`;
     if (pendingUploadDrains.has(key)) return pendingUploadDrains.get(key);
     const uploadDeadlineAt = Date.now() + UPLOAD_TIMEOUT_MS;
     const drain = (async () => {
-      const entries = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid));
+      const entries = uploadEntries(userId).filter(({ record }) =>
+        isPendingUpload(record, openid) && (!selectedIds || selectedIds.has(record.localId)));
       const summary = { success: false, total: entries.length, uploaded: 0, failed: 0, pending: entries.length };
       if (!entries.length) return { ...summary, success: true };
       if (!openid) return { ...summary, error: '请登录后上传本机记录' };
@@ -1150,7 +1283,7 @@ const checkinManager = {
             summary.failed++;
             summary.error = result.error || '部分记录仍待上传';
             summary.code = result.code;
-            if (!['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED'].includes(result.code)) break;
+            if (!['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD'].includes(result.code)) break;
           }
         }
       } catch (error) {
@@ -1363,7 +1496,8 @@ const checkinManager = {
         emotion = record.emotion || [];
         experience = record.experience;
         timestamp = record.timestamp;
-        metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid };
+        metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid,
+          ...(record.syncLegacyRecovery ? { recoverLegacy: true } : {}) };
         updateStoredUpload(userId, localId, item => {
           item.syncStatus = 'uploading';
           delete item.syncError;
@@ -1403,7 +1537,7 @@ const checkinManager = {
             record.syncStatus = 'failed';
             record.syncAttempts = (Number(record.syncAttempts) || 0) + 1;
             delete record.syncNextRetryAt;
-            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED'].includes(record.syncErrorCode);
+            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD'].includes(record.syncErrorCode);
           }
         }
       });

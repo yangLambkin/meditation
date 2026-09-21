@@ -278,23 +278,23 @@ test('uppercase BJ numbers are trimmed and bound only after confirmation for fir
   }
 });
 
-test('recent completed sync dates turn over at Beijing 02:00 with accurate calendar-day labels', () => {
+test('seven recent completed sync dates turn over at Beijing 02:00 with accurate calendar-day labels', () => {
   for (const [now, expected, beforeCutoff] of [
-    ['2026-09-17T00:00:00+08:00', ['2026-09-15', '2026-09-14', '2026-09-13'], true],
-    ['2026-09-17T01:59:59.999+08:00', ['2026-09-15', '2026-09-14', '2026-09-13'], true],
-    ['2026-09-17T02:00:00+08:00', ['2026-09-16', '2026-09-15', '2026-09-14'], false],
-    ['2026-03-01T00:00:00+08:00', ['2026-02-27', '2026-02-26', '2026-02-25'], true],
-    ['2026-03-01T02:00:00+08:00', ['2026-02-28', '2026-02-27', '2026-02-26'], false],
-    ['2024-03-01T01:59:59+08:00', ['2024-02-28', '2024-02-27', '2024-02-26'], true],
-    ['2024-03-01T02:00:00+08:00', ['2024-02-29', '2024-02-28', '2024-02-27'], false],
-    ['2026-01-01T00:00:00+08:00', ['2025-12-30', '2025-12-29', '2025-12-28'], true],
-    ['2026-01-01T02:00:00+08:00', ['2025-12-31', '2025-12-30', '2025-12-29'], false]
+    ['2026-09-17T00:00:00+08:00', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09'], true],
+    ['2026-09-17T01:59:59.999+08:00', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09'], true],
+    ['2026-09-17T02:00:00+08:00', ['2026-09-16', '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10'], false],
+    ['2026-03-01T00:00:00+08:00', ['2026-02-27', '2026-02-26', '2026-02-25', '2026-02-24', '2026-02-23', '2026-02-22', '2026-02-21'], true],
+    ['2026-03-01T02:00:00+08:00', ['2026-02-28', '2026-02-27', '2026-02-26', '2026-02-25', '2026-02-24', '2026-02-23', '2026-02-22'], false],
+    ['2024-03-01T01:59:59+08:00', ['2024-02-28', '2024-02-27', '2024-02-26', '2024-02-25', '2024-02-24', '2024-02-23', '2024-02-22'], true],
+    ['2024-03-01T02:00:00+08:00', ['2024-02-29', '2024-02-28', '2024-02-27', '2024-02-26', '2024-02-25', '2024-02-24', '2024-02-23'], false],
+    ['2026-01-01T00:00:00+08:00', ['2025-12-30', '2025-12-29', '2025-12-28', '2025-12-27', '2025-12-26', '2025-12-25', '2025-12-24'], true],
+    ['2026-01-01T02:00:00+08:00', ['2025-12-31', '2025-12-30', '2025-12-29', '2025-12-28', '2025-12-27', '2025-12-26', '2025-12-25'], false]
   ]) {
     const { page } = createPage({ now });
     const options = page.getBijingSyncDateOptions();
     assert.deepEqual(Array.from(options, option => option.date), expected, now);
     assert.deepEqual(Array.from(options, option => option.label),
-      beforeCutoff ? ['前天', '大前天', '4天前'] : ['昨天', '前天', '大前天'], now);
+      beforeCutoff ? ['前天', '大前天', '4天前', '5天前', '6天前', '7天前', '8天前'] : ['昨天', '前天', '大前天', '4天前', '5天前', '6天前', '7天前'], now);
   }
 });
 
@@ -313,6 +313,24 @@ test('opening and canceling the picker never syncs; confirmation submits only th
   await page.confirmBijingSyncDate();
   assert.deepEqual(calls.sync, [['2026-09-15']]);
   assert.equal(page.data.bijingShowSyncDatePicker, false);
+});
+
+test('each of the seven completed dates can be previewed and synced, including the oldest', async () => {
+  for (const [now, dates] of [
+    ['2026-09-17T01:59:59+08:00', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09']],
+    ['2026-09-17T02:00:00+08:00', ['2026-09-16', '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10']]
+  ]) {
+    for (const date of dates) {
+      const { page, calls } = createPage({ now });
+      await page.syncBijingNow();
+      await page.onBijingSyncDateChange({ detail: { value: date } });
+      assert.equal(page.data.bijingSyncDate, date);
+      assert.equal(page.data.bijingSyncDetailsDate, date);
+      assert.deepEqual(calls.preview.at(-1), [date]);
+      await page.confirmBijingSyncDate();
+      assert.deepEqual(calls.sync, [[date]]);
+    }
+  }
 });
 
 test('opening and confirmation require both login and a bound student number', async () => {
@@ -336,7 +354,7 @@ test('opening and confirmation require both login and a bound student number', a
 });
 
 test('invalid selection events are ignored and tampered dates cannot reach the API', async () => {
-  for (const invalid of ['2026-09-17', '2026-09-13', '2026-09-18', 'invalid', '']) {
+  for (const invalid of ['2026-09-17', '2026-09-09', '2026-09-18', 'invalid', '']) {
     const { page, calls } = createPage();
     await page.syncBijingNow();
     page.onBijingSyncDateChange({ detail: { value: invalid } });
@@ -355,22 +373,22 @@ test('invalid selection events are ignored and tampered dates cannot reach the A
 test('crossing Beijing midnight keeps the same completed sync dates available', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-12-31T23:59:59+08:00' });
   await page.syncBijingNow();
-  await page.onBijingSyncDateChange({ detail: { value: '2026-12-28' } });
+  await page.onBijingSyncDateChange({ detail: { value: '2026-12-24' } });
   setNow('2027-01-01T00:00:01+08:00');
   await page.retryBijingSyncDetails();
   assert.deepEqual(Array.from(page.data.bijingSyncDateOptions, option => option.date),
-    ['2026-12-30', '2026-12-29', '2026-12-28']);
+    ['2026-12-30', '2026-12-29', '2026-12-28', '2026-12-27', '2026-12-26', '2026-12-25', '2026-12-24']);
   assert.deepEqual(Array.from(page.data.bijingSyncDateOptions, option => option.label),
-    ['前天', '大前天', '4天前']);
-  assert.equal(page.data.bijingSyncDate, '2026-12-28');
+    ['前天', '大前天', '4天前', '5天前', '6天前', '7天前', '8天前']);
+  assert.equal(page.data.bijingSyncDate, '2026-12-24');
   await page.confirmBijingSyncDate();
-  assert.deepEqual(calls.sync, [['2026-12-28']]);
+  assert.deepEqual(calls.sync, [['2026-12-24']]);
 });
 
 test('crossing Beijing 02:00 refreshes an expired selection across year and month boundaries', async () => {
   for (const [before, after, oldest, expected] of [
-    ['2027-01-01T01:59:59+08:00', '2027-01-01T02:00:00+08:00', '2026-12-28', ['2026-12-31', '2026-12-30', '2026-12-29']],
-    ['2026-03-01T01:59:59+08:00', '2026-03-01T02:00:00+08:00', '2026-02-25', ['2026-02-28', '2026-02-27', '2026-02-26']]
+    ['2027-01-01T01:59:59+08:00', '2027-01-01T02:00:00+08:00', '2026-12-24', ['2026-12-31', '2026-12-30', '2026-12-29', '2026-12-28', '2026-12-27', '2026-12-26', '2026-12-25']],
+    ['2026-03-01T01:59:59+08:00', '2026-03-01T02:00:00+08:00', '2026-02-21', ['2026-02-28', '2026-02-27', '2026-02-26', '2026-02-25', '2026-02-24', '2026-02-23', '2026-02-22']]
   ]) {
     const { page, calls, setNow } = createPage({ now: before });
     await page.syncBijingNow();
@@ -592,10 +610,10 @@ test('retry is ignored while preview is loading or the date picker is closed', a
 test('retry after Beijing 02:00 replaces an expired date and loads the refreshed default preview', async () => {
   const { page, calls, setNow } = createPage({
     now: '2027-01-01T01:59:59+08:00',
-    preview: date => date === '2026-12-28' ? { success: false, error: '读取失败' } : previewResult(date)
+    preview: date => date === '2026-12-24' ? { success: false, error: '读取失败' } : previewResult(date)
   });
   await page.syncBijingNow();
-  await page.onBijingSyncDateChange({ detail: { value: '2026-12-28' } });
+  await page.onBijingSyncDateChange({ detail: { value: '2026-12-24' } });
   assert.equal(page.data.bijingSyncDetailsError, '读取失败');
   setNow('2027-01-01T02:00:00+08:00');
   await page.retryBijingSyncDetails();
@@ -603,7 +621,7 @@ test('retry after Beijing 02:00 replaces an expired date and loads the refreshed
   assert.equal(page.data.bijingSyncDetailsDate, '2026-12-31');
   assert.equal(page.data.bijingSyncDetailsError, '');
   assert.deepEqual(Array.from(page.data.bijingSyncDateOptions, option => option.date),
-    ['2026-12-31', '2026-12-30', '2026-12-29']);
+    ['2026-12-31', '2026-12-30', '2026-12-29', '2026-12-28', '2026-12-27', '2026-12-26', '2026-12-25']);
   assert.deepEqual(calls.preview.at(-1), ['2026-12-31']);
   assert.equal(calls.sync.length, 0);
 });

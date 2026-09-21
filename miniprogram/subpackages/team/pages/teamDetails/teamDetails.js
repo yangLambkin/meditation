@@ -1,6 +1,7 @@
 const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
+const { buildReminderText } = require('../../utils/reminderText.js');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const statusLabels = { not_practiced: '尚未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 
@@ -29,7 +30,9 @@ Page({
     draftPracticeRulesEnabled: false,
     settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '',
     isPreparingInvite: false, inviteReady: false, inviteError: '',
-    inviteDialogOpen: false, inviteExpiresLabel: ''
+    inviteDialogOpen: false, inviteExpiresLabel: '',
+    isPreparingReminder: false, isCopyingReminder: false,
+    reminderDialogOpen: false, reminderText: '', reminderCount: 0, reminderDate: ''
   },
 
   onLoad(options = {}) {
@@ -45,6 +48,7 @@ Page({
 
   onHide() {
     this._isVisible = false;
+    this.cancelReminder();
     this._editVisibilityVersion = (this._editVisibilityVersion || 0) + 1;
     this._loadVersion = (this._loadVersion || 0) + 1;
     this.resetInvitation({ keepPrepared: true });
@@ -54,6 +58,7 @@ Page({
 
   onUnload() {
     this.resetInvitation();
+    this.cancelReminder();
     this._unloaded = true;
     this._isVisible = false;
     this._loadVersion = (this._loadVersion || 0) + 1;
@@ -99,6 +104,7 @@ Page({
     }
     if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingTeamId === teamId) return;
+    this.cancelReminder();
     const version = this._loadVersion = (this._loadVersion || 0) + 1;
     this._loadingOpenid = openid;
     this._loadingTeamId = teamId;
@@ -276,6 +282,87 @@ Page({
     if (!['attention', 'all', 'not_practiced', 'below_goal', 'qualified', 'practiced'].includes(filter)) return;
     this.setData({ todayFilter: filter, currentTab: 'records', recordTab: 'today' });
     if (this.data.report) this.updateTodayMembers();
+  },
+
+  cancelReminder() {
+    this._reminderVersion = (this._reminderVersion || 0) + 1;
+    this._reminderContext = null;
+    if (!this._unloaded) this.setData({ isPreparingReminder: false, isCopyingReminder: false,
+      reminderDialogOpen: false, reminderText: '', reminderCount: 0, reminderDate: '' });
+  },
+
+  closeReminderDialog() {
+    this.cancelReminder();
+  },
+
+  async showReminderList() {
+    const { teamId, teamInfo, isMember } = this.data;
+    const openid = wx.getStorageSync('userOpenId');
+    if (this._unloaded || !this._isVisible || !isMember || !teamInfo || teamInfo._id !== teamId ||
+        !openid || this._viewerOpenid !== openid || this._viewerTeamId !== teamId ||
+        !this.data.report || this.data.isLoading || this.data.isPreparingReminder ||
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
+    this.cancelReminder();
+    const version = this._reminderVersion;
+    const loadVersion = this._loadVersion;
+    const isCurrent = () => !this._unloaded && this._isVisible && version === this._reminderVersion &&
+      loadVersion === this._loadVersion && this.data.teamId === teamId && this.data.isMember &&
+      wx.getStorageSync('userOpenId') === openid && !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId;
+    this.setData({ isPreparingReminder: true });
+    try {
+      // 名单包含全体待提醒成员，不受当前列表筛选影响；打开前重新获取云端统计。
+      const report = await this.callTeam('getTeamPracticeReport', { teamId });
+      if (!isCurrent()) return;
+      this.applyReport(report);
+      this.scheduleReset(report.nextResetAt);
+      const hasGoal = report.settings.dailyGoalMinutes !== null;
+      const members = report.members.filter(member => member.todayStatus === 'not_practiced' ||
+        (hasGoal && member.todayStatus === 'below_goal'));
+      if (!members.length) {
+        wx.showToast({ title: hasGoal ? '今天大家都已达标' : '今天大家都已练习', icon: 'none' });
+        return;
+      }
+      const reminder = buildReminderText({ report });
+      if (report.nextResetAt <= Date.now()) {
+        wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });
+        await this.loadTeamData();
+        return;
+      }
+      this._reminderContext = { teamId, openid, nextResetAt: report.nextResetAt };
+      this.setData({ reminderDialogOpen: true, reminderText: reminder.text,
+        reminderCount: reminder.memberCount, reminderDate: report.businessDate });
+    } catch (error) {
+      if (isCurrent()) wx.showModal({ title: '名单加载失败', content: error.message || '请稍后重试', showCancel: false });
+    } finally {
+      if (!this._unloaded && version === this._reminderVersion) this.setData({ isPreparingReminder: false });
+    }
+  },
+
+  async copyReminderList() {
+    const context = this._reminderContext;
+    if (!context || this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
+        !this.data.reminderText || this.data.isCopyingReminder || !this.data.isMember ||
+        this.data.teamId !== context.teamId || this._viewerOpenid !== context.openid ||
+        wx.getStorageSync('userOpenId') !== context.openid || this.data.isLoading ||
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
+    if (context.nextResetAt <= Date.now()) {
+      this.closeReminderDialog();
+      wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });
+      await this.loadTeamData();
+      return;
+    }
+    const isCurrent = () => !this._unloaded && this._isVisible && this._reminderContext === context &&
+      this.data.teamId === context.teamId && wx.getStorageSync('userOpenId') === context.openid;
+    this.setData({ isCopyingReminder: true });
+    try {
+      await new Promise((resolve, reject) => wx.setClipboardData({
+        data: this.data.reminderText, success: resolve, fail: reject
+      }));
+    } catch (error) {
+      if (isCurrent()) wx.showToast({ title: '复制失败，请重试', icon: 'none' });
+    } finally {
+      if (isCurrent()) this.setData({ isCopyingReminder: false });
+    }
   },
 
   openHistoryDetails(event) {

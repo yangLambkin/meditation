@@ -31,14 +31,15 @@ Page({
         text, uniqueId: this._submissionId, timestamp: this._timestamp,
         duration: `${this.data.duration}分钟`, emotion: []
       }] : [];
-      const result = await checkinManager.recordCheckinWithSync(this.data.duration, [], experience, this._timestamp, {
+      // 本机保存成功后立即返回首页，上传状态由首页列表展示。
+      const result = checkinManager.recordCheckin(this.data.duration, [], experience, this._timestamp, {
         idempotencyKey: this._submissionId, source: 'manual'
       });
       if (!result || !result.success) throw new Error((result && result.error) || '保存失败，请重试');
       this.setData({ completed: true });
       wx.showToast({
-        title: result.cloudSynced ? '上传成功' : '已存本机，请手动上传',
-        icon: result.cloudSynced ? 'success' : 'none'
+        title: '已保存到本机',
+        icon: 'success'
       });
       wx.switchTab({ url: '/pages/index/index' });
     } catch (error) {

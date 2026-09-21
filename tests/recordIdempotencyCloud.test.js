@@ -137,6 +137,151 @@ test('same client identity is scoped to the authenticated account', async () => 
   assert.equal(app.stats.length, 2);
 });
 
+test('explicit legacy recovery acknowledges an existing cloud record without duplicating duration or replacing experience', async () => {
+  const timestamp = Date.parse('2026-09-20T00:35:00+08:00');
+  for (const storedTimestamp of [timestamp, String(timestamp), '2026-09-20T00:35:00+08:00']) {
+    const app = harness({ records: [{ _id: 'old-cloud', _openid: 'owner', date: '2026-09-20',
+      timestamp: storedTimestamp, duration: 45, experience: [{ text: '原始心得' }] }],
+    stats: [{ _id: 'stats', _openid: 'owner', totalCount: 1, totalDuration: 45 }] });
+    const before = { records: app.records, stats: app.stats };
+    const result = await app.record({ recoverLegacy: true, localId: 'old-local', timestamp, duration: 45,
+      expectedOpenid: 'owner', experience: [{ text: '本机心得' }] });
+    assert.equal(result.success, true);
+    assert.equal(result.data.recordId, 'old-cloud');
+    assert.equal(result.data.date, '2026-09-19');
+    assert.equal(result.data.duplicate, true);
+    assert.deepEqual({ records: app.records, stats: app.stats }, before);
+  }
+});
+
+test('explicit recovery of a missing legacy record remains idempotent across concurrent attempts', async () => {
+  const app = harness({ now: '2026-09-21T10:15:00+08:00' });
+  const data = { recoverLegacy: true, localId: 'september-19-local',
+    timestamp: Date.parse('2026-09-19T08:35:00+08:00'), duration: 45 };
+  const results = await Promise.all(Array.from({ length: 5 }, () => app.record(data)));
+  assert.ok(results.every(result => result.success));
+  assert.equal(new Set(results.map(result => result.data.recordId)).size, 1);
+  assert.equal(app.records.length, 1);
+  assert.equal(app.stats[0].totalCount, 1);
+  assert.equal(app.stats[0].totalDuration, 45);
+});
+
+test('legacy recovery refuses ambiguous cloud matches without writing records or statistics', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  const app = harness({ records: ['first', 'second'].map(_id => ({
+    _id, _openid: 'owner', timestamp, date: '2026-09-19', duration: 45
+  })) });
+  const before = { records: app.records, stats: app.stats };
+  const result = await app.record({ recoverLegacy: true, localId: 'old-local', timestamp, duration: 45 });
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'AMBIGUOUS_RECORD');
+  assert.deepEqual({ records: app.records, stats: app.stats }, before);
+});
+
+test('ordinary uploads still keep a new identity separate from old cloud records at the same time', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  for (const cloudIdentity of [{}, { localId: 'other-local' }, { idempotencyKey: 'other-key' }]) {
+    const app = harness({ records: [{ _id: 'old-cloud', _openid: 'owner', timestamp,
+      date: '2026-09-19', duration: 45, ...cloudIdentity }] });
+    const result = await app.record({ localId: 'new-local', timestamp, duration: 45 });
+    assert.equal(result.success, true);
+    assert.equal(result.data.duplicate, false);
+    assert.notEqual(result.data.recordId, 'old-cloud');
+    assert.equal(app.records.length, 2);
+    assert.equal(app.stats[0].totalCount, 2);
+    assert.equal(app.stats[0].totalDuration, 90);
+  }
+});
+
+test('explicit recovery cannot recreate or absorb an exact cloud match with a different identity', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  for (const cloudIdentity of [{ localId: 'other-local' }, { idempotencyKey: 'other-key' }]) {
+    const app = harness({ records: [{ _id: 'old-cloud', _openid: 'owner', timestamp,
+      date: '2026-09-19', duration: 45, ...cloudIdentity }] });
+    const before = { records: app.records, stats: app.stats };
+    const result = await app.record({ recoverLegacy: true, localId: 'new-local', timestamp, duration: 45 });
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'AMBIGUOUS_RECORD');
+    assert.match(result.error, /核对/);
+    assert.deepEqual({ records: app.records, stats: app.stats }, before);
+  }
+});
+
+test('an unkeyed exact match beside a differently keyed exact match remains ambiguous', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  const app = harness({ records: [
+    { _id: 'unkeyed-cloud', _openid: 'owner', timestamp, date: '2026-09-19', duration: 45 },
+    { _id: 'keyed-cloud', _openid: 'owner', timestamp, date: '2026-09-19', duration: 45, localId: 'original-key' }
+  ] });
+  const before = { records: app.records, stats: app.stats };
+  const ambiguous = await app.record({ recoverLegacy: true, localId: 'recovered-local', timestamp, duration: 45 });
+  assert.equal(ambiguous.success, false);
+  assert.equal(ambiguous.code, 'AMBIGUOUS_RECORD');
+  assert.deepEqual({ records: app.records, stats: app.stats }, before);
+  // A known identity still confirms its own record even beside identical legacy rows.
+  const identified = await app.record({ recoverLegacy: true, localId: 'original-key', timestamp, duration: 45 });
+  assert.equal(identified.success, true);
+  assert.equal(identified.data.recordId, 'keyed-cloud');
+  assert.equal(identified.data.duplicate, true);
+  assert.deepEqual({ records: app.records, stats: app.stats }, before);
+});
+
+test('pre-September legacy uploads with server-generated timestamps cannot be counted twice', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  // The July client sent no timestamp: its local save time and the server's
+  // upload time differed, and delayed background uploads could differ by hours.
+  for (const delay of [1, 500, 60000, 12 * 3600000]) {
+    const app = harness({ records: [{ _id: 'july-client-cloud-record', _openid: 'owner',
+      timestamp: new Date(timestamp + delay).toISOString(), date: '2026-09-19', duration: 45 }],
+    stats: [{ _id: 'stats', _openid: 'owner', totalCount: 1, totalDuration: 45 }] });
+    const before = { records: app.records, stats: app.stats };
+    const result = await app.record({ recoverLegacy: true, localId: 'recovered-local', timestamp, duration: 45 });
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'AMBIGUOUS_RECORD');
+    assert.match(result.error, /核对/);
+    assert.deepEqual({ records: app.records, stats: app.stats }, before);
+  }
+});
+
+test('legacy recovery does not conflate a different account, duration or business date', async () => {
+  const timestamp = Date.parse('2026-09-19T08:35:00+08:00');
+  for (const mismatch of [{ _openid: 'another-owner' }, { duration: 44 },
+    { source: 'manual', date: '2026-09-18' }]) {
+    const app = harness({ records: [{ _id: 'different-record', _openid: 'owner', timestamp,
+      date: '2026-09-19', duration: 45, ...mismatch }] });
+    const result = await app.record({ recoverLegacy: true, localId: 'old-local', timestamp, duration: 45 });
+    assert.equal(result.success, true);
+    assert.equal(result.data.duplicate, false);
+    assert.notEqual(result.data.recordId, 'different-record');
+    assert.equal(app.records.length, 2);
+  }
+});
+
+test('legacy recovery needs a stable identity and rejects account changes before any writes', async () => {
+  const app = harness();
+  assert.equal((await app.record({ recoverLegacy: true, duration: 45 })).code, 'INVALID_RECORD');
+  assert.equal((await app.record({ recoverLegacy: true, localId: 'old-local', duration: 45,
+    expectedOpenid: 'another-owner' })).code, 'ACCOUNT_CHANGED');
+  assert.equal(app.records.length, 0);
+  assert.equal(app.stats.length, 0);
+});
+
+test('legacy manual recovery acknowledges existing old records but cannot bypass the backfill window for missing records', async () => {
+  const timestamp = Date.parse('2026-09-01T08:35:00+08:00');
+  const data = { recoverLegacy: true, localId: 'old-local', timestamp, duration: 45,
+    dateSource: 'manual', date: '2026-09-01' };
+  const existing = harness({ records: [{ _id: 'old-cloud', _openid: 'owner', timestamp,
+    duration: 45, dateSource: 'manual', date: '2026-09-01' }] });
+  const result = await existing.record(data);
+  assert.equal(result.success, true);
+  assert.equal(result.data.recordId, 'old-cloud');
+  assert.equal(result.data.duplicate, true);
+  const missing = harness();
+  assert.equal((await missing.record(data)).code, 'DATE_OUT_OF_RANGE');
+  assert.equal(missing.records.length, 0);
+  assert.equal(missing.stats.length, 0);
+});
+
 test('a stats or transaction failure rolls back the record and retry can succeed once', async () => {
   for (const failure of ['failStats', 'failCommit']) {
     const options = { [failure]: true };

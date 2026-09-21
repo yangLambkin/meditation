@@ -1,6 +1,6 @@
 const lunarUtil = require('../../utils/lunar.js');
 const checkinManager = require('../../utils/checkin.js');
-const imageConfig = require('../../config/images.js');
+const dailyCardImage = require('../../utils/dailyCardImage.js');
 const badgeManager = require('../../utils/badgeManager.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
@@ -9,24 +9,21 @@ const dailyWisdom = require('../../utils/dailyWisdom.js');
 Page({
   data: {
     wisdomQuote: dailyWisdom.DEFAULT_QUOTE,
-    // displayImage 由云存储异步加载，加载完成前用 1x1 透明 gif 占位，避免裂图/闪烁
-    // 其余字段（日期/用户/统计/勋章）均在 onLoad 中同步填充，无需占位初值
-    displayImage: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+    // 未预热时先显示本地卡片，云图片下载完成后再替换。
+    displayImage: dailyCardImage.DEFAULT_IMAGE
   },
 
   onLoad(options) {
+    this._isUnloaded = false;
+    this._initialShowPending = true;
     // 1. 立即同步设置当前日期，避免首屏闪现默认日期 23（日期设置不应依赖异步图片预加载）
     this.setCurrentDateInfo();
 
     // 2. 预加载随机图片（仅影响 displayImage，不阻塞日期）
-    this.preloadRandomImage().then(() => {
-      // 图片预加载成功，displayImage 已在 preloadRandomImage 内设置
-    }).catch(error => {
+    this.preloadRandomImage().catch(error => {
       // 如果预加载失败，降级到默认图片
       console.warn('图片预加载失败，使用默认图片:', error);
-      this.setData({
-        displayImage: '/images/p1.png'
-      });
+      this.fallbackToDefaultImage();
     });
 
     console.log('开始预加载图片，避免闪烁');
@@ -36,16 +33,18 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    this._isPageVisible = true;
     console.log('=== daily1页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
       this.setData({ wisdomQuote: content });
     });
     
-    // 重新获取用户数据，确保显示最新的登录状态
-    this.getUserData();
-    // 返回页面或保持前台跨过 02:00 时同时刷新日期和当日统计。
-    this.setCurrentDateInfo();
+    // 首次 onLoad 已同步刷新日期、用户和统计；返回页面时再刷新。
+    if (!this._initialShowPending || this._displayedBusinessDate !== dateUtil.getBusinessDate()) {
+      this.setCurrentDateInfo();
+    }
+    this._initialShowPending = false;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => this.setCurrentDateInfo());
     
@@ -56,7 +55,8 @@ Page({
    * 设置当前日期信息
    */
   setCurrentDateInfo: function() {
-    const [year, month, day] = dateUtil.getBusinessDate().split('-').map(Number);
+    this._displayedBusinessDate = dateUtil.getBusinessDate();
+    const [year, month, day] = this._displayedBusinessDate.split('-').map(Number);
     const today = new Date(year, month - 1, day, 12);
     
     // 获取英文月份名称
@@ -94,110 +94,31 @@ Page({
   },
 
   /**
-   * 预加载随机图片 - 避免页面闪烁
+   * 消费计时完成时预热的图片，直接进入日签时也复用相同的下载流程。
    */
-  preloadRandomImage: async function() {
-    try {
-      console.log('🎯 开始预加载随机图片...');
-      
-      // 从配置文件获取随机图片信息
-      const randomImageInfo = imageConfig.getRandomDailyPokerImage();
-      
-      if (randomImageInfo.isDefault) {
-        console.warn('⚠️ 没有可用的图片，使用默认图片');
-        return Promise.reject(new Error('No available images'));
-      }
-      
-      console.log('🎲 预加载图片:', randomImageInfo.filename);
-      
-      // 初始化云开发环境
-      wx.cloud.init({
-        env: 'cloud1-2g2rbxbu2c126d4a'
-      });
-      
-      // 转换为可访问的URL
-      const urlResult = await wx.cloud.getTempFileURL({
-        fileList: [randomImageInfo.fileID]
-      });
-      
-      if (urlResult.fileList && urlResult.fileList.length > 0 && urlResult.fileList[0].tempFileURL) {
-        const imageUrl = urlResult.fileList[0].tempFileURL;
-        
-        // 更新页面图片（在预加载阶段就设置，避免闪烁）
-        this.setData({
-          displayImage: imageUrl
-        });
-        
-        console.log('✅ 图片预加载成功，URL长度:', imageUrl.length);
-        return imageUrl;
-      } else {
-        console.warn('⚠️ 图片URL转换失败');
-        return Promise.reject(new Error('URL conversion failed'));
-      }
-      
-    } catch (error) {
-      console.error('❌ 图片预加载失败:', error);
-      return Promise.reject(error);
+  preloadRandomImage: function() {
+    const image = dailyCardImage.takeNextImage();
+    if (image.path) {
+      if (!this._isUnloaded) this.setData({ displayImage: image.path });
+      return image.promise;
     }
+    return image.promise.then(path => {
+      if (!this._isUnloaded) this.setData({ displayImage: path });
+      return path;
+    });
+  },
+
+  getRandomImage: function() {
+    return this.preloadRandomImage();
   },
 
   /**
-   * 高性能随机图片获取 - 配置文件方案（最佳实践）
-   * 使用单独的配置文件管理图片列表
-   * 注意：此函数已由预加载机制替代，保留作为备用
-   */
-  getRandomImage: async function() {
-    try {
-      console.log('🎯 备用方案：重新获取随机图片...');
-      
-      // 从配置文件获取随机图片信息
-      const randomImageInfo = imageConfig.getRandomDailyPokerImage();
-      
-      if (randomImageInfo.isDefault) {
-        console.warn('⚠️ 没有可用的图片，使用默认图片');
-        this.fallbackToDefaultImage();
-        return;
-      }
-      
-      // 初始化云开发环境
-      wx.cloud.init({
-        env: 'cloud1-2g2rbxbu2c126d4a'
-      });
-      
-      // 转换为可访问的URL
-      const urlResult = await wx.cloud.getTempFileURL({
-        fileList: [randomImageInfo.fileID]
-      });
-      
-      if (urlResult.fileList && urlResult.fileList.length > 0 && urlResult.fileList[0].tempFileURL) {
-        const imageUrl = urlResult.fileList[0].tempFileURL;
-        
-        // 更新页面图片
-        this.setData({
-          displayImage: imageUrl
-        });
-        
-        console.log('✅ 备用图片设置成功');
-      } else {
-        console.warn('⚠️ 图片URL转换失败，使用默认图片');
-        this.fallbackToDefaultImage();
-      }
-      
-    } catch (error) {
-      console.error('❌ 获取备用图片失败:', error);
-      // 降级处理
-      this.fallbackToDefaultImage();
-    }
-  },
-
-  /**
-   * 降级到默认图片
+   * 图片读取失败时使用本地卡片，避免临时文件失效造成裂图。
    */
   fallbackToDefaultImage: function() {
-    this.setData({
-      displayImage: '/images/p1.png'
-    });
-    console.log('使用默认图片:', '/images/p1.png');
+    if (!this._isUnloaded && this.data.displayImage !== dailyCardImage.DEFAULT_IMAGE) {
+      this.setData({ displayImage: dailyCardImage.DEFAULT_IMAGE });
+    }
   },
 
   /**
@@ -316,15 +237,19 @@ Page({
    * 显示个人信息设置提示
    */
   showProfileHint: function() {
+    if (this._profileHintTimer || this._profileHintShown || this._isUnloaded) return;
     // 延迟显示提示，避免影响页面加载
-    setTimeout(() => {
+    this._profileHintTimer = setTimeout(() => {
+      this._profileHintTimer = null;
+      if (!this._isPageVisible || this._isUnloaded) return;
+      this._profileHintShown = true;
       wx.showModal({
         title: '完善个人信息',
         content: '设置个性化昵称和头像，享受更好的冥想体验',
         confirmText: '立即设置',
         cancelText: '稍后再说',
         success: (res) => {
-          if (res.confirm) {
+          if (res.confirm && this._isPageVisible && !this._isUnloaded) {
             // 跳转到个人信息设置页面
             wx.navigateTo({
               url: '/pages/profile/profile?type=new&from=daily'
@@ -465,6 +390,10 @@ Page({
 
 
   onHide() {
+    this._isPageVisible = false;
+    this._initialShowPending = false;
+    if (this._profileHintTimer) clearTimeout(this._profileHintTimer);
+    this._profileHintTimer = null;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
@@ -473,6 +402,10 @@ Page({
 
   // 重写页面返回逻辑
   onUnload() {
+    this._isUnloaded = true;
+    this._isPageVisible = false;
+    if (this._profileHintTimer) clearTimeout(this._profileHintTimer);
+    this._profileHintTimer = null;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();

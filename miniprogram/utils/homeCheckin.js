@@ -67,12 +67,15 @@ function parseDateTime(date, time) {
 
 function getRecordSyncState(record) {
   if (record._id) return {};
-  // 旧本机记录仅提示来源，不推断它应当补传或给它加上新版上传标记。
+  // 旧本机记录在首页统一预览后确认，不因展示列表就加上新版上传标记。
   if (record.syncVersion !== 1) {
     return { syncStatus: 'unconfirmed', syncStatusText: '本机记录，未确认上传' };
   }
   if (record.syncErrorCode === 'DATE_OUT_OF_RANGE') {
     return { syncStatus: 'blocked', syncStatusText: '已存本机，已超出补录期限，无法上传' };
+  }
+  if (record.syncErrorCode === 'AMBIGUOUS_RECORD') {
+    return { syncStatus: 'blocked', syncStatusText: '已存本机，云端有相似记录，请核对' };
   }
   if (record.syncBlocked) {
     return { syncStatus: 'blocked', syncStatusText: '已存本机，记录无法上传，请核对记录' };
@@ -100,7 +103,8 @@ function buildCheckinRecords(userData, experienceRecords = [], { openid } = {}) 
     const day = dailyRecords[date] || {};
     (Array.isArray(day.records) ? day.records : []).forEach((record, index) => {
       if (!record) return;
-      if (openid && record.syncOpenid && record.syncOpenid !== openid) return;
+      if (openid && ((record.syncOpenid && record.syncOpenid !== openid) ||
+          (record._openid && record._openid !== openid))) return;
       const timestamp = dateUtil.getRecordTimestamp(record.timestamp);
       const hasTime = Number.isFinite(timestamp) && timestamp > 0;
       const dateTime = hasTime ? getDateTime(timestamp) : null;

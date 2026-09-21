@@ -335,17 +335,17 @@ async function cronSyncAll() {
   return { success: true, data: { date: yesterday, total, success, failed } };
 }
 
-// 手动同步仅允许最近三个已在次日 02:00 结束的同步日。
+// 手动同步仅允许最近七个已在次日 02:00 结束的同步日。
 // 每次请求只取一次当前时间，避免跨 02:00 时生成不一致的日期范围。
 function getRecentSyncDates(now = Date.now()) {
-  return [1, 2, 3].map(daysAgo => getSyncBusinessDate(now - daysAgo * DAY_MS));
+  return Array.from({ length: 7 }, (_, index) => getSyncBusinessDate(now - (index + 1) * DAY_MS));
 }
 
 function validateManualSyncDate(openid, recordDate) {
   if (!openid) return '用户未登录';
   const allowedDates = getRecentSyncDates();
   if (typeof recordDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || !allowedDates.includes(recordDate)) {
-    return '仅支持同步最近三天已结束的数据（北京时间次日凌晨2点结束）';
+    return '仅支持同步最近七天已结束的数据（北京时间次日凌晨2点结束）';
   }
   return null;
 }
@@ -392,7 +392,7 @@ async function manualSyncSelectedDate(openid, recordDate) {
       return { success: false, error: '尚未绑定学号' };
     }
 
-    // 不受绑定时间限制，刚绑定的用户也可以补同步最近三天。
+    // 不受绑定时间限制，刚绑定的用户也可以补同步最近七天。
     // 复用 syncDate 的幂等上报与无数据处理，不清除已有同步状态。
     const result = await syncDate(openid, recordDate);
     if (result.success === false) {
@@ -405,7 +405,7 @@ async function manualSyncSelectedDate(openid, recordDate) {
   }
 }
 
-// ===== 兼容旧版手动同步：重新上报最近三个已结束日期的数据 =====
+// ===== 兼容旧版手动同步：重新上报最近七个已结束日期的数据 =====
 // 无需 force 即可重复同步；旧版传入的 force 不清除状态，也不扩大日期范围。
 async function manualSyncPending(openid) {
   if (!openid) return { success: false, error: '用户未登录' };

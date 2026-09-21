@@ -20,6 +20,11 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     static now() { return currentTime; }
   }
   const checkinManager = {
+    getUserId: () => 'local-home',
+    getPendingUploadEntries: () => Object.entries(dailyRecords).flatMap(([date, day]) =>
+      (day.records || []).filter(record => record.syncVersion === 1 && !record._id &&
+        record.syncStatus !== 'uploading' && (!record.syncOpenid || record.syncOpenid === openid))
+        .map(record => ({ date, record }))),
     getPendingSyncSummary: () => ({ total: pending, pending, failed: 0 }),
     syncWithCloud: options => {
       calls.sync.push(options);
@@ -46,11 +51,13 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     getUserCheckinData: () => { calls.userDataReads++; return { dailyRecords }; },
     getDailyCheckinCountSync: date => dailyRecords[date] ? dailyRecords[date].count : 0,
     getExperienceRecordsFromLocal: ids => experiences.filter(value => ids.includes(value._id || value.uniqueId)),
-    recordCheckin: () => { throw new Error('page must await cloud confirmation'); },
-    recordCheckinWithSync: async (...args) => {
+    recordCheckin: (...args) => {
       calls.record.push(args);
+      return record ? record(...args) : { success: true };
+    },
+    recordCheckinWithSync: (...args) => {
       calls.blockingRecord.push(args);
-      return record ? record(...args) : { success: true, cloudSynced: true };
+      throw new Error('page must complete after the local save without waiting for cloud confirmation');
     }
   };
   const wx = {
@@ -90,6 +97,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     Date: Clock,
     wx,
     console,
+    setTimeout() {},
     setInterval(callback, milliseconds) {
       const id = nextInterval++;
       intervals.set(id, { callback, milliseconds });
@@ -108,6 +116,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
   };
   return { page, calls, intervals, subscribers, setNow: value => { currentTime = Date.parse(value); },
     setPending(value) { pending = value; },
+    setOpenid(value) { openid = value; },
     publishSyncState() { for (const callback of subscribers) callback(); }
   };
 }
@@ -129,63 +138,63 @@ function makeRecords(count, startAt = '2026-09-17T04:10:00+08:00') {
   return dailyRecords;
 }
 
-test('home waits for cloud confirmation without flashing pending and blocks repeated taps', async () => {
-  let finish;
-  const { page, calls } = createPage({ record: () => new Promise(resolve => { finish = resolve; }) });
+function makePendingRecords(count) {
+  return { '2026-09-16': { records: Array.from({ length: count }, (_, index) => ({
+    localId: `pending-${index}`, timestamp: Date.parse('2026-09-16T06:32:00+08:00') + index * 60000,
+    duration: 7, syncVersion: 1, syncStatus: 'failed'
+  })) } };
+}
+
+test('home completes immediately after the local save and blocks repeated taps', async () => {
+  const { page, calls } = createPage();
   page.openCheckinModal();
   const saving = page.submitCheckin();
-  assert.equal(page.data.checkinSubmitting, true);
-  assert.equal(page.data.showCheckinModal, true);
-  assert.equal(calls.blockingRecord.length, 1);
-  assert.equal(calls.toast.length, 0);
-  await page.submitCheckin();
-  assert.equal(calls.record.length, 1);
-  finish({ success: true, cloudSynced: true });
-  await saving;
   assert.equal(page.data.checkinSubmitting, false);
   assert.equal(page.data.showCheckinModal, false);
+  assert.equal(calls.blockingRecord.length, 0);
   assert.equal(calls.refresh, 1);
-  assert.equal(calls.toast.at(-1).title, '打卡成功');
-  assert.equal(calls.toast.at(-1).icon, 'success');
-});
-
-test('home keeps failed or timed-out initial uploads local and offers only manual retry', async () => {
-  for (const code of ['NETWORK_ERROR', 'CLOUD_TIMEOUT']) {
-    const { page, calls } = createPage({ record: () => ({ success: true, cloudSynced: false, syncErrorCode: code }) });
-    page.openCheckinModal();
-    await page.submitCheckin();
-    assert.equal(page.data.checkinSubmitting, false);
-    assert.equal(page.data.showCheckinModal, false);
-    assert.equal(calls.toast.at(-1).title, code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : '已存本机，待上传');
-    assert.equal(calls.toast.at(-1).icon, 'none');
-    assert.equal(calls.retry.length, 0);
-  }
+  assert.equal(calls.toast.length, 1);
+  assert.equal(calls.toast[0].title, '已保存');
+  assert.equal(calls.toast[0].icon, 'success');
+  await page.submitCheckin();
+  await saving;
+  assert.equal(calls.record.length, 1);
+  assert.equal(calls.toast.length, 1);
+  assert.equal(calls.retry.length, 0);
 });
 
 test('home retry forces the existing upload queue, refreshes status and blocks double taps', async () => {
   let completeUpload;
-  const app = createPage({ pending: 2, retry: () => new Promise(resolve => { completeUpload = resolve; }) });
+  const app = createPage({ pending: 2, dailyRecords: makePendingRecords(2), openid: 'oz-home',
+    retry: () => new Promise(resolve => { completeUpload = resolve; }) });
   const { page, calls, setPending } = app;
   page.refreshCheckinRecords();
   assert.equal(page.data.pendingCheckinCount, 2);
+  page.openCheckinUploadPreview();
+  assert.equal(calls.retry.length, 0);
   const uploading = page.retryCheckinUploads();
   assert.equal(page.data.checkinRetrying, true);
+  page.closeCheckinUploadPreview();
+  assert.equal(page.data.showCheckinUploadPreview, true, 'keep the upload list visible while uploading');
   await page.retryCheckinUploads();
   assert.equal(calls.retry.length, 1);
   assert.equal(calls.retry[0].force, true);
   assert.equal(calls.retry[0].uploadPending, true);
+  assert.deepEqual(Array.from(calls.retry[0].localIds), ['pending-1', 'pending-0']);
   assert.equal(calls.record.length, 0, 'retry must not create another check-in');
   setPending(0);
   completeUpload({ success: true, uploaded: 2, pending: 0 });
   await uploading;
   assert.equal(page.data.pendingCheckinCount, 0);
   assert.equal(page.data.checkinRetrying, false);
+  assert.equal(page.data.showCheckinUploadPreview, false);
   assert.equal(calls.toast.at(-1).title, '上传成功');
 });
 
 test('home retry failure retains the pending indicator and releases its button', async () => {
   for (const retry of [async () => ({ success: false, uploaded: 0, pending: 1 }), async () => { throw new Error('网络不可用'); }]) {
-    const { page, calls } = createPage({ pending: 1, retry });
+    const { page, calls } = createPage({ pending: 1, retry, dailyRecords: makePendingRecords(1), openid: 'oz-home' });
+    page.openCheckinUploadPreview();
     await page.retryCheckinUploads();
     assert.equal(page.data.pendingCheckinCount, 1);
     assert.equal(page.data.checkinRetrying, false);
@@ -196,9 +205,10 @@ test('home retry failure retains the pending indicator and releases its button',
 });
 
 test('manual upload timeout releases the button and tells the user to retry manually', async () => {
-  const { page, calls } = createPage({ pending: 2, retry: async () => ({
+  const { page, calls } = createPage({ pending: 2, dailyRecords: makePendingRecords(2), openid: 'oz-home', retry: async () => ({
     success: false, uploaded: 0, pending: 2, code: 'CLOUD_TIMEOUT'
   }) });
+  page.openCheckinUploadPreview();
   await page.retryCheckinUploads();
   assert.equal(page.data.checkinRetrying, false);
   assert.equal(page.data.pendingCheckinCount, 2);
@@ -241,20 +251,104 @@ test('home keeps legacy unconfirmed records and new pending records in the same 
   assert.equal(byId.old.syncStatusText, '本机记录，未确认上传');
   assert.equal(byId.new.syncStatusText, '已存本机，待上传');
   assert.equal(byId.cloud.syncStatusText, undefined);
-  assert.equal(page.data.pendingCheckinCount, 1, 'legacy records are not added to the retry count');
+  assert.equal(page.data.pendingCheckinCount, 2, 'the home reminder also includes unconfirmed legacy records');
   assert.equal(JSON.stringify(dailyRecords), before);
 });
 
-test('home keeps terminal upload failures explicit after a manual sync attempt', async () => {
+test('home explains blocked records in the preview without attempting another upload', async () => {
   const { page, calls } = createPage({ pending: 1, dailyRecords: { '2026-09-16': { records: [
     { localId: 'expired', duration: 7, syncVersion: 1, syncStatus: 'failed',
       syncErrorCode: 'DATE_OUT_OF_RANGE', syncBlocked: true }
   ] } } });
+  page.openCheckinUploadPreview();
   await page.retryCheckinUploads();
-  assert.equal(calls.sync[0].force, true);
+  assert.equal(calls.sync.length, 0);
+  assert.equal(page.data.checkinUploadCount, 0);
+  assert.equal(page.data.checkinUploadBlockedRecords.length, 1);
+  assert.equal(page.data.showCheckinUploadPreview, true);
   assert.equal(page.data.checkinRecords[0].syncStatusText, '已存本机，已超出补录期限，无法上传');
-  assert.equal(calls.toast.at(-1).title, '部分记录无法上传，请查看记录提示');
-  assert.equal(calls.toast.at(-1).icon, 'none');
+});
+
+test('upload preview includes all dates and legacy records, resolves reflections and excludes uploading and other-account records', async () => {
+  const dailyRecords = makePendingRecords(1);
+  dailyRecords['2026-08-10'] = { records: [
+    { localId: 'older', timestamp: Date.parse('2026-08-11T01:30:00+08:00'), duration: 25,
+      syncVersion: 1, syncStatus: 'failed', emotion: ['平静'], experience: ['reflection'] },
+    { localId: 'legacy', timestamp: Date.parse('2026-08-10T08:35:00+08:00'), duration: 5 },
+    { localId: 'cloud', duration: 6, syncVersion: 1, _id: 'cloud-id' },
+    { localId: 'in-flight', duration: 7, syncVersion: 1, syncStatus: 'uploading' },
+    { localId: 'other', duration: 8, syncVersion: 1, syncOpenid: 'oz-other' },
+    { localId: 'blocked', duration: 9, syncVersion: 1, syncBlocked: true,
+      syncErrorCode: 'DATE_OUT_OF_RANGE', syncError: '已超出补录期限' }
+  ] };
+  const { page, calls } = createPage({ dailyRecords, openid: 'oz-home', pending: 3,
+    experiences: [{ _id: 'reflection', text: '更早的静坐体验' }] });
+  await page.retryCheckinUploads();
+  assert.equal(calls.retry.length, 0, 'confirmation requires an open preview');
+  page.openCheckinUploadPreview();
+  assert.equal(calls.sync.length, 0, 'preview does not upload or wait for cloud reads');
+  assert.equal(page.data.pendingCheckinCount, 4);
+  assert.equal(page.data.checkinUploadCount, 3);
+  assert.equal(page.data.checkinUploadDuration, 37);
+  assert.deepEqual(Array.from(page.data.checkinUploadGroups, group => group.date), ['2026-09-16', '2026-08-10']);
+  const older = page.data.checkinUploadGroups[1].records[0];
+  assert.equal(older.localId, 'older');
+  assert.equal(older.timeLabel, '次日 01:30');
+  assert.equal(older.duration, 25);
+  assert.deepEqual(Array.from(older.experienceTexts), ['更早的静坐体验']);
+  assert.deepEqual(Array.from(older.emotion), ['平静']);
+  assert.equal(page.data.checkinUploadGroups[1].records[1].localId, 'legacy');
+  assert.deepEqual(Array.from(page.data.checkinUploadBlockedRecords, record => record.localId), ['blocked']);
+  assert.equal(page.data.checkinUploadBlockedRecords[0].syncError, '已超出补录期限');
+  page.closeCheckinUploadPreview();
+  await page.retryCheckinUploads();
+  assert.equal(calls.retry.length, 0, 'cancelled previews never upload');
+  assert.equal(page.data.showCheckinUploadPreview, false);
+});
+
+test('confirmation submits only the reviewed list even when new pending records arrive', async () => {
+  const dailyRecords = makePendingRecords(1);
+  const { page, calls } = createPage({ dailyRecords, pending: 1, openid: 'oz-home' });
+  page.openCheckinUploadPreview();
+  dailyRecords['2026-09-16'].records.push({ localId: 'new-later', duration: 10, syncVersion: 1 });
+  page.refreshCheckinRecords();
+  await page.retryCheckinUploads();
+  assert.deepEqual(Array.from(calls.retry[0].localIds), ['pending-0']);
+});
+
+test('an incomplete old record is explained in the batch preview without preventing valid uploads', async () => {
+  const dailyRecords = makePendingRecords(1);
+  dailyRecords['2026-08-10'] = { records: [{ localId: 'missing-time', duration: 45 }] };
+  const { page, calls } = createPage({ dailyRecords, pending: 1, openid: 'oz-home' });
+  page.openCheckinUploadPreview();
+  assert.equal(page.data.pendingCheckinCount, 2);
+  assert.equal(page.data.checkinUploadCount, 1);
+  assert.equal(page.data.checkinUploadBlockedRecords.length, 1);
+  assert.equal(page.data.checkinUploadBlockedRecords[0].localId, 'missing-time');
+  assert.match(page.data.checkinUploadBlockedRecords[0].syncError, /时间或时长不完整/);
+  await page.retryCheckinUploads();
+  assert.deepEqual(Array.from(calls.retry[0].localIds), ['pending-0']);
+  assert.equal(calls.retry[0].unconfirmedRecords, undefined);
+  assert.equal(dailyRecords['2026-08-10'].records[0].syncVersion, undefined);
+});
+
+test('changing accounts after preview requires reviewing records again before upload', async () => {
+  const { page, calls, setOpenid } = createPage({ dailyRecords: makePendingRecords(1), pending: 1, openid: 'oz-home' });
+  page.openCheckinUploadPreview();
+  setOpenid('oz-other');
+  await page.retryCheckinUploads();
+  assert.equal(calls.retry.length, 0);
+  assert.equal(page.data.showCheckinUploadPreview, false);
+  assert.equal(calls.toast.at(-1).title, '账号已切换，请重新查看待上传记录');
+});
+
+test('guest can review local records but must log in before confirming upload', async () => {
+  const { page, calls } = createPage({ dailyRecords: makePendingRecords(1), pending: 1 });
+  page.openCheckinUploadPreview();
+  assert.equal(page.data.checkinUploadCount, 1);
+  await page.retryCheckinUploads();
+  assert.equal(calls.retry.length, 0);
+  assert.equal(calls.toast.at(-1).title, '请登录后上传本机记录');
 });
 
 test('home hides another known account from both the list and calendar without deleting local data', () => {
@@ -411,7 +505,7 @@ test('unedited fields submit the actual current instant even after Beijing midni
   assert.equal(page.data.checkinDate, '2026-09-17');
   assert.equal(page.data.checkinTime, '00:02');
   assert.equal(page.data.checkinSubmitting, false);
-  assert.equal(calls.toast.at(-1).title, '打卡成功');
+  assert.equal(calls.toast.at(-1).title, '已保存');
 });
 
 test('manual date/time and experience are submitted together after text approval', async () => {

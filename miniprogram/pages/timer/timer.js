@@ -2,6 +2,7 @@
 const { createScreenBrightnessController } = require('../../utils/screenBrightness');
 const checkinManager = require('../../utils/checkin');
 const contentSec = require('../../utils/contentSec');
+const dailyCardImage = require('../../utils/dailyCardImage');
 const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
 const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
 const MAX_SESSION_SECONDS = 24 * 60 * 60;
@@ -36,6 +37,7 @@ Page({
     completionDuration: 0,
     completionText: '',
     isSavingCompletion: false,
+    isCompletionSaved: false,
     completionNotice: '',
 
     // 计时器控制
@@ -52,11 +54,11 @@ Page({
     showStopButton: false,
     showResetButton: false,
     
-    // 按钮图标
-    startIcon: "/images/icons/start.png",
-    pauseIcon: "/images/icons/pause.png",
-    stopIcon: "/images/icons/stop.png",
-    resetIcon: "/images/icons/resetting.png",
+    // 使用矢量图标，避免高清屏放大小尺寸位图后模糊。
+    startIcon: "/images/icons/timer-start.svg",
+    pauseIcon: "/images/icons/timer-pause.svg",
+    stopIcon: "/images/icons/timer-stop.svg",
+    resetIcon: "/images/icons/timer-reset.svg",
     
     // 音频播放器
     audioPlayer: null,
@@ -84,6 +86,8 @@ Page({
     this.screenBrightness = createScreenBrightnessController(wx);
     this.isPageVisible = false;
     this.isUnloaded = false;
+    this.isOpeningDaily = false;
+    this.didOpenDaily = false;
     this.sessionId = null;
     this.pendingCompletion = wx.getStorageSync('timerPendingCompletion') || null;
     this.setData({ completionNotice: wx.getStorageSync('timerCompletionNotice') || '' });
@@ -100,6 +104,17 @@ Page({
 
   onShow() {
     this.isPageVisible = true;
+    // 路由动画期间保留完成弹窗，回到计时页时再清理，避免先闪回计时界面。
+    if (this.didOpenDaily) {
+      this.didOpenDaily = false;
+      this.isOpeningDaily = false;
+      this.setData({
+        showCompletionDialog: false,
+        completionText: '',
+        isSavingCompletion: false,
+        isCompletionSaved: false
+      });
+    }
     this.setKeepScreenOn();
     if (this.pendingCompletion) this.showCompletion();
     if (this.data.completionNotice) {
@@ -182,7 +197,7 @@ Page({
 
   // 开始计时器
   startTimer() {
-    if (this.data.isRunning || this.pendingCompletion || this.data.isSavingCompletion) return;
+    if (this.data.isRunning || this.pendingCompletion || this.data.isSavingCompletion || this.data.isCompletionSaved) return;
     const isResuming = this.data.isPaused;
 
     // 清理之前的计时器
@@ -291,7 +306,7 @@ Page({
     this.finishSession(this.data.totalTime, { endedAt });
   },
 
-  finishSession(elapsedSeconds, { silent = false, endedAt = Date.now() } = {}) {
+  finishSession(elapsedSeconds, { silent = false, endedAt = Date.now(), resetDisplay = false } = {}) {
     if (!this.data.isRunning && !this.data.isPaused) return;
     const modeName = this.data.isCountdown ? '倒计时' : '正计时';
     const sessionLimit = this.data.isCountdown ? Math.min(this.data.totalTime, MAX_SESSION_SECONDS) : MAX_SESSION_SECONDS;
@@ -306,11 +321,14 @@ Page({
       wx.setStorageSync('timerPendingCompletion', this.pendingCompletion);
     }
     this.stopTimer({ playEndSound: !silent });
-    this.setData({
-      elapsedTime: Math.max(0, elapsedSeconds),
-      remainingTime: Math.max(0, this.data.totalTime - elapsedSeconds)
-    });
-    this.updateDisplay();
+    // 手动结束保留 stopTimer 的初始显示，本次实际时长已存入完成记录。
+    if (!resetDisplay) {
+      this.setData({
+        elapsedTime: Math.max(0, elapsedSeconds),
+        remainingTime: Math.max(0, this.data.totalTime - elapsedSeconds)
+      });
+      this.updateDisplay();
+    }
     if (duration < 1) {
       if (silent) {
         this.setCompletionNotice(`${modeName}已结束，不足1分钟未记录`);
@@ -323,11 +341,6 @@ Page({
       // 本地写入同步完成，系统随后挂起小程序也不会延长本次记录。
       const saved = this.saveCompletedSession('');
       this.setCompletionNotice(saved ? `${modeName}已结束，${duration}分钟已存本机` : `${modeName}已结束，请确认保存记录`);
-      if (saved) saved.upload.then(result => {
-        this.setCompletionNotice(result.cloudSynced
-          ? `${modeName}已结束，${duration}分钟已上传`
-          : `${modeName}已结束，${duration}分钟已存本机，请手动上传`);
-      });
     } else {
       this.showCompletion();
     }
@@ -345,6 +358,8 @@ Page({
       completionDuration: this.pendingCompletion.duration,
       completionText: this.pendingCompletion.text || ''
     });
+    // 用户填写感受时就下载下一张日签，确认及跳转都不等待图片网络请求。
+    dailyCardImage.prepareNextImage();
   },
 
   onCompletionInput(e) {
@@ -357,26 +372,40 @@ Page({
   },
 
   async confirmCompletion() {
-    if (!this.pendingCompletion || this.data.isSavingCompletion) return;
+    if ((!this.pendingCompletion && !this.data.isCompletionSaved) || this.data.isSavingCompletion) return;
     this.setData({ isSavingCompletion: true });
-    const text = this.data.completionText.trim();
     try {
-      if (text && !await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 })) return;
-      const saved = this.saveCompletedSession(text);
-      if (saved) {
-        const result = await saved.upload;
-        if (!this.isUnloaded) this.setData({ showCompletionDialog: false, completionText: '' });
-        if (this.isPageVisible && !this.isUnloaded) {
-          wx.showToast({
-            title: result.cloudSynced ? '上传成功' : '已存本机，请手动上传',
-            icon: result.cloudSynced ? 'success' : 'none'
-          });
-        } else {
-          this.setCompletionNotice(result.cloudSynced ? '静坐记录已上传' : '静坐记录已存本机，请手动上传');
-        }
+      if (!this.data.isCompletionSaved) {
+        const text = this.data.completionText.trim();
+        if (text && !await contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 })) return;
+        if (!this.saveCompletedSession(text) || this.isUnloaded) return;
+        this.setData({ isCompletionSaved: true });
       }
+      if (!this.isUnloaded && this.isPageVisible) this.openCompletionDaily();
     } finally {
-      if (!this.isUnloaded) this.setData({ isSavingCompletion: false });
+      if (!this.isUnloaded && !this.isOpeningDaily) this.setData({ isSavingCompletion: false });
+    }
+  },
+
+  openCompletionDaily() {
+    this.isOpeningDaily = true;
+    const onFailure = () => {
+      this.isOpeningDaily = false;
+      if (this.isUnloaded) return;
+      this.setData({ isSavingCompletion: false });
+      if (this.isPageVisible) {
+        wx.showToast({ title: '记录已保存，日签打开失败，请重试', icon: 'none' });
+      }
+    };
+    try {
+      wx.hideKeyboard({ fail() {} });
+      wx.navigateTo({
+        url: '/pages/daily/daily1',
+        success: () => { this.didOpenDaily = true; },
+        fail: onFailure
+      });
+    } catch (error) {
+      onFailure();
     }
   },
 
@@ -391,21 +420,14 @@ Page({
       uniqueId: completion.sessionId
     }] : [];
     try {
+      // 同步保存本机并启动后台上传，计时完成界面不等待或展示上传结果。
       const result = checkinManager.recordCheckin(
         completion.duration, [], experience, completion.endedAt, completion.sessionId
       );
       if (!result || !result.success) throw new Error('本地保存失败');
       wx.setStorageSync('timerPendingCompletion', null);
       this.pendingCompletion = null;
-      // 同一会话仅等待已开始的首次上传；重复身份不会重存或补传失败记录。
-      // 草稿先同步清除，避免后台挂起或页面重建后再次弹出保存表单。
-      const upload = Promise.resolve(checkinManager.recordCheckinWithSync(
-        completion.duration, [], experience, completion.endedAt, completion.sessionId
-      )).catch(error => {
-        console.warn('读取首次上传结果失败，记录已保存在本机:', error);
-        return { success: true, cloudSynced: false };
-      });
-      return { ...result, upload };
+      return result;
     } catch (error) {
       console.error('静坐保存失败，保留本次记录以便重试:', error);
       if (this.isPageVisible && !this.isUnloaded) {
@@ -484,7 +506,7 @@ Page({
 
   // 用户结束时按实际已用分钟保存，暂停时间不计入。
   handleStop() {
-    this.finishSession(this.calculateElapsedTime());
+    this.finishSession(this.calculateElapsedTime(), { resetDisplay: true });
   },
 
   // 停止所有计时器

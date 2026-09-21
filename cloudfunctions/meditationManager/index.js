@@ -188,6 +188,9 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
     if (key !== undefined && (typeof key !== 'string' || !key.trim() || key.length > 200)) {
       return { success: false, code: 'INVALID_RECORD', error: '本地记录标识无效' };
     }
+    if (data.recoverLegacy === true && !key) {
+      return { success: false, code: 'INVALID_RECORD', error: '补传旧记录需要固定的本地记录标识' };
+    }
     const duration = Number(data.duration || 0);
     if (!Number.isInteger(duration) || duration < 1 || duration > 1440) throw new Error('静坐时长须为 1–1440 分钟的整数');
     const source = data.source === 'manual' || data.dateSource === 'manual' ? 'manual' : 'timer';
@@ -209,6 +212,24 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
       // 成功后的重试即使跨过三天窗口，仍返回原结果；不再次写心得或累计统计。
       if (existing) return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true };
+      if (data.recoverLegacy === true) {
+        // 仅显式旧记录恢复使用此规则。旧版分别在本机、云端生成时间戳，
+        // 同日同分钟数的无身份记录不能仅因毫秒不同就当作另一条再上传。
+        const similar = records.filter(row => getRecordBusinessDate(row) === dateStr && Number(row.duration) === duration);
+        const exact = similar.filter(row => meditationTimestamp(row.timestamp) === timestamp);
+        if (exact.some(row => row.localId || row.idempotencyKey)) {
+          throw deletionError('AMBIGUOUS_RECORD', '云端存在时间、时长相同但标识不同的记录，请先核对，记录已保留在本机');
+        }
+        const matches = exact.filter(row => !row.localId && !row.idempotencyKey);
+        if (matches.length > 1) throw deletionError('AMBIGUOUS_RECORD', '云端存在多条相同的旧记录，请先核对，记录已保留在本机');
+        if (matches.length === 1) {
+          const matched = matches[0];
+          return { recordId: matched._id, date: getRecordBusinessDate(matched), timestamp: matched.timestamp, duplicate: true };
+        }
+        if (similar.some(row => !row.localId && !row.idempotencyKey)) {
+          throw deletionError('AMBIGUOUS_RECORD', '云端存在同一天、时长相同的旧记录，请先核对，记录已保留在本机');
+        }
+      }
       if (source === 'manual') {
         const today = getBusinessDate(now);
         const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 2 * 86400000).toISOString().slice(0, 10);

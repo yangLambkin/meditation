@@ -12,7 +12,8 @@ const GUIDE_AUDIO = 'https://example.test/meditation-guide.mp3';
 
 function createPage({
   withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true,
-  recordCheckin, recordCheckinWithSync, networkType, contentSecRequest = () => new Promise(() => {})
+  recordCheckin, backgroundUpload = async () => ({ success: true }), networkType,
+  contentSecRequest = () => new Promise(() => {}), navigateTo
 } = {}) {
   let definition;
   let now = Date.parse('2026-09-18T08:00:00+08:00');
@@ -26,6 +27,8 @@ function createPage({
   const listeners = { show: new Set(), hide: new Set() };
   const storage = new Map(Object.entries(initialStorage));
   const records = [];
+  const uploads = [];
+  const imagePrefetches = [];
 
   function createAudioPlayer() {
     let src = '';
@@ -93,7 +96,13 @@ function createPage({
     showModal: options => modals.push(options),
     showToast: options => toasts.push(options),
     getNetworkType: options => options.success?.({ networkType }),
-    navigateTo: options => navigations.push(options.url),
+    hideKeyboard() {},
+    navigateTo(options) {
+      navigations.push(options.url);
+      if (navigateTo) return navigateTo(options);
+      page.onHide();
+      options.success?.({});
+    },
     cloud: {
       init() {},
       getTempFileURL: options => options.success?.({ fileList: [] }),
@@ -129,16 +138,21 @@ function createPage({
     require(request) {
       if (request === '../../utils/checkin') return {
         recordCheckin(...args) {
-          if (recordCheckin) return recordCheckin(...args);
+          const result = recordCheckin ? recordCheckin(...args) : { success: true };
+          if (!result || !result.success) return result;
           records.push(args);
-          return { success: true };
+          // The manager owns background failures; the page receives only the local save result.
+          if (networkType !== 'none') uploads.push(Promise.resolve(backgroundUpload(...args)).catch(() => {}));
+          return result;
         },
-        recordCheckinWithSync(...args) {
-          return recordCheckinWithSync ? recordCheckinWithSync(...args)
-            : Promise.resolve({ success: true, cloudSynced: networkType !== 'none' });
+        recordCheckinWithSync() {
+          assert.fail('timer completion must not wait for or repeat the background upload');
         }
       };
       if (request === '../../utils/contentSec') return contentSec;
+      if (request === '../../utils/dailyCardImage') return {
+        prepareNextImage() { imagePrefetches.push(true); }
+      };
       assert.equal(request, '../../utils/screenBrightness');
       return { createScreenBrightnessController: () => ({ dim() {}, restore() {} }) };
     },
@@ -174,7 +188,7 @@ function createPage({
   }
 
   return {
-    page, players, audioCalls, navigations, modals, toasts, records, storage, advance,
+    page, players, audioCalls, navigations, modals, toasts, records, uploads, storage, advance, imagePrefetches,
     jump: milliseconds => { now += milliseconds; },
     plays: () => audioCalls.filter(call => call.action === 'play').map(call => call.src),
     emitApp: event => { for (const callback of [...listeners[event]]) callback(); }
@@ -498,7 +512,7 @@ test('unloading destroys the cue player and queued callbacks cannot start or res
 });
 
 
-test('completion saves an empty reflection without navigation and repeated confirms record once', async () => {
+test('completion saves an empty reflection and repeated confirms record and open the daily page once', async () => {
   const { page, records, navigations, advance, toasts, storage } = createPage();
   page.setData({ totalTime: 60, remainingTime: 60 });
   page.startTimer();
@@ -507,89 +521,212 @@ test('completion saves an empty reflection without navigation and repeated confi
   assert.equal(page.data.showCompletionDialog, true);
   assert.equal(page.data.showStopButton, false);
   assert.equal(page.data.showResetButton, false);
+  assert.deepEqual(navigations, [], 'the daily page only opens after confirmation');
   await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
   assert.equal(records.length, 1);
   assert.equal(records[0][0], 1);
   assert.equal(records[0][1].length, 0);
   assert.equal(records[0][2].length, 0);
   assert.equal(records[0][4], sessionId);
-  assert.deepEqual(navigations, []);
+  assert.deepEqual(navigations, ['/pages/daily/daily1']);
+  assert.equal(page.data.showCompletionDialog, true, 'the outgoing page retains its dialog throughout the route animation');
+  page.onShow();
   assert.equal(page.data.showCompletionDialog, false);
-  assert.equal(toasts.at(-1).title, '上传成功');
-  assert.equal(toasts.at(-1).icon, 'success', 'success follows the confirmed upload');
+  assert.deepEqual(toasts, [], 'saving a completed timer does not show an upload result');
   assert.equal(storage.get('timerPendingCompletion'), null, 'upload retry must not reopen completion for a second save');
 });
 
-test('both timer modes wait for the first upload without showing a pending-upload notice or accepting duplicate confirms', async () => {
-  for (const isCountdown of [false, true]) {
-    let resolveUpload;
-    const uploadCalls = [];
-    const { page, records, advance, toasts, storage } = createPage({
-      isCountdown,
-      recordCheckinWithSync(...args) {
-        uploadCalls.push(args);
-        return new Promise(resolve => { resolveUpload = resolve; });
+test('completion preloads the card and keeps the dialog stable until navigation and return finish', async () => {
+  let route;
+  const { page, advance, records, navigations, imagePrefetches } = createPage({
+    navigateTo: options => { route = options; }
+  });
+  page.startTimer();
+  assert.equal(imagePrefetches.length, 0);
+  advance(60000);
+  page.handleStop();
+  assert.equal(imagePrefetches.length, 1, 'the image request starts while the reflection dialog is visible');
+  await page.confirmCompletion();
+  assert.equal(page.data.showCompletionDialog, true, 'confirmation must not expose the timer behind the dialog');
+  assert.equal(page.data.isSavingCompletion, true);
+  await page.confirmCompletion();
+  assert.equal(navigations.length, 1, 'double taps cannot start concurrent routes');
+  assert.equal(records.length, 1);
+  page.onHide();
+  route.success({});
+  assert.equal(page.data.showCompletionDialog, true, 'the outgoing view remains stable during the native slide');
+  page.onShow();
+  assert.equal(page.data.showCompletionDialog, false);
+  assert.equal(page.data.isSavingCompletion, false);
+  assert.equal(page.data.isCompletionSaved, false);
+  page.startTimer();
+  assert.equal(page.data.isRunning, true);
+});
+
+test('failed navigation can retry opening the saved card without recording or moderating twice', async () => {
+  for (const throws of [false, true]) {
+    let route;
+    let shouldFail = true;
+    const checked = [];
+    const { page, advance, records, navigations, toasts, storage } = createPage({
+      checkText: async text => { checked.push(text); return true; },
+      navigateTo(options) {
+        route = options;
+        if (throws && shouldFail) throw new Error('route failed');
       }
     });
-    page.setData({ totalTime: 60, remainingTime: 60 });
     page.startTimer();
     advance(60000);
-    if (!isCountdown) page.handleStop();
-    const saving = page.confirmCompletion();
+    page.handleStop();
+    page.onCompletionInput({ detail: { value: '很平静' } });
     await page.confirmCompletion();
-    page.startTimer();
-    assert.equal(page.data.isRunning, false, 'an upload in progress keeps the completion controls locked');
-    assert.equal(page.data.isSavingCompletion, true);
+    if (!throws) route.fail({ errMsg: 'navigateTo:fail' });
     assert.equal(page.data.showCompletionDialog, true);
-    assert.equal(toasts.length, 0);
-    assert.equal(records.length, 1);
-    assert.equal(uploadCalls.length, 1);
-    assert.equal(uploadCalls[0][4], records[0][4]);
-    assert.equal(uploadCalls[0][3], records[0][3]);
-    assert.equal(storage.get('timerPendingCompletion'), null, 'the persisted local record owns recovery while upload is in flight');
-    resolveUpload({ success: true, cloudSynced: true });
-    await saving;
     assert.equal(page.data.isSavingCompletion, false);
-    assert.equal(page.data.showCompletionDialog, false);
-    assert.equal(toasts.at(-1).title, '上传成功');
-    await page.confirmCompletion();
+    assert.equal(page.data.isCompletionSaved, true);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+    assert.equal(toasts.at(-1).title, '记录已保存，日签打开失败，请重试');
+    page.startTimer();
+    assert.equal(page.data.isRunning, false, 'the saved completion remains available for navigation retry');
+    shouldFail = false;
+    await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
     assert.equal(records.length, 1);
-    assert.equal(uploadCalls.length, 1);
+    assert.deepEqual(checked, ['很平静']);
+    assert.equal(navigations.length, 2);
+    page.onHide();
+    route.success({});
+    page.onShow();
+    assert.equal(page.data.showCompletionDialog, false);
   }
 });
 
-test('timer upload timeout closes the saved completion and leaves retries to the manual-upload button', async () => {
+test('a reflection check finishing in the background saves once and waits for a visible navigation retry', async () => {
+  let resolveCheck;
+  const { page, advance, records, navigations } = createPage({
+    checkText: () => new Promise(resolve => { resolveCheck = resolve; })
+  });
+  page.startTimer();
+  advance(60000);
+  page.handleStop();
+  page.onCompletionInput({ detail: { value: '安静' } });
+  const pending = page.confirmCompletion();
+  page.onHide();
+  resolveCheck(true);
+  await pending;
+  assert.equal(records.length, 1);
+  assert.equal(navigations.length, 0);
+  assert.equal(page.data.isSavingCompletion, false);
+  page.onShow();
+  await page.confirmCompletion();
+  assert.equal(records.length, 1);
+  assert.deepEqual(navigations, ['/pages/daily/daily1']);
+});
+
+test('a late navigation failure stays silent while hidden and allows retry on return', async () => {
+  let route;
+  const { page, advance, records, navigations, toasts } = createPage({
+    navigateTo: options => { route = options; }
+  });
+  page.startTimer();
+  advance(60000);
+  page.handleStop();
+  await page.confirmCompletion();
+  page.onHide();
+  route.fail({ errMsg: 'navigateTo:fail' });
+  assert.deepEqual(toasts, []);
+  assert.equal(page.data.isSavingCompletion, false);
+  page.onShow();
+  await page.confirmCompletion();
+  assert.equal(records.length, 1);
+  assert.equal(navigations.length, 2);
+});
+
+test('both timer modes finish locally and a late upload result cannot interrupt the next session', async () => {
+  for (const ending of ['count-up stop', 'countdown stop', 'countdown automatic']) {
+    for (const outcome of ['success', 'failure', 'rejection']) {
+      let resolveUpload;
+      let rejectUpload;
+      const uploadCalls = [];
+      const { page, records, uploads, advance, toasts, storage, navigations } = createPage({
+        isCountdown: ending !== 'count-up stop',
+        backgroundUpload(...args) {
+          uploadCalls.push(args);
+          return new Promise((resolve, reject) => { resolveUpload = resolve; rejectUpload = reject; });
+        }
+      });
+      const totalTime = ending === 'countdown automatic' ? 60 : 120;
+      page.setData({ totalTime, remainingTime: totalTime });
+      page.startTimer();
+      const completedSessionId = page.sessionId;
+      advance(60000);
+      if (ending !== 'countdown automatic') page.handleStop();
+      assert.deepEqual(navigations, [], ending);
+      await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
+      assert.deepEqual(navigations, ['/pages/daily/daily1'], ending);
+      page.onShow();
+      assert.equal(page.data.isSavingCompletion, false, 'returning to the timer releases controls before the upload finishes');
+      assert.equal(page.data.showCompletionDialog, false);
+      assert.equal(toasts.length, 0);
+      assert.equal(records.length, 1);
+      assert.equal(uploadCalls.length, 1);
+      assert.equal(uploadCalls[0][4], records[0][4]);
+      assert.equal(uploadCalls[0][3], records[0][3]);
+      assert.equal(storage.get('timerPendingCompletion'), null, 'the saved record owns recovery while upload is in flight');
+      page.startTimer();
+      assert.equal(page.data.isRunning, true, 'a new session can start before the upload finishes');
+      assert.notEqual(page.sessionId, completedSessionId);
+      const nextSessionId = page.sessionId;
+      const nextState = structuredClone(storage.get('timerState'));
+      if (outcome === 'rejection') rejectUpload(new Error('network disconnected'));
+      else resolveUpload({ success: outcome === 'success', cloudSynced: outcome === 'success' });
+      await Promise.all(uploads);
+      assert.equal(page.data.isRunning, true);
+      assert.equal(page.sessionId, nextSessionId);
+      assert.deepEqual(structuredClone(storage.get('timerState')), nextState);
+      assert.equal(page.data.showCompletionDialog, false);
+      assert.equal(page.data.completionNotice, '');
+      assert.deepEqual(toasts, [], `${ending}: ${outcome} must stay silent`);
+      await page.confirmCompletion();
+      assert.equal(records.length, 1);
+      assert.equal(uploadCalls.length, 1);
+      assert.deepEqual(navigations, ['/pages/daily/daily1'], 'late uploads and repeated confirms must not navigate again');
+    }
+  }
+});
+
+test('timer upload timeout stays silent after local completion and reopening does not record again', async () => {
   let resolveUpload;
-  const { page, records, advance, toasts, storage } = createPage({
-    recordCheckinWithSync: () => new Promise(resolve => { resolveUpload = resolve; })
+  const { page, records, uploads, advance, toasts, storage } = createPage({
+    backgroundUpload: () => new Promise(resolve => { resolveUpload = resolve; })
   });
   page.setData({ totalTime: 60, remainingTime: 60 });
   page.startTimer();
   advance(60000);
-  const saving = page.confirmCompletion();
+  await page.confirmCompletion();
+  page.onShow();
   advance(4999);
-  assert.equal(page.data.isSavingCompletion, true);
-  assert.equal(toasts.length, 0);
-  advance(1);
-  resolveUpload({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' });
-  await saving;
   assert.equal(page.data.isSavingCompletion, false);
   assert.equal(page.data.showCompletionDialog, false);
-  assert.equal(toasts.at(-1).title, '已存本机，请手动上传');
-  assert.equal(toasts.at(-1).icon, 'none');
-  page.onShow();
-  await page.confirmCompletion();
+  assert.equal(toasts.length, 0);
+  page.onUnload();
+  page.setData = () => { throw new Error('a completed upload cannot update an unloaded page'); };
+  advance(1);
+  resolveUpload({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' });
+  await Promise.all(uploads);
+  assert.deepEqual(toasts, []);
   assert.equal(records.length, 1);
   const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
+  assert.equal(reopened.page.data.showCompletionDialog, false);
+  assert.deepEqual(reopened.toasts, []);
   await reopened.page.confirmCompletion();
   assert.equal(reopened.records.length, 0);
 });
 
-test('a background timer completion only asks for manual upload after the first upload fails', async () => {
+test('a background timer completion keeps its neutral notice after an upload failure', async () => {
   let resolveUpload;
-  const { page, records, advance, emitApp, storage } = createPage({
+  const { page, records, uploads, advance, emitApp, storage } = createPage({
     isCountdown: false,
-    recordCheckinWithSync: () => new Promise(resolve => { resolveUpload = resolve; })
+    backgroundUpload: () => new Promise(resolve => { resolveUpload = resolve; })
   });
   page.startTimer();
   advance(60000);
@@ -600,11 +737,11 @@ test('a background timer completion only asks for manual upload after the first 
   page.onUnload();
   page.setData = () => { throw new Error('a completed upload cannot update an unloaded page'); };
   resolveUpload({ success: true, cloudSynced: false, syncErrorCode: 'CLOUD_TIMEOUT' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(storage.get('timerCompletionNotice'), '正计时已结束，1分钟已存本机，请手动上传');
+  await Promise.all(uploads);
+  assert.equal(storage.get('timerCompletionNotice'), '正计时已结束，1分钟已存本机');
   const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
   assert.equal(reopened.records.length, 0);
-  assert.equal(reopened.toasts.at(-1).title, '正计时已结束，1分钟已存本机，请手动上传');
+  assert.equal(reopened.toasts.at(-1).title, '正计时已结束，1分钟已存本机');
 });
 
 test('optional reflection is checked and recorded as text with no emotion', async () => {
@@ -656,11 +793,12 @@ test('count-up and countdown save offline reflections locally without contacting
     assert.equal(records[0][2][0].text, '离线时也很安静');
     assert.equal(records[0][3], endedAt);
     assert.equal(records[0][4], sessionId);
+    page.onShow();
     assert.equal(page.data.isSavingCompletion, false);
     assert.equal(page.data.showCompletionDialog, false);
     assert.equal(page.pendingCompletion, null);
     assert.equal(storage.get('timerPendingCompletion'), null);
-    assert.equal(toasts.at(-1).title, '已存本机，请手动上传');
+    assert.deepEqual(toasts, [], 'an offline timer completion does not show an upload failure');
     await page.confirmCompletion();
     assert.equal(records.length, 1);
 
@@ -694,6 +832,7 @@ test('both timer modes release saving within 1500 ms when the network request ha
 
     assert.equal(records.length, 1);
     assert.equal(records[0][2][0].text, '弱网时的感受');
+    page.onShow();
     assert.equal(page.data.isSavingCompletion, false);
     assert.equal(page.data.showCompletionDialog, false);
     resolveRequest({ result: { success: true, safe: true } });
@@ -723,6 +862,7 @@ test('an online rejected reflection stays editable and can be cleared to finish 
     assert.equal(storage.get('timerPendingCompletion').text, 'blocked');
     page.onCompletionInput({ detail: { value: '' } });
     await page.confirmCompletion();
+    page.onShow();
     assert.equal(records.length, 1);
     assert.equal(page.data.isSavingCompletion, false);
   }
@@ -900,7 +1040,7 @@ test('unloading a count-up records it once and ends the session', () => {
 
 test('a failed completion retries with the original session id and timestamp', async () => {
   const attempts = [];
-  const { page, storage, advance } = createPage({
+  const { page, storage, advance, toasts, navigations } = createPage({
     recordCheckin(...args) {
       attempts.push(args);
       if (attempts.length === 1) throw new Error('disk busy');
@@ -914,14 +1054,19 @@ test('a failed completion retries with the original session id and timestamp', a
   assert.equal(page.data.showCompletionDialog, true);
   assert.equal(page.data.isSavingCompletion, false, 'a local write failure must release the save button');
   assert.ok(storage.get('timerPendingCompletion'));
+  assert.equal(toasts.at(-1).title, '保存失败，请重试');
+  assert.deepEqual(navigations, [], 'a failed save must keep the completion available for retry');
   advance(60000);
   await page.confirmCompletion();
   assert.equal(attempts.length, 2);
   assert.equal(attempts[0][3], attempts[1][3]);
   assert.equal(attempts[0][4], attempts[1][4]);
+  page.onShow();
   assert.equal(page.data.showCompletionDialog, false);
   assert.equal(page.data.isSavingCompletion, false);
   assert.equal(storage.get('timerPendingCompletion'), null);
+  assert.equal(toasts.length, 1, 'successful retry adds no upload result notification');
+  assert.deepEqual(navigations, ['/pages/daily/daily1']);
 });
 
 test('a restored count-up uses its last foreground checkpoint without adding closed time', () => {
@@ -960,6 +1105,7 @@ test('a new session after completion starts at zero with a fresh identity', asyn
   advance(60000);
   page.handleStop();
   await page.confirmCompletion();
+  page.onShow();
   page.startTimer();
   assert.notEqual(page.sessionId, firstId);
   assert.equal(page.data.elapsedTime, 0);
@@ -1044,7 +1190,7 @@ test('a locally saved timer completion is not resubmitted by foreground or page 
   assert.equal(records.length, 1);
   assert.equal(page.pendingCompletion, null);
   assert.equal(storage.get('timerPendingCompletion'), null);
-  assert.equal(toasts.at(-1).icon, 'success');
+  assert.deepEqual(toasts, []);
   emitApp('hide');
   emitApp('show');
   page.onShow();

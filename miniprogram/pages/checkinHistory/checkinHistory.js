@@ -63,7 +63,8 @@ Page({
     try {
       const records = this.data.isMemberHistory ? (this._memberRecords || []) : homeCheckin.readCheckinRecords(
         checkinManager,
-        wx.getStorageSync('meditationTextRecords') || []
+        wx.getStorageSync('meditationTextRecords') || [],
+        { openid: wx.getStorageSync('userOpenId') || '' }
       );
       const months = homeCheckin.buildCheckinMonths(records);
       this._allCheckinRecords = records;

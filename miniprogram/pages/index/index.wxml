@@ -23,11 +23,11 @@
           <!-- 日历头部 -->
           <view class="flex-row justify-between items-center">
             <view class="calendar-nav-btn" bindtap="prevMonth">
-              <image class="image" src="/images/icons/left.png" />
+              <image class="image" src="/images/icons/chevron-left.svg" mode="aspectFit" />
             </view>
             <text class="font_5 text_3">{{currentYear}}年 {{currentMonth}}月</text>
             <view class="calendar-nav-btn" bindtap="nextMonth">
-              <image class="image image_2" src="/images/icons/right.png" />
+              <image class="image image_2" src="/images/icons/chevron-right.svg" mode="aspectFit" />
             </view>
           </view>
 
@@ -56,7 +56,8 @@
                 <text class="day-text">{{item.day}}</text>
                 <image
                   class="check-icon"
-                  src="/images/icons/checked.png"
+                  src="/images/icons/checked.svg"
+                  mode="aspectFit"
                   wx:if="{{item.isChecked}}"
                 />
               </view>
@@ -68,7 +69,7 @@
       <!-- 觉察与静坐记录入口 -->
       <view class="meditation-btn-container">
         <button class="weui-btn meditation-btn primary" bindtap="startMeditation" hover-class="weui-btn_active">
-          <image class="meditation-btn-icon" src="/images/icons/start.png" />
+          <image class="meditation-btn-icon" src="/images/icons/timer-start.svg" mode="aspectFit" />
           <text class="meditation-btn-text">开始觉察</text>
         </button>
         <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openCheckinModal" hover-class="checkin-record-active">
@@ -92,8 +93,8 @@
         </button>
       </view>
       <view wx:if="{{pendingCheckinCount > 0}}" class="checkin-pending-banner">
-        <text class="checkin-pending-text">{{pendingCheckinCount}} 条本机记录尚未上传</text>
-        <button class="checkin-retry-button" bindtap="retryCheckinUploads" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">手动上传</button>
+        <text class="checkin-pending-text">全部日期共 {{pendingCheckinCount}} 条记录待上传或待确认</text>
+        <button class="checkin-retry-button" bindtap="openCheckinUploadPreview" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">重试上传</button>
       </view>
       <text wx:if="{{checkinTotal}}" class="checkin-load-hint">长按记录可删除</text>
       <view wx:if="{{!checkinTotal}}" class="checkin-empty">尚无打卡记录</view>
@@ -124,6 +125,59 @@
       </view>
       <view wx:if="{{hiddenCheckinCount > 0}}" class="checkin-list-footer">
         <text class="checkin-load-hint">还有 {{hiddenCheckinCount}} 条更早记录，点击「全部」按月查看</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showCheckinUploadPreview}}" class="checkin-modal">
+    <view class="checkin-modal-mask" bindtap="closeCheckinUploadPreview" catchtouchmove="preventCheckinModalTouchMove"></view>
+    <view class="checkin-dialog" catchtap="preventCheckinModalTouchMove">
+      <view class="checkin-dialog-header">
+        <text class="checkin-title">待上传记录</text>
+        <button class="checkin-close" bindtap="closeCheckinUploadPreview" disabled="{{checkinRetrying}}" aria-label="关闭待上传记录弹窗" hover-class="checkin-record-active">×</button>
+      </view>
+      <scroll-view class="checkin-dialog-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
+        <view class="checkin-dialog-body">
+          <text class="checkin-subtitle">统一上传全部日期的未上传记录，不限最近三天。旧本机记录会先核对云端，无法确认时保留本机并提示核对。</text>
+          <view class="checkin-upload-summary">
+            <text>本次将尝试上传 {{checkinUploadCount}} 条 · {{checkinUploadDuration}} 分钟</text>
+            <text class="checkin-subtitle">请核对记录后确认上传，上传失败的记录会保留在本机。</text>
+          </view>
+          <view class="checkin-day-group" wx:for="{{checkinUploadGroups}}" wx:for-item="group" wx:key="date">
+            <view class="checkin-day-heading">
+              <text class="checkin-day-date">{{group.date}}</text>
+              <text class="checkin-day-summary">{{group.count}} 次 · {{group.totalDuration}} 分钟</text>
+            </view>
+            <view class="checkin-record checkin-upload-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="id">
+              <view class="checkin-record-heading">
+                <text class="checkin-record-time">{{record.timeLabel}}</text>
+                <text class="checkin-record-duration">{{record.duration}} 分钟</text>
+              </view>
+              <view wx:if="{{record.emotion.length}}" class="checkin-record-emotions">
+                <text class="checkin-emotion" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
+              </view>
+              <view wx:if="{{record.experienceTexts.length}}" class="checkin-record-experience">
+                <text class="checkin-record-experience-text" wx:for="{{record.experienceTexts}}" wx:for-item="experience" wx:key="*this">{{experience}}</text>
+              </view>
+            </view>
+          </view>
+          <view wx:if="{{checkinUploadBlockedRecords.length}}" class="checkin-upload-blocked">
+            <text class="checkin-day-date">暂无法上传 · {{checkinUploadBlockedRecords.length}} 条</text>
+            <text class="checkin-subtitle">以下记录保留在本机，本次不会上传。</text>
+            <view class="checkin-record checkin-upload-record" wx:for="{{checkinUploadBlockedRecords}}" wx:for-item="record" wx:key="id">
+              <text class="checkin-upload-date">{{record.dayDate}}</text>
+              <view class="checkin-record-heading">
+                <text class="checkin-record-time">{{record.timeLabel}}</text>
+                <text class="checkin-record-duration">{{record.duration}} 分钟</text>
+              </view>
+              <text class="record-sync-error">{{record.syncError || record.syncStatusText}}</text>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+      <view class="checkin-dialog-actions">
+        <button class="checkin-cancel" bindtap="closeCheckinUploadPreview" disabled="{{checkinRetrying}}" hover-class="checkin-record-active">{{checkinUploadCount ? '取消' : '关闭'}}</button>
+        <button class="checkin-submit" bindtap="retryCheckinUploads" loading="{{checkinRetrying}}" disabled="{{checkinRetrying || !checkinUploadCount}}" hover-class="checkin-submit-active">{{checkinRetrying ? '正在上传' : '确认上传'}}</button>
       </view>
     </view>
   </view>

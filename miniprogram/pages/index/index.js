@@ -26,6 +26,11 @@ Page({
     checkinSubmitting: false,
     checkinRetrying: false,
     pendingCheckinCount: 0,
+    showCheckinUploadPreview: false,
+    checkinUploadGroups: [],
+    checkinUploadCount: 0,
+    checkinUploadDuration: 0,
+    checkinUploadBlockedRecords: [],
     checkinDeleting: false,
     checkinActionsOpen: false,
     deletingCheckinId: '',
@@ -119,7 +124,8 @@ Page({
         duration: `${duration}分钟`,
         emotion: []
       }] : [];
-      const result = await checkinManager.recordCheckinWithSync(duration, [], experience, timestamp, {
+      // 本机保存成功即可完成操作，云端上传及状态更新由记录管理器在后台处理。
+      const result = checkinManager.recordCheckin(duration, [], experience, timestamp, {
         idempotencyKey: this._checkinSubmissionId, source: 'manual', date: recordDate
       });
       if (!result || !result.success) throw new Error('本地保存失败');
@@ -131,11 +137,7 @@ Page({
       this.setData({ checkinExperience: '', showCheckinModal: false });
       this.refreshCheckinDefaults();
       this.refreshPageData();
-      wx.showToast({
-        title: result.cloudSynced ? '打卡成功'
-          : result.syncErrorCode === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : '已存本机，待上传',
-        icon: result.cloudSynced ? 'success' : 'none'
-      });
+      wx.showToast({ title: '已保存', icon: 'success' });
     } catch (error) {
       console.error('首页打卡保存失败:', error);
       wx.showToast({ title: '打卡保存失败，请重试', icon: 'none' });
@@ -145,10 +147,12 @@ Page({
   },
 
   refreshCheckinRecords() {
+    const pendingCheckinCount = checkinManager.getPendingSyncSummary().pending;
     this._allCheckinRecords = homeCheckin.readCheckinRecords(
       checkinManager, wx.getStorageSync('meditationTextRecords') || [], this.getCheckinDisplayOptions()
     );
-    this.setData({ pendingCheckinCount: checkinManager.getPendingSyncSummary().pending });
+    const unconfirmedCount = this._allCheckinRecords.filter(record => record.syncStatus === 'unconfirmed').length;
+    this.setData({ pendingCheckinCount: pendingCheckinCount + unconfirmedCount });
     this.updateCheckinGroups();
   },
 
@@ -157,25 +161,87 @@ Page({
     return { openid: typeof openid === 'string' && openid.startsWith('oz') ? openid : '' };
   },
 
-  async retryCheckinUploads() {
+  openCheckinUploadPreview() {
     if (this.data.checkinRetrying || this.data.checkinSubmitting) return;
+    this.refreshCheckinRecords();
+    const records = (this._allCheckinRecords || []).filter(record =>
+      ['unconfirmed', 'pending', 'failed', 'blocked'].includes(record.syncStatus)).map(record => {
+      if (record.syncStatus !== 'unconfirmed') return record;
+      const timestamp = dateUtil.getRecordTimestamp(record.timestamp);
+      if (!Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > Date.now() ||
+          !Number.isInteger(record.duration) || record.duration < 1 || record.duration > 1440) {
+        return { ...record, syncStatus: 'blocked', syncError: '记录的时间或时长不完整，无法上传' };
+      }
+      return record;
+    });
+    const uploadRecords = records.filter(record => record.syncStatus !== 'blocked');
+    const blockedRecords = records.filter(record => record.syncStatus === 'blocked');
+    if (!records.length) {
+      wx.showToast({ title: '暂无待上传记录', icon: 'none' });
+      return;
+    }
+    this._checkinUploadAccount = {
+      userId: checkinManager.getUserId(), openid: this.getCheckinDisplayOptions().openid
+    };
+    this._checkinUploadLocalIds = uploadRecords.filter(record => record.syncStatus !== 'unconfirmed')
+      .map(record => record.localId);
+    this._checkinUploadUnconfirmedRecords = uploadRecords.filter(record => record.syncStatus === 'unconfirmed')
+      .map(record => ({ localId: record.localId, timestamp: record.timestamp, duration: record.duration, date: record.dayDate }));
+    this.setData({
+      showCheckinUploadPreview: true,
+      checkinUploadGroups: homeCheckin.buildCheckinGroups(uploadRecords, { showAll: true }).groups,
+      checkinUploadCount: uploadRecords.length,
+      checkinUploadDuration: uploadRecords.reduce((total, record) => total + record.duration, 0),
+      checkinUploadBlockedRecords: blockedRecords
+    });
+  },
+
+  closeCheckinUploadPreview() {
+    if (this.data.checkinRetrying) return;
+    this._checkinUploadAccount = null;
+    this._checkinUploadLocalIds = null;
+    this._checkinUploadUnconfirmedRecords = null;
+    this.setData({ showCheckinUploadPreview: false, checkinUploadGroups: [],
+      checkinUploadCount: 0, checkinUploadDuration: 0, checkinUploadBlockedRecords: [] });
+  },
+
+  async retryCheckinUploads() {
+    if (this.data.checkinRetrying || this.data.checkinSubmitting || !this.data.showCheckinUploadPreview) return;
+    const account = this._checkinUploadAccount;
+    if (!account || account.userId !== checkinManager.getUserId() ||
+        account.openid !== this.getCheckinDisplayOptions().openid) {
+      this.closeCheckinUploadPreview();
+      this.refreshCheckinRecords();
+      wx.showToast({ title: '账号已切换，请重新查看待上传记录', icon: 'none' });
+      return;
+    }
+    if (!account.openid) {
+      wx.showToast({ title: '请登录后上传本机记录', icon: 'none' });
+      return;
+    }
+    const localIds = (this._checkinUploadLocalIds || []).slice();
+    const unconfirmedRecords = (this._checkinUploadUnconfirmedRecords || []).slice();
+    if (!localIds.length && !unconfirmedRecords.length) return;
     this.setData({ checkinRetrying: true });
     let result;
     try {
-      result = await checkinManager.syncWithCloud({ force: true, uploadPending: true });
+      result = await checkinManager.syncWithCloud({ force: true, uploadPending: true, localIds,
+        ...(unconfirmedRecords.length ? { unconfirmedRecords } : {}) });
     } catch (error) {
       console.error('首页重试上传失败:', error);
       wx.showToast({ title: '记录仍在本机，请稍后重试上传', icon: 'none' });
     } finally {
       this.refreshCalendarData();
       this.setData({ checkinRetrying: false });
+      this.closeCheckinUploadPreview();
     }
     if (result) {
       const pending = this.data.pendingCheckinCount;
       const blocked = (this._allCheckinRecords || []).some(record => record.syncStatus === 'blocked');
       wx.showToast({
         title: pending > 0 ? (blocked ? '部分记录无法上传，请查看记录提示'
-          : result.code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试' : `仍有 ${pending} 条未上传，请手动重试`)
+          : result.code === 'CLOUD_TIMEOUT' ? '上传超时（5秒），请手动重试'
+            : result.error || `仍有 ${pending} 条未上传，请手动重试`)
           : result.error || (result.uploaded > 0 ? '上传成功' : '暂无待上传记录'),
         icon: pending === 0 && result.uploaded > 0 ? 'success' : 'none'
       });

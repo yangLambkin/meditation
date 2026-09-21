@@ -235,40 +235,46 @@ test('selected sync includes legacy records for only the chosen date and current
   assert.equal(app.calls.now, 1);
 });
 
-test('only the three completed sync dates are accepted across 02:00, month, leap-year and year boundaries', async t => {
+test('only the seven completed sync dates can be previewed and uploaded across 02:00, month, leap-year and year boundaries', async t => {
   const cases = [
-    ['2026-09-16T15:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
-    ['2026-09-16T16:00:00.000Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
-    ['2026-09-16T17:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13'], '2026-09-16'],
-    ['2026-09-16T18:00:00.000Z', ['2026-09-16', '2026-09-15', '2026-09-14'], '2026-09-17'],
-    ['2026-09-30T18:00:00.000Z', ['2026-09-30', '2026-09-29', '2026-09-28'], '2026-10-01'],
-    ['2026-12-31T18:00:00.000Z', ['2026-12-31', '2026-12-30', '2026-12-29'], '2027-01-01'],
-    ['2028-02-29T18:00:00.000Z', ['2028-02-29', '2028-02-28', '2028-02-27'], '2028-03-01'],
+    ['2026-09-16T15:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09'], '2026-09-08', '2026-09-16'],
+    ['2026-09-16T16:00:00.000Z', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09'], '2026-09-08', '2026-09-16'],
+    ['2026-09-16T17:59:59.999Z', ['2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09'], '2026-09-08', '2026-09-16'],
+    ['2026-09-16T18:00:00.000Z', ['2026-09-16', '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10'], '2026-09-09', '2026-09-17'],
+    ['2026-10-02T18:00:00.000Z', ['2026-10-02', '2026-10-01', '2026-09-30', '2026-09-29', '2026-09-28', '2026-09-27', '2026-09-26'], '2026-09-25', '2026-10-03'],
+    ['2027-01-02T18:00:00.000Z', ['2027-01-02', '2027-01-01', '2026-12-31', '2026-12-30', '2026-12-29', '2026-12-28', '2026-12-27'], '2026-12-26', '2027-01-03'],
+    ['2028-03-02T18:00:00.000Z', ['2028-03-02', '2028-03-01', '2028-02-29', '2028-02-28', '2028-02-27', '2028-02-26', '2028-02-25'], '2028-02-24', '2028-03-03'],
   ];
-  for (const [now, allowed, today] of cases) {
+  for (const [now, allowed, expired, unfinished] of cases) {
     await t.test(now, async () => {
-      for (const date of allowed) {
-        const app = createHarness({ now, clockStep: 24 * 3600 * 1000 });
-        const result = await app.select(date);
-        assert.equal(result.success, true);
-        assert.equal(result.data.date, date);
-        assert.equal(result.data.skipped, true);
-        assert.equal(app.calls.now, 1);
+      for (const method of ['select', 'details']) {
+        for (const date of allowed) {
+          const app = createHarness({ now, clockStep: 24 * 3600 * 1000, records: [{ _openid: 'user-a', date, duration: 20 }] });
+          const result = await app[method](date);
+          assert.equal(result.success, true);
+          assert.equal(result.data.date, date);
+          assert.equal(result.data[method === 'select' ? 'duration' : 'totalDuration'], 20);
+          assert.equal(app.calls.posts.length, method === 'select' ? 1 : 0);
+          assert.equal(app.calls.now, 1);
+        }
+        for (const date of [expired, unfinished]) {
+          const app = createHarness({ now });
+          assert.equal((await app[method](date)).success, false);
+          assert.equal(app.calls.reads.length, 0);
+          assert.equal(app.calls.posts.length, 0);
+        }
       }
-      const app = createHarness({ now });
-      assert.equal((await app.select(today)).success, false);
-      assert.equal(app.calls.reads.length, 0);
     });
   }
 });
 
 test('invalid, missing, today, future and expired dates are rejected before database reads or external calls', async t => {
-  for (const date of [undefined, null, '', 20260916, ['2026-09-16'], {}, true, '2026-9-16', ' 2026-09-16', '2026-09-16T00:00:00+08:00', '2026-09-31', '2026-09-13', '2026-09-17', '2026-09-18']) {
+  for (const date of [undefined, null, '', 20260916, ['2026-09-16'], {}, true, '2026-9-16', ' 2026-09-16', '2026-09-16T00:00:00+08:00', '2026-09-31', '2026-09-09', '2026-09-17', '2026-09-18']) {
     await t.test(String(date), async () => {
       const app = createHarness();
       const result = await app.select(date);
       assert.equal(result.success, false);
-      assert.match(result.error, /最近三天/);
+      assert.match(result.error, /最近七天/);
       for (const key of ['reads', 'aggregates', 'updates', 'posts', 'gets']) assert.equal(app.calls[key].length, 0);
     });
   }
@@ -378,28 +384,32 @@ test('database failure becomes a top-level failure', async () => {
   assert.equal(app.calls.posts.length, 0);
 });
 
-test('legacy syncPending repeats all three completed dates with or without force and preserves its summary shape', async () => {
-  const app = createHarness({ records: ['2026-09-01', '2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17'].map(date => ({ _openid: 'user-a', date, duration: 20 })) });
+test('legacy syncPending repeats all seven completed dates with or without force and preserves its summary shape', async () => {
+  const dates = ['2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16'];
+  const app = createHarness({ records: ['2026-09-01', '2026-09-09', ...dates, '2026-09-17'].map(date => ({ _openid: 'user-a', date, duration: 20 })) });
   app.users[0].bijingBoundAt = '2026-09-01T03:00:00Z';
   app.users[0].bijingSyncedDates = { '2026-09-01': true, '2026-09-15': true };
   const result = await app.run({ type: 'syncPending', force: true });
   assert.equal(result.success, true);
-  assert.deepEqual({ ...result.data, results: undefined }, { pending: 3, synced: 3, skipped: 0, failed: 0, pendingCount: 0, forced: false, results: undefined });
-  assert.deepEqual(result.data.results.map(value => value.date), ['2026-09-14', '2026-09-15', '2026-09-16']);
-  assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), ['2026-09-14', '2026-09-15', '2026-09-16']);
-  assert.equal(app.calls.updates.length, 3);
-  assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-01': true, '2026-09-14': true, '2026-09-15': true, '2026-09-16': true });
+  assert.deepEqual({ ...result.data, results: undefined }, { pending: 7, synced: 7, skipped: 0, failed: 0, pendingCount: 0, forced: false, results: undefined });
+  assert.deepEqual(result.data.results.map(value => value.date), dates);
+  assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), dates);
+  assert.equal(app.calls.updates.length, 7);
+  assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-01': true, ...Object.fromEntries(dates.map(date => [date, true])) });
   assert.equal(app.calls.now, 1);
   assert.deepEqual(await app.run({ type: 'syncPending' }), result);
-  assert.deepEqual(app.calls.posts.slice(3).map(value => value.body.recordDate), ['2026-09-14', '2026-09-15', '2026-09-16']);
+  assert.deepEqual(app.calls.posts.slice(7).map(value => value.body.recordDate), dates);
 });
 
-test('legacy syncPending can backfill recent dates for a newly bound user', async () => {
-  const app = createHarness();
+test('legacy syncPending can backfill all seven recent dates for a newly bound user', async () => {
+  const app = createHarness({ records: [{ _openid: 'user-a', date: '2026-09-10', duration: 20 }] });
   const result = await app.run({ type: 'syncPending' });
-  assert.deepEqual(result.data.results.map(value => value.date), ['2026-09-14', '2026-09-15', '2026-09-16']);
-  assert.equal(result.data.skipped, 3);
-  assert.equal(app.calls.updates.length, 0);
+  assert.deepEqual(result.data.results.map(value => value.date), ['2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16']);
+  assert.equal(result.data.pending, 7);
+  assert.equal(result.data.synced, 1);
+  assert.equal(result.data.skipped, 6);
+  assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), ['2026-09-10']);
+  assert.equal(app.calls.updates.length, 1);
 });
 
 test('automatic timer sync still synchronizes only yesterday for all bound users', async t => {
@@ -499,13 +509,13 @@ test('empty date details return zero totals and the existing sync status without
 test('date details apply the same login, binding and recent-date validation as selected sync', async t => {
   const cases = [
     [{ openid: undefined }, '2026-09-16', '用户未登录'],
-    [{}, undefined, '最近三天'],
-    [{}, null, '最近三天'],
-    [{}, 20260916, '最近三天'],
-    [{}, '2026-09-13', '最近三天'],
-    [{}, '2026-09-17', '最近三天'],
-    [{}, '2026-09-18', '最近三天'],
-    [{}, '2026-9-16', '最近三天'],
+    [{}, undefined, '最近七天'],
+    [{}, null, '最近七天'],
+    [{}, 20260916, '最近七天'],
+    [{}, '2026-09-09', '最近七天'],
+    [{}, '2026-09-17', '最近七天'],
+    [{}, '2026-09-18', '最近七天'],
+    [{}, '2026-9-16', '最近七天'],
     [{ users: [] }, '2026-09-16', '尚未绑定学号'],
     [{ users: [{ _id: 'a', _openid: 'user-a', bijingBound: false }] }, '2026-09-16', '尚未绑定学号'],
     [{ users: [{ _id: 'a', _openid: 'user-a', bijingBound: true }] }, '2026-09-16', '尚未绑定学号'],

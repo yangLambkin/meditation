@@ -26,17 +26,19 @@
               <text class="font text">{{userNickname}}</text>
               <text class="edit-hint">点击修改</text>
             </view>
-            <!-- 同步日为北京时间 02:00 至次日 02:00，只提供最近三个已结束的同步日 -->
+            <!-- 同步日为北京时间 02:00 至次日 02:00，只提供最近七个已结束的同步日 -->
             <view wx:if="{{bijingShowSyncDatePicker}}" class="bijing-modal-mask" bindtap="cancelBijingSyncDate" catchtouchmove="noop">
               <view class="bijing-modal bijing-sync-modal" catchtap="noop">
                 <view class="bijing-modal-title">选择同步日期</view>
-                <view class="bijing-sync-hint">每天按北京时间 02:00 至次日 02:00 统计，可同步最近三个已结束的同步日</view>
-                <radio-group bindchange="onBijingSyncDateChange">
-                  <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
-                    <view class="bijing-date-text"><text>{{item.date}}</text><text class="bijing-date-label">{{item.label}}</text></view>
-                    <radio value="{{item.date}}" checked="{{bijingSyncDate === item.date}}" color="#b29764" />
-                  </label>
-                </radio-group>
+                <view class="bijing-sync-hint">每天按北京时间 02:00 至次日 02:00 统计，可同步最近 7 个已结束的同步日，滑动选择日期</view>
+                <scroll-view class="bijing-sync-dates" scroll-y="{{true}}" scroll-into-view="bijing-date-{{bijingSyncDate}}">
+                  <radio-group bindchange="onBijingSyncDateChange">
+                    <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" id="bijing-date-{{item.date}}" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
+                      <view class="bijing-date-text"><text>{{item.date}}</text><text class="bijing-date-label">{{item.label}}</text></view>
+                      <radio value="{{item.date}}" checked="{{bijingSyncDate === item.date}}" color="#b29764" />
+                    </label>
+                  </radio-group>
+                </scroll-view>
                 <view class="bijing-sync-details">
                   <view class="bijing-details-title">{{bijingSyncDate}} 打卡明细</view>
                   <view class="bijing-details-note">{{bijingSyncDate}} 02:00 至次日 02:00 前（北京时间）</view>
@@ -163,7 +165,7 @@
           <image
             class="shrink-0 image"
           />
-          <text class="font_2 text_9 ml-17">版本 V2.7.3</text>
+          <text class="font_2 text_9 ml-17">版本 V2.8.0</text>
         </view>
         <image
           class="image_3"

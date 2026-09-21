@@ -38,9 +38,13 @@ function createPage(name, dailyWisdom) {
   let nextTimer = 0;
   const modules = {
     'dailyWisdom.js': dailyWisdom,
+    'dailyCardImage.js': { DEFAULT_IMAGE: '/images/p1.png' },
     'homeCheckin.js': { getCheckinDay: () => '2026-09-19' },
     'checkin.js': { subscribeSyncState: () => () => {}, syncWithCloud: async () => ({ success: true, pending: 0, refreshed: false }) }, 'contentSec.js': {}, 'lunar.js': {},
-    'images.js': {}, 'badgeManager.js': {}, 'dateUtil.js': { watchBusinessDate: () => () => {} }
+    'images.js': {}, 'badgeManager.js': {}, 'dateUtil.js': {
+      getBusinessDate: () => undefined,
+      watchBusinessDate: () => () => {}
+    }
   };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     Page(value) { definition = value; },
@@ -112,8 +116,8 @@ test('home and daily card share daily wisdom while preserving loading and refres
   assert.equal(home.calls.generateCalendar, 1);
   assert.equal(home.calls.refreshCheckinsFromCloud, 1);
   assert.equal(home.calls.checkUserInfoStatus, 2);
-  assert.equal(card.calls.setCurrentDateInfo, 2);
-  assert.equal(card.calls.getUserData, 1);
+  assert.equal(card.calls.setCurrentDateInfo, 1, 'first show reuses the synchronous load refresh');
+  assert.equal(card.calls.getUserData || 0, 0, 'user data is refreshed by setCurrentDateInfo');
   assert.equal(Array.from(home.intervals.values())[0].milliseconds, 30000);
 
   wisdom.publish('新的一天，从觉察开始。');

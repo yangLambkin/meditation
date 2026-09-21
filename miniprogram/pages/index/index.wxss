@@ -516,11 +516,8 @@
   position: absolute;
   top: 2rpx;
   right: 2rpx;
-  width: 14rpx;
-  height: 14rpx;
-  border-radius: 50%;
-  background-color: #B29764;
-  box-shadow: 0rpx 1rpx 2rpx rgba(0, 0, 0, 0.2);
+  width: 18rpx;
+  height: 18rpx;
 }
 
 /* 静坐打卡按钮容器 */
@@ -721,6 +718,39 @@
 
 .checkin-dialog-body {
   padding: 0 32rpx 28rpx;
+}
+
+.checkin-upload-summary {
+  margin-top: 24rpx;
+  padding: 20rpx;
+  border-radius: 14rpx;
+  background-color: #b2976414;
+  color: #8a7145;
+  font-size: 26rpx;
+  line-height: 1.5;
+}
+
+.checkin-dialog .checkin-upload-record {
+  padding-top: 20rpx;
+  padding-bottom: 20rpx;
+}
+
+.checkin-upload-blocked {
+  margin-top: 28rpx;
+  padding-top: 24rpx;
+  border-top: 2rpx solid #edf0f3;
+}
+
+.checkin-upload-blocked .checkin-subtitle {
+  margin-bottom: 16rpx;
+}
+
+.checkin-upload-date {
+  display: block;
+  margin-bottom: 8rpx;
+  color: #596273;
+  font-size: 24rpx;
+  line-height: 1.5;
 }
 
 .checkin-dialog-actions {

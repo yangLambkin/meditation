@@ -31,7 +31,7 @@
       <!-- 有计时进度时显示重置按钮，隐藏时保留占位以保持主按钮居中 -->
       <view class="reset-btn-wrapper">
         <view class="weui-btn-circle reset-btn" bindtap="resetTimer" wx:if="{{showResetButton}}">
-          <image class="reset-btn-icon" src="{{resetIcon}}" />
+          <image class="reset-btn-icon" src="{{resetIcon}}" mode="aspectFit" />
           <text class="reset-btn-text">重置</text>
         </view>
         <view class="reset-btn-placeholder" wx:else></view>
@@ -39,19 +39,19 @@
       
       <!-- 主控制按钮 - 开始和暂停按钮在同一位置切换 -->
       <view class="weui-btn-circle main-btn primary" bindtap="startTimer" wx:if="{{showStartButton}}">
-        <image class="main-btn-icon" src="{{startIcon}}" />
+        <image class="main-btn-icon" src="{{startIcon}}" mode="aspectFit" />
         <text class="main-btn-text">开始</text>
       </view>
       
       <view class="weui-btn-circle pause-btn primary" bindtap="pauseTimer" wx:if="{{showPauseButton}}">
-        <image class="pause-btn-icon" src="{{pauseIcon}}" />
+        <image class="pause-btn-icon" src="{{pauseIcon}}" mode="aspectFit" />
         <text class="pause-btn-text">暂停</text>
       </view>
       
       <!-- 停止按钮 - 使用占位方式确保布局对称 -->
       <view class="stop-btn-wrapper">
         <view class="weui-btn-circle stop-btn warn-btn" bindtap="handleStop" wx:if="{{showStopButton}}">
-          <image class="stop-btn-icon" src="{{stopIcon}}" />
+          <image class="stop-btn-icon" src="{{stopIcon}}" mode="aspectFit" />
           <text class="stop-btn-text">停止</text>
         </view>
         <!-- 隐藏时的占位元素 -->
@@ -65,7 +65,8 @@
           <view class="flex-row items-center">
             <image
               class="shrink-0 image_4"
-              src="/images/icons/timer.png"
+              src="/images/icons/stopwatch.svg"
+              mode="aspectFit"
             />
             <text class="font ml-13">{{isCountdown ? '倒计时' : '正计时'}}模式</text>
           </view>
@@ -78,16 +79,17 @@
           </view>
           <image
             class="image_6"
-            src="/images/icons/right.png"
+            src="/images/icons/chevron-right.svg"
+            mode="aspectFit"
           />
         </view>
       </view>
-      <text class="timer-mode-hint">离开小程序或切到后台时，{{isCountdown ? '倒计时' : '正计时'}}会自动结束并记录已完成的分钟数。</text>
         <view class="mt-12 flex-row justify-between items-center section_5" bindtap="showMusicPicker">
         <view class="flex-row items-center">
           <image
             class="image_4"
-            src="/images/icons/music.png"
+            src="/images/icons/music.svg"
+            mode="aspectFit"
           />
           <view class="flex-col items-center ml-13">
             <text class="font_2 text_5 text_8">背景音乐</text>
@@ -96,7 +98,8 @@
         </view>
         <image
           class="image_6"
-          src="/images/icons/right.png"
+          src="/images/icons/chevron-right.svg"
+          mode="aspectFit"
         />
       </view>
     </view>
@@ -201,9 +204,9 @@
     <view class="completion-content">
       <text class="completion-title">静坐结束</text>
       <text class="completion-summary">这一刻，已静坐 {{completionDuration}} 分钟</text>
-      <textarea class="completion-input" placeholder="此刻有什么感受？可以写下来，也可以留白。" value="{{completionText}}" bindinput="onCompletionInput" maxlength="2000" disabled="{{isSavingCompletion}}" show-confirm-bar="{{false}}" />
+      <textarea class="completion-input" placeholder="此刻有什么感受？可以写下来，也可以留白。" value="{{completionText}}" bindinput="onCompletionInput" maxlength="2000" disabled="{{isSavingCompletion || isCompletionSaved}}" show-confirm-bar="{{false}}" />
       <text class="completion-hint">感受选填，留空也可以直接确定</text>
-      <button class="completion-confirm" bindtap="confirmCompletion" loading="{{isSavingCompletion}}" disabled="{{isSavingCompletion}}">确定</button>
+      <button class="completion-confirm" bindtap="confirmCompletion" loading="{{isSavingCompletion}}" disabled="{{isSavingCompletion}}">{{isCompletionSaved ? '查看日签' : '确定'}}</button>
     </view>
   </view>
 </view>

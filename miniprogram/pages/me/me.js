@@ -501,16 +501,19 @@ Page({
     this.setData({ bijingShowBindInput: false, bijingInputValue: '' });
   },
 
-  // 同步日按北京时间 02:00 至次日 02:00 划分，只提供最近三个已结束的同步日
+  // 同步日按北京时间 02:00 至次日 02:00 划分，只提供最近七个已结束的同步日
   getBijingSyncDateOptions() {
     const now = Date.now();
-    const syncNow = now;
     const beforeCutoff = dateUtil.getBusinessDate(now) !== new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10);
-    const labels = ['昨天', '前天', '大前天', '4天前'];
-    return [1, 2, 3].map((daysAgo, index) => ({
-      label: labels[index + (beforeCutoff ? 1 : 0)],
-      date: dateUtil.getBusinessDate(new Date(syncNow - daysAgo * 24 * 3600 * 1000))
-    }));
+    const labels = ['昨天', '前天', '大前天'];
+    return Array.from({ length: 7 }, (_, index) => {
+      const daysAgo = index + 1;
+      const calendarDaysAgo = daysAgo + (beforeCutoff ? 1 : 0);
+      return {
+        label: labels[calendarDaysAgo - 1] || `${calendarDaysAgo}天前`,
+        date: dateUtil.getBusinessDate(new Date(now - daysAgo * 24 * 3600 * 1000))
+      };
+    });
   },
 
   // 先选择日期，确认后才发起同步
@@ -624,7 +627,7 @@ Page({
       return;
     }
     const recordDate = this.data.bijingSyncDate;
-    // 弹窗跨过北京时间 02:00 时重新校验，不能提交已经超出最近三个同步日的日期
+    // 弹窗跨过北京时间 02:00 时重新校验，不能提交已经超出最近七个同步日的日期
     const options = this.getBijingSyncDateOptions();
     if (!options.some(option => option.date === recordDate)) {
       this.setData({ bijingSyncDateOptions: options, bijingSyncDate: options[0].date });

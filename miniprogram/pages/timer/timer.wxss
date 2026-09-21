@@ -99,8 +99,7 @@
   padding: 32rpx 0;
 }
 .image_4 {
-  filter: drop-shadow(0rpx 2rpx 2rpx #0000001a, 0rpx 2rpx 3rpx #0000001a);
-  border-radius: 20rpx;
+  display: block;
   width: 40rpx;
   height: 40rpx;
 }
@@ -145,6 +144,7 @@
   line-height: 25.84rpx;
 }
 .image_6 {
+  display: block;
   width: 36rpx;
   height: 36rpx;
 }
@@ -277,6 +277,15 @@
   margin-bottom: 6rpx;
 }
 
+/* 图标固定比例，避免在按钮内被 flex 压缩。 */
+.main-btn-icon,
+.pause-btn-icon,
+.stop-btn-icon,
+.reset-btn-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
 /* 主按钮大图标 - 开始和暂停按钮 */
 .main-btn-icon,
 .pause-btn-icon {
@@ -285,17 +294,11 @@
   margin-bottom: 10rpx;
 }
 
-/* 停止按钮图标 */
-.stop-btn-icon {
-  width: 32rpx;
-  height: 32rpx;
-  margin-bottom: 4rpx;
-}
-
-/* 重置按钮小图标 */
+/* 两侧图标略微放大，让重置箭头和停止方块更易辨认。 */
+.stop-btn-icon,
 .reset-btn-icon {
-  width: 32rpx;
-  height: 32rpx;
+  width: 36rpx;
+  height: 36rpx;
   margin-bottom: 4rpx;
 }
 
@@ -869,13 +872,6 @@
   background-color: #e5e7eb;
 }
 
-
-.timer-mode-hint {
-  margin: 20rpx 8rpx 0;
-  color: #8b8376;
-  font-size: 23rpx;
-  line-height: 1.6;
-}
 
 .duration-manage {
   margin-left: auto;

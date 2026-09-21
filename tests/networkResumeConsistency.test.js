@@ -166,6 +166,10 @@ test('restored network only refreshes cloud records and pending uploads wait for
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
   assert.equal(app.cloudRows.size, 0);
+  app.home.openCheckinUploadPreview();
+  assert.equal(app.home.data.showCheckinUploadPreview, true);
+  assert.equal(app.home.data.checkinUploadCount, 1);
+  assert.equal(app.calls.uploads.length, 1, 'the retry button previews the queue before upload');
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.rows()[0].localId, original.localId);
@@ -174,6 +178,7 @@ test('restored network only refreshes cloud records and pending uploads wait for
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
   assert.equal(app.calls.uploads.length, 2);
   assert.equal(app.home.data.checkinRetrying, false);
+  assert.equal(app.home.data.showCheckinUploadPreview, false);
 });
 
 test('repeated app visibility, disconnected events and elapsed time never retry a failed upload', async () => {
@@ -227,6 +232,7 @@ for (const firstEntry of ['app', 'home']) {
     assert.equal(app.rows().length, 1);
     assert.equal(app.rows()[0].syncStatus, 'failed');
     assert.equal(app.manager.getUserStats().totalCount, 1);
+    app.home.openCheckinUploadPreview();
     await app.home.retryCheckinUploads();
     assert.equal(app.calls.uploads.length, 2);
     assert.equal(app.cloudRows.size, 1);
@@ -242,6 +248,7 @@ test('resuming after suspended timers preserves failed records until manual uplo
   assert.equal(app.calls.uploads.length, 1);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 0);
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.calls.uploads.length, 2);
@@ -262,6 +269,7 @@ test('restarting after OS eviction retains pending identity and never reconstruc
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 0);
   assert.equal(app.calls.uploads.length, 1);
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.rows()[0].syncStatus, 'synced');
   assert.equal(app.cloudRows.size, 1);
@@ -280,6 +288,7 @@ for (const entry of ['home', 'login']) {
     assert.equal(app.rows().length, 1);
     assert.equal(app.manager.getPendingSyncSummary().pending, 1);
     assert.equal(app.cloudRows.size, 0);
+    app.home.openCheckinUploadPreview();
     await app.home.retryCheckinUploads();
     assert.equal(app.rows()[0].syncOpenid, OPENID);
     assert.equal(app.rows()[0].syncStatus, 'synced');
@@ -293,6 +302,7 @@ test('missing lock failures stay local through time and dependency repair until 
   assert.equal(app.rows()[0].syncErrorCode, 'MISSING_COLLECTION');
   await app.advance(24 * 60 * 60 * 1000);
   assert.equal(app.calls.uploads.length, 1);
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.calls.uploads.length, 2);
   assert.equal(app.rows()[0].syncStatus, 'failed');
@@ -302,6 +312,7 @@ test('missing lock failures stay local through time and dependency repair until 
   await app.advance(24 * 60 * 60 * 1000);
   assert.equal(app.calls.uploads.length, 2);
   assert.equal(app.rows()[0].syncStatus, 'failed');
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(app.calls.uploads.length, 3);
   assert.equal(app.rows()[0].syncStatus, 'synced');
@@ -363,6 +374,7 @@ test('manual upload completes independently of an already pending cloud read', a
   const refresh = app.manager.syncWithCloud();
   await flush();
   let completed = false;
+  app.home.openCheckinUploadPreview();
   const manual = app.home.retryCheckinUploads().then(() => { completed = true; });
   await flush();
   assert.equal(completed, true, 'a cloud refresh cannot hold the manual-upload button open');
@@ -429,6 +441,7 @@ test('a late old-account upload failure leaves both accounts local until their o
   assert.equal(currentAttempts, 1);
   await app.app.onShow();
   assert.equal(currentAttempts, 1);
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   assert.equal(currentAttempts, 2);
   assert.equal(app.rows().find(record => record.localId === 'current-account-pending').syncStatus, 'synced');
@@ -466,13 +479,20 @@ test('concurrent manual retry taps create one upload and never reopen an automat
       timestamp: args[3], date: '2026-09-20', duration: args[0], emotion: args[1], experience: args[2] });
     return new Promise(resolve => { resolveUpload = resolve; });
   });
+  app.home.openCheckinUploadPreview();
   const first = app.home.retryCheckinUploads();
+  app.home.openCheckinUploadPreview();
   const second = app.home.retryCheckinUploads();
   await flush();
   assert.equal(app.calls.uploads.length, 2);
   assert.equal(app.home.data.checkinRetrying, true);
+  app.home.closeCheckinUploadPreview();
+  assert.equal(app.home.data.showCheckinUploadPreview, true, 'repeat taps cannot close or replace an active upload preview');
+  assert.equal(app.home.data.checkinUploadCount, 1);
   resolveUpload({ success: true, data: { recordId: 'manual-once' } });
   await Promise.all([first, second]);
+  assert.equal(app.home.data.showCheckinUploadPreview, false);
+  app.home.openCheckinUploadPreview();
   await app.home.retryCheckinUploads();
   await app.advance(60 * 60 * 1000);
   assert.equal(app.calls.uploads.length, 2);
@@ -488,6 +508,7 @@ test('manual upload of several pending records has one five-second budget and fa
   }
   app.setUploadHook(() => new Promise(() => {}));
   let complete = false;
+  app.home.openCheckinUploadPreview();
   const manual = app.home.retryCheckinUploads().then(() => { complete = true; });
   await flush();
   await app.advance(4999);

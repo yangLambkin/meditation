@@ -87,6 +87,7 @@
           <view class="filter-chip {{todayFilter === 'attention' ? 'active' : ''}}" data-filter="attention" bindtap="changeTodayFilter">待关注 <text class="filter-count">{{attentionCount}}</text></view>
           <view class="filter-chip {{todayFilter === (hasGoal ? 'qualified' : 'practiced') ? 'active' : ''}}" data-filter="{{hasGoal ? 'qualified' : 'practiced'}}" bindtap="changeTodayFilter">{{hasGoal ? '已达标' : '已练习'}}</view>
           <view class="filter-chip {{todayFilter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeTodayFilter">全部</view>
+          <button class="reminder-button" bindtap="showReminderList" loading="{{isPreparingReminder}}" disabled="{{isPreparingReminder || isSaving || isDeleting || removingMemberId}}" aria-label="{{hasGoal ? '查看今日未达标名单' : '查看今日未练习名单'}}">提醒</button>
         </view>
         <text class="list-note">{{todayFilter === 'attention' ? (hasGoal ? '先显示尚未练习的成员，再显示时长不足的成员' : '本练习日尚无练习记录的成员') : (todayFilter === 'not_practiced' ? '本练习日尚无练习记录的成员' : (todayFilter === 'below_goal' ? '本练习日累计时长未达目标的成员' : (todayFilter === 'qualified' ? '已完成本练习日目标的成员' : (todayFilter === 'practiced' ? '本练习日已有练习记录的成员' : '全体成员的当日累计练习情况'))))}}</text>
 
@@ -172,6 +173,22 @@
     <text class="state-description">{{isLoading ? '请稍候' : loadError}}</text>
     <button wx:if="{{!isLoading && teamId}}" class="secondary-button" bindtap="loadTeamData">重新加载</button>
     <button wx:if="{{!isLoading}}" class="text-button" bindtap="goToTeamList">返回团队列表</button>
+  </view>
+
+  <view wx:if="{{reminderDialogOpen}}" class="invite-overlay" bindtap="closeReminderDialog" catchtouchmove="noop">
+    <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasGoal ? '今日未达标名单' : '今日未练习名单'}}">
+      <view class="invite-dialog-heading">
+        <text class="invite-dialog-title">{{hasGoal ? '今日未达标名单' : '今日未练习名单'}}</text>
+        <button class="invite-dialog-close" bindtap="closeReminderDialog" aria-label="关闭名单">×</button>
+      </view>
+      <text class="reminder-caption">{{reminderDate}} · {{reminderCount}} 位同学</text>
+      <scroll-view class="reminder-list" scroll-y="true" style="height: {{(reminderCount > 8 ? 8 : reminderCount) * 52 + 32}}rpx;">
+        <text class="reminder-names" user-select="{{true}}">{{reminderText}}</text>
+      </scroll-view>
+      <view class="invite-dialog-actions">
+        <button class="invite-dialog-share" bindtap="copyReminderList" loading="{{isCopyingReminder}}" disabled="{{isCopyingReminder}}">复制名单</button>
+      </view>
+    </view>
   </view>
 
   <view wx:if="{{inviteDialogOpen}}" class="invite-overlay" bindtap="closeInviteDialog" catchtouchmove="noop">

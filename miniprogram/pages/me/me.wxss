@@ -409,6 +409,9 @@
   width: 650rpx;
   padding: 28rpx 32rpx;
 }
+.bijing-sync-dates {
+  height: 252rpx;
+}
 .bijing-sync-modal .bijing-date-option {
   padding: 12rpx 20rpx;
   margin-bottom: 12rpx;

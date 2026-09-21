@@ -103,6 +103,7 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     require(request) {
       if (request === '../../utils/checkin') return { recordCheckin: () => ({ success: true }) };
       if (request === '../../utils/contentSec') return { checkText: async () => true };
+      if (request === '../../utils/dailyCardImage') return { prepareNextImage() {} };
       return loadModule(require.resolve(path.resolve(path.dirname(pagePath), request)));
     }
   }, { filename: pagePath });

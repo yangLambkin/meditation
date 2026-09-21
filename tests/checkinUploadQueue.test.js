@@ -254,6 +254,137 @@ test('pending summary filters by selected record date and excludes historical un
   assert.equal(app.calls.backups.length, 0);
 });
 
+for (const nested of [false, true]) {
+  test(`upload preview reads all dates from ${nested ? 'nested' : 'flat'} storage and includes only eligible waiting records`, async () => {
+    const response = deferred();
+    const app = harness({ nested, backup: () => response.promise });
+    app.manager.recordToLocal(18, [], [], TIMESTAMP - 86400000,
+      { idempotencyKey: 'preview-yesterday', source: 'manual', date: '2026-09-19' });
+    for (const id of ['preview-today', 'preview-blocked', 'preview-confirmed', 'preview-other-account', 'preview-guest']) {
+      save(app, id);
+    }
+    Object.assign(app.records().find(record => record.localId === 'preview-blocked'), {
+      syncStatus: 'failed', syncBlocked: true, syncError: '已超出补录期限', syncErrorCode: 'DATE_OUT_OF_RANGE'
+    });
+    app.records().find(record => record.localId === 'preview-confirmed')._id = 'confirmed-cloud-id';
+    app.records().find(record => record.localId === 'preview-other-account').syncOpenid = 'oz-someone-else';
+    delete app.records().find(record => record.localId === 'preview-guest').syncOpenid;
+    app.data().dailyRecords['2026-09-19'].records.push({
+      localId: 'preview-legacy', timestamp: TIMESTAMP - 86400000, duration: 10,
+      date: '2026-09-19', syncStatus: 'failed', syncError: '旧缓存错误'
+    });
+    app.manager.recordCheckin(12, [], [], TIMESTAMP, 'preview-uploading');
+    if (nested) app.storage.set(KEY, { checkinRecords: clone(app.data()), experienceRecords: {} });
+
+    const preview = clone(app.manager.getPendingUploadEntries());
+    assert.deepEqual(preview.map(({ date, record }) => [date, record.localId]), [
+      ['2026-09-19', 'preview-yesterday'], ['2026-09-20', 'preview-today'],
+      ['2026-09-20', 'preview-blocked'], ['2026-09-20', 'preview-guest']
+    ]);
+    assert.equal(preview.find(({ record }) => record.localId === 'preview-blocked').record.syncBlocked, true);
+    assert.deepEqual(clone(app.manager.getPendingUploadEntries({ date: '2026-09-19' }))
+      .map(({ record }) => record.localId), ['preview-yesterday']);
+    assert.deepEqual(clone(app.manager.getPendingUploadEntries({ date: '2026-09-18' })), []);
+    assert.equal(app.calls.reads, 0, 'preview is derived from persisted upload state without fetching cloud data');
+    assert.equal(app.calls.backups.length, 1, 'opening preview cannot start uploads');
+    response.resolve({ success: true, data: { recordId: 'preview-active-finished' } });
+    await flush();
+  });
+}
+
+for (const method of ['retryPendingBackups', 'syncWithCloud']) {
+  test(`${method} uploads only the specified cross-date identities once`, async () => {
+    const app = harness();
+    app.manager.recordToLocal(18, [], [], TIMESTAMP - 86400000,
+      { idempotencyKey: 'selected-yesterday', source: 'manual', date: '2026-09-19' });
+    save(app, 'selected-today');
+    save(app, 'unselected-today');
+    const result = await app.manager[method]({ uploadPending: true,
+      localIds: ['selected-today', 'selected-yesterday', 'selected-today', 'missing-record'] });
+    assert.deepEqual(app.calls.backups.map(args => args[4]), ['selected-yesterday', 'selected-today']);
+    assert.equal(result.total, 2);
+    assert.equal(result.uploaded, 2);
+    assert.equal(result.pending, 1, 'remaining pending count still covers the whole account');
+    assert.equal(app.records().find(record => record.localId === 'unselected-today').syncStatus, 'pending');
+  });
+
+  test(`${method} treats an empty selection as no upload, including during another active queue`, async () => {
+    const response = deferred();
+    const app = harness({ backup: () => response.promise });
+    save(app, 'empty-selection-pending');
+    const empty = await app.manager[method]({ uploadPending: true, localIds: [] });
+    assert.equal(empty.total, 0);
+    assert.equal(empty.uploaded, 0);
+    assert.equal(app.calls.backups.length, 0);
+    const active = app.manager[method]({ uploadPending: true, localIds: ['empty-selection-pending'] });
+    const concurrentEmpty = await app.manager[method]({ uploadPending: true, localIds: [] });
+    assert.equal(concurrentEmpty.total, 0);
+    assert.equal(concurrentEmpty.uploaded, 0);
+    assert.equal(app.calls.backups.length, 1);
+    response.resolve({ success: true, data: { recordId: 'active-selection-finished' } });
+    await active;
+  });
+}
+
+test('confirmed preview uploads skip records confirmed or deleted since preview and do not include newly added records', async () => {
+  const app = harness({ remove: () => ({ success: false, code: 'RECORD_NOT_FOUND' }) });
+  for (const id of ['preview-remains', 'preview-now-confirmed', 'preview-now-deleted']) save(app, id);
+  const localIds = app.manager.getPendingUploadEntries().map(({ record }) => record.localId);
+  save(app, 'added-after-preview');
+  const confirmed = app.records().find(record => record.localId === 'preview-now-confirmed');
+  Object.assign(confirmed, { _id: 'confirmed-after-preview', syncStatus: 'synced' });
+  assert.equal((await app.manager.deleteCheckin('2026-09-20', { localId: 'preview-now-deleted' })).success, true);
+  const result = await app.manager.syncWithCloud({ uploadPending: true, localIds });
+  assert.deepEqual(app.calls.backups.map(args => args[4]), ['preview-remains']);
+  assert.equal(result.uploaded, 1);
+  assert.equal(result.pending, 1);
+  assert.equal(app.records().find(record => record.localId === 'added-after-preview').syncStatus, 'pending');
+  assert.equal(app.records().some(record => record.localId === 'preview-now-deleted'), false);
+});
+
+test('a selected record newly confirmed during another upload is rechecked and skipped', async () => {
+  const response = deferred();
+  const app = harness({ backup: () => response.promise });
+  save(app, 'selected-inflight');
+  save(app, 'selected-later-confirmed');
+  const localIds = app.manager.getPendingUploadEntries().map(({ record }) => record.localId);
+  const upload = app.manager.syncWithCloud({ uploadPending: true, localIds });
+  await flush();
+  Object.assign(app.records().find(record => record.localId === 'selected-later-confirmed'),
+    { _id: 'other-request-confirmed', syncStatus: 'synced' });
+  response.resolve({ success: true, data: { recordId: 'selected-inflight-confirmed' } });
+  assert.equal((await upload).success, true);
+  assert.deepEqual(app.calls.backups.map(args => args[4]), ['selected-inflight']);
+});
+
+test('an account switch after preview cannot upload the original account selection', async () => {
+  const app = harness();
+  save(app, 'selected-account-a');
+  const localIds = app.manager.getPendingUploadEntries().map(({ record }) => record.localId);
+  app.storage.set('userOpenId', 'oz-preview-account-b');
+  assert.deepEqual(clone(app.manager.getPendingUploadEntries()), []);
+  await app.manager.syncWithCloud({ uploadPending: true, localIds });
+  assert.equal(app.calls.backups.length, 0);
+  assert.equal(app.records()[0].syncStatus, 'pending');
+});
+
+test('concurrent retries and caller mutations cannot widen the fixed preview selection', async () => {
+  const response = deferred();
+  const app = harness({ backup: () => response.promise });
+  save(app, 'fixed-preview-record');
+  save(app, 'outside-preview');
+  const localIds = ['fixed-preview-record'];
+  const upload = app.manager.syncWithCloud({ uploadPending: true, localIds });
+  localIds.push('outside-preview');
+  const concurrent = app.manager.syncWithCloud({ uploadPending: true });
+  assert.strictEqual(concurrent, upload);
+  const directRetry = app.manager.retryPendingBackups({ localIds: ['outside-preview'] });
+  response.resolve({ success: true, data: { recordId: 'fixed-preview-confirmed' } });
+  await Promise.all([upload, concurrent, directRetry]);
+  assert.deepEqual(app.calls.backups.map(args => args[4]), ['fixed-preview-record']);
+  assert.equal(app.records().find(record => record.localId === 'outside-preview').syncStatus, 'pending');
+});
+
 test('recordCheckin keeps its synchronous local interface and concurrent retry does not duplicate its request', async () => {
   const response = deferred();
   const app = harness({ backup: () => response.promise });

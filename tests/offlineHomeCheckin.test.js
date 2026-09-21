@@ -24,7 +24,11 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
     ['localUserId', LOCAL_USER], ['userOpenId', OPENID],
     [STORAGE_KEY, { dailyRecords: {}, monthlyStats: {}, userStats: {} }]
   ]);
-  const calls = { uploads: [], reads: 0, moderation: [], network: 0, toasts: [] };
+  const calls = { uploads: [], uploadStorageSnapshots: [], reads: 0, moderation: [], network: 0, toasts: [] };
+  function savedRows() {
+    const stored = storage.get(STORAGE_KEY);
+    return clone(Object.values((stored.checkinRecords || stored).dailyRecords).flatMap(day => day.records));
+  }
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
@@ -59,6 +63,7 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
   const api = {
     async recordMeditation(...args) {
       calls.uploads.push(clone(args));
+      calls.uploadStorageSnapshots.push(savedRows());
       if (uploadPending) return new Promise(() => {});
       if (uploadDelay) await new Promise(resolve => clock.setTimeout(resolve, uploadDelay));
       if (!connected) throw Object.assign(new Error('Network unavailable'), { code: 'NETWORK_ERROR' });
@@ -116,10 +121,7 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
     page, calls, timers, cloudRows, manager: dependencies.get('checkin.js'),
     get now() { return now; },
     setConnected(value) { connected = value; },
-    rows() {
-      const stored = storage.get(STORAGE_KEY);
-      return clone(Object.values((stored.checkinRecords || stored).dailyRecords).flatMap(day => day.records));
-    },
+    rows: savedRows,
     async advance(milliseconds) {
       const end = now + milliseconds;
       let count = 0;
@@ -150,9 +152,35 @@ async function saveWithoutAdvancingClock(app, text) {
   assert.equal(app.now, INITIAL_TIME);
   assert.equal(app.page.data.checkinSubmitting, false);
   assert.equal(app.page.data.showCheckinModal, false);
-  assert.equal(app.calls.toasts.at(-1).title, '已存本机，待上传');
+  assert.equal(app.calls.toasts.length, 1, 'saving locally shows one success toast');
+  assert.equal(app.calls.toasts[0].title, '已保存');
+  assert.equal(app.calls.toasts[0].icon, 'success');
   assert.equal(app.rows().length, 1);
   assert.equal(app.page.data.checkinTotal, 1, 'the actual page refresh reads the locally saved record');
+  assert.equal(app.calls.uploads.length, 1);
+  assert.equal(app.calls.uploadStorageSnapshots[0][0].localId, app.calls.uploads[0][4],
+    'the local record must be durably saved before the cloud upload starts');
+}
+
+function openAnotherForm(app) {
+  app.page.openCheckinModal();
+  app.page.onCheckinDateChange({ detail: { value: '2026-09-19' } });
+  app.page.onCheckinTimeChange({ detail: { value: '06:30' } });
+  app.page.onCheckinDurationInput({ detail: { value: '21' } });
+  app.page.onCheckinExperienceInput({ detail: { value: '下一次静坐的感受' } });
+  return app.page._checkinSubmissionId;
+}
+
+function assertAnotherFormUnchanged(app, submissionId) {
+  assert.equal(app.page.data.showCheckinModal, true, 'the old upload must not close a newly opened form');
+  assert.equal(app.page.data.checkinSubmitting, false);
+  assert.equal(app.page.data.checkinDate, '2026-09-19');
+  assert.equal(app.page.data.checkinTime, '06:30');
+  assert.equal(app.page.data.checkinDuration, '21');
+  assert.equal(app.page.data.checkinExperience, '下一次静坐的感受');
+  assert.equal(app.page._checkinSubmissionId, submissionId);
+  assert.equal(app.calls.toasts.length, 1, 'background upload completion must not show another toast');
+  assert.equal(app.calls.toasts[0].title, '已保存');
 }
 
 for (const text of ['', '  离线时也能记下平静的呼吸  ']) {
@@ -174,50 +202,45 @@ for (const text of ['', '  离线时也能记下平静的呼吸  ']) {
 }
 
 for (const text of ['', '上传一直没有返回']) {
-  test(`home waits five seconds ${text ? 'with approved text' : 'without text'} before showing pending`, async () => {
+  test(`home completes locally ${text ? 'with approved text' : 'without text'} while a hung upload later becomes pending`, async () => {
     const app = createApp({ online: true, uploadPending: true });
-    app.page.onCheckinExperienceInput({ detail: { value: text } });
-    let completed = false;
-    const saving = app.page.submitCheckin().then(() => { completed = true; });
-    await flush();
-    assert.equal(app.calls.uploads.length, 1);
+    await saveWithoutAdvancingClock(app, text);
     assert.equal(app.calls.moderation.length, text ? 1 : 0);
     assert.equal(app.rows()[0].syncStatus, 'uploading');
     assert.equal(app.manager.getPendingSyncSummary().pending, 0);
     assert.equal(app.page.data.pendingCheckinCount, 0);
     assert.equal(app.page._allCheckinRecords[0].syncStatusText, '正在上传');
-    await app.advance(4999);
-    assert.equal(completed, false);
-    assert.equal(app.page.data.checkinSubmitting, true);
-    assert.equal(app.calls.toasts.length, 0);
-    assert.ok(app.states.every(state => state.pending === 0));
     await app.page.submitCheckin();
     assert.equal(app.calls.uploads.length, 1);
+    assert.equal(app.rows().length, 1, 'a repeat tap cannot duplicate the locally completed check-in');
+    const nextSubmissionId = openAnotherForm(app);
+    await app.advance(4999);
+    assertAnotherFormUnchanged(app, nextSubmissionId);
+    assert.ok(app.states.every(state => state.pending === 0));
     await app.advance(1);
-    await saving;
-    assert.equal(completed, true);
-    assert.equal(app.page.data.checkinSubmitting, false);
+    assertAnotherFormUnchanged(app, nextSubmissionId);
     assert.equal(app.rows()[0].syncStatus, 'failed');
     assert.equal(app.manager.getPendingSyncSummary().pending, 1);
     assert.equal(app.page.data.pendingCheckinCount, 1);
-    assert.equal(app.calls.toasts.at(-1).title, '上传超时（5秒），请手动重试');
+    assert.equal(app.rows()[0].syncErrorCode, 'CLOUD_TIMEOUT');
+    assert.equal(app.page._allCheckinRecords[0].syncStatusText, '上传失败，已存本机，请手动上传');
     assert.equal(app.cloudRows.size, 0);
   });
 }
 
 for (const uploadDelay of [0, 4500]) {
-  test(`online upload confirmed after ${uploadDelay} ms never appears as pending`, async () => {
+  test(`local completion is independent of an online upload confirmed after ${uploadDelay} ms`, async () => {
     const app = createApp({ online: true, uploadDelay });
-    const saving = app.page.submitCheckin();
-    await flush();
+    await saveWithoutAdvancingClock(app, '');
     if (uploadDelay) {
-      assert.equal(app.page.data.checkinSubmitting, true);
-      assert.equal(app.calls.toasts.length, 0);
+      assert.equal(app.rows()[0].syncStatus, 'uploading');
+      assert.equal(app.cloudRows.size, 0, 'the form has completed before the cloud confirms the upload');
+      const nextSubmissionId = openAnotherForm(app);
       await app.advance(uploadDelay);
+      assertAnotherFormUnchanged(app, nextSubmissionId);
     }
-    await saving;
     assert.equal(app.calls.toasts.length, 1);
-    assert.equal(app.calls.toasts[0].title, '打卡成功');
+    assert.equal(app.calls.toasts[0].title, '已保存');
     assert.equal(app.calls.toasts[0].icon, 'success');
     assert.ok(app.states.length > 0);
     assert.ok(app.states.every(state => state.pending === 0));
@@ -238,19 +261,26 @@ test('home text check waits at most 1.5 seconds before saving even when both clo
   assert.equal(app.page.data.checkinSubmitting, true);
   assert.equal(app.rows().length, 0);
   await app.advance(1);
-  assert.equal(completed, false);
+  assert.equal(completed, true);
+  await saving;
+  assert.equal(app.page.data.checkinSubmitting, false);
+  assert.equal(app.page.data.showCheckinModal, false);
+  assert.equal(app.calls.toasts.length, 1);
+  assert.equal(app.calls.toasts[0].title, '已保存');
+  assert.equal(app.calls.toasts[0].icon, 'success');
   assert.equal(app.rows()[0].timestamp, INITIAL_TIME, 'moderation does not change the captured check-in instant');
   assert.equal(app.rows()[0].experience[0].text, '弱网下的体验');
+  assert.equal(app.calls.uploadStorageSnapshots[0][0].localId, app.calls.uploads[0][4],
+    'the reflection must be saved locally before its upload begins');
   assert.equal(app.manager.getPendingSyncSummary().pending, 0);
   await app.advance(4999);
-  assert.equal(completed, false);
-  assert.equal(app.calls.toasts.length, 0);
+  assert.equal(app.calls.toasts.length, 1);
+  assert.equal(app.rows()[0].syncStatus, 'uploading');
   await app.advance(1);
-  await saving;
-  assert.equal(completed, true);
   assert.equal(app.page.data.checkinSubmitting, false);
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
-  assert.equal(app.calls.toasts.at(-1).title, '上传超时（5秒），请手动重试');
+  assert.equal(app.calls.toasts.length, 1, 'the background timeout only updates the record status');
+  assert.equal(app.calls.toasts[0].title, '已保存');
 });
 
 test('restored network only reads until a home retry uploads once with the original date, time, duration and reflection', async () => {
@@ -272,11 +302,38 @@ test('restored network only reads until a home retry uploads once with the origi
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
   assert.equal(app.cloudRows.size, 0);
   await app.page.refreshCheckinsFromCloud({ force: true });
-  await app.advance(24 * 60 * 60 * 1000);
+  await app.advance(4 * 24 * 60 * 60 * 1000);
+  app.page.refreshCheckinRecords();
+  assert.equal(app.page.data.checkinRecords.length, 0, 'older dates can leave the recent home list');
+  assert.equal(app.page.data.pendingCheckinCount, 1, 'older dates still appear in the upload reminder');
   assert.equal(app.calls.uploads.length, 1, 'waiting and refreshing cannot replace a manual retry');
   await app.page.retryCheckinUploads();
+  assert.equal(app.calls.uploads.length, 1, 'confirmation without opening a preview cannot upload');
+  app.page.openCheckinUploadPreview();
+  assert.equal(app.page.data.showCheckinUploadPreview, true);
+  assert.equal(app.page.data.checkinUploadCount, 1);
+  assert.equal(app.page.data.checkinUploadGroups.length, 1);
+  const group = app.page.data.checkinUploadGroups[0];
+  assert.equal(group.date, before.date);
+  const preview = group.records[0];
+  assert.equal(preview.localId, before.localId);
+  assert.equal(preview.dayDate, before.date);
+  assert.equal(preview.timestamp, before.timestamp);
+  assert.equal(preview.timeLabel, '06:32');
+  assert.equal(preview.duration, before.duration);
+  assert.deepEqual(clone(preview.experienceTexts), ['静坐后更能觉察呼吸。']);
+  assert.equal(app.calls.uploads.length, 1, 'opening the preview only displays saved records');
+  app.page.closeCheckinUploadPreview();
+  assert.equal(app.page.data.showCheckinUploadPreview, false);
+  await app.page.retryCheckinUploads();
+  assert.equal(app.calls.uploads.length, 1, 'cancelling the preview cannot upload records');
+  assert.equal(app.rows()[0].syncStatus, 'failed');
+  app.page.openCheckinUploadPreview();
+  await app.page.retryCheckinUploads();
   assert.equal(app.page.data.checkinRetrying, false);
+  assert.equal(app.page.data.showCheckinUploadPreview, false);
   assert.equal(app.calls.toasts.at(-1).title, '上传成功');
+  app.page.openCheckinUploadPreview();
   await app.page.retryCheckinUploads();
   await app.manager.syncWithCloud({ force: true });
   app.page.refreshCalendarData();
@@ -312,15 +369,18 @@ test('a hung initial upload and every manual retry each stop within five seconds
   assert.equal(app.calls.uploads.length, 1);
 
   let complete = false;
+  app.page.openCheckinUploadPreview();
   const manual = app.page.retryCheckinUploads().then(() => { complete = true; });
   await flush();
   assert.equal(app.calls.uploads.length, 2);
   await app.advance(4999);
   assert.equal(complete, false);
   assert.equal(app.page.data.checkinRetrying, true);
+  assert.equal(app.page.data.showCheckinUploadPreview, true, 'the upload list remains visible during the request');
   await app.advance(1);
   await manual;
   assert.equal(app.page.data.checkinRetrying, false);
+  assert.equal(app.page.data.showCheckinUploadPreview, false);
   assert.equal(app.rows()[0].syncStatus, 'failed');
   assert.equal(app.page.data.pendingCheckinCount, 1);
   assert.equal(app.rows().length, 1);
@@ -345,6 +405,7 @@ test('saving a new check-in uploads only that new record and leaves previous fai
   assert.equal(app.rows().find(record => record.localId === originalId).syncStatus, 'failed');
   assert.equal(app.cloudRows.size, 1);
   assert.equal(app.manager.getPendingSyncSummary().pending, 1);
+  app.page.openCheckinUploadPreview();
   await app.page.retryCheckinUploads();
   assert.equal(app.calls.uploads.length, 3);
   assert.equal(app.calls.uploads[2][4], originalId);

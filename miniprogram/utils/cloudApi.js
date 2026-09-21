@@ -103,6 +103,7 @@ const cloudApi = {
           ...(options.source ? { source: options.source } : {}),
           ...(options.date ? { date: options.date } : {}),
           ...(options.expectedOpenid ? { expectedOpenid: options.expectedOpenid } : {}),
+          ...(options.recoverLegacy === true ? { recoverLegacy: true } : {}),
           timestamp: recordTimestamp
         }
       }, { deadlineAt: uploadDeadlineAt });
