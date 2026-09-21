@@ -35,7 +35,7 @@
         <view class="checkin-record-main"><text class="checkin-record-duration">{{record.duration}} 分钟</text><text class="checkin-record-time">{{record.timeLabel}}</text></view>
       </view>
       <text wx:if="{{record.syncStatusText && !isMemberHistory}}" class="record-sync-error">{{record.syncStatusText}}</text>
-      <text wx:elif="{{record.syncError}}" class="record-sync-error">已保存在本机，云端同步失败：{{record.syncError}}</text>
+      <text wx:elif="{{record.syncError}}" class="record-sync-error">上传失败，已存本机，请手动上传</text>
       <view wx:if="{{record.emotion.length}}" class="checkin-record-emotions">
         <text class="checkin-emotion" wx:for="{{record.emotion}}" wx:for-item="emotion" wx:key="*this">{{emotion}}</text>
       </view>
