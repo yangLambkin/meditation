@@ -1624,6 +1624,7 @@ test('creator reminder refreshes the full report and renders all unqualified mem
   assert.equal(calls.reminderImages.length, 1);
   const image = calls.reminderImages[0];
   assert.equal(image.canvas, canvasNode);
+  assert.equal(image.teamName, team.name);
   assert.deepEqual(Array.from(image.members, item => item.openid), ['third', 'member']);
   assert.equal(image.members[1].nickname, latest.members[1].nickname);
   assert.equal(image.members[1].todayMinutes, 18);

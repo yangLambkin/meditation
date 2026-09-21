@@ -7,7 +7,7 @@ const { createReminderImage } = require('../miniprogram/subpackages/team/utils/r
 const { selectReminderMembers } = require('../miniprogram/subpackages/team/utils/reminderText');
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const report = { settings: { dailyGoalMinutes: 60 } };
+const report = { businessDate: '2026-09-21', settings: { dailyGoalMinutes: 60 } };
 const member = (nickname, overrides = {}) => ({ nickname, todayStatus: 'below_goal',
   todayMinutes: 26, todayMinutesLabel: '26', remainingMinutesLabel: '34',
   todayPracticeCount: 1, statusLabel: '时长不足', progress: 43, ...overrides });
@@ -76,8 +76,13 @@ test('exports only selected unmet cards in list order, preserving their labels a
     member('玉亭', { todayStatus: 'not_practiced', statusLabel: '尚未练习', todayMinutes: 0,
       todayMinutesLabel: '0', todayPracticeCount: 0, progress: 0 }), member('俊池', { isCreator: true })];
   const selected = selectReminderMembers({ ...report, members: allMembers });
-  const result = await h.generate(selected);
+  const result = await h.generate(selected, { teamName: '一起冥想' });
   const values = h.text.map(item => item.value);
+  const firstCard = h.fills.find(fill => fill.kind === 'path' && fill.color === '#ffffff');
+  const firstCardTop = Math.min(...firstCard.points.map(point => point[1]));
+  assert.ok(['一起冥想', '2026-09-21 · 待达标同学'].every(value =>
+    h.text.some(item => item.value === value && item.y < firstCardTop)));
+
   assert.deepEqual(values.filter(value => ['玉亭', '俊池', '修一', '已达标同学'].includes(value)), ['玉亭', '俊池', '修一']);
   assert.ok(values.includes('今天的练习，还未开始'));
   assert.ok(values.includes('距离目标还差 34 分钟'));
@@ -100,7 +105,7 @@ test('exports only selected unmet cards in list order, preserving their labels a
 test('without a daily goal the unpracticed cards omit target minutes and progress tracks', async () => {
   const h = harness();
   await h.generate([member('未练习', { todayStatus: 'not_practiced', todayMinutesLabel: '0', todayPracticeCount: 0 })],
-    { report: { settings: { dailyGoalMinutes: null } } });
+    { report: { businessDate: '2026-09-21', settings: { dailyGoalMinutes: null } } });
   assert.ok(h.text.some(item => item.value === ' 分钟'));
   assert.equal(h.text.some(item => item.value.includes('/ 60')), false);
   assert.equal(h.fills.some(fill => fill.kind === 'path' && fill.color === '#f2f4f6'), false);

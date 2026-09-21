@@ -336,7 +336,7 @@ Page({
       }
       const canvas = await this.getReminderCanvas();
       if (!isCurrent()) return;
-      const reminder = await createReminderImage({ canvas, report, members, isCurrent });
+      const reminder = await createReminderImage({ canvas, report, members, teamName: teamInfo.name, isCurrent });
       if (!isCurrent()) return;
       if (report.nextResetAt <= Date.now()) {
         wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });

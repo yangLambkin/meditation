@@ -39,6 +39,25 @@ function wrapText(context, value, maxWidth) {
   return lines.length ? lines : ['未设置昵称'];
 }
 
+function layoutHeading(context, teamName, businessDate) {
+  font(context, 32, '500');
+  const name = String(teamName || '').replace(/\s+/g, ' ').trim();
+  const nameLines = name ? wrapText(context, name, 646) : [];
+  const captionTop = 32 + (nameLines.length ? nameLines.length * 44 + 12 : 0);
+  return { nameLines, caption: `${businessDate} · 待达标同学`, captionTop, height: captionTop + 36 + 28 };
+}
+
+function drawHeading(context, heading) {
+  context.textAlign = 'center';
+  context.fillStyle = colors.text;
+  font(context, 32, '500');
+  heading.nameLines.forEach((line, index) => context.fillText(line, LOGICAL_WIDTH / 2, 32 + index * 44));
+  font(context, 26);
+  context.fillStyle = colors.goldText;
+  context.fillText(heading.caption, LOGICAL_WIDTH / 2, heading.captionTop);
+  context.textAlign = 'left';
+}
+
 function roundedRect(context, x, y, width, height, radius, fill, stroke) {
   const r = Math.min(radius, width / 2, height / 2);
   context.beginPath();
@@ -264,10 +283,11 @@ function exportImage(canvas, width, height, wxApi, isCurrent) {
   });
 }
 
-async function createReminderImage({ canvas, report, members, wxApi = wx, isCurrent = () => true } = {}) {
+async function createReminderImage({ canvas, report, members, teamName = '', wxApi = wx, isCurrent = () => true } = {}) {
   checkCurrent(isCurrent);
   const goal = report && report.settings && report.settings.dailyGoalMinutes;
-  if (!report || !report.settings || !(goal === null || Number.isFinite(goal) && goal > 0) ||
+  if (!report || !/^\d{4}-\d{2}-\d{2}$/.test(report.businessDate || '') ||
+      !report.settings || !(goal === null || Number.isFinite(goal) && goal > 0) ||
       !Array.isArray(members) || members.some(member => !member ||
         !(member.todayStatus === 'not_practiced' || goal !== null && member.todayStatus === 'below_goal'))) {
     throw new Error('当日练习数据不完整，请刷新后重试');
@@ -279,8 +299,9 @@ async function createReminderImage({ canvas, report, members, wxApi = wx, isCurr
   }
   const context = canvas.getContext('2d');
   if (!context) throw new Error('暂时无法生成图片，请重试或更新微信');
+  const heading = layoutHeading(context, teamName, report.businessDate);
   const layouts = members.map(member => layoutCard(context, member, goal !== null));
-  const logicalHeight = 48 + layouts.reduce((sum, layout) => sum + layout.height, 0) + (layouts.length - 1) * 16;
+  const logicalHeight = heading.height + 24 + layouts.reduce((sum, layout) => sum + layout.height, 0) + (layouts.length - 1) * 16;
   const scale = Math.min(2, MAX_CANVAS_EDGE / logicalHeight, MAX_CANVAS_EDGE / LOGICAL_WIDTH,
     Math.sqrt(MAX_CANVAS_PIXELS / (LOGICAL_WIDTH * logicalHeight)));
   const width = Math.max(1, Math.floor(LOGICAL_WIDTH * scale));
@@ -293,7 +314,8 @@ async function createReminderImage({ canvas, report, members, wxApi = wx, isCurr
   context.textBaseline = 'top';
   context.fillStyle = colors.background;
   context.fillRect(0, 0, LOGICAL_WIDTH, logicalHeight);
-  let top = 24;
+  drawHeading(context, heading);
+  let top = heading.height;
   layouts.forEach((layout, index) => {
     checkCurrent(isCurrent);
     drawCard(context, layout, avatars[index], top, goal);
