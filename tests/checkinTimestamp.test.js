@@ -14,10 +14,17 @@ class FixedDate extends Date {
 }
 
 function loadModule(filename, globals = {}) {
+  globals = { ...globals, wx: globals.wx && {
+    getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+  } };
   const module = { exports: {} };
   vm.runInNewContext(read(filename), {
     module, exports: module.exports, Date: FixedDate, console: silentConsole,
     ...globals,
+    require(name) {
+      if (name === './uploadNetwork.js') return loadModule('miniprogram/utils/uploadNetwork.js', globals);
+      return globals.require(name);
+    },
   }, { filename });
   return module.exports;
 }
@@ -157,7 +164,7 @@ function createCloudHarness(initialStats, otherUsers = []) {
   };
 }
 
-test('local check-in uses the selected Beijing date/month and identical backup timestamp', () => {
+test('local check-in uses the selected Beijing date/month and identical backup timestamp', async () => {
   const { manager, backups, storage } = createLocalHarness();
   const timestamp = Date.parse('2026-08-31T16:05:00Z');
   const experience = [{ text: '平静', uniqueId: String(timestamp) }];
@@ -168,6 +175,7 @@ test('local check-in uses the selected Beijing date/month and identical backup t
   assert.deepEqual(data.dailyRecords['2026-08-31'].records[0].experience, experience);
   assert.equal(data.monthlyStats['2026-08'].total, 1);
   assert.equal(storage.get('meditation_monthly_stats_local-test').totalMinutes, 0);
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(backups[0].slice(0, 5), [20, ['平静'], experience, timestamp, result.localId]);
 });
 

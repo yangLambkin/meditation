@@ -12,6 +12,21 @@ const KEY = `meditation_checkin_${LOCAL_USER}`;
 const clone = value => value === undefined ? undefined : structuredClone(value);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+function loadApiModule(filename, globals) {
+  globals = { ...globals, wx: globals.wx && {
+    getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+  } };
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', filename), 'utf8'), {
+    module, exports: module.exports, ...globals,
+    require(name) {
+      assert.equal(name, './uploadNetwork.js');
+      return loadApiModule('uploadNetwork.js', globals);
+    }
+  }, { filename });
+  return module.exports;
+}
+
 function legacy(overrides = {}) {
   return {
     localId: 'legacy-september-19', timestamp: TIMESTAMP, duration: 45, date: '2026-09-19',
@@ -59,10 +74,17 @@ function harness({ records = [legacy()], nested = false, loggedIn = true, backup
     static now() { return now; }
   }
   function load(name, globals = {}) {
+    globals = { ...globals, wx: globals.wx && {
+      getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+    } };
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', name), 'utf8'), {
       module, exports: module.exports, Date: ClockDate,
-      console: { log() {}, warn() {}, error() {} }, ...globals
+      console: { log() {}, warn() {}, error() {} }, ...globals,
+      require(name) {
+        if (name === './uploadNetwork.js') return load('uploadNetwork.js', globals);
+        return globals.require(name);
+      }
     }, { filename: name });
     return module.exports;
   }
@@ -295,6 +317,7 @@ test('an unrelated active upload cannot produce a false success for the selected
     syncVersion: 1, syncStatus: 'pending', syncOpenid: OPENID });
   const app = harness({ records: [selected, pending], backup: () => new Promise(resolve => { completeUpload = resolve; }) });
   const unrelated = app.manager.retryPendingBackups({ localIds: [pending.localId] });
+  await flush();
   const recovery = app.manager.retryUnconfirmedRecord(identity(selected));
   assert.equal(app.calls.backups.length, 1);
   completeUpload({ success: true, data: { recordId: 'unrelated-cloud-record' } });
@@ -308,17 +331,16 @@ test('an unrelated active upload cannot produce a false success for the selected
 
 test('cloudApi forwards explicit recovery metadata and preserves the original payload', async () => {
   const calls = [];
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/cloudApi.js'), 'utf8'), {
-    module, console: { log() {}, warn() {}, error() {} },
+  const api = loadApiModule('cloudApi.js', {
+    console: { log() {}, warn() {}, error() {} },
     wx: { cloud: { callFunction(request) {
       calls.push(clone({ name: request.name, data: request.data }));
       request.success({ result: request.name === 'contentSecCheck'
         ? { success: true, safe: true } : { success: true, data: { recordId: 'cloud-api-recovery' } } });
     } } }
-  }, { filename: 'cloudApi.js' });
+  });
   const selected = legacy();
-  const result = await module.exports.recordMeditation(selected.duration, selected.emotion, selected.experience,
+  const result = await api.recordMeditation(selected.duration, selected.emotion, selected.experience,
     selected.timestamp, selected.localId, { source: 'manual', date: '2026-09-18', expectedOpenid: OPENID, recoverLegacy: true });
   assert.equal(result.success, true);
   assert.equal(calls[0].name, 'contentSecCheck', 'recovery still checks original experience text');
@@ -330,7 +352,7 @@ test('cloudApi forwards explicit recovery metadata and preserves the original pa
       recoverLegacy: true, timestamp: selected.timestamp
     } }
   });
-  await module.exports.recordMeditation(10, [], [], selected.timestamp, 'ordinary-record');
+  await api.recordMeditation(10, [], [], selected.timestamp, 'ordinary-record');
   assert.equal(Object.hasOwn(calls.at(-1).data.data, 'recoverLegacy'), false, 'ordinary uploads never opt into legacy recovery');
 });
 

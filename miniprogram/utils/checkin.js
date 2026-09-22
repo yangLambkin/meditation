@@ -1,6 +1,7 @@
 // 云存储API（仅在需要时使用）
 const cloudApi = require('./cloudApi.js');
 const dateUtil = require('./dateUtil.js');
+const uploadNetwork = require('./uploadNetwork.js');
 const pendingBackups = new Map();
 const activeUploads = new Set();
 const pendingDeletions = new Set();
@@ -14,7 +15,8 @@ const UPLOAD_RETRY_DELAY_MS = 100;
 const MAX_UPLOAD_RETRIES = 3;
 const NON_RETRYABLE_UPLOAD_CODES = new Set([
   'INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD',
-  'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'RECORD_NOT_FOUND', 'STORAGE_FAILED', 'UPLOAD_IGNORED'
+  'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'RECORD_NOT_FOUND', 'STORAGE_FAILED', 'UPLOAD_IGNORED',
+  'UPLOAD_PAUSED'
 ]);
 
 function currentUploadOpenid() {
@@ -31,7 +33,7 @@ function uploadEntries(userId) {
     (data.dailyRecords[date].records || []).filter(Boolean).map(record => ({ date, record })));
 }
 
-// 请求只在当前进程有效；重开后未确认的记录恢复为待手动上传，不能一直显示上传中。
+// 请求只在当前进程有效；重开后恢复为待上传，再按当天自动/历史手动的规则处理。
 function restoreInterruptedUploads(stored, userId) {
   const data = stored.checkinRecords || stored;
   let changed = false;
@@ -1236,7 +1238,22 @@ const checkinManager = {
       entry.record.syncStatus !== 'uploading');
   },
 
-  // 自动入口只读云端；只有用户明确点补传按钮才会上传待处理记录。
+  // 打开小程序只补传当前业务日的明确待上传记录，历史记录仍由首页手动确认。
+  retryTodayBackups: function() {
+    const userId = this.getUserId();
+    const openid = currentUploadOpenid();
+    if (!openid) return Promise.resolve({ success: false, uploaded: 0, code: 'AUTH_REQUIRED' });
+    const today = dateUtil.getBusinessDate();
+    const localIds = uploadEntries(userId).filter(({ date, record }) =>
+      isPendingUpload(record, openid) && !record.syncBlocked && record.syncStatus !== 'uploading' &&
+      typeof record.localId === 'string' && record.localId &&
+      dateUtil.getRecordBusinessDate(record, date) === today &&
+      !pendingDeletions.has(backupKey(userId, record.timestamp, record.localId)))
+      .map(({ record }) => record.localId);
+    return this.syncWithCloud({ uploadPending: true, localIds });
+  },
+
+  // 默认只读云端；打开小程序的补传入口必须传入当天名单，手动入口使用用户预览的名单。
   // 读请求与手动上传分别去重，慢读请求不阻塞补传。
   syncWithCloud: function({ uploadPending = false, localIds, unconfirmedRecords } = {}) {
     const userId = this.getUserId();
@@ -1290,7 +1307,7 @@ const checkinManager = {
     return sync;
   },
 
-  // 此方法仅供显式手动补传；每条记录的每次上传尝试独立计时。
+  // 手动补传和当天自动补传复用队列；每条记录的每次上传尝试独立计时。
   retryPendingBackups: function({ localIds } = {}) {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
@@ -1301,6 +1318,7 @@ const checkinManager = {
     }
     const key = `${userId}:${openid}`;
     if (pendingUploadDrains.has(key)) return pendingUploadDrains.get(key);
+    const uploadNetworkVersion = uploadNetwork.capture();
     const drain = (async () => {
       const entries = uploadEntries(userId).filter(({ record }) =>
         isPendingUpload(record, openid) && (!selectedIds || selectedIds.has(record.localId)));
@@ -1323,7 +1341,7 @@ const checkinManager = {
             continue;
           }
           const result = await this.asyncBackupToCloud(record.duration, record.emotion || [], record.experience,
-            record.timestamp, record.localId, { source: record.source, date });
+            record.timestamp, record.localId, { source: record.source, date, uploadNetworkVersion });
           if (result.success) summary.uploaded++;
           else {
             summary.failed++;
@@ -1515,6 +1533,8 @@ const checkinManager = {
   },
 
   backupRecordToCloud: async function(userId, duration, emotion, experience, timestamp, localId, metadata) {
+    const uploadNetworkVersion = metadata && Number.isSafeInteger(metadata.uploadNetworkVersion)
+      ? metadata.uploadNetworkVersion : uploadNetwork.capture();
     let managed = false;
     let openid = '';
     let result;
@@ -1559,6 +1579,13 @@ const checkinManager = {
       const args = [duration, emotion, experienceToSend, timestamp === undefined ? Date.now() : timestamp,
         uploadLocalId];
       for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+        const uploadDeadlineAt = Date.now() + UPLOAD_TIMEOUT_MS;
+        try {
+          await uploadNetwork.ensureOnline(uploadNetworkVersion, uploadDeadlineAt);
+        } catch (error) {
+          result = { success: false, code: error.code, error: error.message };
+          break;
+        }
         if (pendingDeletions.has(backupKey(userId, timestamp, localId))) {
           result = { success: false, code: 'UPLOAD_CANCELLED', error: '记录正在删除，已停止上传' };
           break;
@@ -1580,8 +1607,9 @@ const checkinManager = {
           }
         }
         try {
-          const uploadDeadlineAt = Date.now() + UPLOAD_TIMEOUT_MS;
-          result = await awaitUploadUntil(cloudApi.recordMeditation(...args, { ...metadata, uploadDeadlineAt }), uploadDeadlineAt);
+          uploadNetwork.assertUninterrupted(uploadNetworkVersion);
+          result = await awaitUploadUntil(cloudApi.recordMeditation(...args,
+            { ...metadata, uploadDeadlineAt, uploadNetworkVersion }), uploadDeadlineAt);
           if (!result || (result.success && !(result.data && typeof result.data.recordId === 'string' && result.data.recordId.trim()))) {
             result = { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认保存，请重试上传' };
           }

@@ -9,9 +9,16 @@ const silentConsole = { log() {}, warn() {}, error() {} };
 const clone = value => value === undefined ? value : structuredClone(value);
 
 function load(filename, globals) {
+  globals = { ...globals, wx: globals.wx && {
+    getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+  } };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram', filename), 'utf8'), {
-    module, exports: module.exports, console: silentConsole, ...globals
+    module, exports: module.exports, console: silentConsole, ...globals,
+    require(name) {
+      if (name === './uploadNetwork.js') return load('utils/uploadNetwork.js', globals);
+      return globals.require(name);
+    }
   }, { filename });
   return module.exports;
 }
@@ -49,6 +56,7 @@ function harness({ call, timersEnabled = true } = {}) {
     get now() { return now; },
     elapse(milliseconds) { now += milliseconds; },
     async advance(milliseconds) {
+      await flush();
       const end = now + milliseconds;
       while (true) {
         const timer = [...timers.entries()].filter(([, value]) => value.due <= end)
@@ -222,6 +230,7 @@ test('all text checks and the record write share a single three-second upload bu
   const experience = [{ text: '第一条心得' }, { text: '第二条心得' }];
   const timestamp = app.now - 1000;
   const pending = app.api.recordMeditation(12, [], experience, timestamp, 'shared-deadline');
+  await flush();
   assert.equal([...app.timers.values()][0].delay, 3000);
   app.elapse(1200);
   app.requests[0].success({ result: { success: true, safe: true } });
@@ -250,6 +259,7 @@ test('an earlier attempt deadline limits both text review and the subsequent wri
   const app = harness();
   const pending = app.api.recordMeditation(12, [], '排队的心得', app.now - 1000, 'short-budget',
     { uploadDeadlineAt: app.now + 1800 });
+  await flush();
   assert.equal([...app.timers.values()][0].delay, 1800);
   app.elapse(800);
   app.requests[0].success({ result: { success: true, safe: true } });
@@ -264,6 +274,7 @@ test('an explicit later deadline cannot extend a single upload beyond three seco
   const app = harness();
   const pending = app.api.recordMeditation(12, [], [], app.now - 1000, 'capped-budget',
     { uploadDeadlineAt: app.now + 60000 });
+  await flush();
   assert.equal([...app.timers.values()][0].delay, 3000);
   await app.advance(3000);
   assert.equal((await pending).code, 'CLOUD_TIMEOUT');
@@ -277,6 +288,7 @@ test('a new upload attempt receives a fresh three-second budget after a previous
   assert.equal((await first).code, 'CLOUD_TIMEOUT');
   await app.advance(100);
   const second = app.api.recordMeditation(12, [], [], timestamp, 'fresh-budget');
+  await flush();
   assert.equal([...app.timers.values()][0].delay, 3000);
   assert.deepEqual(app.requests[1].data, app.requests[0].data);
   await app.advance(2999);
@@ -300,6 +312,7 @@ for (const experience of [[], ['未审核心得']]) {
 test('approval arriving at the deadline cannot start a write even before the timer callback runs', async () => {
   const app = harness();
   const pending = app.api.recordMeditation(12, [], '刚超时的心得', app.now - 1000, 'deadline-approval');
+  await flush();
   app.elapse(3000);
   app.requests[0].success({ result: { success: true, safe: true } });
   assert.equal((await pending).code, 'CLOUD_TIMEOUT');
@@ -332,6 +345,7 @@ test('a hung upload and independent cloud refresh release locks for an explicit 
   assert.equal(record.localId, 'offline-timeout');
   assert.equal(record.syncErrorCode, 'CLOUD_TIMEOUT');
   const retry = manager.syncWithCloud({ uploadPending: true });
+  await flush();
   assert.equal(app.requests.length, 5);
   for (const request of app.requests.slice(1)) {
     assert.deepEqual(request.data, app.requests[0].data, 'retry must use the saved idempotent payload');

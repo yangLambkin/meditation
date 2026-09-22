@@ -64,10 +64,17 @@ function harness({ local = [], cloud = [], nested = false, read, stats, remove, 
     static now() { return NOW; }
   }
   function load(name, globals = {}) {
+    globals = { ...globals, wx: globals.wx && {
+      getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+    } };
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', name), 'utf8'), {
       module, exports: module.exports, Date: FixedDate,
-      console: { log() {}, warn() {}, error() {} }, ...globals
+      console: { log() {}, warn() {}, error() {} }, ...globals,
+      require(name) {
+        if (name === './uploadNetwork.js') return load('uploadNetwork.js', globals);
+        return globals.require(name);
+      }
     }, { filename: name });
     return module.exports;
   }

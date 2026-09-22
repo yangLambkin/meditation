@@ -851,6 +851,18 @@
   font-size: 28rpx;
 }
 
+.checkin-dialog .checkin-time-trigger {
+  width: 100%;
+  margin: 0;
+  font-weight: 400;
+  line-height: normal;
+  text-align: left;
+}
+
+.checkin-time-trigger::after {
+  border: none;
+}
+
 .checkin-duration-input {
   flex: 1;
   min-width: 0;

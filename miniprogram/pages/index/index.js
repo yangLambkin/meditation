@@ -23,6 +23,7 @@ Page({
     checkinDuration: '7',
     checkinExperience: '',
     showCheckinModal: false,
+    showCheckinTimePicker: false,
     checkinSubmitting: false,
     checkinRetrying: false,
     pendingCheckinCount: 0,
@@ -48,6 +49,7 @@ Page({
     this.refreshCheckinDefaults();
     this.setData({
       showCheckinModal: true,
+      showCheckinTimePicker: false,
       checkinDuration: '7',
       checkinExperience: ''
     });
@@ -55,7 +57,7 @@ Page({
 
   closeCheckinModal() {
     if (this.data.checkinSubmitting) return;
-    this.setData({ showCheckinModal: false });
+    this.setData({ showCheckinModal: false, showCheckinTimePicker: false });
   },
 
   preventCheckinModalTouchMove() {},
@@ -67,7 +69,7 @@ Page({
       minCheckinDate: homeCheckin.shiftCheckinDate(today, -2),
       maxCheckinDate: today,
       checkinDate: this._checkinDateEdited ? this.data.checkinDate : today,
-      checkinTime: this._checkinTimeEdited ? this.data.checkinTime : current.time
+      checkinTime: this._checkinTimeEdited || this.data.showCheckinTimePicker ? this.data.checkinTime : current.time
     });
   },
 
@@ -76,9 +78,21 @@ Page({
     this.setData({ checkinDate: e.detail.value });
   },
 
+  openCheckinTimePicker() {
+    if (this.data.checkinSubmitting || !this.data.showCheckinModal || this.data.showCheckinTimePicker) return;
+    this.refreshCheckinDefaults();
+    wx.hideKeyboard();
+    this.setData({ showCheckinTimePicker: true });
+  },
+
+  closeCheckinTimePicker() {
+    this.setData({ showCheckinTimePicker: false });
+  },
+
   onCheckinTimeChange(e) {
+    if (this.data.checkinSubmitting) return;
     this._checkinTimeEdited = true;
-    this.setData({ checkinTime: e.detail.value });
+    this.setData({ checkinTime: e.detail.value, showCheckinTimePicker: false });
   },
 
   onCheckinDurationInput(e) {
@@ -90,7 +104,7 @@ Page({
   },
 
   async submitCheckin() {
-    if (this.data.checkinSubmitting || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
+    if (this.data.checkinSubmitting || this.data.showCheckinTimePicker || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
     this.refreshCheckinDefaults();
     const durationText = String(this.data.checkinDuration).trim();
     const duration = Number(durationText);

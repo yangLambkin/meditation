@@ -67,6 +67,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     navigateTo: value => calls.navigation.push(value),
     showLoading() {},
     hideLoading() {},
+    hideKeyboard() {},
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
   };
   const modules = {
@@ -409,6 +410,60 @@ test('home form starts with seven minutes and the current business date and Beij
   assert.equal(page.data.checkinDuration, '7');
   assert.equal(page.data.checkinExperience, '');
   assert.equal(page.data.checkinSubmitting, false);
+});
+
+test('time selection keeps a draft until confirmation and preserves the chosen minute on submit', async () => {
+  const { page, calls, setNow } = createPage({ now: '2026-09-17T08:59:37+08:00' });
+  page.openCheckinModal();
+  page.openCheckinTimePicker();
+  assert.equal(page.data.showCheckinTimePicker, true);
+  setNow('2026-09-17T09:01:00+08:00');
+  page.refreshCheckinDefaults();
+  assert.equal(page.data.checkinTime, '08:59', 'the clock must not reset an open selection');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 0, 'the form cannot save an unfinished time selection');
+  change(page, 'Time', '08:00');
+  assert.equal(page.data.showCheckinTimePicker, false);
+  assert.equal(page.data.checkinTime, '08:00');
+  assert.equal(page.data.checkinDate, '2026-09-17');
+  page.refreshCheckinDefaults();
+  await page.submitCheckin();
+  assert.equal(calls.record[0][3], Date.parse('2026-09-17T08:00:00+08:00'));
+});
+
+test('cancelling time selection preserves both manual edits and automatic current-time defaults', () => {
+  const { page, setNow } = createPage();
+  page.openCheckinModal();
+  page.openCheckinTimePicker();
+  page.closeCheckinTimePicker();
+  assert.equal(page._checkinTimeEdited, false);
+  setNow('2026-09-17T08:26:00+08:00');
+  page.refreshCheckinDefaults();
+  assert.equal(page.data.checkinTime, '08:26');
+  change(page, 'Time', '07:59');
+  page.openCheckinTimePicker();
+  page.closeCheckinTimePicker();
+  page.refreshCheckinDefaults();
+  assert.equal(page.data.checkinTime, '07:59');
+  assert.equal(page._checkinTimeEdited, true);
+});
+
+test('closing the form discards the time picker and a new form uses current time', () => {
+  const { page, setNow } = createPage();
+  page.openCheckinTimePicker();
+  assert.equal(page.data.showCheckinTimePicker, false);
+  page.openCheckinModal();
+  page.openCheckinTimePicker();
+  page.closeCheckinModal();
+  assert.equal(page.data.showCheckinTimePicker, false);
+  setNow('2026-09-17T08:30:00+08:00');
+  page.openCheckinModal();
+  page.openCheckinTimePicker();
+  assert.equal(page.data.checkinTime, '08:30');
+  page.closeCheckinTimePicker();
+  page.setData({ checkinSubmitting: true });
+  page.openCheckinTimePicker();
+  assert.equal(page.data.showCheckinTimePicker, false);
 });
 
 test('home calendar and detail navigation agree on the day before 02:00 across a month boundary', () => {

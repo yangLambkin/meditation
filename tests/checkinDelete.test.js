@@ -13,9 +13,18 @@ class FixedDate extends Date {
   static now() { return NOW; }
 }
 const silentConsole = { log() {}, warn() {}, error() {} };
-function load(file, globals) {
+function load(file, globals = {}) {
+  globals = { ...globals, wx: globals.wx && {
+    getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+  } };
   const module = { exports: {} };
-  vm.runInNewContext(read(file), { module, exports: module.exports, Date: FixedDate, console: silentConsole, ...globals });
+  vm.runInNewContext(read(file), {
+    module, exports: module.exports, Date: FixedDate, console: silentConsole, ...globals,
+    require(name) {
+      if (name === './uploadNetwork.js') return load('miniprogram/utils/uploadNetwork.js', globals);
+      return globals.require(name);
+    }
+  });
   return module.exports;
 }
 function deferred() {
@@ -155,6 +164,7 @@ test('deletion waits for an in-flight backup, captures its cloud ID, and cannot 
   const backup = deferred();
   const app = harness({}, { backup: () => backup.promise });
   const result = app.manager.recordCheckin(10, [], [], NOW);
+  await new Promise(resolve => setImmediate(resolve));
   const deletion = app.manager.deleteCheckin('2026-09-17', { localId: result.localId, timestamp: NOW });
   assert.equal(app.calls.length, 0);
   backup.resolve({ success: true, data: { recordId: 'new-cloud-id' } });
@@ -215,6 +225,7 @@ test('failed backups still delete by local identity rather than another cloud re
     }
   });
   const saved = app.manager.recordCheckin(10, [], [], NOW);
+  await new Promise(resolve => setImmediate(resolve));
   const deletion = app.manager.deleteCheckin('2026-09-17', { localId: saved.localId });
   await app.advance(300);
   assert.equal((await deletion).success, true);

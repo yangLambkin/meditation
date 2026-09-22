@@ -35,11 +35,18 @@ function harness({ remove, stats } = {}) {
     static now() { return NOW; }
   }
   function load(filename, globals = {}) {
+    globals = { ...globals, wx: globals.wx && {
+      getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+    } };
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', filename), 'utf8'), {
       module, exports: module.exports, Date: FixedDate,
       console: { log() {}, warn() {}, error() {} },
-      ...globals
+      ...globals,
+      require(name) {
+        if (name === './uploadNetwork.js') return load('uploadNetwork.js', globals);
+        return globals.require(name);
+      }
     }, { filename });
     return module.exports;
   }

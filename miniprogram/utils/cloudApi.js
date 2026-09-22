@@ -1,6 +1,7 @@
 // 打卡同步请求不依赖 SDK 的最终回调解锁；其它云业务保留原有等待行为。
 const CLOUD_REQUEST_TIMEOUT_MS = 5000;
 const UPLOAD_TIMEOUT_MS = 3000;
+const uploadNetwork = require('./uploadNetwork.js');
 
 function cloudTimeoutError(timeoutMs) {
   const error = new Error(`上传超时（${timeoutMs / 1000}秒），请手动重试`);
@@ -40,6 +41,9 @@ const cloudApi = {
         }, Math.max(0, deadlineAt - Date.now()));
       }
       try {
+        if (isUpload && options.uploadNetworkVersion !== undefined) {
+          uploadNetwork.assertUninterrupted(options.uploadNetworkVersion);
+        }
         wx.cloud.callFunction({
           name: functionName,
           data: data,
@@ -57,10 +61,13 @@ const cloudApi = {
   // 记录冥想打卡
   recordMeditation: async function(duration, emotion, experience = "", timestamp, localId, options = {}) {
     try {
+      const uploadNetworkVersion = Number.isSafeInteger(options.uploadNetworkVersion)
+        ? options.uploadNetworkVersion : uploadNetwork.capture();
       const now = Date.now();
       // 每次上传尝试的文本检测与写入共用三秒；传入的截止时间只能缩短这次预算。
       const uploadDeadlineAt = Math.min(now + UPLOAD_TIMEOUT_MS,
         Number.isFinite(options.uploadDeadlineAt) ? options.uploadDeadlineAt : Infinity);
+      if (uploadDeadlineAt <= now) throw cloudTimeoutError(UPLOAD_TIMEOUT_MS);
       const recordTimestamp = timestamp === undefined ? now : timestamp;
       if (!Number.isSafeInteger(recordTimestamp) || recordTimestamp <= 0 || recordTimestamp > now) {
         return { success: false, error: '打卡时间无效或晚于当前时间' };
@@ -82,11 +89,12 @@ const cloudApi = {
       for (const content of texts) {
         let check;
         try {
+          await uploadNetwork.ensureOnline(uploadNetworkVersion, uploadDeadlineAt);
           const response = await this.callCloudFunction('contentSecCheck', { type: 'text', content, scene: 2 },
-            { deadlineAt: uploadDeadlineAt, isUpload: true });
+            { deadlineAt: uploadDeadlineAt, isUpload: true, uploadNetworkVersion });
           check = response && response.result;
         } catch (error) {
-          if (error && error.code === 'CLOUD_TIMEOUT') throw error;
+          if (error && ['CLOUD_TIMEOUT', 'UPLOAD_PAUSED'].includes(error.code)) throw error;
           return { success: false, code: 'CONTENT_CHECK_UNAVAILABLE', error: '内容安全检测暂不可用，请手动重试上传' };
         }
         if (check && check.success === true && check.safe === false) {
@@ -97,6 +105,7 @@ const cloudApi = {
         }
       }
       
+      await uploadNetwork.ensureOnline(uploadNetworkVersion, uploadDeadlineAt);
       const result = await this.callCloudFunction('meditationManager', {
         type: 'recordMeditation',
         data: {
@@ -110,7 +119,7 @@ const cloudApi = {
           ...(options.recoverLegacy === true ? { recoverLegacy: true } : {}),
           timestamp: recordTimestamp
         }
-      }, { deadlineAt: uploadDeadlineAt });
+      }, { deadlineAt: uploadDeadlineAt, uploadNetworkVersion });
 
       const response = result && result.result;
       if (response && response.success && response.data &&
@@ -130,8 +139,8 @@ const cloudApi = {
       console.error('调用云函数失败:', error);
       return {
         success: false,
-        code: error && error.code === 'CLOUD_TIMEOUT' ? 'CLOUD_TIMEOUT' : 'NETWORK_ERROR',
-        error: error && error.code === 'CLOUD_TIMEOUT' ? error.message : '网络错误，请手动重试'
+        code: error && ['CLOUD_TIMEOUT', 'UPLOAD_PAUSED'].includes(error.code) ? error.code : 'NETWORK_ERROR',
+        error: error && ['CLOUD_TIMEOUT', 'UPLOAD_PAUSED'].includes(error.code) ? error.message : '网络错误，请手动重试'
       };
     }
   },

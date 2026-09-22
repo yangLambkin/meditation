@@ -12,6 +12,21 @@ const KEY = `meditation_checkin_${LOCAL_USER}`;
 const clone = value => value === undefined ? undefined : structuredClone(value);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+function loadApiModule(filename, globals) {
+  globals = { ...globals, wx: globals.wx && {
+    getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+  } };
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', filename), 'utf8'), {
+    module, exports: module.exports, ...globals,
+    require(name) {
+      assert.equal(name, './uploadNetwork.js');
+      return loadApiModule('uploadNetwork.js', globals);
+    }
+  }, { filename });
+  return module.exports;
+}
+
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -48,10 +63,17 @@ function harness({ loggedIn = true, backup, remove, nested = false, cloud = [], 
     static now() { return now; }
   }
   function load(name, globals = {}) {
+    globals = { ...globals, wx: globals.wx && {
+      getNetworkType: ({ success }) => success({ networkType: 'wifi' }), ...globals.wx
+    } };
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', name), 'utf8'), {
       module, exports: module.exports, Date: ClockDate,
-      console: { log() {}, warn() {}, error() {} }, ...globals
+      console: { log() {}, warn() {}, error() {} }, ...globals,
+      require(name) {
+        if (name === './uploadNetwork.js') return load('uploadNetwork.js', globals);
+        return globals.require(name);
+      }
     }, { filename: name });
     return module.exports;
   }
@@ -442,6 +464,7 @@ for (const nested of [false, true]) {
       date: '2026-09-19', syncStatus: 'failed', syncError: '旧缓存错误'
     });
     app.manager.recordCheckin(12, [], [], TIMESTAMP, 'preview-uploading');
+    await flush();
     if (nested) app.storage.set(KEY, { checkinRecords: clone(app.data()), experienceRecords: {} });
 
     const preview = clone(app.manager.getPendingUploadEntries());
@@ -686,6 +709,7 @@ for (const nested of [false, true]) {
   test(`interrupted ${nested ? 'nested' : 'flat'} uploading state becomes manual-only after a restart`, async () => {
     const app = harness({ nested, backup: () => new Promise(() => {}) });
     app.manager.recordCheckin(12, [], [], TIMESTAMP, 'interrupted-first-attempt');
+    await flush();
     assert.equal(app.records()[0].syncStatus, 'uploading');
     assert.deepEqual(app.summary(), { total: 1, pending: 0, failed: 0 });
     if (nested) app.storage.set(KEY, { checkinRecords: clone(app.data()), experienceRecords: {} });
@@ -1159,13 +1183,11 @@ test('failed cache refresh persistence leaves the original pending retry state i
 
 for (const data of [undefined, {}, { recordId: '' }, { recordId: 7 }, { recordId: '   ' }]) {
   test(`cloud API rejects malformed success data ${JSON.stringify(data)}`, async () => {
-    const module = { exports: {} };
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/cloudApi.js'), 'utf8'), {
-      module, exports: module.exports,
+    const api = loadApiModule('cloudApi.js', {
       console: { log() {}, warn() {}, error() {} },
       wx: { cloud: { callFunction(options) { options.success({ result: { success: true, data } }); } } }
-    }, { filename: 'cloudApi.js' });
-    const result = await module.exports.recordMeditation(12, [], [], 1000, 'malformed-confirmation');
+    });
+    const result = await api.recordMeditation(12, [], [], 1000, 'malformed-confirmation');
     assert.equal(result.success, false);
     assert.equal(result.code, 'INVALID_RESPONSE');
   });
@@ -1173,20 +1195,19 @@ for (const data of [undefined, {}, { recordId: '' }, { recordId: 7 }, { recordId
 
 test('cloud API forwards expected owner and preserves server failure codes for the durable queue', async () => {
   const calls = [];
-  const module = { exports: {} };
   class FixedDate extends Date {
     constructor(...args) { super(...(args.length ? args : [NOW])); }
     static now() { return NOW; }
   }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/cloudApi.js'), 'utf8'), {
-    module, exports: module.exports, Date: FixedDate,
+  const api = loadApiModule('cloudApi.js', {
+    Date: FixedDate,
     console: { log() {}, warn() {}, error() {} },
     wx: { cloud: { callFunction(options) {
       calls.push(clone(options.data));
       options.success({ result: { success: false, code: 'IDENTITY_MISMATCH', error: '登录用户已变化' } });
     } } }
-  }, { filename: 'cloudApi.js' });
-  const result = await module.exports.recordMeditation(12, [], [], TIMESTAMP, 'api-owner-check',
+  });
+  const result = await api.recordMeditation(12, [], [], TIMESTAMP, 'api-owner-check',
     { source: 'timer', expectedOpenid: OPENID });
   assert.equal(result.success, false);
   assert.equal(result.code, 'IDENTITY_MISMATCH');

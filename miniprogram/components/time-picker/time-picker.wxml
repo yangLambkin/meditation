@@ -1,0 +1,30 @@
+<view class="time-picker-overlay">
+  <view class="time-picker-mask" bindtap="onCancel" catchtouchmove="preventTouchMove"></view>
+  <view class="time-picker-sheet" aria-role="dialog" aria-label="选择时间">
+    <view class="time-picker-header" catchtouchmove="preventTouchMove">选择时间</view>
+    <view class="time-picker-labels" catchtouchmove="preventTouchMove">
+      <text>小时</text>
+      <text>分钟</text>
+    </view>
+    <picker-view
+      class="time-picker-wheel"
+      value="{{pickerValue}}"
+      immediate-change="{{false}}"
+      indicator-class="time-picker-indicator"
+      bindpickstart="onPickStart"
+      bindpickend="onPickEnd"
+      bindchange="onChange"
+    >
+      <picker-view-column>
+        <view wx:for="{{hours}}" wx:key="*this" class="time-picker-item">{{item}}</view>
+      </picker-view-column>
+      <picker-view-column>
+        <view wx:for="{{minutes}}" wx:key="id" class="time-picker-item">{{item.label}}</view>
+      </picker-view-column>
+    </picker-view>
+    <view class="time-picker-actions" catchtouchmove="preventTouchMove">
+      <button class="time-picker-button time-picker-cancel" bindtap="onCancel">取消</button>
+      <button class="time-picker-button time-picker-confirm" disabled="{{busy}}" bindtap="onConfirm">确定</button>
+    </view>
+  </view>
+</view>

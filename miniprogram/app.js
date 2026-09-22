@@ -34,8 +34,12 @@ App({
 
   onShow() {
     if (!wx.cloud) return;
-    // 只读取云端记录；本机未上传记录必须由用户点击上传按钮处理。
-    return this.refreshRecordBackups();
+    // 打开/返回小程序补传当天记录，同时读取云端；历史记录仍需手动确认。
+    const refresh = this.refreshRecordBackups();
+    const upload = Promise.resolve().then(() => checkinManager.retryTodayBackups()).catch(error => {
+      console.warn('当天记录自动上传失败，保留本机记录:', error);
+    });
+    return Promise.all([refresh, upload]);
   },
 
   setupRecordRefresh() {
@@ -47,7 +51,7 @@ App({
   },
 
   refreshRecordBackups() {
-    // 恢复网络、重新打开均不补传，也不弹全局加载框。
+    // 网络状态变化只刷新；当天补传由 onShow 单独触发，不弹全局加载框。
     return Promise.resolve().then(() => checkinManager.syncWithCloud({ uploadPending: false })).catch(error => {
       console.warn('读取云端静坐记录失败，保留本机记录:', error);
     });
