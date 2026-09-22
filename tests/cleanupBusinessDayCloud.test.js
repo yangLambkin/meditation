@@ -58,13 +58,14 @@ test('safe cleanup uses inclusive 02:00 and exclusive next-day 02:00 for legacy 
   }
   const entry = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/cleanupTestData/index.js'), 'utf8'), {
-    module: entry, exports: entry.exports, Date: Clock, console: { log() {}, error() {} },
+    module: entry, exports: entry.exports, Date: Clock, process: { env: { MAINTENANCE_ADMIN_OPENIDS: 'operator', MAINTENANCE_ENV_ID: 'test-env', MAINTENANCE_DEPLOYMENT_TIER: 'test' } }, console: { log() {}, error() {} },
     require(name) {
+      if (name === './maintenanceAuth') return require('../cloudfunctions/cleanupTestData/maintenanceAuth');
       assert.equal(name, 'wx-server-sdk');
-      return { init() {}, database: () => database };
+      return { init() {}, database: () => database, getWXContext: () => ({ OPENID: 'operator', ENV: 'test-env' }) };
     },
   });
-  const result = await entry.exports.main({ mode: 'safe' });
+  const result = await entry.exports.main({ mode: 'safe', targetEnv: 'test-env', scope: 'all', dryRun: false, startDate: '2026-01-01', endDate: '2026-01-31' });
   assert.equal(result.success, true);
   assert.equal(result.testPeriod.endDate, '2026-01-31');
   assert.equal(result.totalDeleted, 110);

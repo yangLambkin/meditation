@@ -25,9 +25,22 @@ function stableDocumentId(prefix, openid, key) {
 }
 
 // 云函数入口函数
-exports.main = async (event, context) => {
-  // 添加调试日志
-  console.log('云函数接收到的参数:', JSON.stringify(event));
+exports.main = async (event = {}, context) => {
+  // 管理操作先授权，不记录完整请求（可能包含私密用户资料）。
+  if (['recomputeUserBadges', 'migrateBusinessDates'].includes(event.type)) {
+    const { canRunMaintenance, forbidden } = require('./maintenanceAuth');
+    const identity = cloud.getWXContext();
+    const environment = typeof process === 'undefined' ? {} : process.env;
+    if (!canRunMaintenance(identity, environment)) return forbidden();
+    const writes = event.type === 'recomputeUserBadges' ? event.mode === 'apply' : event.dryRun === false;
+    if (writes && (!environment.MAINTENANCE_ENV_ID || environment.MAINTENANCE_ENV_ID !== identity.ENV || event.targetEnv !== identity.ENV)) {
+      return { success: false, code: 'ENVIRONMENT_MISMATCH', error: '管理写入目标必须与平台环境和部署配置一致' };
+    }
+    if (event.type === 'migrateBusinessDates') {
+      if (event.dryRun !== undefined && typeof event.dryRun !== 'boolean') return { success: false, code: 'INVALID_DRY_RUN', error: 'dryRun 必须为布尔值' };
+      if (writes && event.scope !== 'all') return { success: false, code: 'TARGET_REQUIRED', error: '迁移写入必须显式指定 scope: all' };
+    }
+  }
   
   const wxContext = cloud.getWXContext();
   const openid = wxContext.OPENID;
@@ -45,7 +58,6 @@ exports.main = async (event, context) => {
     case "getUserRecords":
       return await getUserRecords(openid, event.date);
     case "migrateBusinessDates":
-      if (openid) return { success: false, error: '仅支持云端运维调用' };
       return await migrateBusinessDates(event);
     case "getUserStats":
       return await getUserStats(openid);
@@ -1100,71 +1112,7 @@ async function updateMeditationRecord(openid, recordId, experience = "") {
 
 // 更新用户档案信息
 async function updateUserProfile(openid, userInfo, userType = 'new') {
-  try {
-    console.log(`开始更新用户档案: openid=${openid}, userType=${userType}`);
-    
-    const usersCollection = db.collection('users');
-    const now = new Date();
-    
-    // 准备更新数据
-    const updateData = {
-      nickName: userInfo.nickName || '静心者',
-      avatarUrl: userInfo.avatarUrl || '/images/avatar.png',
-      lastLoginTime: now,
-      loginCount: db.command.inc(1),
-      lastUpdateTime: now
-    };
-    
-    // 添加新格式的字段
-    if (userInfo.isCustomAvatar !== undefined) {
-      updateData.isCustomAvatar = userInfo.isCustomAvatar;
-      updateData.profileComplete = userInfo.profileComplete !== false;
-      updateData.dataSource = userInfo.dataSource || 'custom';
-      updateData.migrationStatus = userInfo.migrationStatus || 'new';
-    }
-    
-    // 添加传统字段（如果存在）
-    if (userInfo.gender !== undefined) updateData.gender = userInfo.gender;
-    if (userInfo.country !== undefined) updateData.country = userInfo.country;
-    if (userInfo.province !== undefined) updateData.province = userInfo.province;
-    if (userInfo.city !== undefined) updateData.city = userInfo.city;
-    
-    // 检查用户是否已存在
-    const userQuery = await usersCollection.where({ _openid: openid }).get();
-    
-    if (userQuery.data.length > 0) {
-      // 用户已存在，更新信息
-      await usersCollection.doc(userQuery.data[0]._id).update({
-        data: updateData
-      });
-      console.log(`✅ 用户档案更新成功: openid=${openid}`);
-    } else {
-      // 用户不存在，创建新用户
-      const createData = {
-        ...updateData,
-        _openid: openid,
-        createTime: now
-      };
-      
-      await usersCollection.add({
-        data: createData
-      });
-      console.log(`✅ 新用户档案创建成功: openid=${openid}`);
-    }
-    
-    return {
-      success: true,
-      data: {
-        openid: openid,
-        updateTime: now,
-        userType: userType
-      }
-    };
-    
-  } catch (error) {
-    console.error("更新用户档案失败:", error);
-    return { success: false, error: error.message };
-  }
+  return require('./profile').updateUserProfile({ db, openid, userInfo, userType });
 }
 
 // 获取用户档案信息
@@ -1374,11 +1322,21 @@ async function getUserBadges(openid) {
 //   event.mode         'report' | 'apply'
 //   event.openid       指定单个用户（优先）
 //   event.nickName     按昵称解析 openid（如 '亘心'）
-//   两者皆缺省 → 遍历全部用户
+//   全库操作必须显式指定 scope: all；缺少目标不会退化为全库。
 async function recomputeUserBadges(event) {
-  const mode = event.mode || 'report';
-  const targetOpenid = event.openid || null;
-  const targetNickName = event.nickName || null;
+  const mode = event.mode === undefined ? 'report' : event.mode;
+  const invalid = (code, error) => ({ success: false, code, error });
+  if (!['report', 'apply'].includes(mode)) return invalid('INVALID_MODE', '仅支持 report 或 apply');
+  for (const key of ['openid', 'nickName']) {
+    if (event[key] !== undefined && (typeof event[key] !== 'string' || !event[key].trim())) {
+      return invalid('INVALID_TARGET', '用户目标必须是非空字符串');
+    }
+  }
+  const targetOpenid = typeof event.openid === 'string' ? event.openid.trim() : null;
+  const targetNickName = typeof event.nickName === 'string' ? event.nickName.trim() : null;
+  if ((event.scope !== undefined && !['all', 'user'].includes(event.scope)) ||
+      (event.scope === 'all' && (targetOpenid || targetNickName))) return invalid('INVALID_TARGET', '全库范围不能混用单用户目标');
+  if (!targetOpenid && !targetNickName && event.scope !== 'all') return invalid('TARGET_REQUIRED', '请指定用户；全库操作需显式 scope: all');
 
   // 勋章定义镜像（与 miniprogram/utils/badgeManager.js 保持一致；仅保留判定所需字段）
   const BADGES = [
@@ -1406,9 +1364,11 @@ async function recomputeUserBadges(event) {
   if (targetOpenid) {
     targetOpenids = [targetOpenid];
   } else if (targetNickName) {
-    const uRes = await db.collection('users').where({ nickName: targetNickName }).limit(100).get();
-    targetOpenids = uRes.data.map(u => u._openid);
-    console.log(`🔍 按昵称「${targetNickName}」解析到 ${targetOpenids.length} 个 openid:`, targetOpenids);
+    const uRes = await db.collection('users').where({ nickName: targetNickName }).limit(2).get();
+    if (!uRes.data.length) return invalid('TARGET_NOT_FOUND', '没有找到此昵称对应的用户');
+    if (uRes.data.length !== 1) return invalid('AMBIGUOUS_TARGET', '昵称不唯一，请使用 OPENID');
+    if (typeof uRes.data[0]._openid !== 'string' || !uRes.data[0]._openid.trim()) return invalid('INVALID_TARGET', '用户记录缺少有效 OPENID');
+    targetOpenids = [uRes.data[0]._openid];
   }
 
   // 拉取冥想记录（分页，避免单次超限）

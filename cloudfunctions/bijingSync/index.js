@@ -446,19 +446,13 @@ async function manualSyncPending(openid) {
 }
 
 // ===== 入口 =====
-exports.main = async (event, context) => {
-  // 启动日志：区分触发来源（timer 定时 / 手动），便于验证触发器是否生效
+exports.main = async (event = {}, context) => {
   const wxContext = cloud.getWXContext();
-  // 微信定时触发器：context.source === 'timer'，且 event 不含自定义 type 字段
-  const isTimer = (context.source === 'timer') || (!wxContext.OPENID && !event.type);
-  console.log('📥 bijingSync 触发, source=', isTimer ? 'TIMER(定时)' : 'MANUAL(手动)',
-    ', openid=', wxContext.OPENID || 'none',
-    ', type=', event.type,
-    ', time=', new Date().toISOString());
   const openid = wxContext.OPENID;
-
-  // 定时触发：自动走全量同步（兼容 event 不带 type 的情况）
-  if (isTimer) {
+  // Missing type remains the timer dispatch shape, but never authenticates a caller.
+  if (!event.type || event.type === 'cronSyncAll') {
+    const { canRunMaintenance, forbidden } = require('./maintenanceAuth');
+    if (!canRunMaintenance(wxContext, typeof process === 'undefined' ? {} : process.env, true)) return forbidden();
     return await cronSyncAll();
   }
 
@@ -475,8 +469,6 @@ exports.main = async (event, context) => {
       return await manualSyncSelectedDate(openid, event.recordDate);
     case 'syncPending':
       return await manualSyncPending(openid);
-    case 'cronSyncAll':
-      return await cronSyncAll();
     default:
       return { success: false, error: '未知操作: ' + event.type };
   }

@@ -332,37 +332,6 @@ const checkinManager = {
     }
   },
 
-  // 获取用户打卡数据（统一架构，支持迁移旧数据和新结构）
-  getUserCheckinData: function() {
-    const userId = this.getUserId();
-    const storageKey = `meditation_checkin_${userId}`;
-    
-    // 尝试从统一存储获取数据
-    const unifiedData = wx.getStorageSync(storageKey);
-    if (unifiedData) restoreInterruptedUploads(unifiedData, userId);
-    if (unifiedData) this.normalizeBusinessDates(unifiedData, storageKey);
-    
-    // 支持新的数据结构：{checkinRecords: {dailyRecords: {...}}, experienceRecords: {...}}
-    if (unifiedData && unifiedData.checkinRecords && unifiedData.checkinRecords.dailyRecords) {
-      // 返回新的数据结构，转换为兼容格式
-      return {
-        businessDayVersion: 2,
-        dailyRecords: unifiedData.checkinRecords.dailyRecords || {},
-        monthlyStats: unifiedData.checkinRecords.monthlyStats || {},
-        userStats: unifiedData.checkinRecords.userStats || {}
-      };
-    }
-    
-    // 支持旧的数据结构：{dailyRecords: {...}, monthlyStats: {...}}
-    if (unifiedData && unifiedData.dailyRecords) {
-      // 已经有统一数据，直接返回
-      return unifiedData;
-    }
-    
-    // 如果没有统一数据，尝试从旧存储迁移数据
-    return this.migrateOldCheckinData(userId);
-  },
-
   normalizeBusinessDates: function(stored, storageKey) {
     const data = stored.checkinRecords || stored;
     if (!data.dailyRecords || data.businessDayVersion === 2) return;
@@ -428,18 +397,6 @@ const checkinManager = {
     
     console.log('✅ 旧打卡数据迁移完成');
     return oldData;
-  },
-
-  // 保存用户打卡数据（统一架构）
-  saveUserCheckinData: function(data) {
-    const userId = this.getUserId();
-    const storageKey = `meditation_checkin_${userId}`;
-    
-    // 直接保存打卡数据（无需嵌套结构）
-    wx.setStorageSync(storageKey, data);
-    bumpUserStorageRevision(userId);
-    
-    return true;
   },
 
   // === 严格缓存检测机制 ===
@@ -714,8 +671,17 @@ const checkinManager = {
         record.date = dateUtil.getRecordBusinessDate(record);
       }
     });
-    const merged = this.rebuildLocalCacheFromCloudRecords(reconciled);
-    merged.experienceRecords = { ...merged.experienceRecords, ...(stored.experienceRecords || {}) };
+    const rebuilt = this.rebuildLocalCacheFromCloudRecords(reconciled);
+    const merged = { ...stored, ...rebuilt };
+    if (stored.checkinRecords) {
+      merged.checkinRecords = { ...local, ...rebuilt.checkinRecords };
+    } else {
+      // 刷新原本就统一为嵌套结构；只移除旧打卡投影，保留原外层扩展信息。
+      for (const field of ['businessDayVersion', 'dailyRecords', 'monthlyStats', 'userStats']) {
+        delete merged[field];
+      }
+    }
+    merged.experienceRecords = { ...rebuilt.experienceRecords, ...(stored.experienceRecords || {}) };
     const data = merged.checkinRecords;
     data.userStats = { ...(local.userStats || {}), ...this.getUserStats(data) };
     Object.keys(local.monthlyStats || {}).forEach(month => {
@@ -1851,13 +1817,30 @@ const checkinManager = {
     return defaultData;
   },
   
-  // 保存用户打卡数据
+  // 只提交打卡字段；页面读取到的投影不能覆盖独立体验或完整存储的元数据。
   saveUserCheckinData: function(data) {
     const userId = this.getUserId();
     const userKey = `meditation_checkin_${userId}`;
     
     try {
-      wx.setStorageSync(userKey, data);
+      const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
+      if (!isObject(data)) throw new Error('打卡数据格式无效');
+      const stored = wx.getStorageSync(userKey) || {};
+      if (!isObject(stored)) throw new Error('本地记录格式无效，已保留原数据');
+      const nested = Object.prototype.hasOwnProperty.call(stored, 'checkinRecords');
+      if (nested && !isObject(stored.checkinRecords)) throw new Error('本地打卡结构无效，已保留原数据');
+      const current = nested ? stored.checkinRecords : stored;
+      const patch = {};
+      for (const field of ['businessDayVersion', 'dailyRecords', 'monthlyStats', 'userStats']) {
+        if (!Object.prototype.hasOwnProperty.call(data, field) || data[field] === undefined) continue;
+        if (field !== 'businessDayVersion' && !isObject(data[field])) {
+          throw new Error('打卡字段格式无效');
+        }
+        patch[field] = data[field];
+      }
+      // 无 await：读取最新完整对象后一次写入。字段缺省保留，显式空对象允许清空。
+      const merged = { ...current, ...patch };
+      wx.setStorageSync(userKey, nested ? { ...stored, checkinRecords: merged } : merged);
       bumpUserStorageRevision(userId);
       return true;
     } catch (error) {

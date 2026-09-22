@@ -9,6 +9,7 @@
 //   云函数一次调用即返回 Pass/Review/Block，前端同步拿到结论后立即拦截，无需轮询。
 
 const VIOLATION_TIP = '所发布内容含违规信息'
+const UNAVAILABLE_TIP = '内容安全检测暂不可用，请稍后重试'
 
 // 判断是否为需要检测的本地临时文件（微信体系内的网络图/云存储图不在此列）
 function isLocalTempFile(path) {
@@ -177,14 +178,14 @@ async function checkText(text, scene = 2, opts = {}) {
       data: { type: 'text', content: String(text), scene }
     })
     const result = res && res.result
-    if (!result || !result.success || !result.safe) {
-      wx.showToast({ title: VIOLATION_TIP, icon: 'none' })
-      return false
-    }
-    return true
+    if (result && result.success === true && result.safe === true) return true
+    const risky = result && result.success === true && result.safe === false
+    wx.showToast({ title: risky ? VIOLATION_TIP : UNAVAILABLE_TIP, icon: 'none' })
+    return false
   } catch (err) {
     console.error('内容安全文本检测失败:', err)
-    return true
+    wx.showToast({ title: UNAVAILABLE_TIP, icon: 'none' })
+    return false
   }
 }
 

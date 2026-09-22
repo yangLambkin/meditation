@@ -4,7 +4,7 @@ cloud.init({
 });
 
 // 🔍 内容安全检测云函数
-//   文本 -> cloud.openapi.security.msgSecCheck（同步，命中违规抛 errCode 87014）
+//   文本 -> cloud.openapi.security.msgSecCheck v2（同步读取 result.suggest，兼容违规异常 87014）
 //   图片 -> 腾讯云图片内容安全 IMS（ImageModeration，同步返回 Pass/Review/Block）
 //
 // ⚠️ 为什么图片用腾讯云 IMS：
@@ -147,14 +147,28 @@ exports.main = async (event, context) => {
         return { success: true, safe: true };
       }
       console.log("🔍 内容安全: 开始文本检测");
-      await cloud.openapi.security.msgSecCheck({
+      const response = await cloud.openapi.security.msgSecCheck({
         content: String(content),
         version: 2,
         scene: scene,
         openid: wxContext.OPENID
       });
-      console.log("✅ 内容安全: 文本检测通过");
-      return { success: true, safe: true };
+      // v2 的调用成功只表示取得审核结果；risky/review 也会正常返回 errCode: 0。
+      const errCode = response && (response.errCode !== undefined ? response.errCode : response.errcode);
+      if (errCode !== undefined && errCode !== null && errCode !== 0) {
+        throw response;
+      }
+      const suggestion = response && response.result && response.result.suggest;
+      if (suggestion === "pass") {
+        console.log("✅ 内容安全: 文本检测通过");
+        return { success: true, safe: true, status: "pass" };
+      }
+      if (suggestion === "risky" || suggestion === "review") {
+        return { success: true, safe: false, status: suggestion };
+      }
+      // 无结论时不允许发布，也不能把接口异常误报成用户内容违规。
+      console.warn("⚠️ 内容安全: 文本检测未返回有效结论", suggestion);
+      return { success: false, safe: false, status: "error", error: "文本检测未返回有效结论" };
     }
 
     return { success: false, error: "未知的检测类型: " + type };
@@ -167,6 +181,6 @@ exports.main = async (event, context) => {
     // 检测链路异常（权限未开通 / 网络 / 配额等）→ 按"未通过检测"处理，
     // 由前端拦截发布，避免违规内容因检测失败而漏过
     console.error("❌ 内容安全: 接口调用异常", error);
-    return { success: false, safe: false, status: "error", error: error.message };
+    return { success: false, safe: false, status: "error", error: (error && error.message) || "内容安全检测接口调用失败" };
   }
 };

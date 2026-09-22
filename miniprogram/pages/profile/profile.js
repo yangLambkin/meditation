@@ -1,5 +1,6 @@
 // pages/profile/profile.js
 const contentSec = require('../../utils/contentSec.js')
+const profileCache = require('../../utils/profileCache.js')
 Page({
   /**
    * 页面的初始数据
@@ -69,39 +70,20 @@ Page({
    * 根据用户类型初始化页面
    */
   initByUserType() {
-    const userInfo = wx.getStorageSync('userInfo');
-    
-    switch (this.data.userType) {
-      case 'wechat':
-        // 微信用户：迁移现有数据
-        if (userInfo && userInfo.nickName) {
-          this.setData({
-            avatarUrl: userInfo.avatarUrl || '/images/avatar.png',
-            nickname: userInfo.nickName,
-            isAvatarSelected: !!userInfo.avatarUrl,
-            isProfileValid: true
-          });
-          this.setData({
-            nicknameHint: '检测到您之前的微信头像和昵称，可以修改或直接保存'
-          });
-        }
-        break;
-        
-      case 'local':
-        // 本地用户：提示完善信息
-        this.setData({
-          nicknameHint: '完善个人信息，享受更好的服务体验'
-        });
-        break;
-        
-      default:
-        // 新用户：默认提示
-        this.setData({
-          nicknameHint: '昵称将用于显示您的身份'
-        });
-        break;
-    }
-    
+    const userInfo = profileCache.readProfile();
+    this._originalProfile = { ...userInfo };
+    this._profileAccount = profileCache.currentAccount();
+    const editing = !!(userInfo.nickName || userInfo.avatarUrl);
+    this.setData({
+      profileMode: editing ? 'edit' : 'new',
+      ...(editing ? {
+        avatarUrl: userInfo.avatarUrl || '/images/userLogin.png',
+        nickname: userInfo.nickName || '',
+        isAvatarSelected: !!userInfo.avatarUrl
+      } : {}),
+      nicknameHint: editing ? '可以修改昵称或头像后保存' : '昵称将用于显示您的身份'
+    });
+
     // 更新表单验证状态
     this.checkFormValidity();
   },
@@ -115,6 +97,8 @@ Page({
    */
   async onChooseAvatar(e) {
     const { avatarUrl } = e.detail;
+    const previousAvatar = this.data.avatarUrl;
+    const previousSelection = this.data.isAvatarSelected;
     console.log('选择头像:', e.detail);
     if (!avatarUrl) {
       console.error('chooseAvatar 未返回图片路径');
@@ -134,8 +118,8 @@ Page({
     });
 
     if (!fileID) {
-      // 拦截（违规或检测不可用）：回滚预览到默认头像
-      this.setData({ avatarUrl: '/images/userLogin.png', isAvatarSelected: false });
+      // 拦截（违规或检测不可用）：保留原头像和草稿
+      this.setData({ avatarUrl: previousAvatar, isAvatarSelected: previousSelection });
       this.checkFormValidity();
       return;
     }
@@ -232,117 +216,77 @@ Page({
    * 保存用户信息
    */
   saveProfile() {
-    if (!this.data.isProfileValid) {
-      wx.showToast({
-        title: '请完善信息',
-        icon: 'none',
-        duration: 2000
-      });
+    if (this.data.isLoading || this._savingProfile) return;
+    if (!this.checkFormValidity()) {
+      wx.showToast({ title: '请完善信息', icon: 'none' });
       return;
     }
-    
-    this.setData({ isLoading: true });
-    
-    // 模拟异步保存过程
-    setTimeout(() => {
-      this.saveUserInfo();
-    }, 500);
+    return this.saveUserInfo();
   },
 
   /**
-   * 实际保存用户信息（包含微信登录流程）
+   * 审核、登录、保存分阶段处理。云端保存失败只保留草稿供用户重试，
+   * 不能再次登录/提交，也不能降级生成另一个本地账号。
    */
   async saveUserInfo() {
-    const { avatarUrl, nickname, userType, loginCode } = this.data;
-    
-    // 昵称文本发布前内容安全检测（资料场景 scene=1）。
-    // 头像图片的检测已在 onChooseAvatar 选图时完成，此处不再重复。
-    const nickSafe = await contentSec.checkText(nickname, 1);
-    if (!nickSafe) {
-      return;
-    }
-    
-    // 头像已在 onChooseAvatar 检测时固化为 cloud:// 永久链接，直接使用，无需再次上传
-    const finalAvatarUrl = avatarUrl;
-
-    // 构建新的用户信息结构
-    const userInfo = {
-      nickName: nickname.trim(),
-      avatarUrl: finalAvatarUrl,
-      isCustomAvatar: true, // 标记为自定义信息
-      profileComplete: true,
-      createTime: new Date().toISOString(),
-      lastUpdateTime: new Date().toISOString(),
-      dataSource: 'custom', // 数据来源：自定义
-      migrationStatus: userType === 'wechat' ? 'migrated' : 'new'
+    if (this._savingProfile) return false;
+    this._savingProfile = true;
+    this.setData({ isLoading: true });
+    const startingAccount = profileCache.currentAccount();
+    const assertAccount = () => {
+      if (!profileCache.isCurrentAccount(startingAccount)) throw new Error('账号已切换，请重新打开资料页');
     };
-    
-    console.log('保存用户信息:', userInfo);
-    
     try {
-      // 1. 执行微信登录获取openid
-      const wechatOpenId = await this.getWechatOpenId();
-      
-      // 2. 获取当前使用的localUserId
-      const localUserId = wx.getStorageSync('localUserId');
-      
-      // 3. 建立用户映射关系
-      if (localUserId && localUserId.startsWith('local_')) {
-        this.createUserMapping(localUserId, wechatOpenId);
-        
-        // 4. 异步迁移本地数据（不影响主流程）
-        this.migrateLocalData(localUserId, wechatOpenId)
-          .then(success => {
-            if (success) {
-              console.log('✅ 数据迁移完成');
-            } else {
-              console.warn('⚠️ 数据迁移失败，但用户可继续使用');
-            }
-          });
+      if (this._profileAccount !== undefined && this._profileAccount !== startingAccount) {
+        throw new Error('账号已切换，请重新打开资料页');
       }
-      
-      // 5. 设置新的主标识
-      const oldUserOpenId = wx.getStorageSync('userOpenId');
-      wx.setStorageSync('userOpenId', wechatOpenId);
-      // 登录换绑：将本地(local_)期间已解锁的勋章迁移到微信 openid 缓存（修复风险③）
-      require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, wechatOpenId);
-      
-      console.log('✅ 微信登录完成，映射关系建立:', {
-        from: localUserId,
-        to: wechatOpenId
-      });
-      
-      // 6. 保存用户信息到本地存储
-      this.saveToLocalStorage(userInfo, wechatOpenId);
-      
-      // 7. 保存到云端
-      await this.saveToCloud(userInfo, wechatOpenId);
-      
-      this.setData({ isLoading: false });
-      
-      // 登录成功后检查勋章解锁条件
+      const { avatarUrl, nickname, userType } = this.data;
+      if (!this.validateNickname(nickname)) return false;
+      const nickSafe = await contentSec.checkText(nickname, 1);
+      if (!nickSafe) return false;
+      assertAccount();
+
+      const original = this._originalProfile || profileCache.readProfile();
+      const patch = { profileComplete: true, dataSource: 'custom' };
+      if (nickname.trim() !== original.nickName) patch.nickName = nickname.trim();
+      // 默认预览不代表用户要求覆盖已有头像。
+      if ((!original.avatarUrl || this.data.isAvatarSelected) && avatarUrl !== original.avatarUrl) {
+        patch.avatarUrl = avatarUrl;
+        patch.isCustomAvatar = !!this.data.isAvatarSelected;
+      }
+      if (!original.nickName) patch.migrationStatus = userType === 'wechat' ? 'migrated' : 'new';
+
+      const wechatOpenId = await this.getWechatOpenId();
+      assertAccount();
+      const response = await this.saveToCloud(patch, wechatOpenId);
+      assertAccount();
+      const serverProfile = response.data && response.data.userInfo;
+      const userInfo = original.nickName
+        ? { ...profileCache.readProfile(), ...profileCache.confirmedPatch(patch, serverProfile) }
+        : { ...profileCache.readProfile(), ...patch, ...serverProfile };
+      this.saveToLocalStorage(userInfo, wechatOpenId, startingAccount);
+      this._originalProfile = { ...userInfo };
+      this._profileAccount = wechatOpenId;
+
+      const localUserId = wx.getStorageSync('localUserId');
+      if (localUserId && localUserId.startsWith('local_') && localUserId !== wechatOpenId) {
+        try {
+          this.createUserMapping(localUserId, wechatOpenId);
+          this.migrateLocalData(localUserId, wechatOpenId).catch(error => console.warn('本地迁移失败，可稍后重试', error));
+        } catch (error) {
+          console.warn('资料已保存，本地映射暂未建立:', error);
+        }
+      }
       this.checkBadgeAfterLogin();
-      
       this.showSuccessAndNavigate();
-      
+      return true;
     } catch (error) {
-      console.error('微信登录流程失败，降级为本地模式:', error);
-      
-      // 降级处理：使用原有的本地标识逻辑
-      const openid = this.getUserOpenId(loginCode);
-      
-      // 保存到本地存储
-      this.saveToLocalStorage(userInfo, openid);
-      
-      // 尝试保存到云端（即使失败也不影响）
-      this.saveToCloud(userInfo, openid)
-        .catch(cloudError => {
-          console.warn('云端保存失败（不影响使用）:', cloudError);
-        })
-        .finally(() => {
-          this.setData({ isLoading: false });
-          this.showSuccessAndNavigate();
-        });
+      console.error('资料保存失败，保留当前账号与草稿:', error);
+      wx.showToast({ title: error.message || '资料保存失败，请重试', icon: 'none', duration: 2500 });
+      return false;
+    } finally {
+      this._savingProfile = false;
+      this.setData({ isLoading: false });
     }
   },
 
@@ -373,7 +317,7 @@ Page({
         }
       });
       
-      if (cloudResult.result && cloudResult.result.openid) {
+      if (cloudResult.result && cloudResult.result.success === true && cloudResult.result.openid) {
         const openid = cloudResult.result.openid;
         console.log('✅ 成功获取微信openid:', openid);
         return openid;
@@ -489,50 +433,34 @@ Page({
   /**
    * 保存到本地存储
    */
-  saveToLocalStorage(userInfo, openid) {
-    // 保存用户信息
-    const oldUserOpenId = wx.getStorageSync('userOpenId');
-    wx.setStorageSync('userInfo', userInfo);
-    wx.setStorageSync('userNickname', userInfo.nickName);
+  saveToLocalStorage(userInfo, openid, expectedAccount = profileCache.currentAccount()) {
+    if (!profileCache.isCurrentAccount(expectedAccount)) throw new Error('账号已切换，请重新打开资料页');
+    const previousLogin = wx.getStorageSync('userLoginData') || {};
     wx.setStorageSync('userOpenId', openid);
-    // 登录/保存：将本地(local_)期间已解锁的勋章迁移到新 openid 缓存（修复风险③）
-    require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, openid);
-    
-    // 保存完整的用户数据
-    const userData = {
-      openid: openid,
-      userInfo: userInfo,
-      loginTime: new Date().toISOString(),
-      profileVersion: '2.0' // 标记为新版本格式
-    };
-    
-    wx.setStorageSync('userLoginData', userData);
-    
-    console.log('用户信息保存到本地完成');
+    const saved = profileCache.updateProfile(userInfo, openid);
+    wx.setStorageSync('userLoginData', {
+      ...(previousLogin.openid === openid ? previousLogin : {}),
+      openid, userInfo: saved,
+      loginTime: new Date().toISOString(), profileVersion: '2.0'
+    });
+    require('../../utils/badgeManager.js').migrateBadges(expectedAccount, openid);
   },
 
-  /**
-   * 保存到云端
-   */
+  /** 网络调用成功后，仍需检查云函数是否确认业务保存成功。 */
   saveToCloud(userInfo, openid) {
     return new Promise((resolve, reject) => {
-      // 调用云函数保存用户信息
       wx.cloud.callFunction({
         name: 'meditationManager',
-        data: {
-          type: 'updateUserProfile',
-          openid: openid,
-          userInfo: userInfo,
-          userType: this.data.userType
+        data: { type: 'updateUserProfile', userInfo, userType: this.data.userType },
+        success: response => {
+          const result = response && response.result;
+          if (!result || result.success !== true) {
+            reject(new Error(result && result.error || '云端尚未确认保存，请重试'));
+            return;
+          }
+          resolve(result);
         },
-        success: (res) => {
-          console.log('用户信息保存到云端成功:', res);
-          resolve(res);
-        },
-        fail: (err) => {
-          console.error('用户信息保存到云端失败:', err);
-          reject(err);
-        }
+        fail: reject
       });
     });
   },
@@ -659,7 +587,7 @@ Page({
     this.setData({ isLoading: false });
     
     wx.showToast({
-      title: '已使用默认信息',
+      title: '已保存到本机，云端尚未同步',
       icon: 'success',
       duration: 1500
     });

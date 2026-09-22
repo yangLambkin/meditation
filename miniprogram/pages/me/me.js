@@ -5,6 +5,7 @@ const dateUtil = require('../../utils/dateUtil.js');
 const contentSec = require('../../utils/contentSec.js');
 const bijingApi = require('../../utils/bijingApi.js');
 const cloudApi = require('../../utils/cloudApi.js');
+const profileCache = require('../../utils/profileCache.js');
 
 Page({
   data: {
@@ -106,7 +107,7 @@ Page({
         openid: openid
       });
       const profile = result && result.result && result.result.data;
-      if (profile) {
+      if (profile && profileCache.isCurrentAccount(openid)) {
         this.setData({
           bijingBound: !!profile.bijingBound,
           bijingStudentNumber: profile.bijingStudentNumber || ''
@@ -281,6 +282,7 @@ Page({
     
     // 记录原头像，便于检测不通过时回滚预览
     const originalAvatar = this.data.userAvatar;
+    const startingAccount = profileCache.currentAccount();
     
     wx.showActionSheet({
       itemList: ['拍照', '从相册选择'],
@@ -304,6 +306,7 @@ Page({
               returnFileID: true,
               cloudPrefix: 'avatar'
             });
+            if (!profileCache.isCurrentAccount(startingAccount)) return;
             if (!avatarFileID) {
               this.setData({ userAvatar: originalAvatar });
               return;
@@ -314,14 +317,19 @@ Page({
               userAvatar: avatarFileID
             });
 
-            // 保存（已是永久链接，无需再次上传）
-            this.saveAvatarToStorage(avatarFileID);
-
-            wx.showToast({
-              title: '头像修改成功',
-              icon: 'success',
-              duration: 1500
-            });
+            try {
+              const synced = await this.saveAvatarToStorage(avatarFileID);
+              if (!profileCache.isCurrentAccount(startingAccount)) return;
+              wx.showToast({
+                title: synced ? '头像修改成功' : '已保存到本机，云端尚未同步',
+                icon: synced ? 'success' : 'none',
+                duration: 2500
+              });
+            } catch (error) {
+              if (!profileCache.isCurrentAccount(startingAccount)) return;
+              this.setData({ userAvatar: originalAvatar });
+              wx.showToast({ title: '头像保存失败，请重试', icon: 'none' });
+            }
           },
           fail: (err) => {
             console.error('选择图片失败:', err);
@@ -341,50 +349,41 @@ Page({
   /**
    * 保存头像到本地存储
    */
-  saveAvatarToStorage: function(avatarUrl) {
-    const currentUserInfo = wx.getStorageSync('userInfo') || {};
-    
-    // 更新用户信息
-    const updatedUserInfo = {
-      ...currentUserInfo,
-      avatarUrl: avatarUrl,
-      isCustomAvatar: true,
-      profileComplete: true,
-      dataSource: 'custom',
-      lastUpdateTime: new Date().toISOString()
-    };
-    
-    wx.setStorageSync('userInfo', updatedUserInfo);
-    
-    // 同步到云端
-    this.syncUserInfoToCloud(updatedUserInfo);
+  async saveAvatarToStorage(avatarUrl) {
+    const openid = profileCache.currentAccount();
+    const patch = { avatarUrl, isCustomAvatar: true, profileComplete: true, dataSource: 'custom' };
+    profileCache.updateProfile(patch, openid);
+    return this.syncUserInfoToCloud(patch, openid);
   },
 
-  /**
-   * 同步用户信息到云端
-   */
-  syncUserInfoToCloud: function(userInfo) {
-    const openid = wx.getStorageSync('userOpenId');
-    
-    if (!openid) {
-      console.warn('无法同步用户信息：缺少openid');
-      return;
+  /** 只提交本次修改的字段，迟到结果不得覆盖已切换的账号。 */
+  async syncUserInfoToCloud(userInfo, openid = profileCache.currentAccount()) {
+    if (!openid || !checkinManager.isUserLoggedIn()) return false;
+    try {
+      const result = await new Promise((resolve, reject) => {
+        wx.cloud.callFunction({
+          name: 'meditationManager',
+          data: { type: 'updateUserProfile', userInfo },
+          success: response => {
+            const reply = response && response.result;
+            if (!reply || reply.success !== true) {
+              reject(new Error(reply && reply.error || '云端尚未确认保存，请重试'));
+              return;
+            }
+            resolve(reply);
+          },
+          fail: reject
+        });
+      });
+      if (!profileCache.isCurrentAccount(openid)) return false;
+      profileCache.updateProfile(profileCache.confirmedPatch(userInfo, result.data && result.data.userInfo), openid);
+      this.setData({ profileSyncError: '' });
+      return true;
+    } catch (error) {
+      console.error('用户资料尚未同步:', error);
+      if (profileCache.isCurrentAccount(openid)) this.setData({ profileSyncError: error.message || '资料尚未同步' });
+      return false;
     }
-    
-    wx.cloud.callFunction({
-      name: 'meditationManager',
-      data: {
-        type: 'updateUserProfile',
-        openid: openid,
-        userInfo: userInfo
-      },
-      success: (res) => {
-        console.log('用户信息同步到云端成功:', res);
-      },
-      fail: (err) => {
-        console.error('用户信息同步到云端失败:', err);
-      }
-    });
   },
 
   // ===== 必经之路绑定与同步 =====
@@ -461,12 +460,20 @@ Page({
 
   // 执行真正的绑定（弹窗确认后调用）
   async doBindBijing(sn) {
+    const startingAccount = profileCache.currentAccount();
     // 判断是否为重新绑定（原已绑定的学号与新学号不同）
     const wasBound = this.data.bijingBound;
     const isRebind = wasBound && sn !== this.data.bijingStudentNumber;
     wx.showLoading({ title: isRebind ? '重新绑定中...' : '绑定中...', mask: true });
-    const res = await bijingApi.bindBijing(sn);
-    wx.hideLoading();
+    let res;
+    try {
+      res = await bijingApi.bindBijing(sn);
+    } catch (error) {
+      res = { success: false, error: error.message || '绑定失败，请重试' };
+    } finally {
+      wx.hideLoading();
+    }
+    if (!profileCache.isCurrentAccount(startingAccount)) return;
     if (!res.success) {
       wx.showToast({ title: res.error || '绑定失败', icon: 'none' });
       return;
@@ -487,7 +494,7 @@ Page({
     }
     if (res.data.nicknameOverridden && res.data.nickname) {
       // 覆盖本地昵称缓存 + 即时展示
-      wx.setStorageSync('userNickname', res.data.nickname);
+      profileCache.updateProfile({ nickName: res.data.nickname }, startingAccount);
       newData.userNickname = res.data.nickname;
       wx.showToast({ title: (isRebind ? '已重新绑定并' : '已绑定并') + '同步昵称', icon: 'success' });
     } else {

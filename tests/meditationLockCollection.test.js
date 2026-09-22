@@ -86,8 +86,10 @@ function harness(options = {}) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/meditationManager/index.js'), 'utf8'), {
     module, exports: module.exports, console: { log() {}, error() {}, warn() {} },
+    process: { env: { MAINTENANCE_ADMIN_OPENIDS: 'maintenance-operator' } },
     require(name) {
       if (name === 'crypto') return require('node:crypto');
+      if (name === './maintenanceAuth') return require('../cloudfunctions/meditationManager/maintenanceAuth');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, database: () => database, getWXContext: () => ({ OPENID: options.openid === undefined ? 'owner' : options.openid }) };
     }
@@ -233,7 +235,7 @@ test('continually stale snapshots stop after bounded retries without writing an 
 });
 
 test('maintenance dry run remains read-only when the lock collection is missing', async () => {
-  const app = harness({ openid: '', missingLockCollection: true, records: [
+  const app = harness({ openid: 'maintenance-operator', missingLockCollection: true, records: [
     { _id: 'old', _openid: 'owner', date: '2026-09-19', timestamp: Date.parse('2026-09-20T01:00:00+08:00'), duration: 10 }
   ] });
   const before = app.state;

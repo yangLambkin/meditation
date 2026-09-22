@@ -23,6 +23,7 @@ function matches(value, filter) {
 function createHarness(options = {}) {
   const now = Date.parse(options.now || '2026-09-17T02:00:00Z');
   const openid = Object.hasOwn(options, 'openid') ? options.openid : 'user-a';
+  let wxContext = { OPENID: openid, SOURCE: options.platformSource || 'wx_client' };
   const users = clone(options.users || [{
     _id: 'doc-a',
     _openid: 'user-a',
@@ -108,12 +109,13 @@ function createHarness(options = {}) {
   vm.runInNewContext(source, {
     exports,
     Date: FixedDate,
-    process: { env: { BIJING_API_BASE: 'https://example.test', BIJING_ACCESS_TOKEN: 'test-token', ...options.env } },
+    process: { env: { BIJING_TIMER_ENABLED: 'true', BIJING_TIMER_SOURCE: 'verified-timer-only', MAINTENANCE_ADMIN_OPENIDS: options.adminOpenid || '', BIJING_API_BASE: 'https://example.test', BIJING_ACCESS_TOKEN: 'test-token', ...options.env } },
     console: { log() {}, warn() {}, error() {} },
     require(name) {
+      if (name === './maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
       if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
       if (name === 'wx-server-sdk') {
-        return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => ({ OPENID: openid }) };
+        return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
       }
       if (name === 'axios') {
         return {
@@ -138,6 +140,11 @@ function createHarness(options = {}) {
     users,
     records,
     async run(event, context = {}) { return clone(await exports.main(event, context)); },
+    async timer(event = {}, context = {}) {
+      const previous = wxContext;
+      wxContext = { SOURCE: 'verified-timer-only' };
+      try { return clone(await exports.main(event, context)); } finally { wxContext = previous; }
+    },
     async select(recordDate) { return this.run({ type: 'syncSelectedDate', recordDate }); },
     async details(recordDate) { return this.run({ type: 'getSyncDateDetails', recordDate }); },
   };
@@ -320,7 +327,7 @@ test('automatic and manual sync can repeat in either order and include late-arri
   for (const first of ['automatic', 'manual']) {
     await t.test(first, async () => {
       const app = createHarness({ records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] });
-      const automatic = () => app.run({}, { source: 'timer' });
+      const automatic = () => app.timer();
       const manual = () => app.select('2026-09-16');
       const initial = first === 'automatic' ? automatic : manual;
       const following = first === 'automatic' ? manual : automatic;
@@ -425,7 +432,7 @@ test('automatic timer sync still synchronizes only yesterday for all bound users
         ],
         records: ['user-a', 'user-b', 'user-c'].flatMap(_openid => ['2026-09-29', '2026-09-30', '2026-10-01'].map(date => ({ _openid, date, duration: 30 }))),
       });
-      assert.deepEqual(await app.run(event, context), { success: true, data: { date: '2026-09-30', total: 2, success: 2, failed: 0 } });
+      assert.deepEqual(await app.timer(event, context), { success: true, data: { date: '2026-09-30', total: 2, success: 2, failed: 0 } });
       assert.deepEqual(app.calls.posts.map(value => value.body), [
         { studentNumber: '123456', recordDate: '2026-09-30', durationMinutes: 30 },
         { studentNumber: '234567', recordDate: '2026-09-30', durationMinutes: 30 },
@@ -596,7 +603,7 @@ test('before 02:00 manual calls reject the unfinished date and cron only uploads
   assert.equal((await app.select('2026-09-16')).success, false);
   assert.equal((await app.details('2026-09-16')).success, false);
   assert.equal(app.calls.reads.length, 0);
-  const cron = await app.run({ type: 'cronSyncAll' });
+  const cron = await app.timer({ type: 'cronSyncAll' });
   assert.equal(cron.data.date, '2026-09-15');
   assert.deepEqual(app.calls.posts.map(item => item.body), [{ studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 10 }]);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-15': true });

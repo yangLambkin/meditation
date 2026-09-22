@@ -44,7 +44,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
   function load(request) {
     const name = path.basename(request).replace(/(?:\.js)?$/, '.js');
     if (modules[name]) return modules[name];
-    assert.ok(['dateUtil.js', 'homeCheckin.js', 'heatmap.js'].includes(name), request);
+    assert.ok(['dateUtil.js', 'homeCheckin.js', 'heatmap.js', 'profileCache.js'].includes(name), request);
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', name), 'utf8'), {
       module, require: load, ...clock, wx, console: quiet

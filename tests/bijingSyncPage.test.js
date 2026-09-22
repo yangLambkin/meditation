@@ -33,7 +33,20 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
   }
+  const storage = { userOpenId: loggedIn ? 'oz-test-account' : '' };
+  const wxMock = {
+    getStorageSync: key => storage[key],
+    setStorageSync: (key, value) => { storage[key] = value; },
+    showToast: value => calls.toast.push(value),
+    showLoading: value => calls.loading.push(value),
+    hideLoading: () => { calls.hideLoading++; }
+  };
+  const profileCacheModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/profileCache.js'), 'utf8'), {
+    wx: wxMock, module: profileCacheModule
+  });
   const mocks = {
+    '../../utils/profileCache.js': profileCacheModule.exports,
     '../../utils/badgeManager': {},
     '../../utils/checkin.js': {
       isUserLoggedIn: () => isLoggedIn,
@@ -80,11 +93,7 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
     Page: value => { definition = value; },
     Date: Clock,
     console,
-    wx: {
-      showToast: value => calls.toast.push(value),
-      showLoading: value => calls.loading.push(value),
-      hideLoading: () => { calls.hideLoading++; }
-    }
+    wx: wxMock
   });
   const page = {
     ...definition,
@@ -94,7 +103,7 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   return {
     page, calls,
     setNow(value) { currentTime = Date.parse(value); },
-    setLoggedIn(value) { isLoggedIn = value; },
+    setLoggedIn(value) { isLoggedIn = value; storage.userOpenId = value ? 'oz-test-account' : ''; },
     setPending(value) { pending = value; }
   };
 }

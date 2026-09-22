@@ -87,11 +87,12 @@ function harness(options = {}) {
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/meditationManager/index.js'), 'utf8'), {
-    module, exports: module.exports, Date: Clock, console: { log() {}, error() {}, warn() {} },
+    module, exports: module.exports, Date: Clock, process: { env: { MAINTENANCE_ADMIN_OPENIDS: options.adminOpenid || '', MAINTENANCE_ENV_ID: 'test-env' } }, console: { log() {}, error() {}, warn() {} },
     require(name) {
+      if (name === './maintenanceAuth') return require('../cloudfunctions/meditationManager/maintenanceAuth');
       if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
-      return { init() {}, database: () => database, getWXContext: () => ({ OPENID: openid }) };
+      return { init() {}, database: () => database, getWXContext: () => ({ OPENID: openid, ENV: 'test-env' }) };
     }
   });
   return {
@@ -328,7 +329,7 @@ test('invalid durations cannot write records or statistics', async () => {
 
 test('maintenance defaults to dry run, preserves explicit dates and only merges stable duplicate identities', async () => {
   const timestamp = Date.parse('2026-09-20T00:30:00+08:00');
-  const app = harness({ openid: '', records: [
+  const app = harness({ openid: 'operator', adminOpenid: 'operator', records: [
     { _id: 'a', _openid: 'owner', localId: 'same', date: '2026-09-20', timestamp, duration: 10, experience: [{ text: '初次' }] },
     { _id: 'b', _openid: 'owner', localId: 'same', date: '2026-09-20', timestamp, duration: 10, experience: [{ text: '补充' }] },
     { _id: 'c', _openid: 'owner', localId: 'distinct', date: '2026-09-20', timestamp, duration: 10 },
@@ -342,7 +343,7 @@ test('maintenance defaults to dry run, preserves explicit dates and only merges 
   assert.equal(app.stats.length, 0);
   assert.deepEqual(preview.data.users[0].duplicates, [{ recordId: 'b', keepRecordId: 'a' }]);
   assert.equal(preview.data.users[0].dateChanges.length, 3);
-  const applied = await app.call({ type: 'migrateBusinessDates', dryRun: false });
+  const applied = await app.call({ type: 'migrateBusinessDates', dryRun: false, scope: 'all', targetEnv: 'test-env' });
   assert.equal(applied.data.dryRun, false);
   assert.equal(app.records.length, 4);
   assert.equal(app.records.find(record => record._id === 'a').date, '2026-09-19');
@@ -351,11 +352,11 @@ test('maintenance defaults to dry run, preserves explicit dates and only merges 
   assert.equal(app.stats[0].totalCount, 4);
   assert.equal(app.stats[0].totalDuration, 40);
   assert.equal(app.stats[0].totalDays, 2);
-  await app.call({ type: 'migrateBusinessDates', dryRun: false });
+  await app.call({ type: 'migrateBusinessDates', dryRun: false, scope: 'all', targetEnv: 'test-env' });
   assert.equal(app.records.length, 4);
   assert.equal(app.stats[0].totalCount, 4);
   app.setOpenid('owner');
-  assert.equal((await app.call({ type: 'migrateBusinessDates', dryRun: false })).success, false);
+  assert.equal((await app.call({ type: 'migrateBusinessDates', dryRun: false, scope: 'all', targetEnv: 'test-env' })).success, false);
 });
 
 test('first badge award racing the first record creates one statistics document with both results', async () => {
@@ -428,7 +429,7 @@ test('badge recomputation counts business days when two natural dates collapse i
     _id: `day-${index}`, _openid: 'owner', date: `2027-01-0${index + 1}`,
     timestamp: Date.parse(`2027-01-0${index + 1}T${index === 0 ? '12' : '00'}:30:00+08:00`), duration: 1,
   }));
-  const app = harness({ now: '2027-01-07T01:59:59+08:00', records,
+  const app = harness({ openid: 'operator', adminOpenid: 'operator', now: '2027-01-07T01:59:59+08:00', records,
     stats: [{ _id: 'stats', _openid: 'owner', badges: { 'continuous-7': { unlockTime: '2027-01-07' } } }] });
   const before = { records: app.records, stats: app.stats };
   const report = await app.call({ type: 'recomputeUserBadges', mode: 'report', openid: 'owner' });

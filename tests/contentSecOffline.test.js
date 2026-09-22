@@ -116,3 +116,26 @@ test('offline allowance is opt-in and leaves other publishing entry points uncha
   assert.equal(app.calls.cloud.length, 1);
   assert.equal(app.calls.toasts[0].title, '所发布内容含违规信息');
 });
+
+test('ordinary publishing blocks moderation errors without reporting content violations', async () => {
+  for (const request of [
+    () => Promise.reject(new Error('offline')),
+    () => { throw new Error('cloud not ready'); },
+    async () => ({ result: { success: false, safe: false, status: 'error' } }),
+    async () => ({ result: { success: true } }),
+    async () => ({ result: { success: 'true', safe: 'true' } }),
+    async () => ({ result: { success: false, safe: true } }),
+    async () => undefined
+  ]) {
+    const app = harness({ request });
+    assert.equal(await app.contentSec.checkText('团队名称', 2), false);
+    assert.equal(app.calls.toasts.length, 1);
+    assert.equal(app.calls.toasts[0].title, '内容安全检测暂不可用，请稍后重试');
+  }
+});
+
+test('ordinary publishing accepts only explicit successful moderation', async () => {
+  const app = harness({ request: async () => ({ result: { success: true, safe: true, status: 'pass' } }) });
+  assert.equal(await app.contentSec.checkText('团队名称', 2), true);
+  assert.equal(app.calls.toasts.length, 0);
+});
