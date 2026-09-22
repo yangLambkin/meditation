@@ -163,7 +163,7 @@
           </view>
           <view wx:if="{{checkinUploadBlockedRecords.length}}" class="checkin-upload-blocked">
             <text class="checkin-day-date">暂无法上传 · {{checkinUploadBlockedRecords.length}} 条</text>
-            <text class="checkin-subtitle">以下记录保留在本机，本次不会上传。</text>
+            <text class="checkin-subtitle">以下记录本次不会上传。相似记录核对后可忽略，仍保留在本机，不再提醒上传。</text>
             <view class="checkin-record checkin-upload-record" wx:for="{{checkinUploadBlockedRecords}}" wx:for-item="record" wx:key="id">
               <text class="checkin-upload-date">{{record.dayDate}}</text>
               <view class="checkin-record-heading">
@@ -171,6 +171,9 @@
                 <text class="checkin-record-duration">{{record.duration}} 分钟</text>
               </view>
               <text class="record-sync-error">{{record.syncError || record.syncStatusText}}</text>
+              <view wx:if="{{record.canIgnoreUpload}}" class="checkin-upload-record-actions">
+                <button class="checkin-ignore-upload" bindtap="ignoreCheckinUpload" data-local-id="{{record.localId}}" disabled="{{checkinRetrying || checkinSubmitting}}" hover-class="checkin-record-active">忽略</button>
+              </view>
             </view>
           </view>
         </view>

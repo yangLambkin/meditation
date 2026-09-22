@@ -14,7 +14,7 @@ const UPLOAD_RETRY_DELAY_MS = 100;
 const MAX_UPLOAD_RETRIES = 3;
 const NON_RETRYABLE_UPLOAD_CODES = new Set([
   'INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD',
-  'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'RECORD_NOT_FOUND', 'STORAGE_FAILED'
+  'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'RECORD_NOT_FOUND', 'STORAGE_FAILED', 'UPLOAD_IGNORED'
 ]);
 
 function currentUploadOpenid() {
@@ -56,7 +56,7 @@ function restoreInterruptedUploads(stored, userId) {
 }
 
 function isPendingUpload(record, openid) {
-  return record.syncVersion === 1 && !record._id &&
+  return record.syncVersion === 1 && !record._id && record.syncIgnored !== true &&
     (!record.syncOpenid || record.syncOpenid === openid);
 }
 
@@ -210,6 +210,7 @@ function prepareUnconfirmedUploads(userId, openid, identities) {
       fail('ACCOUNT_CHANGED', '请切换回保存该记录时的账号后重试');
     }
     if (record._id) { alreadySynced++; continue; }
+    if (record.syncIgnored === true) fail('UPLOAD_IGNORED', '该记录已忽略上传，仍保留在本机');
     if (record.syncVersion !== 1) {
       const timestamp = dateUtil.getRecordTimestamp(record.timestamp);
       const duration = Number(record.duration);
@@ -690,7 +691,7 @@ const checkinManager = {
         combined.experience = mergeCheckinExperiences(existing.experience, record.experience);
         if (combined._id) {
           if (existing.syncVersion === 1) combined.syncStatus = 'synced';
-          ['syncError', 'syncErrorCode', 'syncAttempts', 'syncNextRetryAt', 'syncBlocked'].forEach(key => {
+          ['syncError', 'syncErrorCode', 'syncAttempts', 'syncNextRetryAt', 'syncBlocked', 'syncIgnored'].forEach(key => {
             delete combined[key];
             delete existing[key];
           });
@@ -1103,7 +1104,7 @@ const checkinManager = {
       localData.checkinRecords.dailyRecords[dateStr].records.push({
         // 重建缓存也必须保留未确认记录的补传状态，不能把它们变成历史脏数据。
         ...Object.fromEntries(['syncVersion', 'syncStatus', 'syncOpenid', 'syncAttempts',
-          'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode', 'syncLegacyRecovery']
+          'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode', 'syncLegacyRecovery', 'syncIgnored']
           .filter(key => record[key] !== undefined).map(key => [key, record[key]])),
         ...(record._openid ? { syncOpenid: record._openid } : {}),
         _id: record._id,
@@ -1171,6 +1172,51 @@ const checkinManager = {
         ...(!confirmed && !result.error ? { error: '记录尚未确认上传，请稍后重试' } : {}) };
     } catch (error) {
       return { success: false, code: error.code, error: error.message || '记录仍在本机，请稍后重试上传' };
+    }
+  },
+
+  // 用户核对后只忽略这一条疑似重复记录；保留原始内容和云端核对结果。
+  ignoreAmbiguousUpload: function({ localId } = {}) {
+    const userId = this.getUserId();
+    const openid = currentUploadOpenid();
+    if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请登录后忽略本机记录' };
+    if (typeof localId !== 'string' || !localId.trim()) {
+      return { success: false, code: 'INVALID_RECORD', error: '记录无法识别，请刷新后重试' };
+    }
+    try {
+      const storageKey = `meditation_checkin_${userId}`;
+      const stored = wx.getStorageSync(storageKey) || {};
+      const data = stored.checkinRecords || stored;
+      const matches = Object.entries(data.dailyRecords || {}).flatMap(([date, day]) =>
+        (day.records || []).map((record, index) => ({ date, record, index }))
+          .filter(({ record }) => record && record.localId === localId));
+      if (matches.length !== 1) {
+        return { success: false, code: 'INVALID_RECORD', error: '记录已变更或无法唯一识别，请刷新后重试' };
+      }
+      const { date, record, index } = matches[0];
+      if ((record.syncOpenid && record.syncOpenid !== openid) || (record._openid && record._openid !== openid)) {
+        return { success: false, code: 'ACCOUNT_CHANGED', error: '请切换回保存该记录时的账号后重试' };
+      }
+      if (record._id || record.syncVersion !== 1 || !record.syncBlocked || record.syncErrorCode !== 'AMBIGUOUS_RECORD') {
+        return { success: false, code: 'INVALID_RECORD', error: '仅可忽略待核对的相似记录，请刷新后重试' };
+      }
+      const key = backupKey(userId, record.timestamp, localId);
+      if (record.syncStatus === 'uploading' || activeUploads.has(key) || pendingBackups.has(key) || pendingDeletions.has(key)) {
+        return { success: false, code: 'RECORD_BUSY', error: '记录正在处理，请稍后重试' };
+      }
+      if (record.syncIgnored === true) return { success: true };
+      const day = data.dailyRecords[date];
+      const updatedData = { ...data, dailyRecords: { ...data.dailyRecords,
+        [date]: { ...day, records: day.records.map((item, position) => position === index
+          ? { ...item, syncIgnored: true } : item) }
+      } };
+      wx.setStorageSync(storageKey, stored.checkinRecords ? { ...stored, checkinRecords: updatedData } : updatedData);
+      bumpUserStorageRevision(userId);
+      notifySyncState();
+      return { success: true };
+    } catch (error) {
+      console.warn('保存忽略上传状态失败:', error.message);
+      return { success: false, code: 'STORAGE_FAILED', error: '忽略状态保存失败，请重试' };
     }
   },
 
@@ -1483,6 +1529,9 @@ const checkinManager = {
           return { success: false, code: 'ACCOUNT_CHANGED', error: '请切换回保存该记录时的账号后重试' };
         }
         if (record._id) return { success: true, data: { recordId: record._id } };
+        if (record.syncIgnored === true) {
+          return { success: false, code: 'UPLOAD_IGNORED', error: '该记录已忽略上传，仍保留在本机' };
+        }
         // 游客记录先持久化归属；落盘失败时绝不发送无法追踪的上传。
         if (!record.syncOpenid) {
           if (!updateStoredUpload(userId, localId, item => { item.syncOpenid = openid; })) {
@@ -1563,6 +1612,7 @@ const checkinManager = {
           delete record.syncAttempts;
           delete record.syncNextRetryAt;
           delete record.syncBlocked;
+          delete record.syncIgnored;
         } else {
           record.syncError = result.error || '云端同步失败';
           record.syncErrorCode = result.code || 'SYNC_FAILED';

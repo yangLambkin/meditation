@@ -753,6 +753,32 @@
   line-height: 1.5;
 }
 
+.checkin-upload-record-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16rpx;
+}
+
+.checkin-dialog .checkin-ignore-upload {
+  margin: 0;
+  padding: 0 24rpx;
+  border: 2rpx solid #e4dccd;
+  border-radius: 12rpx;
+  background-color: #b2976414;
+  color: #8a7145;
+  font-size: 24rpx;
+  font-weight: 400;
+  line-height: 56rpx;
+}
+
+.checkin-ignore-upload[disabled] {
+  opacity: 0.5;
+}
+
+.checkin-ignore-upload::after {
+  border: none;
+}
+
 .checkin-dialog-actions {
   display: flex;
   align-items: center;

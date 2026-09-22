@@ -67,6 +67,9 @@ function parseDateTime(date, time) {
 
 function getRecordSyncState(record) {
   if (record._id) return {};
+  if (record.syncIgnored === true) {
+    return { syncStatus: 'ignored', syncStatusText: '已存本机，已忽略上传' };
+  }
   // 旧本机记录在首页统一预览后确认，不因展示列表就加上新版上传标记。
   if (record.syncVersion !== 1) {
     return { syncStatus: 'unconfirmed', syncStatusText: '本机记录，未确认上传' };
@@ -130,6 +133,7 @@ function buildCheckinRecords(userData, experienceRecords = [], { openid } = {}) 
         experienceTexts,
         ...getRecordSyncState(record),
         ...(record.syncError ? { syncError: record.syncError } : {}),
+        ...(record.syncErrorCode ? { syncErrorCode: record.syncErrorCode } : {}),
         order: index
       });
     });

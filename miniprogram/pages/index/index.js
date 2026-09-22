@@ -175,7 +175,10 @@ Page({
       return record;
     });
     const uploadRecords = records.filter(record => record.syncStatus !== 'blocked');
-    const blockedRecords = records.filter(record => record.syncStatus === 'blocked');
+    const blockedRecords = records.filter(record => record.syncStatus === 'blocked').map(record => ({
+      ...record,
+      canIgnoreUpload: !record._id && !!record.localId && record.syncErrorCode === 'AMBIGUOUS_RECORD'
+    }));
     if (!records.length) {
       wx.showToast({ title: '暂无待上传记录', icon: 'none' });
       return;
@@ -203,6 +206,43 @@ Page({
     this._checkinUploadUnconfirmedRecords = null;
     this.setData({ showCheckinUploadPreview: false, checkinUploadGroups: [],
       checkinUploadCount: 0, checkinUploadDuration: 0, checkinUploadBlockedRecords: [] });
+  },
+
+  ignoreCheckinUpload(e) {
+    if (this.data.checkinRetrying || this.data.checkinSubmitting || !this.data.showCheckinUploadPreview) return;
+    const account = this._checkinUploadAccount;
+    if (!account || account.userId !== checkinManager.getUserId() ||
+        account.openid !== this.getCheckinDisplayOptions().openid) {
+      this.closeCheckinUploadPreview();
+      this.refreshCheckinRecords();
+      wx.showToast({ title: '账号已切换，请重新查看待上传记录', icon: 'none' });
+      return;
+    }
+    const localId = e && e.currentTarget && e.currentTarget.dataset.localId;
+    const blockedRecords = this.data.checkinUploadBlockedRecords || [];
+    const record = blockedRecords.find(item => item.localId === localId);
+    if (!localId || !record || record._id || record.syncStatus !== 'blocked' ||
+        record.syncErrorCode !== 'AMBIGUOUS_RECORD' || !record.canIgnoreUpload) return;
+
+    let result;
+    try {
+      result = checkinManager.ignoreAmbiguousUpload({ localId });
+    } catch (error) {
+      console.error('首页忽略上传失败:', error);
+      wx.showToast({ title: '忽略失败，请重试', icon: 'none' });
+      return;
+    }
+    if (!result || !result.success) {
+      wx.showToast({ title: result && result.error || '忽略失败，请重试', icon: 'none' });
+      return;
+    }
+
+    // 只移除本次忽略项，保留用户已经核对的上传选择，不纳入后来新增的记录。
+    const remaining = blockedRecords.filter(item => item !== record);
+    this.setData({ checkinUploadBlockedRecords: remaining });
+    this.refreshCheckinRecords();
+    if (!remaining.length && !this.data.checkinUploadCount) this.closeCheckinUploadPreview();
+    wx.showToast({ title: '已忽略，记录保留在本机', icon: 'none' });
   },
 
   async retryCheckinUploads() {

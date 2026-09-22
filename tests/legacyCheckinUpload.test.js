@@ -24,7 +24,7 @@ function identity(record) {
   return { localId: record.localId, timestamp: record.timestamp, duration: record.duration, date: record.date };
 }
 
-function harness({ records = [legacy()], nested = false, loggedIn = true, backup } = {}) {
+function harness({ records = [legacy()], nested = false, loggedIn = true, backup, cloudRecords = [] } = {}) {
   let failStorage = false;
   let now = NOW;
   let nextTimer = 0;
@@ -48,7 +48,10 @@ function harness({ records = [legacy()], nested = false, loggedIn = true, backup
       calls.persistedAtUpload.push(clone(storage.get(KEY)));
       return backup ? backup(args, index) : { success: true, data: { recordId: `cloud-${index}` } };
     },
-    async getAllRecords() { calls.reads++; return { success: true, data: [] }; },
+    async getAllRecords() {
+      calls.reads++;
+      return { success: true, data: clone(typeof cloudRecords === 'function' ? await cloudRecords() : cloudRecords) };
+    },
     async getUserStats() { return { success: true, data: {} }; }
   };
   class ClockDate extends Date {
@@ -600,4 +603,173 @@ test('ambiguous cloud records keep the original local record and block repeated 
   const displayed = homeCheckin.buildCheckinRecords(app.data());
   assert.equal(displayed[0].syncStatus, 'blocked');
   assert.match(displayed[0].syncStatusText, /云端有相似记录，请核对/);
+});
+
+function ambiguousRecord(overrides = {}) {
+  return legacy({ syncVersion: 1, syncStatus: 'failed', syncOpenid: OPENID, syncLegacyRecovery: true,
+    syncBlocked: true, syncErrorCode: 'AMBIGUOUS_RECORD', syncError: '云端有相似记录，请核对', ...overrides });
+}
+
+for (const nested of [false, true]) {
+  test(`ignoring an ambiguous record preserves its content and other records (${nested ? 'nested' : 'flat'} cache)`, () => {
+    const selected = ambiguousRecord();
+    const untouched = ambiguousRecord({ localId: 'another-ambiguous', timestamp: TIMESTAMP + 60000 });
+    const app = harness({ records: [selected, untouched], nested });
+    const before = clone(app.storage.get(KEY));
+    const expected = clone(before);
+    (expected.checkinRecords || expected).dailyRecords[selected.date].records[0].syncIgnored = true;
+
+    const result = app.manager.ignoreAmbiguousUpload({ localId: selected.localId });
+    assert.equal(result.success, true);
+    assert.deepEqual(app.storage.get(KEY), expected, 'ignoring only adds the selected upload flag; it never deletes or changes check-in data');
+    assert.equal(app.calls.backups.length, 0);
+    assert.equal(app.manager.getPendingSyncSummary().total, 1, 'the other ambiguous row still needs attention');
+    assert.deepEqual(clone(app.manager.getPendingUploadEntries().map(entry => entry.record.localId)), [untouched.localId]);
+  });
+}
+
+test('ignored records stay in history but leave every upload and reminder entry point', async () => {
+  const selected = ambiguousRecord();
+  const app = pageHarness({ records: [selected] });
+  assert.equal(app.manager.ignoreAmbiguousUpload({ localId: selected.localId }).success, true);
+  const persisted = clone(app.storage.get(KEY));
+
+  assert.equal(app.manager.getPendingSyncSummary().total, 0);
+  assert.equal(app.manager.getPendingUploadEntries().length, 0);
+  await app.manager.retryPendingBackups();
+  await app.manager.retryPendingBackups({ localIds: [selected.localId] });
+  await app.manager.retryUnconfirmedRecord(identity(selected));
+  await app.manager.syncWithCloud({ uploadPending: true, localIds: [selected.localId] });
+  await app.manager.syncWithCloud({ uploadPending: true, localIds: [], unconfirmedRecords: [identity(selected)] });
+  await app.manager.asyncBackupToCloud(selected.duration, selected.emotion, selected.experience, selected.timestamp, selected.localId);
+
+  assert.equal(app.calls.backups.length, 0, 'explicit and bulk retries cannot silently undo an ignore decision');
+  assert.deepEqual(app.storage.get(KEY), persisted);
+  app.page.refreshCheckinRecords();
+  assert.equal(app.page.data.pendingCheckinCount, 0);
+  assert.equal(app.page.data.checkinRecords.length, 1, 'the local record remains visible');
+  assert.equal(app.page.data.checkinRecords[0].syncStatus, 'ignored');
+  assert.equal(app.page.data.checkinRecords[0].syncStatusText, '已存本机，已忽略上传');
+  app.page.openCheckinUploadPreview();
+  assert.equal(app.page.data.checkinUploadCount, 0);
+  assert.equal(app.page.data.checkinUploadBlockedRecords.length, 0);
+});
+
+test('ignore survives restart and cloud refresh, then clears only after cloud identity confirmation', async () => {
+  const selected = ambiguousRecord();
+  let cloudRecords = [];
+  const app = harness({ records: [selected], nested: true, cloudRecords: () => cloudRecords });
+  assert.equal(app.manager.ignoreAmbiguousUpload({ localId: selected.localId }).success, true);
+  const restarted = app.restart();
+  assert.equal(restarted.getPendingSyncSummary().total, 0);
+  assert.equal((await restarted.syncWithCloud()).success, true);
+  assert.equal(app.records().length, 1);
+  assert.equal(app.records()[0].syncIgnored, true);
+  assert.equal(app.records()[0]._id, undefined);
+  for (const key of ['timestamp', 'duration', 'date', 'emotion', 'experience']) {
+    assert.deepEqual(app.records()[0][key], selected[key], `refresh preserves ${key}`);
+  }
+  const rebuilt = restarted.rebuildLocalCacheFromCloudRecords(app.records());
+  assert.equal(rebuilt.checkinRecords.dailyRecords[selected.date].records[0].syncIgnored, true);
+
+  cloudRecords = [{ ...legacy(), _id: 'confirmed-ignored-local-record', _openid: OPENID }];
+  assert.equal((await restarted.syncWithCloud()).success, true);
+  assert.equal(app.records().length, 1, 'confirmed identity merges into the retained local row');
+  assert.equal(app.records()[0]._id, 'confirmed-ignored-local-record');
+  assert.equal(app.records()[0].syncStatus, 'synced');
+  assert.equal(app.records()[0].syncIgnored, undefined);
+  assert.equal(app.records()[0].syncBlocked, undefined);
+  assert.equal(restarted.getPendingSyncSummary().total, 0);
+  assert.equal(app.calls.backups.length, 0);
+});
+
+test('ignore rejects records without a unique eligible identity or current account ownership', () => {
+  const invalidSelections = [
+    { records: [legacy()] },
+    { records: [ambiguousRecord({ _id: 'already-confirmed' })] },
+    { records: [ambiguousRecord({ syncBlocked: false })] },
+    { records: [ambiguousRecord({ syncErrorCode: 'DATE_OUT_OF_RANGE' })] },
+    { records: [ambiguousRecord({ localId: undefined })] },
+    { records: [ambiguousRecord(), ambiguousRecord({ timestamp: TIMESTAMP + 60000 })] },
+    { records: [ambiguousRecord({ syncOpenid: 'oz-other-account' })] },
+    { records: [ambiguousRecord({ _openid: 'oz-other-account' })] },
+    { records: [ambiguousRecord()], loggedIn: false }
+  ];
+  for (const options of invalidSelections) {
+    const app = harness(options);
+    const original = clone(app.storage.get(KEY));
+    const result = app.manager.ignoreAmbiguousUpload({ localId: options.records[0].localId });
+    assert.equal(result.success, false, JSON.stringify(options));
+    assert.deepEqual(app.storage.get(KEY), original);
+    assert.equal(app.calls.backups.length, 0);
+  }
+});
+
+test('ignore reports failed persistence and keeps the original reminder available', () => {
+  const selected = ambiguousRecord();
+  const app = pageHarness({ records: [selected] });
+  app.page.openCheckinUploadPreview();
+  const original = clone(app.storage.get(KEY));
+  app.failStorage(true);
+  app.page.ignoreCheckinUpload({ currentTarget: { dataset: { localId: selected.localId } } });
+  assert.deepEqual(app.storage.get(KEY), original);
+  assert.equal(app.manager.getPendingSyncSummary().total, 1);
+  assert.equal(app.page.data.showCheckinUploadPreview, true);
+  assert.equal(app.page.data.checkinUploadBlockedRecords.length, 1);
+  assert.ok(app.pageCalls.toast.at(-1).title);
+  assert.equal(app.calls.backups.length, 0);
+});
+
+test('ignoring the last blocked preview record closes the preview without deleting its history', () => {
+  const selected = ambiguousRecord();
+  const app = pageHarness({ records: [selected] });
+  app.page.openCheckinUploadPreview();
+  assert.equal(app.page.data.checkinUploadCount, 0);
+  assert.equal(app.page.data.checkinUploadBlockedRecords[0].canIgnoreUpload, true);
+  app.page.ignoreCheckinUpload({ currentTarget: { dataset: { localId: selected.localId } } });
+  assert.equal(app.page.data.showCheckinUploadPreview, false);
+  assert.equal(app.page.data.pendingCheckinCount, 0);
+  assert.equal(app.records().length, 1);
+  assert.equal(app.records()[0].syncIgnored, true);
+  assert.equal(app.page.data.checkinRecords[0].syncStatus, 'ignored');
+  assert.equal(app.calls.backups.length, 0);
+});
+
+test('ignoring in a mixed preview keeps its original upload selection and excludes later arrivals', async () => {
+  const selected = ambiguousRecord();
+  const initialUpload = legacy({ localId: 'original-selection', timestamp: TIMESTAMP + 60000 });
+  const otherBlocked = ambiguousRecord({ localId: 'other-blocked', timestamp: TIMESTAMP + 120000 });
+  const app = pageHarness({ records: [selected, initialUpload, otherBlocked] });
+  app.page.openCheckinUploadPreview();
+  const previewGroups = clone(app.page.data.checkinUploadGroups);
+  app.addRecord(legacy({ localId: 'late-arrival', timestamp: TIMESTAMP + 180000 }));
+  app.page.ignoreCheckinUpload({ currentTarget: { dataset: { localId: selected.localId } } });
+  assert.equal(app.page.data.showCheckinUploadPreview, true);
+  assert.deepEqual(clone(app.page.data.checkinUploadGroups), previewGroups);
+  assert.equal(app.page.data.checkinUploadCount, 1);
+  assert.deepEqual(clone(app.page.data.checkinUploadBlockedRecords.map(record => record.localId)), [otherBlocked.localId]);
+  await app.page.retryCheckinUploads();
+  assert.deepEqual(app.calls.backups.map(args => args[4]), [initialUpload.localId]);
+  assert.equal(app.records().find(record => record.localId === selected.localId).syncIgnored, true);
+  assert.equal(app.records().find(record => record.localId === otherBlocked.localId).syncIgnored, undefined);
+  assert.equal(app.records().find(record => record.localId === 'late-arrival').syncVersion, undefined);
+  assert.equal(app.page.data.pendingCheckinCount, 2);
+});
+
+test('home cannot ignore outside its preview, during upload, or after switching either account identifier', () => {
+  const selected = ambiguousRecord();
+  const event = { currentTarget: { dataset: { localId: selected.localId } } };
+  for (const prepare of [
+    () => {},
+    app => { app.page.openCheckinUploadPreview(); app.page.data.checkinRetrying = true; },
+    app => { app.page.openCheckinUploadPreview(); app.setOpenid('oz-new-account'); },
+    app => { app.page.openCheckinUploadPreview(); app.setUserId('local-new-account'); }
+  ]) {
+    const app = pageHarness({ records: [selected] });
+    const original = clone(app.storage.get(KEY));
+    prepare(app);
+    app.page.ignoreCheckinUpload(event);
+    assert.deepEqual(app.storage.get(KEY), original);
+    assert.equal(app.calls.backups.length, 0);
+  }
 });
