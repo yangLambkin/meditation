@@ -12,10 +12,10 @@
         <!-- 两个固定裁剪区分别显示剩余进度，旋转中心均位于圆心 -->
         <view wx:if="{{isCountdown}}" class="progress-circle-fill {{isRunning ? 'is-animating' : ''}}">
           <view class="progress-circle-clip progress-circle-clip-left">
-            <view class="progress-circle-half progress-circle-left" style="transform: rotate({{progressAngleLeft}}deg);"></view>
+            <view class="progress-circle-half progress-circle-left {{progressAngleLeft <= -180 ? 'progress-circle-empty' : ''}}" style="transform: rotate({{progressAngleLeft}}deg);"></view>
           </view>
           <view class="progress-circle-clip progress-circle-clip-right">
-            <view class="progress-circle-half progress-circle-right" style="transform: rotate({{progressAngleRight}}deg);"></view>
+            <view class="progress-circle-half progress-circle-right {{progressAngleRight <= -180 ? 'progress-circle-empty' : ''}}" style="transform: rotate({{progressAngleRight}}deg);"></view>
           </view>
         </view>
         <!-- 时间显示 -->
@@ -114,7 +114,7 @@
         <text class="duration-manage" bindtap="toggleDurationEditing">{{editingDurations ? '完成' : '管理推荐'}}</text>
         <view class="time-picker-close" bindtap="hideTimePicker">✕</view>
       </view>
-      <view class="time-picker-options">
+      <scroll-view class="time-picker-options" scroll-y="{{true}}">
         <view 
           wx:for="{{timeOptions}}" 
           wx:key="value"
@@ -133,7 +133,7 @@
           </view>
         </view>
         <text wx:if="{{!timeOptions.length}}" class="duration-empty">添加你常用的静坐时长</text>
-      </view>
+      </scroll-view>
       <view class="duration-footer">
         <button class="duration-add" bindtap="addRecommendedDuration">＋ 添加推荐</button>
         <button class="duration-custom" bindtap="chooseCustomDuration">自定义时长</button>

@@ -1,5 +1,10 @@
 /**timer.wxss**/
 
+page {
+  height: 100%;
+  overflow: hidden;
+}
+
 .ml-104 {
   margin-left: 208rpx;
 }
@@ -15,12 +20,14 @@
 .page {
   background-color: #ffffff;
   width: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   height: 100%;
 }
 .section {
-  padding: 10rpx 32rpx 32rpx;
+  height: 100%;
+  min-height: 0;
+  /* 原生 tabBar 已处理安全区，内容区只保留固定底部留白。 */
+  padding: 10rpx 32rpx 40rpx;
   background-color: #ffffff;
 }
 .image {
@@ -41,8 +48,11 @@
   line-height: 30.34rpx;
 }
 .section_2 {
-  padding: 0rpx 0 50rpx;
-  width: 600rpx;
+  flex: 1 1 0;
+  min-height: 0;
+  justify-content: center;
+  margin: 24rpx 0;
+  width: 100%;
 }
 .text_3 {
   color: #101727;
@@ -367,12 +377,14 @@
 /* 进度圈容器 */
 .progress-circle-container {
   position: relative;
-  width: 500rpx;
-  height: 500rpx;
+  /* 圆环随剩余高度缩放，操作区和设置卡片始终完整显示。 */
+  height: 100%;
+  max-height: 500rpx;
+  max-width: 100%;
+  aspect-ratio: 1;
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: 20rpx auto;
 }
 
 /* 背景圆环 */
@@ -383,12 +395,12 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 40rpx solid #f2f4f6;
+  background-color: #f2f4f6;
   box-sizing: border-box;
 }
 
 .progress-circle-static {
-  border-color: #b29764;
+  background-color: #b29764;
 }
 
 /* 进度填充圆环容器 */
@@ -402,11 +414,11 @@
   overflow: hidden;
 }
 
-/* 固定的左右裁剪区，避免半圆旋转后覆盖另一侧 */
+/* 中线两侧各重叠 1px，避免缩放后的半像素裁剪露出接缝。 */
 .progress-circle-clip {
   position: absolute;
   top: 0;
-  width: 50%;
+  width: calc(50% + 1px);
   height: 100%;
   overflow: hidden;
 }
@@ -416,10 +428,10 @@
 }
 
 .progress-circle-clip-right {
-  left: 50%;
+  left: calc(50% - 1px);
 }
 
-/* 半圆按秒线性过渡；暂停、重置时立即停在对应进度 */
+/* 只由外层裁剪圆形轮廓，内部使用矩形填充，避免重复抗锯齿。 */
 .progress-circle-half {
   width: 100%;
   height: 100%;
@@ -431,25 +443,29 @@
 }
 
 .progress-circle-left {
-  border-radius: 250rpx 0 0 250rpx;
-  transform-origin: 100% 50%;
+  /* 扣除重叠宽度，旋转中心仍与外层圆心重合。 */
+  transform-origin: calc(100% - 1px) 50%;
 }
 
 .progress-circle-right {
-  border-radius: 0 250rpx 250rpx 0;
-  transform-origin: 0 50%;
+  transform-origin: 1px 50%;
+}
+
+/* 空半圆不绘制重叠区，半程和结束时不会残留细线。 */
+.progress-circle-empty {
+  visibility: hidden;
 }
 
 /* 时间显示区域 */
 .time-display {
-  position: relative;
+  position: absolute;
   z-index: 3;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 420rpx;
-  height: 420rpx;
+  width: 84%;
+  height: 84%;
   border-radius: 50%;
   background-color: #ffffff;
 }
@@ -471,6 +487,51 @@
   line-height: 24rpx;
   text-align: center;
   margin-top: 12rpx;
+}
+
+/* 短屏同时压缩装饰留白，保留完整的触控区域。 */
+@media (max-height: 600px) {
+  .mt-17 {
+    margin-top: 18rpx;
+  }
+
+  .section_2 {
+    margin: 16rpx 0;
+  }
+
+  .weui-btn-circle.main-btn,
+  .weui-btn-circle.pause-btn {
+    width: 128rpx;
+    height: 128rpx;
+  }
+
+  .group_2 {
+    margin-top: 20rpx;
+  }
+
+  .section_3 {
+    padding-bottom: 24rpx;
+  }
+
+  .group_3 {
+    padding: 20rpx 0;
+  }
+
+  .section_4 {
+    padding-top: 16rpx;
+    padding-bottom: 16rpx;
+  }
+
+  .section_5 {
+    margin-top: 16rpx;
+    padding-top: 16rpx;
+    padding-bottom: 16rpx;
+  }
+
+  .text_3 {
+    font-size: 64rpx;
+    line-height: 64rpx;
+  }
 }
 
 /* ===== 时长选择器样式 ===== */
@@ -541,11 +602,12 @@
 
 /* 时长选项容器 */
 .time-picker-options {
+  box-sizing: border-box;
   flex-shrink: 1;
   min-height: 0;
+  height: 400rpx;
   padding: 32rpx;
   max-height: 400rpx;
-  overflow-y: auto;
 }
 
 /* 单个时长选项 */

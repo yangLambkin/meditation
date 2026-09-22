@@ -22,13 +22,15 @@
 操作顺序：
 
 1. 在微信开发者工具打开项目，进入「云开发」，选择**测试环境**。进入「云函数 → bijingSync → 配置／版本与配置 → 环境变量」（控制台版本不同，页签名称可能不同）。检查既有 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN` 对应测试服务，添加 `BIJING_TIMER_SOURCE=wx_trigger`，先保持 `BIJING_TIMER_ENABLED=false`。
-2. 在项目树右键 `cloudfunctions/bijingSync`，选择「上传并部署：云端安装依赖」。确保 `maintenanceAuth.js`、`heatmap.js` 等文件随整个函数目录上传；上传后重新检查环境变量仍在目标环境生效。
+2. 在项目树右键 `cloudfunctions/bijingSync`，选择「上传并部署：云端安装依赖」。确保 `maintenanceAuth.js`、`heatmap.js` 等文件随整个函数目录上传；上传后重新检查环境变量仍在目标环境生效。执行超时不要继续使用 3 秒，**60 秒可作为小规模测试起点**，再按用户数量和实测耗时调大；它限制整轮同步，不能保证任何规模都能完成。
 3. 在开发者工具右键该云函数，选择「上传触发器」，部署 `config.json` 中的规则；然后在控制台核对 `dailySyncBijing`，表达式为 `0 0 2 * * * *`，即北京时间每日 **02:00**。已有旧的 04:00 触发器应更新，不能同时留下两个每日任务。上传代码与上传触发器是两个步骤，见 [CloudBase 定时触发器说明](https://docs.cloudbase.net/cloud-function/timer-trigger)；[微信定时触发器文档](https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloud/guide/functions/triggers.html) 确认时区为 UTC+8，以及定时来源为 `wx_trigger`。
-4. 用下面的只读探测方法先确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查部署侧调用权限：普通请求不能注入或重写平台上下文。恢复正常函数代码后，再把测试环境的 `BIJING_TIMER_ENABLED` 改为 `true` 并保存配置。测试时可临时使用控制台支持的短周期触发器，验证后删除，只保留每日触发器。
-5. 让**实际定时触发器**运行一次，检查日志中的「定时同步开始」「定时同步完成」，确认业务日期为上一业务日、`failed=0`，并用测试绑定账号验证外部测试服务收到预期记录。返回的顶层 `success:true` 不代表所有用户成功，应同时检查 `data.failed`；`total=0` 只能证明调度链路通过。普通客户端伪造 `source/admin` 仍应返回 `FORBIDDEN`。
+4. 用下面的只读探测方法先确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查部署侧调用权限：普通请求不能注入或重写平台上下文。「标准触发器」的名称和表达式正确不代表来源满足鉴权，必须核实实际上下文。恢复正常函数代码后，再把测试环境的 `BIJING_TIMER_ENABLED` 改为 `true` 并保存配置。测试时可临时使用控制台支持的短周期触发器，验证后删除，只保留每日触发器。
+5. 让**实际定时触发器**运行一次，确认业务日期为上一业务日、`data.failed=0`，并用测试绑定账号验证外部测试服务收到预期记录。每个同学串行同步，首次失败后最多额外重试 3 次；仍失败则在日志与 `data.failedUsers` 中记录该同学及业务日期，继续下一个同学。任何最终失败都会令顶层 `success:false`，不能当作全员同步成功；`total=0` 也只能证明调度链路通过。根据失败明细手动补同步对应日期，普通客户端伪造 `source/admin` 仍应返回 `FORBIDDEN`。
 6. 测试通过后，在生产环境设置同样的两个变量并上传已验证版本，保留生产环境自己的 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN`。确认生产触发器、变量和下一次真实运行日志。资料 PATCH 接口所需的 `meditationManager` 也应先部署，再发布小程序客户端。
 
 仅使用定时器不需要配置管理员 OPENID 白名单，也不需要设置清理操作的生产开关。`MAINTENANCE_ADMIN_OPENIDS` 只用于另行授权人工运维。要暂停自动同步，将 `BIJING_TIMER_ENABLED` 改为 `false`；个人绑定、预览和个人同步不受此定时开关影响。
+
+同步与重试都在同一次云函数执行里。单次 HTTP 请求超时为 10 秒，某个同学的初次尝试加 3 次重试仅请求等待就可能接近 40 秒，另有数据库读写等耗时。分页和串行处理不会重置平台超时；强制终止时无法保证剩余同学已处理，也没有断点续跑。下一天只同步下一业务日，不自动补前一天遗漏；应保留日志并在个人手动同步允许的日期范围内补报，对更早日期另行处理。对端须保持「同学号同日期幂等覆盖」约定，使重试不累加时长。
 
 ### 只读确认调用来源
 

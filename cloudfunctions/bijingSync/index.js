@@ -262,8 +262,8 @@ async function syncDate(openid, dateStr) {
 
   try {
     const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration);
-    if (resp && resp.success) {
-      await markSynced(openid, dateStr);
+    if (resp && resp.success === true) {
+      await markSynced(openid, dateStr, userDoc.bijingStudentNumber);
       return { openid, date: dateStr, success: true, duration };
     }
     // 对端返回失败；若为 400（通常因尝试上报当天数据）统一提示
@@ -279,21 +279,47 @@ async function syncDate(openid, dateStr) {
 }
 
 // 记录曾同步成功的日期，仅供状态展示（不覆盖其它日期）
-async function markSynced(openid, dateStr) {
-  try {
-    const userDoc = await getUserDoc(openid);
-    if (!userDoc) return;
-    const synced = userDoc.bijingSyncedDates || {};
-    synced[dateStr] = true;
-    await db.collection('users').doc(userDoc._id).update({
-      data: { bijingSyncedDates: synced },
-    });
-  } catch (e) {
-    console.error('❌ 写入同步标记失败:', e.message);
+async function markSynced(openid, dateStr, studentNumber) {
+  const userDoc = await getUserDoc(openid);
+  if (!userDoc) throw new Error('写入同步标记失败：用户不存在');
+  // 只修改本次日期，避免自动/手动同步不同日期时整张状态表互相覆盖。
+  // 条件更新同时防止上报期间换绑后，把旧学号的成功状态写给新学号。
+  const result = await db.collection('users').where({
+    _id: userDoc._id, bijingBound: true, bijingStudentNumber: studentNumber,
+  }).update({ data: { [`bijingSyncedDates.${dateStr}`]: true } });
+  // 部分数据库版本对“原值已为 true”的写入返回更新 0 条；只在重新
+  // 核实相同绑定已有此日期的成功标记后，将它视为幂等成功。
+  if (result && result.stats && result.stats.updated === 0) {
+    const current = await getUserDoc(openid);
+    if (current && current.bijingBound && current.bijingStudentNumber === studentNumber &&
+      current.bijingSyncedDates && current.bijingSyncedDates[dateStr] === true) return;
+  }
+  if (!result || !result.stats || result.stats.updated !== 1) {
+    throw new Error('写入同步标记失败：用户绑定已变化，请重新同步');
   }
 }
 
 // ===== 凌晨 2 点自动：同步所有绑定用户最近一个已结束的同步日 =====
+const CRON_MAX_RETRIES = 3;
+
+async function syncDateWithRetry(openid, dateStr) {
+  let result;
+  for (let attempt = 0; attempt <= CRON_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      console.warn('⏳ 定时同步重试', { openid, date: dateStr, retry: attempt, error: result.error });
+      await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt - 1)));
+    }
+    try {
+      result = await syncDate(openid, dateStr);
+    } catch (error) {
+      result = { success: false, error: error.message || '用户同步异常' };
+    }
+    // 无记录/未绑定属于跳过，不重试；上报或本地标记失败都必须明确失败。
+    if (result.success === true || result.skipped === true) return { result, retries: attempt, attempts: attempt + 1 };
+    if (attempt === CRON_MAX_RETRIES) return { result, retries: attempt, attempts: attempt + 1 };
+  }
+}
+
 async function cronSyncAll() {
   const yesterday = getSyncBusinessDate(Date.now() - DAY_MS);
   console.log(`🚀 定时同步开始, 昨天=${yesterday}`);
@@ -303,10 +329,13 @@ async function cronSyncAll() {
   let total = 0;
   let success = 0;
   let failed = 0;
+  let skipped = 0;
+  let retries = 0;
+  const failedUsers = [];
 
   while (true) {
     // 注意：定时触发 event 无 OPENID，需扫描全部绑定用户
-    // 用户量大时本循环 limit/offset 已是分批；可进一步并行化
+    // 这里只是数据库分页，所有用户仍在同一次云函数里依次执行，共用执行超时。
     const res = await db.collection('users')
       .where({ bijingBound: true })
       .skip(skip)
@@ -317,13 +346,15 @@ async function cronSyncAll() {
 
     for (const u of list) {
       total++;
-      try {
-        const r = await syncDate(u._openid, yesterday);
-        if (r.success) success++;
-        else if (r.success === false) failed++;
-      } catch (e) {
+      const attempt = await syncDateWithRetry(u._openid, yesterday);
+      retries += attempt.retries;
+      if (attempt.result.success === true) success++;
+      else if (attempt.result.skipped === true) skipped++;
+      else {
         failed++;
-        console.error(`❌ 用户同步异常 openid=${u._openid}:`, e.message);
+        const failure = { openid: u._openid, date: yesterday, attempts: attempt.attempts, error: attempt.result.error || '未知同步错误' };
+        failedUsers.push(failure);
+        console.error('❌ 定时同步重试后仍失败', failure);
       }
     }
 
@@ -331,8 +362,13 @@ async function cronSyncAll() {
     skip += limit;
   }
 
-  console.log(`✅ 定时同步完成: total=${total}, success=${success}, failed=${failed}, date=${yesterday}`);
-  return { success: true, data: { date: yesterday, total, success, failed } };
+  const data = { date: yesterday, total, success, failed, skipped, retries, failedUsers };
+  if (failed > 0) {
+    console.error('❌ 定时同步部分失败', data);
+    return { success: false, code: 'PARTIAL_SYNC_FAILED', error: `${failed} 位同学同步失败，请查看失败明细后补同步`, data };
+  }
+  console.log('✅ 定时同步完成', data);
+  return { success: true, data };
 }
 
 // 手动同步仅允许最近七个已在次日 02:00 结束的同步日。

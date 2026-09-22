@@ -75,6 +75,20 @@ function createHarness(options = {}) {
               const page = rows.slice(offset, offset + maximum);
               return { data: clone(fields ? page.map(row => Object.fromEntries(Object.keys(fields).filter(key => fields[key] && Object.hasOwn(row, key)).map(key => [key, row[key]]))) : page) };
             },
+            async update({ data }) {
+              assert.equal(name, 'users');
+              const matched = users.filter(row => matches(row, filter));
+              for (const user of matched) {
+                calls.updates.push({ name, id: user._id, data: clone(data) });
+                for (const [field, value] of Object.entries(data)) {
+                  const parts = field.split('.');
+                  const key = parts.pop();
+                  const target = parts.reduce((object, part) => object[part] ||= {}, user);
+                  target[key] = clone(value);
+                }
+              }
+              return { stats: { updated: matched.length } };
+            },
           };
         },
         aggregate() {
@@ -212,6 +226,7 @@ test('checking and binding accept trimmed uppercase BJ prefixes without changing
         assert.equal(result.data.studentNumber, normalizedNumber);
         assert.equal(app.calls.gets.length, 1);
         assert.equal(app.calls.gets[0][0], `https://example.test/api/openapi/users/${encodeURIComponent(normalizedNumber)}`);
+        assert.deepEqual(app.calls.gets[0][1], { headers: { 'X-Access-Token': 'test-token' }, timeout: 10000 });
         if (type === 'bindStudentNumber') {
           assert.equal(app.calls.updates.length, 1);
           assert.equal(app.users[0].bijingBound, true);
@@ -237,9 +252,31 @@ test('selected sync includes legacy records for only the chosen date and current
   });
   assert.equal(app.calls.reads.filter(call => call.name === 'meditation_records').length, 1);
   assert.equal(app.calls.posts.length, 1);
+  assert.equal(app.calls.posts[0].url, 'https://example.test/api/openapi/meditation/records');
+  assert.deepEqual(app.calls.posts[0].config, { headers: { 'X-Access-Token': 'test-token' }, timeout: 10000 });
   assert.deepEqual(app.calls.posts[0].body, { studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 40 });
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-15': true });
   assert.equal(app.calls.now, 1);
+});
+
+test('a leftover batch environment flag cannot change manual or timer sync into asynchronous submission', async t => {
+  for (const mode of ['manual', 'timer']) {
+    await t.test(mode, async () => {
+      const app = createHarness({
+        env: { BIJING_BATCH_ENABLED: 'true' },
+        records: [{ _openid: 'user-a', date: '2026-09-16', duration: 25 }],
+      });
+      const result = mode === 'manual' ? await app.select('2026-09-16') : await app.timer();
+      assert.equal(result.success, true);
+      assert.deepEqual(app.calls.posts, [{
+        url: 'https://example.test/api/openapi/meditation/records',
+        body: { studentNumber: '123456', recordDate: '2026-09-16', durationMinutes: 25 },
+        config: { headers: { 'X-Access-Token': 'test-token' }, timeout: 10000 },
+      }]);
+      assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-16': true });
+      assert.equal(result.data.accepted, undefined);
+    });
+  }
 });
 
 test('only the seven completed sync dates can be previewed and uploaded across 02:00, month, leap-year and year boundaries', async t => {
@@ -432,7 +469,9 @@ test('automatic timer sync still synchronizes only yesterday for all bound users
         ],
         records: ['user-a', 'user-b', 'user-c'].flatMap(_openid => ['2026-09-29', '2026-09-30', '2026-10-01'].map(date => ({ _openid, date, duration: 30 }))),
       });
-      assert.deepEqual(await app.timer(event, context), { success: true, data: { date: '2026-09-30', total: 2, success: 2, failed: 0 } });
+      assert.deepEqual(await app.timer(event, context), { success: true, data: {
+        date: '2026-09-30', total: 2, success: 2, failed: 0, skipped: 0, retries: 0, failedUsers: [],
+      } });
       assert.deepEqual(app.calls.posts.map(value => value.body), [
         { studentNumber: '123456', recordDate: '2026-09-30', durationMinutes: 30 },
         { studentNumber: '234567', recordDate: '2026-09-30', durationMinutes: 30 },
