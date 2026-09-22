@@ -52,7 +52,7 @@
         <view wx:for="{{group.items}}" wx:for-item="member" wx:key="key" class="member-row"
           bindtap="openDayRecords" data-key="{{member.key}}" hover-class="member-row-pressed" aria-role="button"
           aria-label="{{member.nickname}}，{{group.dateLabel}}，{{member.statusLabel}}，查看当日练习记录">
-          <image class="member-avatar" src="{{member.avatar}}" mode="aspectFill" />
+          <nickname-avatar avatar-class="member-avatar" src="{{member.avatar}}" nickname="{{member.nickname}}" />
           <view class="member-content">
             <view class="member-heading">
               <text class="member-name">{{member.nickname}}</text>

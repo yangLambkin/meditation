@@ -37,6 +37,7 @@ function createPage(name, dailyWisdom) {
   let definition;
   let nextTimer = 0;
   const modules = {
+    'avatar.js': require('../miniprogram/utils/avatar.js'),
     'dailyWisdom.js': dailyWisdom,
     'dailyCardImage.js': { DEFAULT_IMAGE: '/images/p1.png' },
     'homeCheckin.js': { getCheckinDay: () => '2026-09-19' },

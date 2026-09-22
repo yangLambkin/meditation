@@ -40,12 +40,7 @@
       <view class="members-list">
         <view class="member-item" wx:for="{{members}}" wx:key="id">
           <view class="member-avatar">
-            <image src="{{item.avatar || '/images/userLogin.png'}}" 
-                   mode="aspectFill"
-                   class="avatar-image"
-                   data-index="{{index}}"
-                   binderror="onAvatarError">
-            </image>
+            <nickname-avatar src="{{item.avatar}}" nickname="{{item.name}}" size="{{80}}" />
           </view>
           <view class="member-info">
             <text class="member-name">{{item.name}}</text>

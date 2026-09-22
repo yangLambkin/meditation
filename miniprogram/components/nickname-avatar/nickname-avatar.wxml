@@ -1,0 +1,4 @@
+<view class="nickname-avatar avatar-class" style="width: {{size}}rpx; height: {{size}}rpx;">
+  <image wx:if="{{imageSource}}" class="avatar-image" src="{{imageSource}}" mode="aspectFill" binderror="onImageError" />
+  <view wx:else class="avatar-initial" style="font-size: {{size * 0.4}}rpx;">{{initial}}</view>
+</view>

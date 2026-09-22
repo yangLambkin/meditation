@@ -1,6 +1,6 @@
 <template name="member-history-header">
   <view class="member-history-header" wx:if="{{isMemberHistory}}">
-    <image class="member-history-avatar" src="{{memberAvatar || '/images/avatar.png'}}" mode="aspectFill" />
+    <nickname-avatar avatar-class="member-history-avatar" src="{{memberAvatar}}" nickname="{{memberName}}" />
     <view class="member-history-identity">
       <text class="member-history-name">{{memberName}}的练习记录</text>
       <text class="member-history-caption">{{memberStartDate ? '从 ' + memberStartDate + ' 起统计' : '团队成员练习记录'}}</text>

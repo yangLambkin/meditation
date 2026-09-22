@@ -86,13 +86,11 @@ Page({
    */
   getUserNickname() {
     // 尝试从缓存获取用户昵称
-    const cachedNickname = wx.getStorageSync('userNickname');
-    if (cachedNickname) {
-      this.setData({
-        userNickname: cachedNickname,
-        hasUserInfo: true
-      });
-    }
+    const cachedNickname = profileCache.readProfile().nickName;
+    this.setData({
+      userNickname: cachedNickname || '觉察者',
+      hasUserInfo: !!cachedNickname
+    });
   },
 
   /**
@@ -142,7 +140,7 @@ Page({
       console.log('缓存中无用户头像，使用默认头像');
       this.setData({
         userAvatar: '/images/userLogin.png',
-        hasUserInfo: false
+        hasUserInfo: !!(wx.getStorageSync('userNickname') || cachedUserInfo && cachedUserInfo.nickName)
       });
     }
   },
@@ -283,10 +281,13 @@ Page({
     // 记录原头像，便于检测不通过时回滚预览
     const originalAvatar = this.data.userAvatar;
     const startingAccount = profileCache.currentAccount();
+    const selectionId = this._avatarSelectionId = (this._avatarSelectionId || 0) + 1;
+    const isCurrentSelection = () => selectionId === this._avatarSelectionId && profileCache.isCurrentAccount(startingAccount);
     
     wx.showActionSheet({
       itemList: ['拍照', '从相册选择'],
       success: (res) => {
+        if (!isCurrentSelection()) return;
         const sourceType = res.tapIndex === 0 ? ['camera'] : ['album'];
         
         wx.chooseMedia({
@@ -306,7 +307,7 @@ Page({
               returnFileID: true,
               cloudPrefix: 'avatar'
             });
-            if (!profileCache.isCurrentAccount(startingAccount)) return;
+            if (!isCurrentSelection()) return;
             if (!avatarFileID) {
               this.setData({ userAvatar: originalAvatar });
               return;
@@ -319,19 +320,20 @@ Page({
 
             try {
               const synced = await this.saveAvatarToStorage(avatarFileID);
-              if (!profileCache.isCurrentAccount(startingAccount)) return;
+              if (!isCurrentSelection() || synced === null) return;
               wx.showToast({
                 title: synced ? '头像修改成功' : '已保存到本机，云端尚未同步',
                 icon: synced ? 'success' : 'none',
                 duration: 2500
               });
             } catch (error) {
-              if (!profileCache.isCurrentAccount(startingAccount)) return;
+              if (!isCurrentSelection()) return;
               this.setData({ userAvatar: originalAvatar });
               wx.showToast({ title: '头像保存失败，请重试', icon: 'none' });
             }
           },
           fail: (err) => {
+            if (!isCurrentSelection()) return;
             console.error('选择图片失败:', err);
             wx.showToast({
               title: '选择图片失败',
@@ -352,13 +354,16 @@ Page({
   async saveAvatarToStorage(avatarUrl) {
     const openid = profileCache.currentAccount();
     const patch = { avatarUrl, isCustomAvatar: true, profileComplete: true, dataSource: 'custom' };
-    profileCache.updateProfile(patch, openid);
-    return this.syncUserInfoToCloud(patch, openid);
+    const requestId = this._avatarSaveRequestId = (this._avatarSaveRequestId || 0) + 1;
+    const pending = profileCache.stageProfile(patch, openid);
+    return this.syncUserInfoToCloud(patch, openid, pending, requestId);
   },
 
   /** 只提交本次修改的字段，迟到结果不得覆盖已切换的账号。 */
-  async syncUserInfoToCloud(userInfo, openid = profileCache.currentAccount()) {
+  async syncUserInfoToCloud(userInfo, openid = profileCache.currentAccount(), pending = profileCache.pendingSnapshot(openid), requestId = this._avatarSaveRequestId) {
     if (!openid || !checkinManager.isUserLoggedIn()) return false;
+    const isCurrentRequest = () => requestId === this._avatarSaveRequestId && profileCache.isCurrentAccount(openid) &&
+      Object.prototype.hasOwnProperty.call(profileCache.currentRequestPatch(userInfo, pending, openid), 'avatarUrl');
     try {
       const result = await new Promise((resolve, reject) => {
         wx.cloud.callFunction({
@@ -375,13 +380,16 @@ Page({
           fail: reject
         });
       });
-      if (!profileCache.isCurrentAccount(openid)) return false;
-      profileCache.updateProfile(profileCache.confirmedPatch(userInfo, result.data && result.data.userInfo), openid);
+      if (!isCurrentRequest()) return null;
+      const accepted = profileCache.currentRequestPatch(userInfo, pending, openid);
+      profileCache.updateProfile(profileCache.confirmedPatch(accepted, result.data && result.data.userInfo), openid);
+      profileCache.acknowledgePending(accepted, pending, openid);
       this.setData({ profileSyncError: '' });
       return true;
     } catch (error) {
       console.error('用户资料尚未同步:', error);
-      if (profileCache.isCurrentAccount(openid)) this.setData({ profileSyncError: error.message || '资料尚未同步' });
+      if (!isCurrentRequest()) return null;
+      this.setData({ profileSyncError: error.message || '资料尚未同步' });
       return false;
     }
   },
@@ -495,6 +503,7 @@ Page({
     if (res.data.nicknameOverridden && res.data.nickname) {
       // 覆盖本地昵称缓存 + 即时展示
       profileCache.updateProfile({ nickName: res.data.nickname }, startingAccount);
+      profileCache.discardPendingFields(['nickName'], startingAccount);
       newData.userNickname = res.data.nickname;
       wx.showToast({ title: (isRebind ? '已重新绑定并' : '已绑定并') + '同步昵称', icon: 'success' });
     } else {

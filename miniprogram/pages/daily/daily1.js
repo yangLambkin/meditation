@@ -5,6 +5,7 @@ const badgeManager = require('../../utils/badgeManager.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
+const { getAvatarInitial, getAvatarSource } = require('../../utils/avatar.js');
 
 Page({
   data: {
@@ -147,7 +148,7 @@ Page({
     
     if (hasValidUserInfo) {
       // 使用缓存的用户信息
-      const userName = cachedUserInfo.nickName || '静心者';
+      const userName = userNickname || cachedUserInfo.nickName || '静心者';
       
       // 头像显示逻辑优化：
       // 1. 已登录用户：优先使用用户头像，否则使用登录图标
@@ -167,7 +168,7 @@ Page({
       console.log('获取到用户信息 - 昵称:', userName, '头像:', userAvatar, '登录状态:', isLoggedIn);
     } else {
       // 没有用户信息，根据登录状态使用不同默认值
-      const userName = isLoggedIn ? '微信用户' : '静心者';
+      const userName = userNickname || (isLoggedIn ? '微信用户' : '静心者');
       
       // 头像显示逻辑优化：
       // 已登录用户显示登录图标，未登录用户显示默认头像
@@ -561,7 +562,22 @@ Page({
     const userY = 600; // 相当于300rpx -> 600px
     
     // 绘制头像（使用更大的尺寸）
-    ctx.drawImage(this.data.userAvatar, 200, userY, 200, 200); // 相当于100rpx -> 200px
+    const avatar = getAvatarSource(this.data.userAvatar);
+    if (avatar) {
+      ctx.drawImage(avatar, 200, userY, 200, 200); // 相当于100rpx -> 200px
+    } else {
+      ctx.save();
+      ctx.setFillStyle('#b29764');
+      ctx.beginPath();
+      ctx.arc(300, userY + 100, 100, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.setFillStyle('#ffffff');
+      ctx.setFontSize(80);
+      ctx.setTextAlign('center');
+      ctx.setTextBaseline('middle');
+      ctx.fillText(getAvatarInitial(this.data.userName), 300, userY + 100);
+      ctx.restore();
+    }
     
     // 绘制用户等级
     ctx.setFontSize(50); // 相当于25rpx -> 50px

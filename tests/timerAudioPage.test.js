@@ -372,6 +372,7 @@ test('manual stop rounds elapsed minutes down once a full minute has elapsed in 
   for (const isCountdown of [true, false]) {
     for (const [seconds, minutes] of [[60, 1], [89, 1], [90, 1], [119, 1], [120, 2], [629, 10], [630, 10]]) {
       const { page, navigations, toasts, advance } = createPage({ isCountdown });
+      page.applyDuration(30);
       page.startTimer();
       advance(seconds * 1000);
       page.handleStop();
@@ -920,7 +921,7 @@ test('exiting a running or paused countdown stops it immediately and records onl
       assert.equal(page.data.isRunning, false);
       assert.equal(page.data.isPaused, false);
       assert.equal(page.data.elapsedTime, 125);
-      assert.equal(page.data.remainingTime, 1675);
+      assert.equal(page.data.remainingTime, page.data.totalTime - 125);
       assert.equal(page.data.timerInterval, null);
       assert.equal(page.startSoundTimer, null);
       assert.equal(page.data.showStopButton, false);
@@ -936,7 +937,7 @@ test('exiting a running or paused countdown stops it immediately and records onl
       page.onShow();
       assert.equal(page.data.isRunning, false);
       assert.equal(page.data.elapsedTime, 125);
-      assert.equal(page.data.remainingTime, 1675);
+      assert.equal(page.data.remainingTime, page.data.totalTime - 125);
       assert.match(toasts.at(-1).title, /倒计时已结束/);
       assert.equal(records.length, 1);
       assert.equal(records[0][3], endedAt);
@@ -982,7 +983,7 @@ test('unloading a countdown ends it and a fresh start has a new identity and ful
   reopened.page.startTimer();
   assert.equal(reopened.page.data.isRunning, true);
   assert.equal(reopened.page.data.elapsedTime, 0);
-  assert.equal(reopened.page.data.remainingTime, 1800);
+  assert.equal(reopened.page.data.remainingTime, reopened.page.data.totalTime);
   assert.notEqual(reopened.page.sessionId, sessionId);
 });
 
@@ -1004,7 +1005,7 @@ test('countdown checkpoints recover only the last known duration after an exit w
     assert.equal(reopened.page.data.isRunning, false);
     assert.equal(reopened.page.data.isPaused, false);
     assert.equal(reopened.page.data.elapsedTime, 125);
-    assert.equal(reopened.page.data.remainingTime, 1675);
+    assert.equal(reopened.page.data.remainingTime, state.totalTime - 125);
     assert.equal(reopened.records.length, 1);
     assert.equal(reopened.records[0][0], 2);
     assert.equal(reopened.records[0][3], savedAt);
@@ -1113,7 +1114,78 @@ test('a new session after completion starts at zero with a fresh identity', asyn
   assert.equal(page.data.showResetButton, true);
 });
 
-test('recommended durations can be added, edited, removed and restored without changing a running session', () => {
+test('opening the timer selects the first recommendation in its saved order, even when 30 remains available', () => {
+  for (const durations of [[20, 7, 10], [60, 30, 7], ['15', 0, 'invalid', 10, 15, 181]]) {
+    const { page } = createPage({ initialStorage: { timerRecommendedDurations: durations } });
+    const first = Number(durations[0]);
+    assert.equal(page.data.duration, first);
+    assert.equal(page.data.durationText, `${first} 分钟`);
+    assert.equal(page.data.totalTime, first * 60);
+    assert.equal(page.data.remainingTime, first * 60);
+    assert.equal(page.data.displayTime, `${String(first).padStart(2, '0')}:00`);
+    page.startTimer();
+    assert.equal(page.data.totalTime, first * 60);
+  }
+});
+
+test('an empty recommendation list remains empty and custom durations still work', () => {
+  const { page } = createPage({ initialStorage: { timerRecommendedDurations: [] } });
+  assert.equal(page.data.timeOptions.length, 0);
+  assert.equal(page.data.duration, 7);
+  page.applyDuration(42);
+  assert.equal(page.data.displayTime, '42:00');
+});
+
+test('removing the selected recommendation updates an idle timer but keeps an explicit custom duration', () => {
+  const { page } = createPage({ initialStorage: { timerRecommendedDurations: [10, 30, 60] } });
+  page.applyDuration(30);
+  page.removeRecommendedDuration({ currentTarget: { dataset: { value: 30 } } });
+  assert.equal(page.data.duration, 10);
+  assert.equal(page.data.totalTime, 600);
+  assert.equal(page.data.remainingTime, 600);
+  assert.equal(page.data.displayTime, '10:00');
+  page.applyDuration(42);
+  page.removeRecommendedDuration({ currentTarget: { dataset: { value: 10 } } });
+  assert.equal(page.data.duration, 42);
+});
+
+test('moving recommendations in either direction persists their order and respects the ends of the list', () => {
+  const { page, storage } = createPage({ initialStorage: { timerRecommendedDurations: [10, 30, 60] } });
+  page.showTimePicker();
+  page.toggleDurationEditing();
+  const move = (value, offset) => page.moveRecommendedDuration({ currentTarget: { dataset: { value, offset } } });
+  move(30, -1);
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [30, 10, 60]);
+  move(10, 1);
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [30, 60, 10]);
+  move(30, -1);
+  move(10, 1);
+  move(99, 1);
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [30, 60, 10]);
+  assert.equal(page.data.showTimePicker, true);
+  assert.equal(page.data.editingDurations, true);
+  const reopened = createPage({ initialStorage: Object.fromEntries(storage) }).page;
+  assert.deepEqual(Array.from(reopened.data.timeOptions, item => item.value), [30, 60, 10]);
+  assert.equal(reopened.data.duration, 30);
+});
+
+test('editing and adding recommendations preserve manual order without duplicating durations', () => {
+  const { page, storage } = createPage({ initialStorage: { timerRecommendedDurations: [60, 10, 30] } });
+  page.editRecommendedDuration({ currentTarget: { dataset: { value: 10 } } });
+  page.onCustomTimeInput({ detail: { value: '15' } });
+  page.confirmCustomTime();
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [60, 15, 30]);
+  page.addRecommendedDuration();
+  page.onCustomTimeInput({ detail: { value: '7' } });
+  page.confirmCustomTime();
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [60, 15, 30, 7]);
+  page.editRecommendedDuration({ currentTarget: { dataset: { value: 30 } } });
+  page.onCustomTimeInput({ detail: { value: '60' } });
+  page.confirmCustomTime();
+  assert.deepEqual(Array.from(storage.get('timerRecommendedDurations')), [15, 60, 7]);
+});
+
+test('recommended durations can be added, edited, removed, reordered and restored without changing a running session', () => {
   const { page, storage, advance } = createPage();
   page.startTimer();
   advance(10000);
@@ -1128,6 +1200,12 @@ test('recommended durations can be added, edited, removed and restored without c
   assert.equal(page.data.timeOptions.some(item => item.value === 12), false);
   assert.ok(page.data.timeOptions.some(item => item.value === 25));
   page.removeRecommendedDuration({ currentTarget: { dataset: { value: 7 } } });
+  page.toggleDurationEditing();
+  page.moveRecommendedDuration({ currentTarget: { dataset: { value: 60, offset: -1 } } });
+  assert.equal(page.data.duration, 7);
+  assert.equal(page.data.totalTime, 420);
+  assert.equal(page.data.elapsedTime, 10);
+  assert.equal(page.data.isRunning, true);
   const saved = storage.get('timerRecommendedDurations');
   const restored = createPage({ initialStorage: { timerRecommendedDurations: saved } }).page;
   assert.deepEqual(Array.from(restored.data.timeOptions, item => item.value), Array.from(saved));

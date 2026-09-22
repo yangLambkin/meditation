@@ -8,7 +8,7 @@
   <!-- 头像选择区域 -->
   <view class="avatar-section">
     <button class="avatar-btn" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
-      <image class="avatar" src="{{avatarUrl}}" mode="aspectFill"></image>
+      <nickname-avatar avatar-class="avatar" src="{{avatarUrl}}" nickname="{{nickname}}" size="{{100}}" />
     </button>
     <text class="avatar-hint">{{isAvatarSelected ? '头像已选择' : '请点击头像选择'}}</text>
   </view>

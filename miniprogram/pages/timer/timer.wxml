@@ -118,13 +118,17 @@
         <view 
           wx:for="{{timeOptions}}" 
           wx:key="value"
-          class="time-option {{item.value === duration ? 'selected' : ''}}"
+          class="time-option {{item.value === duration ? 'selected' : ''}} {{editingDurations ? 'time-option-editing' : ''}}"
           bindtap="selectDuration"
           data-value="{{item.value}}"
         >
           <text class="time-option-text">{{item.text}}</text>
           <view wx:if="{{editingDurations}}" class="duration-actions">
-            <text class="duration-edit" catchtap="editRecommendedDuration" data-value="{{item.value}}">编辑</text>
+            <view class="duration-reorder">
+              <button class="duration-move" size="mini" hover-class="duration-move-pressed" catchtap="moveRecommendedDuration" data-value="{{item.value}}" data-offset="-1" disabled="{{index === 0}}" aria-label="上移{{item.text}}">
+                <view class="duration-arrow duration-arrow-up" aria-hidden="true"></view>
+              </button>
+            </view>
             <text class="duration-delete" catchtap="removeRecommendedDuration" data-value="{{item.value}}">移除</text>
           </view>
         </view>

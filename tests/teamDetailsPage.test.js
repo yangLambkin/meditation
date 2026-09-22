@@ -53,7 +53,7 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, check
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -126,6 +126,7 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, check
       },
       setClipboardData(options) { calls.clipboard.push(options); },
       saveImageToPhotosAlbum(options) { calls.albums.push(options); },
+      openSetting(options) { calls.settings.push(options); },
       previewImage(options) { calls.previews.push(options); },
       chooseMedia: options => calls.media.push(options),
       showActionSheet: options => calls.actionSheets.push(options),
@@ -1905,13 +1906,17 @@ test('late image failure cannot revive a closed reminder or affect a newly gener
   }
 });
 
-test('reminder controls are creator-only and expose the generated image for manual preview and saving', () => {
+test('reminder controls are creator-only and offer direct saving while retaining image preview', () => {
   const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
   const reminderButton = template.match(/<button[^>]*bindtap="showReminderList"[^>]*>/)[0];
   assert.match(reminderButton, /wx:if="{{isCreator}}"/);
   const reminderImage = template.match(/<image[^>]*src="{{reminderImagePath}}"[^>]*>/)[0];
   assert.match(reminderImage, /show-menu-by-longpress="{{true}}"/);
   assert.match(reminderImage, /bindtap="previewReminderImage"/);
+  const saveButton = template.match(/<button[^>]*bindtap="saveReminderImage"[^>]*>保存图片<\/button>/)[0];
+  assert.match(saveButton, /loading="{{isSavingReminder}}"/);
+  assert.match(saveButton, /disabled="{{isSavingReminder}}"/);
+  assert.doesNotMatch(template, /<button[^>]*>查看大图<\/button>/);
   assert.doesNotMatch(template, /copyReminderList|reminderText/);
 });
 
@@ -1928,7 +1933,7 @@ test('explicit preview opens exactly the generated reminder image without clipbo
   assert.equal(calls.albums.length, 0);
 });
 
-test('reminder preview requires the same creator and an open current image outside team mutations', async () => {
+test('reminder preview and saving require the same creator and an open current image outside team mutations', async () => {
   for (const flag of ['isLoading', 'isSaving', 'isDeleting', 'removingMemberId', 'isMember', 'isCreator', 'account', 'team', 'creator', 'viewer', 'hidden', 'closed', 'empty']) {
     const { page, calls, storage } = createPage();
     await page.onShow();
@@ -1942,8 +1947,84 @@ test('reminder preview requires the same creator and an open current image outsi
     else if (flag === 'empty') page.setData({ reminderImagePath: '' });
     else page.setData({ [flag]: ['isMember', 'isCreator'].includes(flag) ? false : flag === 'removingMemberId' ? 'member' : true });
     await page.previewReminderImage();
+    await page.saveReminderImage();
     assert.equal(calls.previews.length, 0, flag);
+    assert.equal(calls.albums.length, 0, flag);
   }
+});
+
+test('saving writes the generated reminder image once and allows another save after completion', async () => {
+  const { page, calls } = createPage();
+  await page.onShow();
+  await page.showReminderList();
+  assert.equal(calls.albums.length, 0);
+  await Promise.all([page.saveReminderImage(), page.saveReminderImage()]);
+  assert.equal(calls.albums.length, 1);
+  assert.equal(calls.albums[0].filePath, '/tmp/reminder.png');
+  assert.equal(page.data.isSavingReminder, true);
+  calls.albums[0].success();
+  assert.equal(page.data.isSavingReminder, false);
+  assert.equal(calls.toasts.at(-1).title, '图片已保存到相册');
+  assert.equal(calls.previews.length, 0);
+  assert.equal(calls.clipboard.length, 0);
+  await page.saveReminderImage();
+  assert.equal(calls.albums.length, 2);
+});
+
+test('failed reminder saving permits retry and permission denial offers settings only after confirmation', async () => {
+  for (const confirm of [true, false]) {
+    const { page, calls } = createPage({ confirm });
+    await page.onShow();
+    await page.showReminderList();
+    await page.saveReminderImage();
+    calls.albums[0].fail({ errMsg: 'saveImageToPhotosAlbum:fail file not found' });
+    assert.equal(page.data.isSavingReminder, false);
+    assert.equal(calls.toasts.at(-1).title, '图片保存失败，请重试');
+    assert.equal(calls.modals.length, 0);
+    await page.saveReminderImage();
+    calls.albums[1].fail({ errMsg: 'saveImageToPhotosAlbum:fail auth deny' });
+    assert.equal(page.data.isSavingReminder, false);
+    assert.equal(calls.modals.at(-1).title, '保存图片需要授权');
+    assert.equal(calls.settings.length, confirm ? 1 : 0);
+    if (confirm) {
+      calls.settings[0].fail();
+      assert.equal(calls.toasts.at(-1).title, '无法打开设置，请重试');
+    }
+  }
+});
+
+test('callbacks from a previous reminder save cannot change a newly opened reminder', async () => {
+  for (const outcome of ['success', 'fail']) {
+    const { page, calls } = createPage();
+    await page.onShow();
+    await page.showReminderList();
+    await page.saveReminderImage();
+    page.closeReminderDialog();
+    assert.equal(page.data.isSavingReminder, false);
+    await page.showReminderList();
+    await page.saveReminderImage();
+    const toastCount = calls.toasts.length;
+    calls.albums[0][outcome]({ errMsg: 'saveImageToPhotosAlbum:fail auth deny' });
+    assert.equal(page.data.isSavingReminder, true);
+    assert.equal(calls.toasts.length, toastCount);
+    assert.equal(calls.modals.length, 0);
+  }
+});
+
+test('saving after the practice day ends rejects the stale image and refreshes statistics', async () => {
+  const tomorrow = { ...structuredClone(report), businessDate: '2026-09-20', nextResetAt: nextResetAt + 24 * 60 * 60 * 1000 };
+  let currentReport = report;
+  const { page, calls, setNow } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : currentReport) });
+  await page.onShow();
+  await page.showReminderList();
+  currentReport = tomorrow;
+  setNow(nextResetAt);
+  await page.saveReminderImage();
+  assert.equal(calls.albums.length, 0);
+  assert.equal(page.data.reminderDialogOpen, false);
+  assert.equal(page.data.isSavingReminder, false);
+  assert.equal(calls.toasts.at(-1).title, '练习日已更新，请重新查看');
+  assert.equal(page.data.report.businessDate, '2026-09-20');
 });
 
 test('preview after the practice day ends closes the stale image and refreshes current statistics', async () => {

@@ -70,7 +70,7 @@ Page({
    * 根据用户类型初始化页面
    */
   initByUserType() {
-    const userInfo = profileCache.readProfile();
+    const userInfo = { ...profileCache.readProfile(), ...profileCache.pendingPatch(profileCache.pendingSnapshot()) };
     this._originalProfile = { ...userInfo };
     this._profileAccount = profileCache.currentAccount();
     const editing = !!(userInfo.nickName || userInfo.avatarUrl);
@@ -246,8 +246,11 @@ Page({
       if (!nickSafe) return false;
       assertAccount();
 
+      const wechatOpenId = await this.getWechatOpenId();
+      assertAccount();
       const original = this._originalProfile || profileCache.readProfile();
-      const patch = { profileComplete: true, dataSource: 'custom' };
+      const pending = profileCache.pendingSnapshot(startingAccount);
+      const patch = { ...profileCache.pendingPatch(pending), profileComplete: true, dataSource: 'custom' };
       if (nickname.trim() !== original.nickName) patch.nickName = nickname.trim();
       // 默认预览不代表用户要求覆盖已有头像。
       if ((!original.avatarUrl || this.data.isAvatarSelected) && avatarUrl !== original.avatarUrl) {
@@ -256,15 +259,23 @@ Page({
       }
       if (!original.nickName) patch.migrationStatus = userType === 'wechat' ? 'migrated' : 'new';
 
-      const wechatOpenId = await this.getWechatOpenId();
-      assertAccount();
+      // On first login the displayed local profile has never been confirmed for
+      // this cloud identity. Submit the name/avatar the user accepted in the form.
+      if (startingAccount !== wechatOpenId) {
+        patch.nickName = nickname.trim();
+        patch.avatarUrl = avatarUrl;
+        patch.isCustomAvatar = avatarUrl === original.avatarUrl
+          ? !!original.isCustomAvatar : !!this.data.isAvatarSelected;
+      }
+      const request = profileCache.beginProfileRequest(patch, startingAccount);
       const response = await this.saveToCloud(patch, wechatOpenId);
       assertAccount();
       const serverProfile = response.data && response.data.userInfo;
-      const userInfo = original.nickName
-        ? { ...profileCache.readProfile(), ...profileCache.confirmedPatch(patch, serverProfile) }
-        : { ...profileCache.readProfile(), ...patch, ...serverProfile };
+      const accepted = profileCache.currentRequestPatch(patch, request, startingAccount);
+      const userInfo = { ...profileCache.readProfile(), ...profileCache.confirmedPatch(accepted, serverProfile) };
       this.saveToLocalStorage(userInfo, wechatOpenId, startingAccount);
+      profileCache.acknowledgePending(accepted, request, startingAccount);
+      profileCache.migratePending(startingAccount, wechatOpenId);
       this._originalProfile = { ...userInfo };
       this._profileAccount = wechatOpenId;
 

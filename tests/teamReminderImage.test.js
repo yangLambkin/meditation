@@ -89,7 +89,7 @@ test('exports only selected unmet cards in list order, preserving their labels a
   assert.ok(values.includes('团长'));
   assert.equal(values.filter(value => value === '1 次练习').length, 2);
   assert.equal(values.filter(value => value === ' / 60 分钟').length, 3);
-  assert.equal(values.filter(value => value === 'ME').length, 3);
+  assert.deepEqual(h.text.filter(item => item.color === '#ffffff').map(item => item.value), ['玉', '俊', '修']);
   assert.equal(h.exports.length, 1);
   assert.equal(result.tempFilePath, 'wxfile://reminder.png');
   assert.equal(h.exports[0].canvas, h.canvas);
@@ -143,12 +143,12 @@ test('long names wrap in full and increase card height without overlapping the s
 
 test('loads local and HTTPS avatars and crops non-square images to a circle', async () => {
   const h = harness();
-  await h.generate([member('本地', { avatar: '/images/avatar.png' }), member('网络', { avatar: 'https://example.com/avatar.jpg' })]);
+  await h.generate([member('本地', { avatar: '/images/custom-avatar.png' }), member('网络', { avatar: 'https://example.com/avatar.jpg' })]);
   assert.deepEqual(h.downloads, ['https://example.com/avatar.jpg']);
-  assert.deepEqual(h.sources, ['/images/avatar.png', 'wxfile://download-1.png']);
+  assert.deepEqual(h.sources, ['/images/custom-avatar.png', 'wxfile://download-1.png']);
   assert.equal(h.images.length, 2);
   assert.deepEqual(h.images[0].slice(1, 5), [20, 0, 80, 80]);
-  assert.equal(h.text.some(item => item.value === 'ME'), false);
+  assert.equal(h.text.some(item => item.color === '#ffffff'), false);
 });
 
 test('cloud avatars support direct cloud download and temporary URL resolution', async () => {
@@ -164,12 +164,21 @@ test('cloud avatars support direct cloud download and temporary URL resolution',
   assert.equal(url.images.length, 1);
 });
 
+test('legacy placeholder avatars render nickname initials without loading the shared ME image', async () => {
+  const h = harness();
+  await h.generate([member('  ripples', { avatar: '/images/avatar.png' }),
+    member('小林', { avatar: '/images/userLogin.png' }), member('', { avatar: '/images/avatar-1.png' })]);
+  assert.deepEqual(h.text.filter(item => item.color === '#ffffff').map(item => item.value), ['R', '小', '友']);
+  assert.equal(h.sources.length, 0);
+  assert.equal(h.images.length, 0);
+});
+
 test('failed avatar downloads or decoding fall back without losing any cards', async () => {
   const h = harness({ getImageInfo: () => Promise.reject(new Error('offline')),
     decode: image => queueMicrotask(() => image.onerror()), cloud: { downloadFile: options => options.fail(new Error('missing')) } });
   await h.generate([member('网络失败', { avatar: 'https://example.com/a.png' }),
     member('解码失败', { avatar: '/images/b.png' }), member('云图失败', { avatar: 'cloud://c.png' })]);
-  assert.equal(h.text.filter(item => item.value === 'ME').length, 3);
+  assert.deepEqual(h.text.filter(item => item.color === '#ffffff').map(item => item.value), ['网', '解', '云']);
   assert.equal(h.images.length, 0);
   assert.equal(h.exports.length, 1);
 });
@@ -199,6 +208,10 @@ test('stalled avatars share a seven-second budget and late responses cannot redr
   const timers = new Map();
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/subpackages/team/utils/reminderImage.js'), 'utf8'), {
+    require: request => {
+      assert.equal(request, '../../../utils/avatar.js');
+      return require('../miniprogram/utils/avatar.js');
+    },
     module, Date: { now: () => now },
     setTimeout(callback, delay) { const id = ++nextTimer; timers.set(id, { callback, at: now + delay }); return id; },
     clearTimeout: id => timers.delete(id)
@@ -216,7 +229,7 @@ test('stalled avatars share a seven-second budget and late responses cannot redr
   assert.equal(requests.length, 8);
   await advance(3000);
   await generating;
-  assert.equal(h.text.filter(item => item.value === 'ME').length, 50);
+  assert.equal(h.text.filter(item => item.value === '同').length, 50);
   assert.equal(timers.size, 0);
   requests.forEach(request => request.success({ path: 'wxfile://late.png' }));
   assert.equal(h.sources.length, 0);

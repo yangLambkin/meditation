@@ -18,6 +18,7 @@ function createPage({ readyPath = null, profileHint = false } = {}) {
     ? Promise.resolve(readyPath)
     : new Promise(resolve => { resolveImage = resolve; });
   const modules = {
+    'avatar.js': require('../miniprogram/utils/avatar.js'),
     'lunar.js': { getLunarDate: () => '农历' },
     'checkin.js': {},
     'badgeManager.js': {},
@@ -83,6 +84,19 @@ test('daily card uses the prepared local image synchronously on first load', () 
   page.onShow();
   assert.equal(calls.image, 1, 'show must not select or request another image');
   assert.equal(calls.user, 1, 'first show reuses user and statistics initialized on load');
+});
+
+test('daily card export draws the nickname initial in place of a persisted default avatar', () => {
+  const { page } = createPage();
+  const text = [];
+  const images = [];
+  const ctx = new Proxy({ fillText: (value, x, y) => text.push({ value, x, y }), drawImage: source => images.push(source) }, {
+    get: (target, property) => target[property] || (() => {})
+  });
+  page.setData({ userName: 'ripples', userAvatar: '/images/userLogin.png' });
+  page.drawSimpleLayout(ctx, 1500, 2000);
+  assert.ok(text.some(item => item.value === 'R' && item.x === 300 && item.y === 700));
+  assert.equal(images.length, 0);
 });
 
 test('daily card keeps its local fallback until an in-flight prepared image is downloaded', async () => {

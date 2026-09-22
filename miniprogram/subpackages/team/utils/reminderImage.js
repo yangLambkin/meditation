@@ -1,3 +1,4 @@
+const { getAvatarInitial, getAvatarSource } = require('../../../utils/avatar.js');
 const LOGICAL_WIDTH = 750;
 const MAX_CANVAS_EDGE = 8192;
 const MAX_CANVAS_PIXELS = 8 * 1024 * 1024;
@@ -183,7 +184,7 @@ async function loadAvatars(canvas, members, wxApi, isCurrent) {
     while (next < members.length) {
       checkCurrent(isCurrent);
       const index = next++;
-      avatars[index] = await loadAvatar({ canvas, source: members[index].avatar, wxApi, isCurrent, deadline });
+      avatars[index] = await loadAvatar({ canvas, source: getAvatarSource(members[index].avatar), wxApi, isCurrent, deadline });
       checkCurrent(isCurrent);
     }
   }
@@ -191,7 +192,7 @@ async function loadAvatars(canvas, members, wxApi, isCurrent) {
   return avatars;
 }
 
-function drawAvatar(context, avatar, x, y) {
+function drawAvatar(context, avatar, nickname, x, y) {
   context.save();
   context.beginPath();
   context.arc(x + 38, y + 38, 38, 0, Math.PI * 2);
@@ -202,10 +203,10 @@ function drawAvatar(context, avatar, x, y) {
   } else {
     context.fillStyle = colors.gold;
     context.fillRect(x, y, 76, 76);
-    font(context, 25, '600');
+    font(context, 30, '600');
     context.fillStyle = '#ffffff';
     context.textAlign = 'center';
-    context.fillText('ME', x + 38, y + 25);
+    context.fillText(getAvatarInitial(nickname), x + 38, y + 23);
   }
   context.restore();
 }
@@ -217,7 +218,7 @@ function drawCard(context, layout, avatar, top, goal) {
   const left = 52;
   const headerTop = top + 24;
   const identityLeft = left + 93;
-  drawAvatar(context, avatar, left, headerTop);
+  drawAvatar(context, avatar, member.nickname, left, headerTop);
   context.textAlign = 'left';
   font(context, 28, '500');
   context.fillStyle = colors.text;

@@ -15,13 +15,13 @@ Page({
     isCountdown: true,
     
     // 时间设置
-    totalTime: 1800,
+    totalTime: DEFAULT_DURATIONS[0] * 60,
     elapsedTime: 0,
-    remainingTime: 1800,
+    remainingTime: DEFAULT_DURATIONS[0] * 60,
     
     // 时长选择
-    duration: 30,
-    durationText: "30 分钟",
+    duration: DEFAULT_DURATIONS[0],
+    durationText: `${DEFAULT_DURATIONS[0]} 分钟`,
     showTimePicker: false,
     showCustomTimePicker: false,
     customTimeInput: "",
@@ -46,7 +46,7 @@ Page({
     // 进度显示
     progressAngleLeft: 0,
     progressAngleRight: 0,
-    displayTime: "30:00",
+    displayTime: `${String(DEFAULT_DURATIONS[0]).padStart(2, '0')}:00`,
     
     // 按钮状态
     showStartButton: true,
@@ -704,13 +704,33 @@ Page({
     const values = Array.isArray(stored)
       ? [...new Set(stored.map(Number).filter(value => Number.isInteger(value) && value >= 1 && value <= 180))]
       : DEFAULT_DURATIONS;
-    this.setData({ timeOptions: values.sort((a, b) => a - b).map(value => ({ value, text: `${value} 分钟` })) });
+    const minutes = values[0] || DEFAULT_DURATIONS[0];
+    this.setData({
+      timeOptions: values.map(value => ({ value, text: `${value} 分钟` })),
+      duration: minutes,
+      durationText: `${minutes} 分钟`,
+      totalTime: minutes * 60,
+      remainingTime: minutes * 60
+    });
   },
 
   saveDurationOptions(values) {
-    const durations = [...new Set(values)].sort((a, b) => a - b);
+    const durations = [...new Set(values)];
+    const removedSelection = this.data.timeOptions.some(item => item.value === this.data.duration)
+      && !durations.includes(this.data.duration);
     wx.setStorageSync(DURATION_STORAGE_KEY, durations);
     this.setData({ timeOptions: durations.map(value => ({ value, text: `${value} 分钟` })) });
+    if (removedSelection && !this.data.isRunning && !this.data.isPaused
+      && !this.data.elapsedTime && !this.pendingCompletion) {
+      const minutes = durations[0] || DEFAULT_DURATIONS[0];
+      this.setData({
+        duration: minutes,
+        durationText: `${minutes} 分钟`,
+        totalTime: minutes * 60,
+        remainingTime: minutes * 60
+      });
+      this.updateDisplay();
+    }
   },
 
   showTimePicker() { this.setData({ showTimePicker: true, editingDurations: false }); },
@@ -738,6 +758,19 @@ Page({
     this.saveDurationOptions(this.data.timeOptions.map(item => item.value).filter(item => item !== value));
   },
 
+  moveRecommendedDuration(e) {
+    if (!this.data.editingDurations) return;
+    const value = Number(e.currentTarget.dataset.value);
+    const offset = Number(e.currentTarget.dataset.offset);
+    if (offset !== -1 && offset !== 1) return;
+    const values = this.data.timeOptions.map(item => item.value);
+    const index = values.indexOf(value);
+    const nextIndex = index + offset;
+    if (index < 0 || nextIndex < 0 || nextIndex >= values.length) return;
+    [values[index], values[nextIndex]] = [values[nextIndex], values[index]];
+    this.saveDurationOptions(values);
+  },
+
   onCustomTimeInput(e) {
     const value = e.detail.value;
     const minutes = Number(value);
@@ -752,9 +785,12 @@ Page({
     if (!this.data.isValidCustomTime || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) return;
     const action = this.data.customTimeAction;
     if (action === 'add' || action === 'edit') {
-      const values = this.data.timeOptions.map(item => item.value)
-        .filter(value => action !== 'edit' || value !== this.data.editingDuration);
-      this.saveDurationOptions([...values, minutes]);
+      const values = this.data.timeOptions.map(item => item.value);
+      const nextValues = action === 'edit'
+        ? values.filter(value => value === this.data.editingDuration || value !== minutes)
+          .map(value => value === this.data.editingDuration ? minutes : value)
+        : [...values, minutes];
+      this.saveDurationOptions(nextValues);
       this.setData({ showCustomTimePicker: false, showTimePicker: true, customTimeInput: '' });
       return;
     }

@@ -501,10 +501,13 @@
 /* 选择器内容区域 */
 .time-picker-content {
   position: relative;
+  display: flex;
+  flex-direction: column;
   background-color: #ffffff;
   border-radius: 24rpx;
   width: 600rpx;
   max-height: 70%;
+  overflow: hidden;
   box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, 0.2);
 }
 
@@ -538,6 +541,8 @@
 
 /* 时长选项容器 */
 .time-picker-options {
+  flex-shrink: 1;
+  min-height: 0;
   padding: 32rpx;
   max-height: 400rpx;
   overflow-y: auto;
@@ -888,13 +893,92 @@
 
 .duration-actions {
   display: flex;
-  gap: 24rpx;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 16rpx;
   font-size: 23rpx;
   color: #8b8376;
 }
 
+.time-option-editing {
+  padding: 12rpx 16rpx;
+}
+
+.time-option-editing:active {
+  transform: none;
+}
+
+.time-option-text {
+  white-space: nowrap;
+}
+
+.duration-reorder {
+  display: flex;
+  margin-right: 8rpx;
+  border-radius: 12rpx;
+  background-color: #f0ece4;
+  color: #967b47;
+}
+
+/* 显式覆盖小程序 button 的默认宽度、内边距和禁用底色。 */
+button.duration-move {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 72rpx;
+  width: 72rpx;
+  min-width: 72rpx;
+  height: 72rpx;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  line-height: 1;
+  border-radius: 12rpx;
+}
+
+button.duration-move::after {
+  border: none;
+}
+
+button.duration-move[disabled] {
+  background: transparent;
+  color: inherit;
+  opacity: 0.25;
+}
+
+button.duration-move-pressed {
+  background: rgba(150, 123, 71, 0.16);
+}
+
+.duration-arrow {
+  width: 16rpx;
+  height: 16rpx;
+  border-top: 3rpx solid currentColor;
+  border-right: 3rpx solid currentColor;
+}
+
+.duration-arrow-up {
+  transform: translateY(4rpx) rotate(-45deg);
+}
+
+.duration-delete {
+  padding: 0 10rpx;
+  line-height: 72rpx;
+}
+
 .time-option.selected .duration-actions {
   color: #fff;
+}
+
+.time-option.selected .duration-reorder {
+  background-color: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.time-option.selected button.duration-move-pressed {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .duration-empty {
@@ -908,7 +992,9 @@
 .duration-footer {
   display: flex;
   gap: 16rpx;
-  padding: 0 32rpx 32rpx;
+  padding: 20rpx 32rpx 32rpx;
+  border-top: 2rpx solid #f2f4f6;
+  background-color: #fff;
 }
 
 .duration-add,

@@ -32,7 +32,7 @@ Page({
     settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '',
     isPreparingInvite: false, inviteReady: false, inviteError: '',
     inviteDialogOpen: false, inviteExpiresLabel: '',
-    isPreparingReminder: false,
+    isPreparingReminder: false, isSavingReminder: false,
     reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: ''
   },
 
@@ -288,7 +288,7 @@ Page({
   cancelReminder() {
     this._reminderVersion = (this._reminderVersion || 0) + 1;
     this._reminderContext = null;
-    if (!this._unloaded) this.setData({ isPreparingReminder: false,
+    if (!this._unloaded) this.setData({ isPreparingReminder: false, isSavingReminder: false,
       reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: '' });
   },
 
@@ -353,24 +353,75 @@ Page({
     }
   },
 
-  async previewReminderImage() {
-    const context = this._reminderContext;
-    if (!context || this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
+  canUseReminderImage(context) {
+    return !!context && this._reminderContext === context && !(this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
         !this.data.reminderImagePath || !this.data.isMember || !this.data.isCreator ||
         !this.data.teamInfo || this.data.teamInfo.creator !== context.openid ||
         this.data.teamId !== context.teamId || this._viewerOpenid !== context.openid ||
         wx.getStorageSync('userOpenId') !== context.openid || this.data.isLoading ||
-        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId);
+  },
+
+  async getCurrentReminderContext() {
+    const context = this._reminderContext;
+    if (!this.canUseReminderImage(context)) return null;
     if (context.nextResetAt <= Date.now()) {
       this.closeReminderDialog();
       wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });
       await this.loadTeamData();
-      return;
+      return null;
     }
+    return context;
+  },
+
+  async previewReminderImage() {
+    const context = await this.getCurrentReminderContext();
+    if (!this.canUseReminderImage(context)) return;
     wx.previewImage({ current: this.data.reminderImagePath, urls: [this.data.reminderImagePath],
       fail: () => {
         if (!this._unloaded && this._isVisible && this._reminderContext === context) {
           wx.showToast({ title: '图片预览失败，请重试', icon: 'none' });
+        }
+      }
+    });
+  },
+
+  async saveReminderImage() {
+    if (this.data.isSavingReminder) return;
+    const context = await this.getCurrentReminderContext();
+    if (!this.canUseReminderImage(context) || this.data.isSavingReminder) return;
+    const filePath = this.data.reminderImagePath;
+    const isCurrent = () => this.canUseReminderImage(context) &&
+      context.nextResetAt > Date.now() && this.data.reminderImagePath === filePath;
+    const finish = () => {
+      if (!this._unloaded && this._reminderContext === context) this.setData({ isSavingReminder: false });
+    };
+    this.setData({ isSavingReminder: true });
+    wx.saveImageToPhotosAlbum({
+      filePath,
+      success: () => {
+        finish();
+        if (isCurrent()) wx.showToast({ title: '图片已保存到相册', icon: 'success' });
+      },
+      fail: error => {
+        finish();
+        if (!isCurrent()) return;
+        if (/auth deny|auth denied|authorize/i.test(error && error.errMsg || '')) {
+          wx.showModal({
+            title: '保存图片需要授权',
+            content: '请在设置中允许保存到相册，开启后重新保存图片。',
+            confirmText: '去设置',
+            success: result => {
+              if (!result.confirm || !isCurrent()) return;
+              wx.openSetting({
+                fail: () => {
+                  if (isCurrent()) wx.showToast({ title: '无法打开设置，请重试', icon: 'none' });
+                }
+              });
+            }
+          });
+        } else {
+          wx.showToast({ title: '图片保存失败，请重试', icon: 'none' });
         }
       }
     });

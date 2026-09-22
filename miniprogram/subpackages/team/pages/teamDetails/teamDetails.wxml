@@ -29,7 +29,7 @@
     <view wx:if="{{currentTab === 'members'}}" class="members-view">
       <view class="section-heading"><view><text class="section-title">一起练习的伙伴</text><text wx:if="{{isCreator}}" class="section-caption">长按成员可移除</text></view><text class="member-total">{{teamMembers.length}} 位成员</text></view>
       <view class="roster-card" wx:for="{{teamMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" bindtap="openMemberRecords" catchlongpress="confirmRemoveMember" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的练习记录{{isCreator && !item.isCreator ? '，长按可移除成员' : ''}}">
-        <image class="member-avatar" src="{{item.avatar}}" mode="aspectFill" />
+        <nickname-avatar avatar-class="member-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" />
         <view class="member-identity">
           <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view>
           <text wx:if="{{report && item.totalPracticeCount !== undefined}}" class="member-subtitle">练习 {{item.totalPracticeCount}} 次 · {{item.cumulativeMinutesLabel}} 分钟</text>
@@ -94,7 +94,7 @@
         <view class="member-list" wx:if="{{todayMembers.length}}">
           <view class="practice-card" wx:for="{{todayMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="day" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}今日的练习记录">
             <view class="member-row">
-              <image class="member-avatar" src="{{item.avatar}}" mode="aspectFill" />
+              <nickname-avatar avatar-class="member-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" />
               <view class="member-identity">
                 <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view>
                 <text class="member-subtitle">{{item.todayStatus === 'not_practiced' ? '今天的练习，还未开始' : (item.todayStatus === 'below_goal' ? '距离目标还差 ' + item.remainingMinutesLabel + ' 分钟' : (hasGoal ? '今日目标已完成' : '今天已完成练习'))}}</text>
@@ -147,7 +147,7 @@
           <view class="history-list-caption"><text>成员练习记录</text><text>{{hasGoal ? '按未达标天数排序' : '按练习天数排序'}}</text></view>
           <view class="history-card" wx:for="{{historyMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" data-record-scope="history" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的历史练习记录">
             <view class="member-row">
-              <image class="member-avatar history-avatar" src="{{item.avatar}}" mode="aspectFill" />
+              <nickname-avatar avatar-class="member-avatar history-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" size="{{62}}" />
               <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text></view></view>
               <view class="member-card-trailing"><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
             </view>
@@ -189,7 +189,7 @@
       </scroll-view>
       <text class="reminder-image-tip">长按图片可保存或转发</text>
       <view class="invite-dialog-actions">
-        <button class="invite-dialog-share" bindtap="previewReminderImage">查看大图</button>
+        <button class="invite-dialog-share" bindtap="saveReminderImage" loading="{{isSavingReminder}}" disabled="{{isSavingReminder}}">保存图片</button>
       </view>
     </view>
   </view>

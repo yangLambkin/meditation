@@ -10,19 +10,42 @@
 
 每个云函数包包含独立的 `maintenanceAuth.js`，源文件为 `shared/maintenanceAuth.js`。修改源文件后必须同步三个部署副本，测试会逐字检查它们一致。保留独立副本是因为云函数分别打包上传，不能依赖云端不存在的上级目录。
 
-## 定时器：不能直接覆盖部署后假定运行正常
+## 定时器：环境变量与部署步骤
 
-代码没有假定 `context.source === 'timer'`，也没有假定一个特定的真实 `SOURCE` 值。已检查公开的 wx-server-sdk 4.0.2 实现：`getWXContext()` 从平台进程上下文读取 `OPENID`，并以平台 `TCB_SOURCE` 提供 `SOURCE`。这仅确认 SDK 取值来源，**尚未确认项目线上 SDK 版本或真实触发器发送的值**。本地夹具中的 `verified-timer-only` 是测试值，不能照抄到部署配置。
+这两个变量只需配置在目标云开发环境的 **`bijingSync` 云函数**上，不写进小程序、请求 JSON 或 `config.json` 的定时表达式。微信官方 [Cloud.getWXContext 文档](https://developers.weixin.qq.com/miniprogram/dev/wxcloud/reference-sdk-api/utils/Cloud.getWXContext.html) 明确：原生云函数定时触发器的 `SOURCE` 为 **`wx_trigger`**。2026-09-22 已核对该文档及公开的 wx-server-sdk 4.0.2 实现；当前项目声明的依赖为 `latest`，线上实际版本和运行结果仍需在部署环境确认。
 
-部署前必须在隔离测试环境完成：
+| 云函数环境变量 | 启用原生定时器时填写的值 | 说明 |
+| --- | --- | --- |
+| `BIJING_TIMER_ENABLED` | `true` | 小写文本，不带引号；只有严格等于此值才启用 |
+| `BIJING_TIMER_SOURCE` | `wx_trigger` | 与 SDK 上下文精确匹配，不填 `timer`、触发器名称或测试夹具 `verified-timer-only` |
 
-1. 记录实际部署 SDK、运行时及 `dailySyncBijing` 定时器配置；观察真实定时器调用的 SDK `SOURCE`，同时验证小程序、开发者工具、HTTP、云函数间调用的来源，确认该值只代表受保护的定时执行。
-2. 检查部署侧调用 ACL。请求字段不得注入或重写平台上下文。不要记录完整事件、令牌或用户资料；诊断仅需来源种类、是否存在身份等最小信息。
-3. 仅在来源具有上述可靠区分度后配置 `BIJING_TIMER_SOURCE` 为实际观察值，并设置 `BIJING_TIMER_ENABLED=true`。普通客户端、开发者工具、HTTP、其他云函数以及未知来源值已在代码中显式拒绝作为定时来源。
-4. 验证真实定时器仍同步已绑定用户的上一业务日，并验证普通用户伪造 `source/admin`、空身份和其他来源均在业务读取前返回 `FORBIDDEN`。
-5. 再部署生产版本。当前 `config.json` 中保留原定时计划；如果直接部署而未完成配置，调用将被拒绝并停止全员同步，不能将它判定为发布完成。
+操作顺序：
 
-如果真实调度没有可可靠辨别的 SDK 来源，或与其他可调用入口共享同一来源，**不要启用该开关**。必须先采用独立且由平台 ACL 保护的调度执行入口并完成真实调用验证，才能恢复自动同步。本次没有构造未知平台身份，也没有加入可重放的自定义凭据协议。
+1. 在微信开发者工具打开项目，进入「云开发」，选择**测试环境**。进入「云函数 → bijingSync → 配置／版本与配置 → 环境变量」（控制台版本不同，页签名称可能不同）。检查既有 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN` 对应测试服务，添加 `BIJING_TIMER_SOURCE=wx_trigger`，先保持 `BIJING_TIMER_ENABLED=false`。
+2. 在项目树右键 `cloudfunctions/bijingSync`，选择「上传并部署：云端安装依赖」。确保 `maintenanceAuth.js`、`heatmap.js` 等文件随整个函数目录上传；上传后重新检查环境变量仍在目标环境生效。
+3. 在开发者工具右键该云函数，选择「上传触发器」，部署 `config.json` 中的规则；然后在控制台核对 `dailySyncBijing`，表达式为 `0 0 2 * * * *`，即北京时间每日 **02:00**。已有旧的 04:00 触发器应更新，不能同时留下两个每日任务。上传代码与上传触发器是两个步骤，见 [CloudBase 定时触发器说明](https://docs.cloudbase.net/cloud-function/timer-trigger)；[微信定时触发器文档](https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloud/guide/functions/triggers.html) 确认时区为 UTC+8，以及定时来源为 `wx_trigger`。
+4. 用下面的只读探测方法先确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查部署侧调用权限：普通请求不能注入或重写平台上下文。恢复正常函数代码后，再把测试环境的 `BIJING_TIMER_ENABLED` 改为 `true` 并保存配置。测试时可临时使用控制台支持的短周期触发器，验证后删除，只保留每日触发器。
+5. 让**实际定时触发器**运行一次，检查日志中的「定时同步开始」「定时同步完成」，确认业务日期为上一业务日、`failed=0`，并用测试绑定账号验证外部测试服务收到预期记录。返回的顶层 `success:true` 不代表所有用户成功，应同时检查 `data.failed`；`total=0` 只能证明调度链路通过。普通客户端伪造 `source/admin` 仍应返回 `FORBIDDEN`。
+6. 测试通过后，在生产环境设置同样的两个变量并上传已验证版本，保留生产环境自己的 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN`。确认生产触发器、变量和下一次真实运行日志。资料 PATCH 接口所需的 `meditationManager` 也应先部署，再发布小程序客户端。
+
+仅使用定时器不需要配置管理员 OPENID 白名单，也不需要设置清理操作的生产开关。`MAINTENANCE_ADMIN_OPENIDS` 只用于另行授权人工运维。要暂停自动同步，将 `BIJING_TIMER_ENABLED` 改为 `false`；个人绑定、预览和个人同步不受此定时开关影响。
+
+### 只读确认调用来源
+
+在**隔离测试环境的临时诊断版本**中，可把下面代码放在 `bijingSync/index.js` 的 `exports.main` 内，紧接 `const wxContext = cloud.getWXContext();` 后面。此版本会立即返回，不执行任何业务查询或外部同步，且不记录 OPENID、令牌或完整请求。诊断期间该测试函数的个人接口也会暂停，不能部署到正常服务的生产函数。
+
+```js
+console.info('[bijing-timer-probe]', {
+  source: wxContext.SOURCE || null,
+  hasOpenid: Boolean(wxContext.OPENID),
+  env: wxContext.ENV || null
+});
+return { success: false, code: 'TIMER_SOURCE_PROBE_ONLY' };
+```
+
+等待真实定时触发器执行，读取函数日志；再分别用开发者工具、小程序、已启用的 HTTP 和云函数间调用对比来源。诊断完成后**移除这段代码并重新部署正常版本**，再启用开关。控制台「测试」按钮或请求中填写 `{ "source": "wx_trigger" }` 都不会变成真实定时来源，返回 `FORBIDDEN` 不能据此判定定时器失效。
+
+官方文档还说明来源会随调用链传递，例如 `wx_client,scf`；当前授权采用精确匹配，因此经另一个云函数转发的调用与原生直接定时触发不同。如果实际来源为空、`wx_unknown`、通用 `scf` 或不能与普通入口可靠区分，不应为了绕过拒绝随意修改 `BIJING_TIMER_SOURCE`。应先核对 SDK、触发器入口和平台配置，必要时拆分由平台权限保护的独立调度入口。
 
 ## 清理的独立参数与生产开关
 

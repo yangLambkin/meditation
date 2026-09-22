@@ -67,6 +67,9 @@
       }
     ]
   },
+  "usingComponents": {
+    "nickname-avatar": "/components/nickname-avatar/nickname-avatar"
+  },
   "sitemapLocation": "sitemap.json",
   "style": "v2",
   "lazyCodeLoading": "requiredComponents"
