@@ -2,23 +2,35 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { createStudentAuthDatabase } = require('./helpers/studentAuthDatabase');
 
-function cloudHarness({ openid, records = [], fail = false, environment = {} } = {}) {
+function cloudHarness({ openid, records = [], fail = false, environment = {}, ...options } = {}) {
   const exports = {};
   const reads = [];
-  vm.runInNewContext(fs.readFileSync(require.resolve('../cloudfunctions/adminManager/index.js'), 'utf8'), {
-    exports, process: { env: { ADMIN_OPENID: 'admin', MAINTENANCE_ADMIN_OPENIDS: 'maintenance', ...environment } },
-    require(name) {
-      if (name === './maintenanceAuth') return require('../cloudfunctions/adminManager/maintenanceAuth');
-      return { init() {}, getWXContext() { return { OPENID: openid }; }, database() {
-        reads.push('database');
-        return { collection(name) { reads.push(name); return { limit(size) {
-          reads.push(size); return { async get() { if (fail) throw new Error('sensitive database detail'); return { data: records }; } };
-        } }; } };
+  const authorization = createStudentAuthDatabase(options);
+  const db = {
+    ...authorization.db,
+    collection(name) {
+      if (name !== 'bijing_sync_errors') return authorization.db.collection(name);
+      reads.push('database', name);
+      return { limit(size) {
+        reads.push(size);
+        return { async get() { if (fail) throw new Error('sensitive database detail'); return { data: records }; } };
       } };
     }
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../cloudfunctions/adminManager/index.js'), 'utf8'), {
+    exports, process: { env: { ADMIN_STUDENT_NUMBERS: 'BJ0099', MAINTENANCE_ADMIN_OPENIDS: 'maintenance', ...environment } },
+    require(name) {
+      if (name === './studentAuth') return require('../cloudfunctions/adminManager/studentAuth');
+      if (name === './delegation') return require('../cloudfunctions/adminManager/delegation');
+      if (name === './maintenanceAuth') return require('../cloudfunctions/adminManager/maintenanceAuth');
+      assert.equal(name, 'wx-server-sdk');
+      return { init() {}, getWXContext() { return { OPENID: openid }; }, database() { return db; } };
+    }
   });
-  return { reads, async read(event = {}) { return JSON.parse(JSON.stringify(await exports.main({ type: 'getSyncAlert', ...event }))); } };
+  return { reads, authReads: authorization.reads, authUsers: authorization.users,
+    async read(event = {}) { return JSON.parse(JSON.stringify(await exports.main({ type: 'getSyncAlert', ...event }))); } };
 }
 
 test('ordinary and maintenance users never query sync errors or acquire alerts by forging an administrator', async () => {
@@ -29,8 +41,8 @@ test('ordinary and maintenance users never query sync errors or acquire alerts b
   }
 });
 
-test('sync alerts admit the second administrator and hide errors from outsiders and the replaced legacy administrator', async () => {
-  const environment = { ADMIN_OPENIDS: 'first-admin,second-admin' };
+test('sync alerts admit a second configured student number and hide errors from other accounts', async () => {
+  const environment = { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' };
   const records = [{ studentNumber: 'secret', recordDate: '2026-09-22' }];
   const authorized = cloudHarness({ openid: 'second-admin', environment, records });
   assert.deepEqual(await authorized.read(), { success: true, data: { isAdmin: true, hasErrors: true } });
@@ -52,6 +64,22 @@ test('the designated administrator only receives an existence flag from a one-ro
   const failed = await cloudHarness({ openid: 'admin', fail: true }).read();
   assert.equal(failed.success, false);
   assert.equal(JSON.stringify(failed).includes('sensitive'), false);
+});
+
+test('unbinding clears administrator alerts without another error-collection read', async () => {
+  const cloud = cloudHarness({ openid: 'admin', records: [{ studentNumber: 'secret' }] });
+  assert.deepEqual(await cloud.read(), { success: true, data: { isAdmin: true, hasErrors: true } });
+  cloud.authUsers.find(user => user._openid === 'admin').bijingBound = false;
+  const before = cloud.reads.length;
+  assert.deepEqual(await cloud.read({ studentNumber: 'BJ0099', bijingBound: true }),
+    { success: true, data: { isAdmin: false, hasErrors: false } });
+  assert.equal(cloud.reads.length, before);
+});
+
+test('authorization database failure hides synchronization alerts and its private cause', async () => {
+  const cloud = cloudHarness({ openid: 'admin', authDatabaseError: new Error('private authorization connection') });
+  assert.deepEqual(await cloud.read(), { success: false, code: 'ADMIN_AUTH_UNAVAILABLE', error: '管理员权限校验暂时不可用，请稍后重试' });
+  assert.deepEqual(cloud.reads, []);
 });
 
 function appHarness() {
@@ -180,4 +208,11 @@ test('failed or stalled alert requests clear red dots and retry only on the next
   assert.equal(dots.at(-1), true);
   assert.equal(timers.size, 0);
   app.onHide();
+});
+
+test('sync-alert endpoint never accepts delegation-shaped event fields as the caller identity', async () => {
+  const cloud = cloudHarness({ records: [{ studentNumber: 'secret' }] });
+  assert.deepEqual(await cloud.read({ expectedOpenid: 'admin', delegationId: `auth_${'0'.repeat(64)}`, SOURCE: 'wx_client,scf' }),
+    { success: true, data: { isAdmin: false, hasErrors: false } });
+  assert.deepEqual(cloud.reads, []);
 });

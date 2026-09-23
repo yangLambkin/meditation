@@ -1117,13 +1117,37 @@ async function updateUserProfile(openid, userInfo, userType = 'new') {
 
 // 获取用户档案信息
 async function getUserProfile(openid) {
+  if (typeof openid !== 'string' || !openid.trim()) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录' };
   try {
     console.log(`获取用户档案: openid=${openid}`);
-    
-    const usersCollection = db.collection('users');
-    const userQuery = await usersCollection.where({ _openid: openid }).get();
-    
-    if (userQuery.data.length === 0) {
+    let cursor = '';
+    let userProfile = null;
+    let boundProfile = null;
+    let versionedProfile = null;
+    // 旧账号可能有多份资料。按稳定顺序优先展示仍绑定的那份，避免旧的未绑定
+    // 资料遮住成功绑定；重复绑定也要保持可见，供用户从解绑入口解除。
+    while (true) {
+      const result = await db.collection('users')
+        .where({ _openid: openid, ...(cursor ? { _id: db.command.gt(cursor) } : {}) })
+        .orderBy('_id', 'asc').limit(100).get();
+      if (!result || !Array.isArray(result.data)) throw new Error('用户档案读取失败');
+      if (!userProfile && result.data.length) userProfile = result.data[0];
+      const bound = result.data.filter(row => row.bijingBound === true &&
+        typeof row.bijingStudentNumber === 'string' && row.bijingStudentNumber.trim());
+      if (!boundProfile && bound.length) boundProfile = bound[0];
+      // 混合新旧绑定时必须携带新版令牌解绑，不能让前页无令牌的旧资料遮住它。
+      versionedProfile = bound.find(row => typeof row.bijingBindingVersion === 'string' && row.bijingBindingVersion.trim());
+      if (versionedProfile) {
+        break;
+      }
+      if (result.data.length < 100) break;
+      const next = result.data[result.data.length - 1]._id;
+      if (typeof next !== 'string' || next <= cursor) throw new Error('用户档案分页无效');
+      cursor = next;
+    }
+    userProfile = versionedProfile || boundProfile || userProfile;
+
+    if (!userProfile) {
       console.log(`未找到用户档案: openid=${openid}`);
       return {
         success: true,
@@ -1132,7 +1156,6 @@ async function getUserProfile(openid) {
       };
     }
     
-    const userProfile = userQuery.data[0];
     console.log(`✅ 获取用户档案成功: openid=${openid}`);
     
     return {

@@ -313,6 +313,13 @@
 .bijing-text-action:active {
   color: #8c7345;
 }
+.bijing-unbind {
+  color: #a14b3c;
+}
+.bijing-btn-sm.is-busy,
+.bijing-text-action.is-busy {
+  opacity: 0.5;
+}
 
 /* 绑定确认与同步日期弹窗 */
 .bijing-modal-mask {

@@ -7,7 +7,7 @@ const source = fs.readFileSync(require.resolve('../cloudfunctions/bijingSync/ind
 function harness(options = {}) {
   const calls = [], captured = {};
   const authorization = createAdminManagerCaller({ ...options,
-    centralEnvironment: options.centralEnvironment || { ADMIN_OPENID: 'admin' } });
+    centralEnvironment: options.centralEnvironment || { ADMIN_STUDENT_NUMBERS: 'BJ0099' } });
   const clock = Date.parse(options.now || '2026-09-23T02:00:00+08:00');
   class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } }
   const environment = { BIJING_TIMER_ENABLED:'true',BIJING_TIMER_SOURCE:'wx_trigger',BIJING_API_BASE:'https://example.test',BIJING_ACCESS_TOKEN:'server-token',...options.env };
@@ -16,7 +16,7 @@ function harness(options = {}) {
   vm.runInNewContext(source, {exports,Date:FixedDate,console:{error(){}},process:{env:environment}, require(name) {
     if(name==='wx-server-sdk') {
       const wxContext=options.context || {SOURCE:'wx_trigger'};
-      return {init(){},DYNAMIC_CURRENT_ENV:'test',database:()=>({}),getWXContext:()=>wxContext,
+      return {init(){},DYNAMIC_CURRENT_ENV:'test',database:()=>authorization.delegationDb,getWXContext:()=>wxContext,
         callFunction:request=>authorization.call(request,wxContext)};
     }
     if(name==='axios') return {post: async (...args)=>{calls.push({name:'post',args}); return {data:{success:true}};}};
@@ -25,7 +25,7 @@ function harness(options = {}) {
     if(name==='./setup') return {initialize:async()=>{calls.push({name:'initialize'});return {};}};
     throw new Error(name);
   }});
-  return {calls,captured,authRequests:authorization.requests,run:async(event)=>JSON.parse(JSON.stringify(await exports.main(event)))};
+  return {calls,captured,authRequests:authorization.requests,authUsers:authorization.authUsers,delegationDb:authorization.delegationDb,run:async(event)=>JSON.parse(JSON.stringify(await exports.main(event)))};
 }
 
 test('timer dispatch selects only completed days at the precise Beijing 02:00 boundary',async()=>{
@@ -55,24 +55,24 @@ test('reconciliation adapter queries actual person/date records with server-only
 });
 
 for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
-  test(`${type} rejects ordinary callers and timer identity before all reads/writes`,async()=>{
+  test(`${type} rejects ordinary callers and timer identity before all business reads/writes`,async()=>{
     for(const context of [{OPENID:'ordinary',SOURCE:'wx_client'},{SOURCE:'wx_trigger'},{}]) {
       const app=harness({context});const result=await app.run({type,OPENID:'admin',admin:true});
       assert.equal(result.code,'FORBIDDEN');assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
-      assert.equal(result.error,'仅指定的管理员微信账号可执行此操作');
+      assert.equal(result.error,'仅绑定指定管理员学号的账号可执行此操作');
     }
   });
-  test(`${type} rejects malformed legacy ADMIN_OPENID and ignores maintenance authorization`,async()=>{
-    for(const ADMIN_OPENID of [undefined,'','admin,other','admin other','admin;other']) {
+  test(`${type} rejects obsolete OpenID configuration and ignores maintenance authorization`,async()=>{
+    for(const ADMIN_OPENID of [undefined,'','admin','admin,other','admin other','admin;other']) {
       const app=harness({context:{OPENID:'admin'},centralEnvironment:{ADMIN_OPENID},
-        env:{ADMIN_OPENIDS:'admin',MAINTENANCE_ADMIN_OPENIDS:'admin'}});
+        env:{ADMIN_STUDENT_NUMBERS:'BJ0099',ADMIN_OPENIDS:'admin',MAINTENANCE_ADMIN_OPENIDS:'admin'}});
       const result=await app.run({type,ADMIN_OPENID:'admin',openid:'admin',admin:true});
       assert.equal(result.code,'FORBIDDEN');assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
     }
   });
-  test(`${type} accepts the second administrator and rejects outsiders under the explicit allowlist`,async()=>{
-    const centralEnvironment={ADMIN_OPENIDS:'first-admin,second-admin'};
-    const env={ADMIN_OPENID:'outsider',ADMIN_OPENIDS:'admin,outsider,maintenance,second-admin-extra',MAINTENANCE_ADMIN_OPENIDS:'maintenance'};
+  test(`${type} accepts the second administrator and rejects outsiders under the student-number allowlist`,async()=>{
+    const centralEnvironment={ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'};
+    const env={ADMIN_STUDENT_NUMBERS:'BJ0099,BJ0001,BJ0002',ADMIN_OPENID:'outsider',ADMIN_OPENIDS:'admin,outsider,maintenance,second-admin-extra',MAINTENANCE_ADMIN_OPENIDS:'maintenance'};
     const authorized=harness({context:{OPENID:'second-admin'},centralEnvironment,env});
     assert.equal((await authorized.run({type,recordDate:'2026-09-22',runId:'run'})).success,true);
     for(const context of [{OPENID:'outsider'},{OPENID:'admin'},{OPENID:'maintenance'},
@@ -85,7 +85,7 @@ for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContin
 }
 
 test('sync start and retry preserve the second administrator SDK identity as the operator',async()=>{
-  const app=harness({context:{OPENID:'second-admin'},centralEnvironment:{ADMIN_OPENIDS:'first-admin,second-admin'}});
+  const app=harness({context:{OPENID:'second-admin'},centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'}});
   assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22',operator:'first-admin',OPENID:'first-admin'})).success,true);
   assert.equal((await app.run({type:'adminRetrySyncErrors',operator:'forged'})).success,true);
   assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']},{name:'retryErrors',args:['second-admin']}]);
@@ -94,6 +94,7 @@ test('sync start and retry preserve the second administrator SDK identity as the
 test('all sync administration fails closed when central authorization is unavailable or malformed',async()=>{
   for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
     for(const failure of [{authError:new Error('private endpoint failure')},
+      {authDatabaseError:new Error('private authorization database failure')},
       {authResponse:{result:{success:true,data:{isAdmin:'true'}}}},
       {authResponse:{result:{success:false,error:'private failure'}}}]) {
       const app=harness({...failure,context:{OPENID:'admin'},env:{ADMIN_OPENID:'admin',ADMIN_OPENIDS:'admin'}});
@@ -108,6 +109,7 @@ test('sync administration waits for central authorization before creating or inv
   const gate=new Promise(resolve=>{release=resolve;});
   const app=harness({context:{OPENID:'admin'},beforeAuthorize:()=>gate});
   const pending=app.run({type:'adminStartSync',recordDate:'2026-09-22'});
+  for(let turn=0;turn<20&&app.authRequests.length===0;turn++) await Promise.resolve();
   assert.equal(app.authRequests.length,1);assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
   release();
   assert.equal((await pending).success,true);
@@ -115,21 +117,51 @@ test('sync administration waits for central authorization before creating or inv
 });
 
 test('central revocation takes effect on the next sync request without a local allowlist fallback',async()=>{
-  const centralEnvironment={ADMIN_OPENIDS:'first-admin,second-admin'};
-  const app=harness({context:{OPENID:'second-admin'},centralEnvironment,env:{ADMIN_OPENIDS:'second-admin'}});
+  const centralEnvironment={ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'};
+  const app=harness({context:{OPENID:'second-admin'},centralEnvironment,env:{ADMIN_STUDENT_NUMBERS:'BJ0002',ADMIN_OPENIDS:'second-admin'}});
   assert.equal((await app.run({type:'adminStatus'})).success,true);
-  centralEnvironment.ADMIN_OPENIDS='first-admin';
+  centralEnvironment.ADMIN_STUDENT_NUMBERS='BJ0001';
   assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22'})).code,'FORBIDDEN');
   assert.deepEqual(app.calls,[]);assert.equal(app.authRequests.length,2);
 });
 
-test('lost or substituted nested platform identity cannot authorize synchronization',async()=>{
-  for(const centralContext of [{},{OPENID:'first-admin',SOURCE:'wx_client,scf'}]) {
-    const app=harness({context:{OPENID:'second-admin'},centralContext,
-      centralEnvironment:{ADMIN_OPENIDS:'first-admin,second-admin'}});
-    assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22'})).code,'FORBIDDEN');
+test('unbinding revokes synchronization administration before the next batch can start',async()=>{
+  const app=harness({context:{OPENID:'second-admin'},centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0002'}});
+  assert.equal((await app.run({type:'adminStatus'})).success,true);
+  app.authUsers.find(user=>user._openid==='second-admin').bijingBound=false;
+  for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
+    assert.equal((await app.run({type,studentNumber:'BJ0002',bijingBound:true})).code,'FORBIDDEN');
+  }
+  assert.deepEqual(app.calls,[]);
+});
+
+test('duplicate historical student numbers cannot start or retry synchronization as either account',async()=>{
+  for(const openid of ['second-admin','duplicate']) {
+    const app=harness({context:{OPENID:openid},centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0002'}});
+    app.authUsers.push({_id:'auth-duplicate',_openid:'duplicate',bijingBound:true,bijingStudentNumber:' bj0002 '});
+    for(const type of ['adminStartSync','adminRetrySyncErrors']) assert.equal((await app.run({type})).code,'FORBIDDEN');
     assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
   }
+});
+
+test('a one-time server proof authorizes synchronization when the nested SDK omits OPENID',async()=>{
+  const app=harness({context:{OPENID:'second-admin'},centralContext:{},
+    centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'}});
+  assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22',
+    expectedOpenid:'first-admin',delegationId:`auth_${'0'.repeat(64)}`,operator:'first-admin'})).success,true);
+  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']}]);
+  assert.equal(app.authRequests[0].data.expectedOpenid,'second-admin');
+  assert.match(app.authRequests[0].data.delegationId,/^auth_[a-f0-9]{64}$/);
+  assert.notEqual(app.authRequests[0].data.delegationId,`auth_${'0'.repeat(64)}`);
+  const proof=await app.delegationDb.collection('bijing_bindings').doc(app.authRequests[0].data.delegationId).get();
+  assert.equal(proof.data,undefined);
+});
+
+test('a substituted nonempty nested platform identity cannot authorize synchronization',async()=>{
+  const app=harness({context:{OPENID:'second-admin'},centralContext:{OPENID:'first-admin',SOURCE:'wx_client,scf'},
+    centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'}});
+  assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22'})).code,'FORBIDDEN');
+  assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
 });
 
 test('verified timer, maintenance dispatch and ordinary user operations never depend on central authorization',async()=>{
@@ -169,10 +201,10 @@ test('deployment keeps the daily 02:00 trigger and independent five-minute conti
   assert.deepEqual(config.triggers,[{name:'dailySyncBijing',type:'timer',config:'0 0 2 * * * *'},{name:'resumeBijingBatches',type:'timer',config:'0 */5 * * * * *'}]);
 });
 
-test('setup creates all five operational collections including unresolved errors and surfaces real failures',async()=>{
+test('setup creates binding ownership and operational collections including unresolved errors and surfaces real failures',async()=>{
   const {initialize,COLLECTIONS}=require('../cloudfunctions/bijingSync/setup');
   const names=[];const result=await initialize({createCollection:async name=>{names.push(name);if(name===COLLECTIONS[0]) throw new Error('collection already exists');}});
   assert.deepEqual(names,COLLECTIONS);assert.equal(result.collections[0].created,false);
-  assert.equal(COLLECTIONS.length,5);assert.ok(COLLECTIONS.includes('bijing_sync_errors'));
+  assert.equal(COLLECTIONS.length,6);assert.ok(COLLECTIONS.includes('bijing_bindings'));assert.ok(COLLECTIONS.includes('bijing_sync_errors'));
   await assert.rejects(initialize({createCollection:async()=>{throw new Error('permission denied');}}),/permission denied/);
 });

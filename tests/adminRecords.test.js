@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createStudentAuthDatabase } = require('./helpers/studentAuthDatabase');
 
 const ADMIN = 'fixed-admin';
 const OWNER = 'record-owner';
@@ -15,6 +16,7 @@ const record = (index, extra = {}) => ({ _id: `record-${String(index).padStart(4
   date: DATE, timestamp: Date.parse(`${DATE}T12:00:00+08:00`) + index * 60000, duration: 10, source: 'timer', ...extra });
 
 function harness(options = {}) {
+  const authorization = createStudentAuthDatabase({ adminOpenid: ADMIN, ...options });
   const users = options.users || [profile()];
   const records = options.records || [];
   const reads = [];
@@ -22,8 +24,11 @@ function harness(options = {}) {
   let databaseReads = 0;
   const exports = {};
   const db = {
+    RegExp: authorization.db.RegExp,
+    runTransaction: authorization.db.runTransaction,
     command: { gt(value) { return { operator: 'gt', value }; } },
     collection(name) {
+      if (name === 'bijing_bindings') return authorization.db.collection(name);
       if (name === 'meditation_locks') {
         let filter;
         let fields;
@@ -47,7 +52,10 @@ function harness(options = {}) {
       let limit;
       const ordering = [];
       return {
-        where(value) { filter = value; return this; },
+        where(value) {
+          if (name === 'users' && Object.hasOwn(value, 'bijingBound')) return authorization.db.collection(name).where(value);
+          databaseReads++; filter = value; return this;
+        },
         field(value) { fields = value; return this; },
         orderBy(field, direction) { ordering.push([field, direction]); return this; },
         limit(value) { limit = value; return this; },
@@ -73,24 +81,26 @@ function harness(options = {}) {
     }
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../cloudfunctions/adminManager/index.js'), 'utf8'), {
-    exports, process: { env: options.environment || { ADMIN_OPENID: ADMIN, MAINTENANCE_ADMIN_OPENIDS: 'maintenance' } },
+    exports, process: { env: options.environment || { ADMIN_STUDENT_NUMBERS: 'BJ0099', MAINTENANCE_ADMIN_OPENIDS: 'maintenance' } },
     require(name) {
+      if (name === './studentAuth') return require('../cloudfunctions/adminManager/studentAuth');
+      if (name === './delegation') return require('../cloudfunctions/adminManager/delegation');
       if (name === './maintenanceAuth') return require('../cloudfunctions/adminManager/maintenanceAuth');
       if (name === './records') return require('../cloudfunctions/adminManager/records');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, DYNAMIC_CURRENT_ENV: 'test',
         getWXContext() { return options.context || { OPENID: ADMIN }; },
-        database() { databaseReads++; return db; } };
+        database() { return db; } };
     }
   });
-  return { reads, lockReads, get databaseReads() { return databaseReads; },
+  return { reads, lockReads, authUsers: authorization.users, authReads: authorization.reads, get databaseReads() { return databaseReads; },
     async run(event) { return JSON.parse(JSON.stringify(await exports.main(event))); },
     async search(nickname = '静心者', cursor) { return this.run({ type: 'adminSearchUsers', nickname, cursor }); },
     async day(extra = {}) { return this.run({ type: 'adminGetDayRecords', openid: OWNER, recordDate: DATE, ...extra }); }
   };
 }
 
-test('record queries require a configured server administrator before any database access', async () => {
+test('record queries require a configured bound student number before business database access', async () => {
   const contexts = [{ OPENID: 'ordinary' }, { OPENID: 'maintenance' }, {}, { SOURCE: 'wx_trigger' }];
   for (const context of contexts) {
     const app = harness({ context });
@@ -103,7 +113,7 @@ test('record queries require a configured server administrator before any databa
     }
     assert.equal(app.databaseReads, 0);
   }
-  for (const environment of [{}, { ADMIN_OPENID: '' }, { ADMIN_OPENID: `${ADMIN},other` }, { MAINTENANCE_ADMIN_OPENIDS: ADMIN }]) {
+  for (const environment of [{}, { ADMIN_STUDENT_NUMBERS: '' }, { ADMIN_STUDENT_NUMBERS: 'BJ0099,' }, { ADMIN_OPENID: ADMIN }, { ADMIN_OPENIDS: ADMIN }, { MAINTENANCE_ADMIN_OPENIDS: ADMIN }]) {
     const app = harness({ environment });
     assert.equal((await app.search()).code, 'FORBIDDEN');
     assert.equal((await app.day()).code, 'FORBIDDEN');
@@ -111,8 +121,8 @@ test('record queries require a configured server administrator before any databa
   }
 });
 
-test('the second allowlisted administrator can search users and read records while outsiders fail before database access', async () => {
-  const environment = { ADMIN_OPENIDS: 'first-admin,second-admin', ADMIN_OPENID: ADMIN,
+test('the second configured student-number administrator can query records while outsiders fail before business database access', async () => {
+  const environment = { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002', ADMIN_OPENID: ADMIN,
     MAINTENANCE_ADMIN_OPENIDS: 'maintenance' };
   const authorized = harness({ context: { OPENID: 'second-admin' }, environment, records: [record(1)] });
   assert.equal((await authorized.search()).data.users[0].openid, OWNER);
@@ -133,7 +143,25 @@ test('the second allowlisted administrator can search users and read records whi
   }
 });
 
-test('invalid nickname, cursor, identity or impossible date is rejected before database access', async () => {
+test('unbinding immediately revokes record access without exposing any business data', async () => {
+  const app = harness({ records: [record(1)] });
+  assert.equal((await app.day()).success, true);
+  app.authUsers.find(user => user._openid === ADMIN).bijingBound = false;
+  const before = app.reads.length;
+  assert.equal((await app.search()).code, 'FORBIDDEN');
+  assert.equal((await app.day({ studentNumber: 'BJ0099', bijingBound: true })).code, 'FORBIDDEN');
+  assert.equal(app.reads.length, before);
+});
+
+test('authorization database failures never expose record data or private error details', async () => {
+  const app = harness({ authDatabaseError: new Error('private authorization connection') });
+  for (const result of [await app.search(), await app.day()]) {
+    assert.deepEqual(result, { success: false, code: 'ADMIN_AUTH_UNAVAILABLE', error: '管理员权限校验暂时不可用，请稍后重试' });
+  }
+  assert.deepEqual(app.reads, []);
+});
+
+test('invalid nickname, cursor, identity or impossible date is rejected before business database access', async () => {
   const app = harness();
   for (const nickname of ['', '   ', '字'.repeat(101), {}, null, 42, { $ne: '' }]) {
     assert.equal((await app.search(nickname)).code, 'INVALID_ARGUMENT');
@@ -400,4 +428,15 @@ test('database failures on user lookup or any records page return no partial res
   assert.equal((await harness({ failOnRead: 1 }).search()).code, 'QUERY_FAILED');
   assert.equal((await harness({ invalidOnRead: 1 }).search()).code, 'QUERY_FAILED');
   assert.equal((await harness({ invalidOnRead: 2 }).day()).code, 'QUERY_FAILED');
+});
+
+test('record endpoints cannot replace a missing SDK identity with delegation-shaped event fields', async () => {
+  const app = harness({ context: {} });
+  for (const type of ['adminSearchUsers', 'adminGetDayRecords']) {
+    const result = await app.run({ type, nickname: '静心者', openid: OWNER, recordDate: DATE,
+      expectedOpenid: ADMIN, delegationId: `auth_${'0'.repeat(64)}`, SOURCE: 'wx_client,scf' });
+    assert.equal(result.code, 'FORBIDDEN');
+  }
+  assert.equal(app.databaseReads, 0);
+  assert.deepEqual(app.reads, []);
 });

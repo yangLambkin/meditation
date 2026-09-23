@@ -14,8 +14,8 @@ const invitation = (extra = {}) => ({ _id: 'invite', teamId: 'team', inviterId: 
   status: 'pending', expireTime: new Date(NOW + 1000).toISOString(), ...extra });
 
 function harness(initial = {}, options = {}) {
-  const authorization = createAdminManagerCaller({ ...options,
-    centralEnvironment: options.centralEnvironment || { ADMIN_OPENID: 'operator' } });
+  const authorization = createAdminManagerCaller({ adminOpenid: 'operator', ...options,
+    centralEnvironment: options.centralEnvironment || { ADMIN_STUDENT_NUMBERS: 'BJ0099' } });
   let stored = clone({ admin_audit_logs: [], teams: [], team_members: [], invites: [], invite_actions: [], users: [], meditation_records: [], ...initial });
   const reads = [];
   const writes = [];
@@ -129,7 +129,7 @@ function harness(initial = {}, options = {}) {
     command: { lt: value => bound('lt', value), gt: value => bound('gt', value), gte: value => bound('gte', value), lte: value => bound('lte', value), in: values => ({ inValues: values }) },
     serverDate: () => new FixedDate(),
     RegExp: value => ({ regex: value.regexp, options: value.options }),
-    collection: name => collection(stored, name, false),
+    collection: name => name === 'bijing_bindings' ? authorization.delegationDb.collection(name) : collection(stored, name, false),
     async runTransaction(callback) {
       transactions++;
       // Model optimistic document conflicts, not predicate locks/full serialization.
@@ -177,7 +177,7 @@ function harness(initial = {}, options = {}) {
     return module.exports.main;
   }
   return {
-    reads, writes, authRequests: authorization.requests,
+    reads, writes, authRequests: authorization.requests, authUsers: authorization.authUsers, delegationDb: authorization.delegationDb,
     get stored() { return clone(stored); },
     get transactions() { return transactions; },
     async call(type, data, openid = 'operator', extra = {}) { return clone(await load(openid)({ type, data, ...extra })); }
@@ -204,20 +204,20 @@ test('every admin action rejects anonymous, ordinary and timer callers before al
         { OPENID: 'operator', openid: 'operator', admin: true, source: 'wx_trigger' });
       assert.equal(result.success, false, `${type}/${openid}`);
       assert.equal(result.code, 'FORBIDDEN');
-      assert.equal(result.error, '仅指定的管理员微信账号可执行此操作');
+      assert.equal(result.error, '仅绑定指定管理员学号的账号可执行此操作');
       assert.deepEqual([app.reads, app.writes], [[], []]);
     }
-    for (const ADMIN_OPENID of ['', undefined, 'operator,other', 'operator operator', 'operator;other']) {
+    for (const ADMIN_OPENID of ['', undefined, 'operator', 'operator,other', 'operator operator', 'operator;other']) {
       const disabled = harness(roster(), { centralEnvironment: { ADMIN_OPENID },
-        env: { ADMIN_OPENIDS: 'operator', MAINTENANCE_ADMIN_OPENIDS: 'operator' } });
+        env: { ADMIN_STUDENT_NUMBERS: 'BJ0099', ADMIN_OPENIDS: 'operator', MAINTENANCE_ADMIN_OPENIDS: 'operator' } });
       assert.equal((await disabled.call(type, transfer)).code, 'FORBIDDEN');
       assert.deepEqual([disabled.reads, disabled.writes], [[], []]);
     }
   }
 });
 
-test('the second allowlisted administrator can manage teams and is recorded as the transfer operator', async () => {
-  const app = harness(roster(), { centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' } });
+test('the second configured student-number administrator can manage teams and is recorded as the transfer operator', async () => {
+  const app = harness(roster(), { centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' } });
   const list = await app.call('adminListTeams', {}, 'second-admin');
   assert.equal(list.success, true);
   assert.equal(list.data.teams[0]._id, 'team');
@@ -230,12 +230,12 @@ test('the second allowlisted administrator can manage teams and is recorded as t
   assert.equal(audit.data.logs[0].operator, 'second-admin');
 });
 
-test('all team admin actions reject outsiders and the replaced legacy account under a multi-admin allowlist', async () => {
+test('all team admin actions reject outsiders and the replaced legacy account under a student-number allowlist', async () => {
   for (const type of ['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']) {
     for (const openid of ['', 'outsider', 'operator', 'second-admin-extra', 'maintenance']) {
       const app = harness(roster(), { wxContext: { SOURCE: 'wx_trigger' },
-        centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' }, env: {
-        ADMIN_OPENIDS: 'operator,outsider,maintenance,second-admin-extra', MAINTENANCE_ADMIN_OPENIDS: 'maintenance',
+        centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' }, env: {
+        ADMIN_STUDENT_NUMBERS: 'BJ0099,BJ0001,BJ0002', ADMIN_OPENIDS: 'operator,outsider,maintenance,second-admin-extra', MAINTENANCE_ADMIN_OPENIDS: 'maintenance',
         BIJING_TIMER_ENABLED: 'true', BIJING_TIMER_SOURCE: 'wx_trigger'
       } });
       const result = await app.call(type, { ...transfer, OPENID: 'second-admin', isAdmin: true }, openid,
@@ -251,6 +251,7 @@ test('team authorization failures expose no private details and prevent every ad
   for (const type of ['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']) {
     for (const options of [
       { authError: new Error('private authorization endpoint failure') },
+      { authDatabaseError: new Error('private authorization database failure') },
       { authResponse: { result: { success: true, data: { isAdmin: 'true' } } } },
       { authResponse: { result: { success: false, error: 'private authorization error' } } }
     ]) {
@@ -270,6 +271,7 @@ test('team actions wait for central authorization before touching business data'
   const gate = new Promise(resolve => { release = resolve; });
   const app = harness(roster(), { beforeAuthorize: () => gate });
   const pending = app.call('adminListTeams', {});
+  for (let turn = 0; turn < 20 && app.authRequests.length === 0; turn++) await Promise.resolve();
   assert.equal(app.authRequests.length, 1);
   assert.deepEqual([app.reads, app.writes], [[], []]);
   release();
@@ -278,24 +280,61 @@ test('team actions wait for central authorization before touching business data'
 });
 
 test('central revocation applies to the next team request even when local configuration still lists the administrator', async () => {
-  const centralEnvironment = { ADMIN_OPENIDS: 'first-admin,second-admin' };
-  const app = harness(roster(), { centralEnvironment, env: { ADMIN_OPENIDS: 'second-admin' } });
+  const centralEnvironment = { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' };
+  const app = harness(roster(), { centralEnvironment, env: { ADMIN_STUDENT_NUMBERS: 'BJ0002', ADMIN_OPENIDS: 'second-admin' } });
   assert.equal((await app.call('adminListTeams', {}, 'second-admin')).success, true);
   const before = app.reads.length;
-  centralEnvironment.ADMIN_OPENIDS = 'first-admin';
+  centralEnvironment.ADMIN_STUDENT_NUMBERS = 'BJ0001';
   assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin')).code, 'FORBIDDEN');
   assert.equal(app.reads.length, before);
   assert.equal(app.writes.length, 0);
   assert.equal(app.authRequests.length, 2);
 });
 
-test('lost or substituted nested platform identity cannot authorize a team request', async () => {
-  for (const centralContext of [{}, { OPENID: 'first-admin', SOURCE: 'wx_client,scf' }]) {
-    const app = harness(roster(), { centralContext,
-      centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' } });
-    assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin')).code, 'FORBIDDEN');
-    assert.deepEqual([app.reads, app.writes], [[], []]);
+test('unbinding revokes every team admin action and binding the same student number to a new account transfers access', async () => {
+  const app = harness(roster(), { centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0002' } });
+  assert.equal((await app.call('adminListTeams', {}, 'second-admin')).success, true);
+  app.authUsers.find(user => user._openid === 'second-admin').bijingBound = false;
+  const before = app.reads.length;
+  for (const type of ['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']) {
+    assert.equal((await app.call(type, transfer, 'second-admin', { studentNumber: 'BJ0002' })).code, 'FORBIDDEN');
   }
+  assert.equal(app.reads.length, before);
+  assert.deepEqual(app.writes, []);
+  app.authUsers.push({ _id: 'auth-replacement', _openid: 'replacement', bijingBound: true, bijingStudentNumber: 'BJ0002' });
+  assert.equal((await app.call('adminListTeams', {}, 'replacement')).success, true);
+  assert.equal((await app.call('adminListTeams', {}, 'second-admin')).code, 'FORBIDDEN');
+});
+
+test('duplicate historical student bindings deny both team operators before business access', async () => {
+  const app = harness(roster(), { centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0002' } });
+  app.authUsers.push({ _id: 'auth-duplicate', _openid: 'duplicate', bijingBound: true, bijingStudentNumber: ' bj0002 ' });
+  for (const openid of ['second-admin', 'duplicate']) {
+    assert.equal((await app.call('adminTransferLeader', transfer, openid)).code, 'FORBIDDEN');
+  }
+  assert.deepEqual([app.reads, app.writes], [[], []]);
+  assert.equal(app.transactions, 0);
+});
+
+test('a one-time server proof preserves the real team operator when nested SDK identity is absent', async () => {
+  const app = harness(roster(), { centralContext: {},
+    centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' } });
+  assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin', {
+    expectedOpenid: 'first-admin', delegationId: `auth_${'0'.repeat(64)}`, operator: 'first-admin'
+  })).success, true);
+  assert.equal(app.stored.admin_audit_logs[0].operator, 'second-admin');
+  assert.equal(app.authRequests[0].data.expectedOpenid, 'second-admin');
+  assert.match(app.authRequests[0].data.delegationId, /^auth_[a-f0-9]{64}$/);
+  assert.notEqual(app.authRequests[0].data.delegationId, `auth_${'0'.repeat(64)}`);
+  const proof = await app.delegationDb.collection('bijing_bindings').doc(app.authRequests[0].data.delegationId).get();
+  assert.equal(proof.data, undefined, 'the central consumer and producer cleanup leave no reusable capability');
+});
+
+test('a substituted nonempty nested platform identity cannot authorize a team request', async () => {
+  const app = harness(roster(), { centralContext: { OPENID: 'first-admin', SOURCE: 'wx_client,scf' },
+    centralEnvironment: { ADMIN_STUDENT_NUMBERS: 'BJ0001,BJ0002' } });
+  assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin')).code, 'FORBIDDEN');
+  assert.deepEqual([app.reads, app.writes], [[], []]);
 });
 
 test('normal team actions remain available without the central authorization service', async () => {

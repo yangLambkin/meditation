@@ -5,7 +5,7 @@ cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV,
 });
 
-const db = cloud.database();
+const db = cloud.database({ throwOnNotFound: false });
 
 // ===== 业务日期工具：与 meditationManager / dateUtil 完全一致 =====
 // 采用"时间 +6h 后读 UTC 分量"技巧，使结果不受运行环境本地时区影响，
@@ -134,81 +134,18 @@ async function getDayDuration(openid, dateStr, deadline) {
 
 // 读取用户文档
 async function getUserDoc(openid) {
-  const res = await db.collection('users').where({ _openid: openid }).get();
-  return res.data.length > 0 ? res.data[0] : null;
+  const res = await db.collection('users').where({ _openid: openid, bijingBound: true }).limit(2).get();
+  // Old profile duplicates may remain after unbind; only the unique active binding is usable.
+  return res.data.length === 1 ? res.data[0] : null;
 }
 
-// ===== 绑定学号（含昵称覆盖） =====
+// ===== 原子唯一绑定与解绑 =====
+function bindings() {
+  return require('./bindings').createBindings({ db, checkStudentExists, now: () => new Date() });
+}
+
 async function bindStudentNumber(openid, studentNumber) {
-  if (!openid) return { success: false, error: '用户未登录' };
-  if (typeof studentNumber === 'string') studentNumber = studentNumber.trim();
-  if (!studentNumber) return { success: false, error: '学号不能为空' };
-  if (typeof studentNumber !== 'string' || !/^BJ/.test(studentNumber)) {
-    return { success: false, error: '学号必须以大写 BJ 开头' };
-  }
-
-  // 1. 校验学号存在性
-  // 重新绑定不同学号时，重置同步状态，避免显示旧学号的同步历史
-  const existing = await getUserDoc(openid);
-  const isRebind = !!(existing && existing.bijingBound &&
-    existing.bijingStudentNumber && existing.bijingStudentNumber !== studentNumber);
-  let userData;
-  try {
-    const resp = await checkStudentExists(studentNumber);
-    if (!resp || !resp.success) {
-      return { success: false, error: '学号不存在或校验失败' };
-    }
-    userData = resp.data || {};
-  } catch (e) {
-    // 404 等
-    if (e.response && e.response.status === 404) {
-      return { success: false, error: '学号不存在' };
-    }
-    console.error('❌ 校验学号异常:', e.message);
-    return { success: false, error: '校验学号失败: ' + e.message };
-  }
-
-  // 2. 写绑定字段 + 昵称覆盖（昵称非空时覆盖当前用户昵称）
-  const userDoc = await getUserDoc(openid);
-  const updateData = {
-    bijingStudentNumber: studentNumber,
-    bijingBound: true,
-    bijingBoundAt: new Date(),
-    // 重新绑定不同学号：清空同步标记，旧学号的历史同步记录不继承
-    bijingSyncedDates: isRebind ? {} : ((userDoc && userDoc.bijingSyncedDates) || {}),
-    lastUpdateTime: new Date(),
-  };
-
-  // 昵称覆盖：取必经之路昵称，非空则覆盖 users.nickName
-  let overriddenNickname = null;
-  if (userData.nickname && String(userData.nickname).trim()) {
-    updateData.nickName = String(userData.nickname).trim();
-    overriddenNickname = updateData.nickName;
-    console.log(`📝 绑定覆盖昵称: ${overriddenNickname}`);
-  }
-
-  if (userDoc) {
-    await db.collection('users').doc(userDoc._id).update({ data: updateData });
-  } else {
-    await db.collection('users').add({
-      data: {
-        _openid: openid,
-        ...updateData,
-        nickName: overriddenNickname || '静心者',
-        avatarUrl: '/images/avatar.png',
-        createTime: new Date(),
-      },
-    });
-  }
-
-  return {
-    success: true,
-    data: {
-      studentNumber,
-      nickname: overriddenNickname,
-      nicknameOverridden: !!overriddenNickname,
-    },
-  };
+  return bindings().bind(openid, studentNumber);
 }
 
 // ===== 仅校验学号（不绑定，用于绑定前确认弹窗） =====
@@ -485,6 +422,8 @@ exports.main = async (event = {}, context) => {
       return await require('./heatmap').getHeatmap({ openid, getUserDoc, getApiBase, getAccessToken, axios });
     case 'bindStudentNumber':
       return await bindStudentNumber(openid, event.studentNumber);
+    case 'unbindStudentNumber':
+      return await bindings().unbind(openid, event.studentNumber, event.bindingVersion);
     case 'checkStudentNumber':
       return await checkStudentNumber(event.studentNumber);
     case 'getSyncDateDetails':

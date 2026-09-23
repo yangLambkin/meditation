@@ -64,7 +64,7 @@ test('seven version taps check the independent identity service and only admit t
     assert.equal(calls.cloud[0].name, 'adminManager');
     assert.equal(calls.cloud[0].data.type, 'getAccess');
     assert.equal(calls.navigate.length, allowed ? 1 : 0);
-    if (!allowed) assert.match(calls.toast[0].title, /仅指定管理员/);
+    if (!allowed) assert.equal(calls.toast.length, 0, 'ordinary users receive no reaction');
   }
 });
 

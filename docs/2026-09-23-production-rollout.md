@@ -1,5 +1,7 @@
 # 2026-09-23 正式环境部署记录
 
+本文按实施顺序保留历史记录。当前管理员配置和本次验收结果以末节「绑定学号授权与唯一绑定」为准，前文 OpenID 配置已被替代。
+
 ## 已完成并验证
 
 - 用户明确指定 BJ2407159（瑞璞，微信号 `dingyd_ripples`）为唯一管理员，并授权开启微信开发者工具本机服务端口。
@@ -41,3 +43,29 @@
 - 本地 `npm test` 通过 1,372 项，包括真实入口 VM 串联、第二位管理员、撤权、身份丢失或不一致、伪造参数、本地旧名单失效、故障拒绝及非管理业务隔离。
 - **真实微信会话的函数间调用仍待验收**：窗口控制出现 `noWindowsAvailable`、屏幕捕获失败，官方自动化会话连接也中断，未能完成调用。请在管控页确认团队列表和同步状态正常加载；本地串联测试和云函数 `Active` 状态不能替代平台身份传递验证。
 - 首次代码升级已完成；之后增删管理员仅修改 `adminManager` 的环境变量，保存并等待配置更新完成，无需在其他函数同步名单。
+
+## 后续更新：绑定学号授权与唯一绑定
+
+2026-09-23 北京时间 22:51 完成正式环境 `cloud1-2g2rbxbu2c126d4a` 的本次部署与接口验收：
+
+- 管控管理员仅在 `adminManager` 配置 `ADMIN_STUDENT_NUMBERS=BJ2407159,BJ2302130`。已在控制台核对完整名单；该函数旧 OpenID 管控变量已移除。其他函数遗留的旧管理员变量不再参与管控授权，以后增删管理员只改这一处学号名单。
+- 已创建 `bijing_bindings`，控制台核验客户端规则为 `{"read":false,"write":false}`；`users` 已设为 `{"read":"doc._openid == auth.openid","write":false}`。普通客户端不能直接修改绑定或创建鉴权凭据，资料更新继续使用现有云函数白名单。
+- 绑定/解绑使用学号与账号双向登记及事务 revision 校验，一个学号仅允许一个账号绑定；换号先在原账号「我 → 必经之路 → 解绑」，再由新账号绑定。解绑后立即失去该学号带来的管理员权限，原账号静坐记录及同步归档保留。
+- 19 个历史唯一绑定已于 22:37 完成迁移，新增 38 条双向登记，0 冲突；复核 19 人均已纳入管理，既有资料除新增绑定版本号外保持一致，用户无需重新绑定。备份及完整结果见 [绑定迁移记录](./2026-09-23-binding-migration.md)。本次未重复执行迁移。
+- 已完整部署 `bijingSync`（包括 `bindings.js`）、`meditationManager`（有效绑定资料选择）、`adminManager`（包括 `studentAuth.js`、`delegation.js`、`bindingMigration.js`）；最后更新 `bijingSync`、`teamManager`、`meditationManager` 的 `maintenanceAuth.js`。部署依次执行，未在同一函数 `Updating` 时重复上传。
+- 实际会话发现平台嵌套调用未提供可用原始 OpenID，导致旧中央鉴权对合法管理员返回 `FORBIDDEN`。现由业务函数用真实 SDK 身份创建仅服务端可访问的 30 秒一次性凭据，中央事务消费后校验当前唯一绑定；临时诊断日志已移除。
+- 最后 CLI 查询四个函数均为 `Active`：`adminManager` 超时 10 秒、`teamManager` 20 秒、`bijingSync` 60 秒、`meditationManager` 保持 3 秒；内部中央鉴权调用上限 8 秒。
+
+使用当前已登录微信会话，通过官方自动化 SDK 调用 `wx.cloud.callFunction` 验收：
+
+| 接口 | 实际结果 |
+| --- | --- |
+| `adminManager.getAccess` | `success: true`，`isAdmin: true` |
+| `teamManager.adminListTeams` | 成功返回 3 个团队 |
+| `bijingSync.adminStatus` | `success: true` |
+| `meditationManager.getUserProfile` | `success: true`，仍绑定 `BJ2407159` |
+| 伪造 expectedOpenid / 不存在的一次性凭据 | 两种请求均返回 `isAdmin: false` |
+
+完整本地测试通过 **1,472 项，0 失败**，覆盖并发唯一绑定、解绑与撤权、历史重复资料、过期页面响应、凭据重放及身份伪造、迁移保留与幂等。`git diff --check` 通过。未为验收解除当前真实账号的绑定；绑定/解绑边界由本地测试验证，线上保留现有业务状态。
+
+**小程序正式版前端尚未提交审核/发布**，线上用户看到新增「解绑」入口仍需要发布此次前端代码。前文批量同步的定时器、其他业务集合权限、索引及真实批次验收待办不属于本次绑定升级验收，不能因本节接口成功而视为完成。

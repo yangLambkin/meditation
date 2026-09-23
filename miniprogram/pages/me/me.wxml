@@ -92,28 +92,29 @@
           <text class="bijing-card-title">必经之路同步</text>
           <text wx:if="{{bijingBound}}" class="bijing-auto-badge">自动同步</text>
         </view>
-        <view wx:if="{{bijingShowBindInput}}" class="bijing-binding-form">
-          <text class="bijing-bind-description">{{bijingBound ? '输入新学号，确认后更换绑定' : '绑定学号后，静坐记录将每天自动同步'}}</text>
+        <view wx:if="{{bijingShowBindInput && !bijingBound}}" class="bijing-binding-form">
+          <text class="bijing-bind-description">一个学号只能绑定一个账号；绑定后，静坐记录将每天自动同步。</text>
           <view class="bijing-input-row">
             <input
               class="bijing-input"
               placeholder="请输入以大写 BJ 开头的学号"
               value="{{bijingInputValue}}"
               bindinput="onBijingInput"
+              disabled="{{bijingBinding || bijingUnbinding}}"
             />
           </view>
           <view class="bijing-actions">
-            <view class="bijing-btn-sm" bindtap="confirmBindBijing">确认绑定</view>
+            <view class="bijing-btn-sm {{bijingBinding ? 'is-busy' : ''}}" bindtap="confirmBindBijing">{{bijingBinding ? '处理中…' : '确认绑定'}}</view>
             <view class="bijing-text-action" bindtap="cancelBindBijing">取消</view>
           </view>
         </view>
         <block wx:elif="{{bijingBound}}">
           <view class="bijing-account-row">
             <text class="bijing-bound-tip">已绑定学号：{{bijingStudentNumber}}</text>
-            <view class="bijing-text-action" bindtap="toggleBindInput">重新绑定</view>
+            <view class="bijing-text-action bijing-unbind {{bijingUnbinding || bijingSyncing ? 'is-busy' : ''}}" bindtap="unbindBijing">{{bijingUnbinding ? '解绑中…' : '解绑'}}</view>
           </view>
           <view class="bijing-actions">
-            <view class="bijing-btn-sm bijing-manual-btn {{bijingSyncing ? 'is-syncing' : ''}}" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
+            <view class="bijing-btn-sm bijing-manual-btn {{bijingSyncing || bijingUnbinding ? 'is-syncing' : ''}}" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
             <view wx:if="{{bijingStudentNumber}}" class="bijing-text-action" bindtap="openBijingHeatmap">查看热力图</view>
           </view>
           <view class="bijing-auto-note">

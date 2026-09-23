@@ -1,19 +1,21 @@
 # 第一批运维入口：配置与部署门槛
 
 
-2026-09-23 新增管控中心：七次版本点击由独立 `adminManager.getAccess` 检查服务端管理员名单。**`ADMIN_OPENIDS` 只在 `adminManager` 云函数的环境变量中配置**，用英文逗号分隔完整 OpenID；未设置时兼容该函数原单值 `ADMIN_OPENID`。显式名单覆盖旧值，空名单或包含非法/空条目时拒绝授权，不回退旧值。名单内所有管理员同权。
+2026-09-23 管控中心统一使用绑定学号授权：只在 `adminManager` 的环境变量 `ADMIN_STUDENT_NUMBERS` 配置英文逗号分隔的完整学号名单。本次为 `BJ2407159,BJ2302130`。名单为空或非法时拒绝授权；旧 `ADMIN_OPENID`、`ADMIN_OPENIDS` 不再生效，也不回退。
 
-`bijingSync` 的所有 `admin*` 操作及 `teamManager` 的四个管理操作，每次都通过服务端 SDK `cloud.callFunction` 调用 `adminManager.getAccess`，不缓存授权。身份严格来自平台 SDK 上下文，内部参数 `expectedOpenid` 只用于校验两端身份一致，不能作为身份来源。中央鉴权故障或身份不一致时拒绝当前操作，服务恢复后可重试；两个业务函数自身的旧 `ADMIN_OPENID`、`ADMIN_OPENIDS` 已不再授权，也不作为兜底，可以保留或删除。此权限与旧维护脚本的 `MAINTENANCE_ADMIN_OPENIDS` 分开，定时器身份不能调用这些管理操作。
+`bijingSync` 的所有 `admin*` 操作和 `teamManager` 的管理操作每次调用 `adminManager.getAccess`，业务函数用 SDK 真实 OpenID 写入仅服务端可读写的一次性凭据（30 秒有效），由中央事务消费后查唯一有效绑定。凭据不返回客户端；直接请求仍使用 SDK 身份，原始身份或 SOURCE 参数不能替代凭据。客户端参数不授予权限，中央故障拒绝操作，不缓存结果。旧维护脚本的 OpenID 授权与定时器规则保持独立。
 
-首次上线须先部署 `adminManager`，再部署 `teamManager`、`bijingSync` 的新代码及本地模块，并确认三个函数均为 `Active`。之后增删管理员只需核对本人微信会话 OpenID，在 `adminManager` 更新完整 `ADMIN_OPENIDS`；配置生效后的下次权限检查即使用新名单，无需同步其他函数或重新上传代码。显式空串关闭管控权限，删除该变量则恢复 `adminManager` 原单值兼容行为。详细配置及验证步骤见 [管控中心说明](./2026-09-23-admin-batch-sync.md)。
+升级前先创建 `bijing_bindings` 并设置 `{"read":false,"write":false}`，同时将 `users` 设为 `{"read":"doc._openid == auth.openid","write":false}`，保留本人读取、禁止客户端直接写入。必须先完成这一步再部署学号版 `adminManager`，否则中央校验失败，管理员也无法用 `adminInitialize` 创建缺失的绑定集合。完整部署三个必需云函数：`bijingSync`（含 `bindings.js`）、`meditationManager`（优先展示有效绑定资料）、`adminManager`（含 `studentAuth.js`、`delegation.js`）。逐个部署并等待 `Active`；处于 `Updating` 时先等待，避免同时再次上传。`teamManager` 同步更新 `maintenanceAuth.js`，支持平台嵌套调用丢失 OpenID 时的服务端一次性凭据。将 `adminManager` 执行超时设为 10 秒、`teamManager` 为 20 秒、`bijingSync` 保留 60 秒；内部中央校验调用上限 8 秒。最后发布带解绑入口的小程序。以后增删管理员只修改 `adminManager` 的学号名单。
 
-本次仅修改本地源码并使用隔离测试验证，未部署、未调用远程清理或重算。默认配置下所有运维任务关闭。个人绑定、预览、个人同步和打卡接口保持原身份行为。
+换微信账号：原账号在「我 → 必经之路」解绑，再由新账号绑定；已经绑定其他学号的账号也须先解绑。每个学号只能绑定一个微信账号，绑定和解绑使用账号/学号双锁事务。解绑撤销该学号带来的管理权限，静坐历史和同步归档保留在原账号，不迁移到新账号。历史多人重复绑定不获得管理员权限，不自动选定保留者；相关账号自行解绑到唯一有效绑定后可恢复授权，原有唯一绑定无需重新绑定。详细步骤见 [管控中心说明](./2026-09-23-admin-batch-sync.md)；实际部署状态见 [正式环境部署记录](./2026-09-23-production-rollout.md)。
+
+将现有唯一绑定统一纳入新表管理，可使用 `adminManager.adminMigrateBindings`，先预览备份、再分批事务写入、最后复核。此过程不要求用户重新绑定，详见 [一次性绑定迁移](./2026-09-23-binding-migration.md)。
 
 ## 身份边界
 
 `cleanupTestData` 的所有请求，以及 `meditationManager` 的 `recomputeUserBadges`、`migrateBusinessDates`，只允许 `cloud.getWXContext().OPENID` 位于服务端环境变量 `MAINTENANCE_ADMIN_OPENIDS` 中的身份。变量是逗号分隔的完整 OPENID，默认空列表。不接受请求中的 OPENID、admin、source 作为身份，也不因为没有 OPENID 就授权。把列表配置给部署环境不会在客户端暴露名单。
 
-`bijingSync` 的全员任务也使用相同管理员白名单；没有 `type` 的调用只表示尝试调度，不再意味着已获授权。只有这一全员任务还允许经过下面门槛确认的定时来源。授权拒绝发生在业务数据库查询、写入和外部 API 调用之前。
+`bijingSync` 的 `cronSyncAll` 及未提供 `type` 时的自动调度入口也使用 `MAINTENANCE_ADMIN_OPENIDS`；没有 `type` 只表示尝试调度，不意味着已获授权。这些调度入口还允许经过下面门槛确认的定时来源。管控页的 `adminStartSync`、`adminRetrySyncErrors` 等管理入口则使用绑定学号的中央鉴权，两类授权相互独立。授权拒绝发生在业务数据库查询、写入和外部 API 调用之前；鉴权仅访问所需绑定资料及一次性凭据。
 
 每个云函数包包含独立的本地授权模块，不能依赖云端不存在的上级目录。`maintenanceAuth.js` 的源文件为 `shared/maintenanceAuth.js`；修改源文件后必须同步五份部署副本，测试会逐字检查它们一致。该模块的旧维护及定时器规则保持独立；业务函数的管理入口使用上述中央鉴权流程，不读取自身的管控管理员名单。
 
@@ -29,7 +31,7 @@
 操作顺序：
 
 1. 在微信开发者工具打开项目，进入「云开发」，选择**测试环境**。进入「云函数 → bijingSync → 配置／版本与配置 → 环境变量」（控制台版本不同，页签名称可能不同）。检查既有 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN` 对应测试服务，添加 `BIJING_TIMER_SOURCE=wx_trigger`，先保持 `BIJING_TIMER_ENABLED=false`。
-2. 部署整个 `bijingSync` 目录，包含 `batchJobs.js`、`setup.js`、`maintenanceAuth.js`、`heatmap.js`。执行超时固定为 **60 秒**（必须小于 120 秒租约），不是按总人数无限调大；分块进度持久化后由后续调用续跑。
+2. 部署整个 `bijingSync` 目录，包含 `batchJobs.js`、`setup.js`、`maintenanceAuth.js`、`heatmap.js`、`bindings.js`。执行超时固定为 **60 秒**（必须小于 120 秒租约），不是按总人数无限调大；分块进度持久化后由后续调用续跑。
 3. 上传两条原生触发器并在控制台核对：`dailySyncBijing = 0 0 2 * * * *`（北京时间每日 02:00）；`resumeBijingBatches = 0 */5 * * * * *`（每 5 分钟续跑）。更新旧 04:00 或每分钟规则。上传代码与上传触发器是两个步骤；完整迁移/集合/索引要求见 [批量同步部署说明](2026-09-23-admin-batch-sync.md)。
 4. 用下面的只读探测方法先确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查部署侧调用权限：普通请求不能注入或重写平台上下文。「标准触发器」的名称和表达式正确不代表来源满足鉴权，必须核实实际上下文。恢复正常函数代码后，再把测试环境的 `BIJING_TIMER_ENABLED` 改为 `true` 并保存配置。测试时可临时使用控制台支持的短周期触发器，验证后删除临时规则，保留每日与每 5 分钟续跑两条触发器。
 5. 观察**真实定时触发器**建立 `trigger=timer` 的运行记录，业务日期为刚结束的静坐日；等待 `data.status=success` 且 `failedCount=0`，核对外部测试服务收到预期总分钟。`partial`、`failed`、`interrupted` 必须查看持久化错误；顶层 `success:true` 只说明调度请求执行成功，不代表该轮全员完成。普通客户端伪造 `source/admin` 必须仍被拒绝。

@@ -19,6 +19,10 @@ Page({
     // 必经之路绑定相关
     bijingBound: false, // 是否已绑定学号
     bijingStudentNumber: '', // 已绑定的学号
+    bijingBindingVersion: null,
+    bijingBinding: false,
+    bijingUnbinding: false,
+    bijingIsAdmin: false,
     bijingShowBindInput: false, // 是否展示绑定输入框
     bijingInputValue: '', // 绑定输入框当前值
     bijingSyncing: false, // 同步中状态（防重复点击）
@@ -51,6 +55,7 @@ Page({
 
   onShow() {
     this._adminHidden = false;
+    this._bijingHidden = false;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
       this.calculateUserStatistics();
@@ -98,18 +103,38 @@ Page({
    * 加载必经之路绑定状态（来自云端 users 文档）
    */
   async loadBijingStatus() {
-    if (!checkinManager.isUserLoggedIn()) return;
+    if (this._bijingHidden) return;
     const openid = wx.getStorageSync('userOpenId');
+    if (this._bijingAccount !== undefined && this._bijingAccount !== openid) {
+      this._bijingGeneration = (this._bijingGeneration || 0) + 1;
+      this.clearBijingBindingView();
+      this.setData({ bijingBinding: false, bijingUnbinding: false, bijingSyncing: false });
+      this.clearBijingAdminAccess();
+    }
+    this._bijingAccount = openid;
+    if (!checkinManager.isUserLoggedIn()) {
+      this.clearBijingBindingView();
+      return;
+    }
+    if (this._bijingOperation && this._bijingOperation.account === openid) return;
+    const context = this.bijingContext();
+    const requestId = this._bijingStatusRequestId = (this._bijingStatusRequestId || 0) + 1;
     try {
       const result = await cloudApi.callCloudFunction('meditationManager', {
         type: 'getUserProfile',
         openid: openid
       });
       const profile = result && result.result && result.result.data;
-      if (profile && profileCache.isCurrentAccount(openid)) {
+      if (profile && this.isBijingContextCurrent(context) && requestId === this._bijingStatusRequestId) {
+        if (!profile.bijingBound || profile.bijingStudentNumber !== this.data.bijingStudentNumber ||
+            (profile.bijingBindingVersion || null) !== this.data.bijingBindingVersion) {
+          this.clearBijingBindingView();
+          this.clearBijingAdminAccess();
+        }
         this.setData({
           bijingBound: !!profile.bijingBound,
-          bijingStudentNumber: profile.bijingStudentNumber || ''
+          bijingStudentNumber: profile.bijingStudentNumber || '',
+          bijingBindingVersion: profile.bijingBindingVersion === undefined ? null : profile.bijingBindingVersion
         });
       }
     } catch (e) {
@@ -399,7 +424,7 @@ Page({
 
   // 隐藏入口只负责发现管控页；权限每次由云函数根据调用者身份校验。
   async onVersionTap() {
-    if (this._adminOpening) return;
+    if (this._adminOpening || this._bijingOperation) return;
     const now = Date.now();
     this._versionTapCount = now - (this._versionTapAt || 0) > 2000 ? 1 : (this._versionTapCount || 0) + 1;
     this._versionTapAt = now;
@@ -416,7 +441,7 @@ Page({
         throw new Error(/^未知操作[：:]\s*getAccess$/.test(message)
           ? '管理员身份服务尚未更新，请先部署 adminManager 云函数' : message);
       }
-      if (!result.data || result.data.isAdmin !== true) throw new Error('仅指定管理员可进入管控');
+      if (!result.data || result.data.isAdmin !== true) return;
       wx.navigateTo({ url: '/pages/admin/admin' });
     } catch (error) {
       if (!this._adminHidden && requestId === this._adminRequestId) {
@@ -435,6 +460,7 @@ Page({
   },
 
   openBijingHeatmap() {
+    if (this._bijingOperation) return;
     const studentNumber = (this.data.bijingStudentNumber || '').trim();
     if (!checkinManager.isUserLoggedIn() || !this.data.bijingBound || !studentNumber) {
       wx.showToast({ title: '请先登录并绑定学号', icon: 'none' });
@@ -445,114 +471,222 @@ Page({
     });
   },
 
-  // 展示/收起绑定输入框
+  bijingContext() {
+    return { account: profileCache.currentAccount(), generation: this._bijingGeneration || 0 };
+  },
+
+  isBijingContextCurrent(context) {
+    return !this._bijingHidden && context.generation === (this._bijingGeneration || 0) &&
+      profileCache.isCurrentAccount(context.account);
+  },
+
+  beginBijingOperation(kind) {
+    if (this._bijingHidden || this._bijingOperation || this._bijingSyncOperation || this.data.bijingSyncing) return null;
+    const operation = { ...this.bijingContext(), kind };
+    this._bijingOperation = operation;
+    this._bijingStatusRequestId = (this._bijingStatusRequestId || 0) + 1;
+    this.setData({ bijingBinding: kind !== 'unbind', bijingUnbinding: kind === 'unbind' });
+    return operation;
+  },
+
+  finishBijingOperation(operation) {
+    if (this._bijingOperation !== operation) return;
+    this._bijingOperation = null;
+    if (this.isBijingContextCurrent(operation)) {
+      wx.hideLoading();
+      this.setData({ bijingBinding: false, bijingUnbinding: false });
+      if (operation.refreshStatus) this.loadBijingStatus();
+    } else if (!this._bijingHidden && profileCache.isCurrentAccount(operation.account)) {
+      // A page reopened while a request was pending must read fresh server state.
+      this.setData({ bijingBinding: false, bijingUnbinding: false });
+      this.loadBijingStatus();
+    }
+  },
+
+  clearBijingBindingView() {
+    this._bijingSyncDetailsRequestId++;
+    this.setData({
+      bijingBound: false, bijingStudentNumber: '', bijingBindingVersion: null,
+      bijingShowBindInput: false, bijingInputValue: '', bijingShowConfirm: false,
+      bijingPendingSn: '', bijingConfirmSn: '', bijingConfirmNickname: '',
+      bijingShowSyncDatePicker: false, bijingSyncDateOptions: [], bijingSyncDate: '',
+      bijingSyncDetailsLoading: false, bijingSyncDetailsError: '', bijingSyncDetailsDate: '',
+      bijingSyncRecords: [], bijingSyncRecordCount: 0, bijingSyncTotalDuration: 0,
+      bijingSyncDuration: 0, bijingSyncAlreadySynced: false, bijingLastSync: '', bijingIsAdmin: false
+    });
+  },
+
+  clearBijingAdminAccess() {
+    this._versionTapCount = 0;
+    this._versionTapAt = 0;
+    this._adminRequestId = (this._adminRequestId || 0) + 1;
+    this.setData({ bijingIsAdmin: false });
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
+  },
+
+  async refreshBijingAdminAccess(context) {
+    this.clearBijingAdminAccess();
+    try {
+      const response = await cloudApi.callCloudFunction('adminManager', { type: 'getAccess' });
+      if (!this.isBijingContextCurrent(context)) return;
+      const result = response && response.result;
+      const allowed = !!(result && result.success === true && result.data && result.data.isAdmin === true);
+      this.setData({ bijingIsAdmin: allowed });
+      const app = typeof getApp === 'function' ? getApp() : null;
+      if (allowed && app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert();
+    } catch (error) {
+      // Binding is already saved. A failed access probe must not undo it or grant access.
+    }
+  },
+
+  // 已绑定账号须先解绑，不允许直接覆盖绑定。
   toggleBindInput() {
+    if (this._bijingOperation || this.data.bijingSyncing || this._bijingHidden) return;
+    if (this.data.bijingBound) {
+      wx.showToast({ title: '请先解绑当前学号', icon: 'none' });
+      return;
+    }
     this.setData({ bijingShowBindInput: !this.data.bijingShowBindInput });
   },
 
-  // 绑定输入框变化
   onBijingInput(e) {
+    if (this._bijingOperation) return;
     this.setData({ bijingInputValue: e.detail.value });
   },
 
-  // 确认绑定（首次绑定或重新绑定共用）
-  // 流程：先校验学号 → 不存在则 toast「学号不存在」→ 存在则弹窗展示学号+昵称 → 用户「确定」才执行绑定
   async confirmBindBijing() {
-    const sn = (this.data.bijingInputValue || '').trim();
-    if (!sn) {
-      wx.showToast({ title: '请输入学号', icon: 'none' });
+    if (this.data.bijingBound) {
+      wx.showToast({ title: '请先解绑当前学号', icon: 'none' });
       return;
     }
-    if (!/^BJ/.test(sn)) {
-      wx.showToast({ title: '学号必须以大写 BJ 开头', icon: 'none' });
+    const sn = (this.data.bijingInputValue || '').trim();
+    if (!sn || !/^BJ/.test(sn)) {
+      wx.showToast({ title: sn ? '学号必须以大写 BJ 开头' : '请输入学号', icon: 'none' });
       return;
     }
     if (!checkinManager.isUserLoggedIn()) {
       wx.showToast({ title: '请先登录', icon: 'none' });
       return;
     }
-    // 第一步：校验学号是否存在
+    const operation = this.beginBijingOperation('check');
+    if (!operation) return;
     wx.showLoading({ title: '校验中...', mask: true });
-    const checkRes = await bijingApi.checkBijing(sn);
-    wx.hideLoading();
-    if (!checkRes.success) {
-      wx.showToast({ title: '学号不存在', icon: 'none' });
-      return;
+    try {
+      const result = await bijingApi.checkBijing(sn);
+      if (!this.isBijingContextCurrent(operation)) return;
+      if (!result || !result.success) throw new Error(result && result.error || '学号不存在');
+      this.setData({ bijingShowConfirm: true, bijingConfirmSn: sn,
+        bijingConfirmNickname: result.data && result.data.nickname || '未获取昵称', bijingPendingSn: sn });
+    } catch (error) {
+      if (this.isBijingContextCurrent(operation)) wx.showToast({ title: error.message || '校验失败，请重试', icon: 'none' });
+    } finally {
+      this.finishBijingOperation(operation);
     }
-    // 第二步：学号存在，弹出自定义确认弹窗展示学号+昵称，由用户确认后才绑定
-    const nickname = checkRes.data.nickname || '未获取昵称';
-    this.setData({
-      bijingShowConfirm: true,
-      bijingConfirmSn: sn,
-      bijingConfirmNickname: nickname,
-      bijingPendingSn: sn
-    });
   },
 
-  // 弹窗「取消」：关闭弹窗，不绑定（保留输入框，方便修改）
   cancelBindConfirm() {
-    this.setData({ bijingShowConfirm: false });
+    if (this._bijingOperation) return;
+    this.setData({ bijingShowConfirm: false, bijingPendingSn: '' });
   },
 
-  // 弹窗「确定」：执行真正的绑定
   async confirmBindConfirm() {
+    if (!this.data.bijingShowConfirm || this._bijingOperation) return;
     const sn = this.data.bijingPendingSn;
     this.setData({ bijingShowConfirm: false });
     await this.doBindBijing(sn);
   },
 
-  // 阻止弹窗内容区点击冒泡到遮罩（避免误关）
   noop() {},
 
-  // 执行真正的绑定（弹窗确认后调用）
   async doBindBijing(sn) {
-    const startingAccount = profileCache.currentAccount();
-    // 判断是否为重新绑定（原已绑定的学号与新学号不同）
-    const wasBound = this.data.bijingBound;
-    const isRebind = wasBound && sn !== this.data.bijingStudentNumber;
-    wx.showLoading({ title: isRebind ? '重新绑定中...' : '绑定中...', mask: true });
-    let res;
-    try {
-      res = await bijingApi.bindBijing(sn);
-    } catch (error) {
-      res = { success: false, error: error.message || '绑定失败，请重试' };
-    } finally {
-      wx.hideLoading();
-    }
-    if (!profileCache.isCurrentAccount(startingAccount)) return;
-    if (!res.success) {
-      wx.showToast({ title: res.error || '绑定失败', icon: 'none' });
+    if (this.data.bijingBound) {
+      wx.showToast({ title: '请先解绑当前学号', icon: 'none' });
       return;
     }
-    // 绑定成功：更新绑定状态，并覆盖昵称（若对端返回昵称）
-    const newData = {
-      bijingBound: true,
-      bijingStudentNumber: res.data.studentNumber,
-      bijingShowBindInput: false,
-      bijingInputValue: '',
-      bijingPendingSn: '',
-      bijingConfirmSn: '',
-      bijingConfirmNickname: ''
-    };
-    if (isRebind) {
-      // 重新绑定不同学号：清空同步标记，避免旧学号标记残留导致新学号漏同步
-      newData.bijingSyncedDates = {};
+    if (!checkinManager.isUserLoggedIn() || typeof sn !== 'string' || !/^BJ/.test(sn)) return;
+    const operation = this.beginBijingOperation('bind');
+    if (!operation) return;
+    wx.showLoading({ title: '绑定中...', mask: true });
+    try {
+      const result = await bijingApi.bindBijing(sn);
+      if (!this.isBijingContextCurrent(operation)) return;
+      if (!result || !result.success || !result.data || result.data.studentNumber !== sn) {
+        operation.refreshStatus = !!(result && result.code === 'UNBIND_REQUIRED');
+        throw new Error(result && result.error || '绑定失败，请重试');
+      }
+      this.clearBijingBindingView();
+      const version = result.data.bindingVersion === undefined ? null : result.data.bindingVersion;
+      const patch = { bijingBound: true, bijingStudentNumber: sn, bijingBindingVersion: version };
+      if (result.data.nicknameOverridden && result.data.nickname) {
+        patch.nickName = result.data.nickname;
+      }
+      this.setData({ bijingBound: true, bijingStudentNumber: sn, bijingBindingVersion: version,
+        ...(patch.nickName ? { userNickname: patch.nickName } : {}) });
+      try {
+        if (patch.nickName) profileCache.discardPendingFields(['nickName'], operation.account);
+        profileCache.updateProfile(patch, operation.account);
+      } catch (error) {
+        console.error('绑定已完成，本机资料缓存更新失败:', error);
+      }
+      wx.showToast({ title: patch.nickName ? '已绑定并同步昵称' : '绑定成功', icon: 'success' });
+      await this.refreshBijingAdminAccess(operation);
+    } catch (error) {
+      if (this.isBijingContextCurrent(operation)) wx.showToast({ title: error.message || '绑定失败，请重试', icon: 'none' });
+    } finally {
+      this.finishBijingOperation(operation);
     }
-    if (res.data.nicknameOverridden && res.data.nickname) {
-      // 覆盖本地昵称缓存 + 即时展示
-      profileCache.updateProfile({ nickName: res.data.nickname }, startingAccount);
-      profileCache.discardPendingFields(['nickName'], startingAccount);
-      newData.userNickname = res.data.nickname;
-      wx.showToast({ title: (isRebind ? '已重新绑定并' : '已绑定并') + '同步昵称', icon: 'success' });
-    } else {
-      wx.showToast({ title: isRebind ? '重新绑定成功' : '绑定成功', icon: 'success' });
-    }
-    this.setData(newData);
   },
 
-  // 取消绑定输入框
+  async unbindBijing() {
+    if (!this.data.bijingBound || !this.data.bijingStudentNumber || !checkinManager.isUserLoggedIn()) return;
+    const operation = this.beginBijingOperation('unbind');
+    if (!operation) return;
+    const studentNumber = this.data.bijingStudentNumber;
+    const bindingVersion = this.data.bijingBindingVersion;
+    try {
+      const confirmation = await new Promise((resolve, reject) => wx.showModal({
+        title: '解绑学号',
+        content: `确定解绑 ${studentNumber}？静坐记录和已同步记录会保留，自动同步将停止；该学号带来的管控权限将立即失效。更换学号需解绑后再绑定。`,
+        confirmText: '解绑', confirmColor: '#a14b3c', success: resolve, fail: reject
+      }));
+      if (!confirmation.confirm || !this.isBijingContextCurrent(operation) ||
+          !this.data.bijingBound || this.data.bijingStudentNumber !== studentNumber ||
+          this.data.bijingBindingVersion !== bindingVersion) return;
+      wx.showLoading({ title: '解绑中...', mask: true });
+      const result = await bijingApi.unbindBijing(studentNumber, bindingVersion);
+      if (!this.isBijingContextCurrent(operation)) return;
+      if (!result || !result.success) {
+        operation.refreshStatus = !!(result && result.code === 'BINDING_STALE');
+        throw new Error(result && result.error || '解绑失败，请重试');
+      }
+      this.clearBijingBindingView();
+      this.clearBijingAdminAccess();
+      try {
+        profileCache.updateProfile({ bijingBound: false, bijingStudentNumber: '', bijingBindingVersion: null }, operation.account);
+      } catch (error) {
+        console.error('解绑已完成，本机资料缓存更新失败:', error);
+      }
+      wx.showToast({ title: '已解绑，静坐记录已保留', icon: 'none' });
+    } catch (error) {
+      if (this.isBijingContextCurrent(operation)) wx.showToast({ title: error.message || '解绑失败，请重试', icon: 'none' });
+    } finally {
+      this.finishBijingOperation(operation);
+    }
+  },
+
   cancelBindBijing() {
+    if (this._bijingOperation) return;
     this.setData({ bijingShowBindInput: false, bijingInputValue: '' });
+  },
+
+  invalidateBijingRequests() {
+    this._bijingHidden = true;
+    this._bijingGeneration = (this._bijingGeneration || 0) + 1;
+    this._bijingStatusRequestId = (this._bijingStatusRequestId || 0) + 1;
+    if (this._bijingOperation || this.data.bijingSyncing) wx.hideLoading();
+    this.setData({ bijingShowConfirm: false, bijingPendingSn: '', bijingBinding: false,
+      bijingUnbinding: false, bijingSyncing: false });
   },
 
   // 同步日按北京时间 02:00 至次日 02:00 划分，只提供最近七个已结束的同步日
@@ -572,7 +706,7 @@ Page({
 
   // 先选择日期，确认后才发起同步
   syncBijingNow() {
-    if (this.data.bijingSyncing) return;
+    if (this.data.bijingSyncing || this._bijingOperation || this._bijingSyncOperation || this._bijingHidden) return;
     if (!checkinManager.isUserLoggedIn()) {
       wx.showToast({ title: '请先登录', icon: 'none' });
       return;
@@ -613,8 +747,9 @@ Page({
 
   async loadBijingSyncDetails(recordDate) {
     const requestId = ++this._bijingSyncDetailsRequestId;
+    const context = this.bijingContext();
     const isCurrent = () => requestId === this._bijingSyncDetailsRequestId &&
-      this.data.bijingShowSyncDatePicker && this.data.bijingSyncDate === recordDate;
+      this.isBijingContextCurrent(context) && this.data.bijingShowSyncDatePicker && this.data.bijingSyncDate === recordDate;
     this.setData({
       bijingSyncDetailsLoading: true,
       bijingSyncDetailsError: '',
@@ -675,7 +810,7 @@ Page({
   },
 
   async confirmBijingSyncDate() {
-    if (this.data.bijingSyncing) return;
+    if (this.data.bijingSyncing || this._bijingOperation || this._bijingSyncOperation || this._bijingHidden) return;
     if (!checkinManager.isUserLoggedIn() || !this.data.bijingBound) {
       wx.showToast({ title: '请先登录并绑定学号', icon: 'none' });
       return;
@@ -712,6 +847,7 @@ Page({
       return;
     }
     this.setData({ bijingSyncing: true, bijingShowSyncDatePicker: false });
+    const context = this._bijingSyncOperation = this.bijingContext();
     wx.showLoading({ title: '同步中...', mask: true });
     let message;
     try {
@@ -733,9 +869,13 @@ Page({
     } catch (e) {
       message = `${recordDate} 同步失败：${e.message || '请稍后重试'}`;
     } finally {
-      wx.hideLoading();
-      this.setData({ bijingSyncing: false });
+      if (this._bijingSyncOperation === context) this._bijingSyncOperation = null;
+      if (this.isBijingContextCurrent(context)) {
+        wx.hideLoading();
+        this.setData({ bijingSyncing: false });
+      }
     }
+    if (!this.isBijingContextCurrent(context)) return;
     this.setData({ bijingLastSync: message });
     wx.showToast({ title: message, icon: 'none', duration: 3000 });
   },
@@ -746,6 +886,7 @@ Page({
 
   onHide() {
     this.resetAdminEntry();
+    this.invalidateBijingRequests();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     this.cancelBijingSyncDate();
@@ -753,6 +894,7 @@ Page({
 
   onUnload() {
     this.resetAdminEntry();
+    this.invalidateBijingRequests();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     this._bijingSyncDetailsRequestId++;

@@ -17,6 +17,7 @@ function matches(value, filter) {
   if (filter && filter.op === 'gte') return typeof value === 'number' && value >= filter.value;
   if (filter && filter.op === 'gt') return value > filter.value;
   if (filter && filter.op === 'lt') return typeof value === 'number' && value < filter.value;
+  if (filter && filter.op === 'regex') return typeof value === 'string' && new RegExp(filter.regexp, filter.options).test(value);
   if (filter && typeof filter === 'object') return Object.entries(filter).every(([key, expected]) => matches(value[key], expected));
   return value === filter;
 }
@@ -34,7 +35,8 @@ function createHarness(options = {}) {
     bijingSyncedDates: {},
   }]);
   const records = clone(options.records || []);
-  const calls = { reads: [], aggregates: [], updates: [], posts: [], gets: [], now: 0 };
+  const bindingRows = clone(options.bindings || []);
+  const calls = { reads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], gets: [], now: 0 };
 
   class FixedDate extends Date {
     constructor(...args) {
@@ -48,6 +50,8 @@ function createHarness(options = {}) {
   }
 
   const database = {
+    RegExp: value => ({ op: 'regex', ...value }),
+    async runTransaction(callback) { return callback(database); },
     command: {
       aggregate: { sum: field => ({ sum: field }) },
       or: values => ({ op: 'or', values }),
@@ -72,8 +76,8 @@ function createHarness(options = {}) {
               if (options.onRead) options.onRead({ name, filter }, records);
               if (options.readError) throw new Error(options.readError);
               if (name === 'meditation_records' && options.detailReadError) throw new Error(options.detailReadError);
-              assert.ok(['users', 'meditation_records'].includes(name));
-              const rows = (name === 'users' ? users : records).filter(row => matches(row, filter));
+              assert.ok(['users', 'meditation_records', 'bijing_bindings'].includes(name));
+              const rows = (name === 'users' ? users : name === 'bijing_bindings' ? bindingRows : records).filter(row => matches(row, filter));
               if (order) rows.sort((a, b) => String(a[order.key]).localeCompare(String(b[order.key])) * (order.direction === 'asc' ? 1 : -1));
               const page = rows.slice(offset, offset + maximum);
               return { data: clone(fields ? page.map(row => Object.fromEntries(Object.keys(fields).filter(key => fields[key] && Object.hasOwn(row, key)).map(key => [key, row[key]]))) : page) };
@@ -112,6 +116,18 @@ function createHarness(options = {}) {
         },
         doc(id) {
           return {
+            async get() {
+              const rows = name === 'users' ? users : bindingRows;
+              const row = rows.find(row => row._id === id);
+              return { data: row ? clone(row) : null };
+            },
+            async set({ data }) {
+              const rows = name === 'users' ? users : bindingRows;
+              const previous = rows.find(row => row._id === id);
+              if (previous) rows.splice(rows.indexOf(previous), 1);
+              rows.push({ _id: id, ...clone(data) });
+              (name === 'users' ? calls.updates : calls.bindingWrites).push({ name, id, data: clone(data) });
+            },
             async update({ data }) {
               calls.updates.push({ name, id, data: clone(data) });
               assert.equal(name, 'users');
@@ -131,6 +147,7 @@ function createHarness(options = {}) {
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
       if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
+      if (name === './bindings') return require('../cloudfunctions/bijingSync/bindings');
       if (name === 'wx-server-sdk') {
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
       }
@@ -222,7 +239,8 @@ test('checking and binding accept trimmed uppercase BJ prefixes without changing
   for (const type of ['checkStudentNumber', 'bindStudentNumber']) {
     for (const studentNumber of ['BJ123456', '  BJabc-123  ', 'BJ']) {
       await t.test(`${type}: ${JSON.stringify(studentNumber)}`, async () => {
-        const app = createHarness({ getResponse: { success: true, data: { nickname: '必经用户' } } });
+        const app = createHarness({ users: [{ _id: 'doc-a', _openid: 'user-a', bijingBound: false }],
+          getResponse: { success: true, data: { nickname: '必经用户' } } });
         const result = await app.run({ type, studentNumber });
         const normalizedNumber = studentNumber.trim();
         assert.equal(result.success, true);
@@ -240,6 +258,40 @@ test('checking and binding accept trimmed uppercase BJ prefixes without changing
       });
     }
   }
+});
+
+test('the binding entrypoint requires unbind before switching and uses SDK identity for unbind', async () => {
+  const app = createHarness({ users: [{ _id: 'doc-a', _openid: 'user-a', bijingBound: true,
+    bijingStudentNumber: 'BJ001', bijingBindingVersion: 'current-version', bijingSyncedDates: { old: true } }] });
+  assert.equal((await app.run({ type: 'bindStudentNumber', studentNumber: 'BJ002' })).code, 'UNBIND_REQUIRED');
+  assert.equal(app.calls.gets.length, 0);
+  assert.equal((await app.run({ type: 'unbindStudentNumber', studentNumber: 'BJ001', bindingVersion: 'stale' })).code, 'BINDING_STALE');
+  assert.equal((await app.run({ type: 'unbindStudentNumber', studentNumber: 'BJ001', bindingVersion: 'current-version',
+    openid: 'somebody-else', OPENID: 'somebody-else' })).success, true);
+  assert.equal(app.users[0].bijingBound, false);
+  assert.deepEqual(app.users[0].bijingSyncedDates, { old: true });
+
+  const attacker = createHarness({ openid: 'outsider', users: [{ _id: 'victim', _openid: 'victim',
+    bijingBound: true, bijingStudentNumber: 'BJ001', bijingBindingVersion: 'known-version' }] });
+  assert.equal((await attacker.run({ type: 'unbindStudentNumber', studentNumber: 'BJ001', bindingVersion: 'known-version',
+    OPENID: 'victim', openid: 'victim' })).code, 'BINDING_STALE');
+  assert.equal(attacker.calls.updates.length, 0);
+  assert.equal(attacker.calls.bindingWrites.length, 0);
+});
+
+test('personal sync selects the unique bound profile even when unbound legacy profiles come first', async () => {
+  const app = createHarness({ users: [
+    { _id: 'a-unbound', _openid: 'user-a', bijingBound: false },
+    { _id: 'z-bound', _openid: 'user-a', bijingBound: true, bijingStudentNumber: 'BJ001' }
+  ], getResponse: { success: true, data: { records: [] } } });
+  assert.equal((await app.run({ type: 'getHeatmap' })).success, true);
+  assert.equal(app.calls.gets[0][1].params.studentNumber, 'BJ001');
+  const duplicate = createHarness({ users: [
+    { _id: 'a', _openid: 'user-a', bijingBound: true, bijingStudentNumber: 'BJ001' },
+    { _id: 'b', _openid: 'user-a', bijingBound: true, bijingStudentNumber: 'BJ002' }
+  ] });
+  assert.equal((await duplicate.run({ type: 'getHeatmap' })).success, false);
+  assert.equal(duplicate.calls.gets.length, 0);
 });
 
 test('selected sync includes legacy records for only the chosen date and current user, including dates before binding', async () => {

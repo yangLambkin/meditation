@@ -10,7 +10,8 @@ async function callBijingSync(data) {
     if (result && result.success) {
       return { success: true, data: result.data };
     }
-    return { success: false, error: (result && result.error) || '操作失败' };
+    return { success: false, error: (result && result.error) || '操作失败',
+      ...(result && typeof result.code === 'string' ? { code: result.code } : {}) };
   } catch (e) {
     return { success: false, error: e.message || '网络错误' };
   }
@@ -20,6 +21,12 @@ async function callBijingSync(data) {
 // 返回 { success, data: { studentNumber, nickname, nicknameOverridden }, error }
 async function bindBijing(studentNumber) {
   return callBijingSync({ type: 'bindStudentNumber', studentNumber });
+}
+
+// 解绑当前观察到的绑定；版本用于拒绝过期页面的解绑请求。
+async function unbindBijing(studentNumber, bindingVersion) {
+  return callBijingSync({ type: 'unbindStudentNumber', studentNumber,
+    ...(bindingVersion === undefined || bindingVersion === null ? {} : { bindingVersion }) });
 }
 
 // 仅校验学号（不绑定），用于绑定前确认弹窗
@@ -46,6 +53,7 @@ async function getBijingHeatmap() {
 module.exports = {
   getBijingHeatmap,
   bindBijing,
+  unbindBijing,
   checkBijing,
   syncBijingDate,
   getBijingSyncDateDetails,

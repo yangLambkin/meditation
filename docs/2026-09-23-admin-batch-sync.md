@@ -2,21 +2,20 @@
 
 ## 功能与口径
 
-“我的”页连续点击版本号 7 次，通过独立 `adminManager.getAccess` 确认属于服务端管理员名单后进入管控；相邻点击超过 2 秒会重新计数。这里只识别指定微信账号，不依赖必经同步服务。直接打开页面路径也会再次校验身份。
+“我的”页连续点击版本号 7 次，通过独立 `adminManager.getAccess` 确认当前绑定学号在服务端管理员名单中后进入管控；直接打开页面和每次管理请求也会重新校验。
 
-初始指定管理员为 **BJ2407159（瑞璞）**，用户确认微信号为 `dingyd_ripples`。后续可以配置多位管理员。这些信息只用于核对目标账号；当前学号绑定接口不验证账号本人归属，不能按学号查询到的第一条记录自动授权，须核对指定账号真实登录会话的云端 OpenID 后配置。
+管理员只在 **`adminManager` 云函数环境变量 `ADMIN_STUDENT_NUMBERS`** 配置，多个学号用英文逗号分隔。本次指定完整名单为 `BJ2407159,BJ2302130`。配置忽略首尾空格及大小写；空名单、空条目、非法格式拒绝整份名单。旧 `ADMIN_OPENID`、`ADMIN_OPENIDS` 不再授权，无回退；旧维护入口的 `MAINTENANCE_ADMIN_OPENIDS` 保持独立。
 
-小程序无法读取用户自行设置的微信号，服务端使用这个账号在当前小程序中的 **OpenID**。管理员名单只在 **`adminManager` 云函数的环境变量 `ADMIN_OPENIDS`** 中配置，用英文逗号分隔完整 OpenID，例如 `openid_one,openid_two`（示例占位值，须替换为核实后的真实值）。名单内各账号具有相同的管控权限，操作记录仍保存实际操作者身份。既有 `MAINTENANCE_ADMIN_OPENIDS` 保留给旧维护脚本，不用它授权管控页面。
+身份取自 SDK 的真实 OpenID，再读取其当前绑定。客户端传入学号、昵称、isAdmin 和缓存均不能授予权限。每个学号只能绑定一个微信账号；管理员学号若有历史重复绑定，先拒绝授权，待相关账号自行解绑到只剩唯一绑定后恢复。现有唯一绑定不要求重新绑定。
 
-兼容旧配置：`adminManager` 未设置 `ADMIN_OPENIDS` 时继续使用该函数原单值 **`ADMIN_OPENID`**。一旦设置 `ADMIN_OPENIDS`，它就是完整名单，不与旧值合并；如需保留原管理员，必须将其 OpenID 一并写入。条目前后空格会去除，重复账号不重复授予权限；空名单、空项（包括末尾多写逗号）、非字符串或非法字符均拒绝整份配置，且不回退到旧管理员。旧 `ADMIN_OPENID` 仍只接受一个值。客户端参数、本地存储、昵称和学号都不能授予管理员身份。
+`teamManager` 和 `bijingSync` 每次管理请求通过 `cloud.callFunction` 调用 `adminManager.getAccess`，不缓存授权。微信平台的嵌套调用不保证保留原始 OpenID：业务函数使用自己收到的真实 SDK 身份，在仅服务端可访问的 `bijing_bindings` 写入 30 秒有效的一次性凭据。`adminManager.getAccess` 在事务中校验并消费凭据，再检查当前学号绑定；`expectedOpenid` 只核对凭据身份，单独传入它或伪造 SOURCE 都不能授权。有真实 SDK 身份时还须与凭据一致。凭据不会返回客户端，请求结束会清理，重放或过期无效。记录查询和提醒接口仍要求直接 SDK 身份。中央校验故障或身份不一致拒绝当前管理操作。
 
-`teamManager` 和 `bijingSync` 每次管理请求都通过服务端 SDK `cloud.callFunction` 调用 `adminManager.getAccess`，不缓存授权结果。它们自身的旧 `ADMIN_OPENID`、`ADMIN_OPENIDS` 在新代码中不再生效，可以保留或删除，但不能作为中央鉴权失败时的兜底。调用者身份严格来自微信平台提供的 SDK 上下文；内部请求的 `expectedOpenid` 只约束两端身份一致，不能替代平台身份或授予权限。中央鉴权失败、身份不一致或响应异常时拒绝当前管理操作，服务恢复后可重试。
+管理员配置与换账号：
 
-管理员配置步骤：
-
-1. 首次上线中央鉴权时，先部署 `adminManager`，再部署 `teamManager`、`bijingSync` 的新代码及所需本地模块，确认三个函数均为 `Active`。`Updating` 期间等待完成，不连续重复上传；仅改环境变量不能替代本次代码升级。
-2. 核对账号本人的微信会话 OpenID，在「云函数 → adminManager → 配置／版本与配置 → 环境变量」设置 `ADMIN_OPENIDS` 为完整名单。之后增加或移除管理员只修改此处，无需同步其他函数的名单或重新上传代码。
-3. 等待配置更新生效，验证每位保留/新增管理员可访问各 tab，被移除者和普通账号均被拒绝。名单变更在下次权限检查时生效，不依赖客户端缓存。将 `adminManager.ADMIN_OPENIDS` 显式设为空串会关闭管控权限；删除该变量则恢复该函数旧 `ADMIN_OPENID` 的兼容行为。
+1. 首次升级先创建 `bijing_bindings`，设为仅服务端可读写 `{"read":false,"write":false}`；`users` 使用 `{"read":"doc._openid == auth.openid","write":false}`，保留本人读取并禁止客户端直接写入（当前资料修改走云函数白名单）。完整部署三个必需云函数：`bijingSync`（含 `bindings.js`）、`meditationManager`（避免旧重复资料遮住当前绑定）、`adminManager`（含 `studentAuth.js`、`delegation.js`）。逐个部署并等待 `Active` 后才做下一次更新。`teamManager` 同步更新 `maintenanceAuth.js` 的一次性凭据逻辑。
+2. 在「云函数 → adminManager → 配置 → 环境变量」设置完整 `ADMIN_STUDENT_NUMBERS`。之后增加或移除管理员只改此处，不必同步其他函数。删除变量或设为空串都关闭管控授权。
+3. 原账号在「我 → 必经之路 → 解绑」确认，随后新账号绑定同一学号。解绑保留静坐记录和同步归档，立即撤销旧账号的学号授权；历史静坐记录仍属于原微信账号，不随绑定转移。
+4. 已绑定账号不能直接覆盖成另一个学号；必须先解绑。并发绑定通过学号锁、账号锁和用户文档的事务一起提交。新绑定带版本号，旧页面不能解绑后来的新绑定；失败不会只写入一半。
 
 管理员身份通过后，各 tab 独立加载：同步使用 `bijingSync`，记录查询使用 `adminManager`，团长与操作记录使用 `teamManager`。某个业务服务未更新时只影响对应 tab，页面框架与其他 tab 仍可打开；每次管理数据读取和修改都由 `adminManager` 统一鉴权，中央鉴权不可用时相应管理请求均拒绝执行。旧维护操作和原生定时器继续使用独立授权规则，不受管控名单变更影响。
 
@@ -30,7 +29,7 @@
 
 ## 个人记录查询接口
 
-两个新接口均由 `adminManager` 提供，参数直接放在事件顶层，每次请求先检查真实调用者是否在服务端管理员名单内；普通用户、旧维护名单和伪造客户端身份均返回 `FORBIDDEN`，不读取个人资料和记录。
+两个新接口均由 `adminManager` 提供，参数直接放在事件顶层，每次请求先检查真实调用者的唯一有效绑定学号是否在服务端管理员名单内；未获得学号管理员权限的普通用户、旧维护身份和伪造客户端身份均返回 `FORBIDDEN`，不读取目标用户的个人记录；身份校验只读取绑定所需资料。
 
 | type | 参数 | data 返回值 |
 | --- | --- | --- |
@@ -39,7 +38,7 @@
 
 `timestamp` 为毫秒数或 `null`，`source` 为 `manual`、`timer` 或 `unknown`，时长单位为分钟。当天记录在服务端分页读取、按既有记录身份去重后汇总，不以数据库单页上限截断；读取前后核对 `meditation_locks` 中的用户记录版本，遇到并发变更最多重读三轮，持续变化则提示重试。旧环境缺少该辅助集合时兼容只读查询，不自动创建集合。没有有效时间戳的旧记录保留日期且不补造时间。不存在的昵称与“用户存在但当天无记录”在页面分别提示。查询失败保留错误供重试，切换昵称、日期、用户或离开页面后，过期响应不回填旧记录。
 
-仅上线本次记录查询时：更新 `adminManager` 云函数（含新增记录查询模块），保留原管理员配置，确认 `users` 的 `nickName` 升序、`_id` 升序复合索引以及下列既有用户/记录索引，再发布小程序。无需新增集合或改动客户端数据库权限。
+在已完成学号鉴权升级的环境中，仅更新记录查询模块时：更新 `adminManager` 云函数并保留当前学号管理员配置，确认 `users` 的 `nickName` 升序、`_id` 升序复合索引以及下列既有用户/记录索引，再发布小程序；无需另增集合或修改已有安全规则。尚未升级的环境必须先完成下述集合、安全规则和三个云函数的部署。
 
 ## 执行机制
 
@@ -63,15 +62,15 @@
 
 1. **必经数据库先迁移**：在 bijing-data 对应的 MySQL 数据库执行 `openapi_meditation_sync_migration.sql`，建立 `openapi_meditation_sync_batches`。主 DDL `bijing_data_ddl.sql` 已同步包含建表语句。
 2. **发布 bijing-data**：确认 `POST /api/openapi/meditation/records/batch` 和 `POST /api/openapi/meditation/records/query` 均已上线，原 `POST /api/openapi/meditation/records` 保留。批量上传和查询使用服务端 `X-Access-Token`。接口每批最多 100 条，此调用方每次最多 20 条。本次查询接口读取既有业务表，无额外 MySQL 表迁移。
-3. **部署云函数**：首次上线中央鉴权须先上传 `adminManager`，再上传 `bijingSync` 和 `teamManager` 的完整目录，包含各自的入口及本地授权模块；`bijingSync` 还须包含 `batchJobs.js`、`setup.js`、`maintenanceAuth.js`、`heatmap.js`。云端安装依赖，确认三个函数均为 `Active`。将 `bijingSync` 执行超时设为 **60 秒**。
-4. **配置身份与地址**：只在 `adminManager` 配置 `ADMIN_OPENIDS`（英文逗号分隔的完整 OpenID 名单；未设置时兼容该函数原单值 `ADMIN_OPENID`），以后增删管理员也只更新此处。`teamManager`、`bijingSync` 自身的旧管理员变量不再授权，不必为本次上线删除。`bijingSync` 保留目标环境的 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN`，设置 `BIJING_TIMER_ENABLED=true`、`BIJING_TIMER_SOURCE=wx_trigger`。原生触发器来源才是 `wx_trigger`，不能仅传 event.source 伪造。
-5. **创建云数据库集合**：`bijing_sync_days`、`bijing_sync_runs`、`bijing_sync_items`、新增的 `bijing_sync_errors`、`admin_audit_logs`。可以在控制台创建，或由已授权管理员在小程序调试控制台执行：
+3. **先准备云数据库集合与安全规则**：所需集合为 `bijing_sync_days`、`bijing_sync_runs`、`bijing_sync_items`、`bijing_sync_errors`、`admin_audit_logs`、`bijing_bindings`。首次学号权限升级必须在部署 `adminManager` 前创建 `bijing_bindings`，并设为 `{"read":false,"write":false}`；否则中央校验无法完成，也不能通过 `adminInitialize` 自助创建它。将 `users` 设为 `{"read":"doc._openid == auth.openid","write":false}`，禁止客户端绕过绑定事务写资料。其余五个业务集合也使用 `{"read":false,"write":false}`，只允许云函数服务端访问。
+4. **部署云函数**：本次升级必需完整部署 `bijingSync`、`meditationManager`、`adminManager` 三个目录，包含各自入口及本地模块。`bijingSync` 须包含 `batchJobs.js`、`setup.js`、`maintenanceAuth.js`、`heatmap.js`、`bindings.js`；`adminManager` 须包含 `studentAuth.js`、`delegation.js`。逐个上传并在云端安装依赖，等当前函数为 `Active` 后再继续，避免在 `Updating` 状态重复更新。将 `bijingSync` 执行超时设为 **60 秒**，`adminManager` 为 **10 秒**，`teamManager` 为 **20 秒**；内部鉴权调用超时为 8 秒。`teamManager` 同步更新 `maintenanceAuth.js`；尚未接入中央鉴权的旧环境需完整更新它。
+5. **配置身份与地址**：只在 `adminManager` 配置 `ADMIN_STUDENT_NUMBERS`（英文逗号分隔的完整学号名单），以后增删管理员也只更新此处。`teamManager`、`bijingSync` 自身的旧管理员变量不再授权，不必为本次上线删除。`bijingSync` 保留目标环境的 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN`，设置 `BIJING_TIMER_ENABLED=true`、`BIJING_TIMER_SOURCE=wx_trigger`。原生触发器来源才是 `wx_trigger`，不能仅传 event.source 伪造。中央鉴权就绪后，已授权管理员也可补建缺失业务集合：
 
    ```js
    wx.cloud.callFunction({ name: 'bijingSync', data: { type: 'adminInitialize' } })
    ```
 
-   此操作仅创建缺失集合，不插入样例数据、不改动既有数据。随后在数据库控制台把这五个集合安全规则均设为 `{ "read": false, "write": false }`，只允许云函数服务端访问。`adminManager` 也需更新到支持 `getSyncAlert` 的版本：只有指定管理员才查询错误表，普通用户只得到无权限、无提醒的结果。
+   此操作仅创建缺失集合，不插入样例数据、不改动既有数据；新建集合仍须检查上述安全规则。`getSyncAlert` 只有通过学号鉴权后才查询错误表，普通用户只得到无权限、无提醒的结果。
 
 6. **检查/建立查询索引**（不要求唯一，`_id` 自带唯一索引）：
 
@@ -89,11 +88,13 @@
    | `teams` | `isActive` 升序、`_id` 升序 |
 
 7. **上传两个原生触发器**：`dailySyncBijing = 0 0 2 * * * *`；`resumeBijingBatches = 0 */5 * * * * *`。微信云函数定时器使用 UTC+8。上传代码不自动保证触发器已更新，需要在控制台核对；删除旧 04:00 或旧每分钟规则，保留这两条。不要把普通 HTTP/标准触发器来源当作原生定时器授权。
-8. **发布小程序**：指定微信账号登录后，点击版本 7 次应通过独立身份检查进入页面并可切换 tab；其他账号拒绝进入，也不能直接调用数据操作。`bijingSync` 尚未更新时，只在同步 tab 显示服务更新提示，不能阻塞已就位的团队和操作记录 tab。
+8. **发布小程序**：发布包含「解绑」入口的客户端。绑定管理员名单内学号的唯一有效账号登录后，点击版本 7 次应通过独立身份检查进入页面并可切换 tab；其他账号拒绝进入，也不能直接调用管理操作。仅在中央鉴权已经就绪的前提下，某个业务服务未更新才只影响对应 tab。
 
 ## 上线验收
 
 先在测试环境执行一轮包含正常学号、停用学号、无记录用户的同步，核对小程序逐项记录与接收端审计一致。重复同步同日时应覆盖总分钟，不能累加。验证转移团长后旧团长仍在团队、审计记录存在。
+
+验证学号权限与换绑：两个账号并发绑定同一学号只能一个成功；已绑定账号切换学号须先解绑。原账号解绑后，下一次管理请求被拒绝，新账号可绑定该学号并按当前管理员名单获得权限；原账号的静坐记录仍保留在原账号。历史重复绑定的管理员学号在仍有多个有效账号时均不能授权，不自动挑选保留者。真实小程序跨云函数调用还须验证 SDK 身份传递，不能用本地模拟调用代替。
 
 验证上传已落库但响应丢失时，首次核对直接成功，错误表不应出现该项；上传未落库或远端分钟数不符时，首次核对写入差异，重试后实际查询一致才删除。查询故障不得清空错误或报告成功。确认仅管理员看到“我”红点，每次打开或从后台返回小程序只查询一次，前台停留与页面操作不额外查询；待修复列表恢复清空后，下次打开小程序时红点消失。进入后台应取消未完成的提醒请求，忽略过期响应；请求失败或超过 10 秒时清除红点，等下次打开再查询。
 
@@ -107,4 +108,4 @@ npm run test:bijing-sync
 npm run test:admin
 ```
 
-未来可增加的管控：重复学号绑定排查、超过约定时间未完成的同步告警、离线上传积压检查、按范围预览后重算统计。本次提供日志与配置状态，不添加未授权的消息发送或自动数据清理。
+未来可增加的管控：超过约定时间未完成的同步告警、离线上传积压检查、按范围预览后重算统计。本次提供日志与配置状态，不添加未授权的消息发送或自动数据清理。
