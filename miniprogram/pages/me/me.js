@@ -50,6 +50,7 @@ Page({
   },
 
   onShow() {
+    this._adminHidden = false;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
       this.calculateUserStatistics();
@@ -396,6 +397,43 @@ Page({
 
   // ===== 必经之路绑定与同步 =====
 
+  // 隐藏入口只负责发现管控页；权限每次由云函数根据调用者身份校验。
+  async onVersionTap() {
+    if (this._adminOpening) return;
+    const now = Date.now();
+    this._versionTapCount = now - (this._versionTapAt || 0) > 2000 ? 1 : (this._versionTapCount || 0) + 1;
+    this._versionTapAt = now;
+    if (this._versionTapCount < 7) return;
+    this._versionTapCount = 0;
+    this._adminOpening = true;
+    const requestId = this._adminRequestId = (this._adminRequestId || 0) + 1;
+    try {
+      const response = await cloudApi.callCloudFunction('adminManager', { type: 'getAccess' });
+      if (this._adminHidden || requestId !== this._adminRequestId) return;
+      const result = response && response.result;
+      if (!result || result.success !== true) {
+        const message = result && result.error || '管理员身份校验失败，请重试';
+        throw new Error(/^未知操作[：:]\s*getAccess$/.test(message)
+          ? '管理员身份服务尚未更新，请先部署 adminManager 云函数' : message);
+      }
+      if (!result.data || result.data.isAdmin !== true) throw new Error('仅指定管理员可进入管控');
+      wx.navigateTo({ url: '/pages/admin/admin' });
+    } catch (error) {
+      if (!this._adminHidden && requestId === this._adminRequestId) {
+        wx.showToast({ title: error.message || '权限校验失败，请重试', icon: 'none' });
+      }
+    } finally {
+      this._adminOpening = false;
+    }
+  },
+
+  resetAdminEntry() {
+    this._adminHidden = true;
+    this._versionTapCount = 0;
+    this._versionTapAt = 0;
+    this._adminRequestId = (this._adminRequestId || 0) + 1;
+  },
+
   openBijingHeatmap() {
     const studentNumber = (this.data.bijingStudentNumber || '').trim();
     if (!checkinManager.isUserLoggedIn() || !this.data.bijingBound || !studentNumber) {
@@ -707,12 +745,14 @@ Page({
   },
 
   onHide() {
+    this.resetAdminEntry();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     this.cancelBijingSyncDate();
   },
 
   onUnload() {
+    this.resetAdminEntry();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
     this._bijingSyncDetailsRequestId++;

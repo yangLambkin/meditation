@@ -164,6 +164,7 @@ function harness(initial = {}, options = {}) {
       module, exports: module.exports, Date: FixedDate, console: { log() {}, warn() {}, error() {} },
       require(name) {
         if (name === 'crypto') return crypto;
+        if (name === './maintenanceAuth') return require('../cloudfunctions/teamManager/maintenanceAuth');
         assert.equal(name, 'wx-server-sdk');
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => ({ OPENID: openid }) };
       }

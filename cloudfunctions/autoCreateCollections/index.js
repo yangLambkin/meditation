@@ -7,6 +7,11 @@ const db = cloud.database();
 
 // 根据新的1对多关系设计数据库表结构
 const COLLECTION_SCHEMAS = {
+  bijing_sync_errors: { description: '远端核对确认尚未恢复的同步差异（仅服务端）', sampleData: { recordDate: '2026-09-22', studentNumber: 'example', expectedDurationMinutes: 20, actualDurationMinutes: 0, reason: 'missing', updatedAt: Date.now() } },
+  bijing_sync_days: { description: '必经同步每日调度与运行锁（仅服务端）', sampleData: { recordDate: '2026-09-22', activeRunId: '', latestRunId: '', attempts: 0, timerAttempts: 0, status: 'success', updatedAt: Date.now() } },
+  bijing_sync_runs: { description: '必经同步执行记录（仅服务端）', sampleData: { recordDate: '2026-09-22', trigger: 'manual', operator: '', status: 'success', startedAt: Date.now(), finishedAt: Date.now(), durationMs: 0, total: 0, successCount: 0, failedCount: 0, skippedCount: 0 } },
+  bijing_sync_items: { description: '必经同步逐学号结果（仅服务端）', sampleData: { runId: 'example', recordDate: '2026-09-22', studentNumber: 'example', status: 'skipped', durationMinutes: 0, error: '示例', attempts: 1 } },
+  admin_audit_logs: { description: '团长变更审计（仅服务端）', sampleData: { action: 'transfer_team_leader', teamId: 'example', operator: '', previousLeader: { openid: '', nickname: '' }, newLeader: { openid: '', nickname: '' }, createdAt: new Date() } },
   meditation_locks: {
     description: '静坐记录原子写入的用户版本锁（仅云函数访问）',
     sampleData: { ownerOpenid: 'user_openid_123', revision: 0, updatedAt: new Date() }
@@ -187,6 +192,11 @@ async function createCollection(collectionName, sampleData) {
         // 集合不存在，创建集合
         await db.createCollection(collectionName);
         console.log(`集合 ${collectionName} 创建成功`);
+
+        // 运行状态与未恢复错误必须来自真实任务，不能用样例数据触发调度或红点。
+        if (collectionName.startsWith('bijing_sync_') || collectionName === 'admin_audit_logs') {
+          return { success: true, action: 'created', message: `集合 ${collectionName} 创建成功` };
+        }
         
         // 等待一小段时间让集合创建完成
         await new Promise(resolve => setTimeout(resolve, 1000));

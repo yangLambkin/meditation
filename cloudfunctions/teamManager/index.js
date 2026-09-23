@@ -1,5 +1,6 @@
 const cloud = require('wx-server-sdk');
 const crypto = require('crypto');
+const { canManageControlPanel, panelForbidden } = require('./maintenanceAuth');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
@@ -10,14 +11,22 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PRACTICE_BOUNDARY_HOUR = 2;
 const DEFAULT_DAILY_GOAL_MINUTES = 20;
 const MEMBER_BATCH_SIZE = 20;
+const ADMIN_PAGE_SIZE = 50;
+const ADMIN_ACTIONS = new Set(['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']);
 
 // 身份只信任微信云函数上下文，不能接受客户端传入的 openid。
 exports.main = async (event = {}) => {
   try {
     const { type, data = {} } = event;
-    const openid = cloud.getWXContext().OPENID;
+    const wxContext = cloud.getWXContext();
+    const openid = wxContext.OPENID;
+    if (ADMIN_ACTIONS.has(type) && !canManageControlPanel(wxContext, process.env)) return panelForbidden();
     if (type !== 'getAllTeams' && type !== 'getTeamInfo') requireLogin(openid);
     switch (type) {
+      case 'adminListTeams': return await adminListTeams(data);
+      case 'adminTeamMembers': return await adminTeamMembers(data);
+      case 'adminTransferLeader': return await adminTransferLeader(data, openid);
+      case 'adminAuditLogs': return await adminAuditLogs(data);
       case 'createTeam': return await createTeam(data, openid);
       case 'getUserTeams': return { success: true, data: await userTeams(openid) };
       case 'deleteTeam': return await deleteTeam(data.teamId, openid);
@@ -49,6 +58,103 @@ exports.main = async (event = {}) => {
 
 function requireLogin(openid) {
   if (!openid) throw new Error('用户未登录');
+}
+
+function adminCursor(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error('分页游标无效');
+  return value;
+}
+
+async function adminListTeams(data) {
+  const cursor = adminCursor(data.cursor);
+  const result = await db.collection('teams').where({ isActive: true,
+    ...(cursor ? { _id: db.command.gt(cursor) } : {}) })
+    .field({ _id: true, name: true, creator: true, creatorName: true, members: true })
+    .orderBy('_id', 'asc').limit(ADMIN_PAGE_SIZE + 1).get();
+  const rows = result.data.slice(0, ADMIN_PAGE_SIZE);
+  return { success: true, data: {
+    teams: rows.map(team => ({ _id: team._id, name: team.name, creator: team.creator,
+      creatorName: team.creatorName || '匿名用户', memberCount: memberIds(team).length })),
+    nextCursor: result.data.length > ADMIN_PAGE_SIZE ? rows[rows.length - 1]._id : null
+  } };
+}
+
+async function adminTeamMembers(data) {
+  const team = await activeTeam(db, data.teamId);
+  const ids = memberIds(team);
+  const profiles = new Map();
+  for (let offset = 0; offset < ids.length; offset += MEMBER_BATCH_SIZE) {
+    const users = await readAll(db.collection('users').where({ _openid: db.command.in(ids.slice(offset, offset + MEMBER_BATCH_SIZE)) })
+      .field({ _id: true, _openid: true, nickName: true }).orderBy('_id', 'asc'));
+    users.forEach(user => { if (!profiles.has(user._openid)) profiles.set(user._openid, user); });
+  }
+  return { success: true, data: { teamId: team._id, members: ids.map(id => ({
+    openid: id, nickname: profiles.get(id)?.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
+    isCreator: id === team.creator
+  })) } };
+}
+
+function validateLeaderTransfer(team, newLeaderOpenid, expectedLeaderOpenid) {
+  if (team.creator !== expectedLeaderOpenid) throw new Error('团长已变更，请刷新团队后重试');
+  if (newLeaderOpenid === team.creator) throw new Error('该成员已经是团长');
+  if (!isMember(team, newLeaderOpenid)) throw new Error('新团长必须是当前团队成员');
+}
+
+async function adminTransferLeader(data, operator) {
+  const teamId = requireId(data.teamId);
+  const newLeaderOpenid = requireId(data.newLeaderOpenid, '新团长');
+  const expectedLeaderOpenid = requireId(data.expectedLeaderOpenid, '当前团长');
+  validateLeaderTransfer(await activeTeam(db, teamId), newLeaderOpenid, expectedLeaderOpenid);
+  // 事务只支持 doc 操作，先定位资料 ID，再于事务内重读资料和团队状态。
+  const users = await db.collection('users').where({ _openid: newLeaderOpenid })
+    .field({ _id: true }).orderBy('_id', 'asc').limit(1).get();
+  const profileId = users.data[0]?._id;
+  const auditId = `audit_${String(Date.now()).padStart(13, '0')}_${crypto.randomBytes(16).toString('hex')}`;
+  const result = await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    validateLeaderTransfer(team, newLeaderOpenid, expectedLeaderOpenid);
+    const members = memberIds(team);
+    const user = profileId ? await optionalDocument(transaction, 'users', profileId) : null;
+    const oldRelationId = `${teamId}_${team.creator}`;
+    const newRelationId = `${teamId}_${newLeaderOpenid}`;
+    const oldRelation = await optionalDocument(transaction, 'team_members', oldRelationId);
+    const newRelation = await optionalDocument(transaction, 'team_members', newRelationId);
+    const creatorName = (user?._openid === newLeaderOpenid && user.nickName) || newRelation?.nickname || '匿名用户';
+    const previousLeader = { openid: team.creator, nickname: team.creatorName || oldRelation?.nickname || '匿名用户' };
+    const newLeader = { openid: newLeaderOpenid, nickname: creatorName };
+    await transaction.collection('teams').doc(teamId).update({ data: {
+      creator: newLeaderOpenid, creatorName, members, memberCount: members.length, updatedAt: db.serverDate()
+    } });
+    for (const [id, relation, leader, role] of [
+      [oldRelationId, oldRelation, previousLeader, 'member'], [newRelationId, newRelation, newLeader, 'creator']
+    ]) {
+      const { _id, ...existing } = relation || {};
+      await transaction.collection('team_members').doc(id).set({ data: {
+        joinedAt: team.createdAt || db.serverDate(), createdAt: db.serverDate(), checkInCount: 0,
+        ...existing, teamId, openid: leader.openid, nickname: leader.nickname, role, status: 'active', updatedAt: db.serverDate()
+      } });
+    }
+    // 审计失败会回滚整次转移，避免无法追溯的团长变更。
+    await transaction.collection('admin_audit_logs').doc(auditId).set({ data: {
+      action: 'transfer_team_leader', teamId, teamName: team.name, operator,
+      previousLeader, newLeader, createdAt: db.serverDate()
+    } });
+    return { teamId, creator: newLeaderOpenid, creatorName, memberCount: members.length, auditId };
+  });
+  return { success: true, data: result };
+}
+
+async function adminAuditLogs(data) {
+  const cursor = adminCursor(data.cursor);
+  // ID 中包含毫秒时间戳，用内建 _id 索引按最近操作优先分页。
+  const result = await db.collection('admin_audit_logs').where(cursor ? { _id: db.command.lt(cursor) } : {})
+    .field({ _id: true, action: true, teamId: true, teamName: true, operator: true,
+      previousLeader: true, newLeader: true, createdAt: true })
+    .orderBy('_id', 'desc').limit(ADMIN_PAGE_SIZE + 1).get();
+  const logs = result.data.slice(0, ADMIN_PAGE_SIZE);
+  return { success: true, data: { logs,
+    nextCursor: result.data.length > ADMIN_PAGE_SIZE ? logs[logs.length - 1]._id : null } };
 }
 
 function requireId(id, label = '团队') {

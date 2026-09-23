@@ -10,3 +10,7 @@
 
 - [云开发文档](https://developers.weixin.qq.com/miniprogram/dev/wxcloud/basis/getting-started.html)
 
+
+## 必经同步与管控
+
+全员批量同步、每日 02:00 调度、失败续跑和隐藏管控页面的迁移与发布说明见 [2026-09-23 部署文档](docs/2026-09-23-admin-batch-sync.md)。

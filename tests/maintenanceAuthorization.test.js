@@ -36,6 +36,7 @@ function harness(name, options = {}) {
     require(dependency) {
       if (dependency === 'wx-server-sdk') return { init() {}, database: () => database, getWXContext: () => wxContext };
       if (dependency === 'axios') return { post: async () => { external.push('post'); return { data: {} }; } };
+      if (dependency === './batchJobs') return { createBatchJobs: () => ({ timer: async () => { reads.push('batch-dispatch'); return {}; } }) };
       if (dependency === './maintenanceAuth') return require(`../cloudfunctions/${name}/maintenanceAuth`);
       return require(dependency);
     },
@@ -147,15 +148,15 @@ test('only an enabled, verified platform timer source may dispatch a cron job wi
 
 test('deployable authorization modules match the single reviewed source', () => {
   const source = fs.readFileSync(path.join(__dirname, '../shared/maintenanceAuth.js'), 'utf8');
-  for (const name of ['cleanupTestData', 'meditationManager', 'bijingSync']) {
+  for (const name of ['cleanupTestData', 'meditationManager', 'bijingSync', 'teamManager', 'adminManager']) {
     assert.equal(fs.readFileSync(path.join(__dirname, `../cloudfunctions/${name}/maintenanceAuth.js`), 'utf8'), source);
   }
 });
 
-test('authorized explicit cron keeps its all-bound-users dispatch', async () => {
+test('authorized explicit cron dispatches the durable batch worker', async () => {
   const app = harness('bijingSync');
   assert.equal((await app.run({ type: 'cronSyncAll' })).success, true);
-  assert.deepEqual(app.reads, ['users']);
+  assert.deepEqual(app.reads, ['batch-dispatch']);
 });
 
 test('full cleanup reads every page before deletion and reports the matched count', async () => {

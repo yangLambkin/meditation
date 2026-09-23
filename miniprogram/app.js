@@ -34,12 +34,75 @@ App({
 
   onShow() {
     if (!wx.cloud) return;
+    this.startSyncAlertRefresh();
     // 打开/返回小程序补传当天记录，同时读取云端；历史记录仍需手动确认。
     const refresh = this.refreshRecordBackups();
     const upload = Promise.resolve().then(() => checkinManager.retryTodayBackups()).catch(error => {
       console.warn('当天记录自动上传失败，保留本机记录:', error);
     });
     return Promise.all([refresh, upload]);
+  },
+
+  onHide() {
+    this._syncAlertVisible = false;
+    this.clearSyncAlert();
+  },
+
+  syncAlertIdentity() {
+    try { return typeof wx.getStorageSync === 'function' ? wx.getStorageSync('userOpenId') || '' : ''; }
+    catch (error) { return ''; }
+  },
+  setSyncAlertDot(visible) {
+    const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
+    if (typeof action === 'function') action.call(wx, { index: 3, fail() {} });
+  },
+  clearSyncAlert() {
+    this._syncAlertGeneration = (this._syncAlertGeneration || 0) + 1;
+    this._syncAlertRequest = null;
+    if (this._syncAlertCancel) this._syncAlertCancel(new Error('同步提醒已暂停'));
+    this._syncAlertCancel = null;
+    if (this._syncAlertDeadline) clearTimeout(this._syncAlertDeadline);
+    this._syncAlertDeadline = null;
+    this.setSyncAlertDot(false);
+  },
+  startSyncAlertRefresh() {
+    if (typeof wx.cloud.callFunction !== 'function' || typeof wx.showTabBarRedDot !== 'function') return;
+    this._syncAlertVisible = true;
+    this.clearSyncAlert();
+    this.refreshSyncAlert();
+  },
+  // 仅在打开或返回小程序时核对一次，停留前台期间不轮询或自动重试。
+  refreshSyncAlert() {
+    if (!this._syncAlertVisible || !wx.cloud || typeof wx.cloud.callFunction !== 'function') return Promise.resolve();
+    const identity = this.syncAlertIdentity();
+    if (this._syncAlertRequest) return this._syncAlertRequest;
+    const generation = this._syncAlertGeneration;
+    let deadline;
+    const current = () => this._syncAlertVisible && generation === this._syncAlertGeneration && identity === this.syncAlertIdentity();
+    const request = new Promise((resolve, reject) => {
+      this._syncAlertCancel = reject;
+      deadline = setTimeout(() => reject(new Error('同步提醒请求超时')), 10000);
+      this._syncAlertDeadline = deadline;
+      wx.cloud.callFunction({ name: 'adminManager', data: { type: 'getSyncAlert' }, success: resolve, fail: reject });
+    }).then(response => {
+      if (!current()) return;
+      const result = response && response.result;
+      this.setSyncAlertDot(!!(result && result.success && result.data && result.data.isAdmin === true && result.data.hasErrors === true));
+    }).catch(() => {
+      if (current()) this.setSyncAlertDot(false);
+    }).finally(() => {
+      clearTimeout(deadline);
+      if (generation !== this._syncAlertGeneration) return;
+      this._syncAlertRequest = null;
+      this._syncAlertCancel = null;
+      this._syncAlertDeadline = null;
+      if (!this._syncAlertVisible) return;
+      if (identity !== this.syncAlertIdentity()) {
+        this.setSyncAlertDot(false);
+      }
+    });
+    this._syncAlertRequest = request;
+    return request;
   },
 
   setupRecordRefresh() {

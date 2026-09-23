@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "管控中心",
+  "navigationBarBackgroundColor": "#f8fafc",
+  "navigationBarTextStyle": "black",
+  "enablePullDownRefresh": true,
+  "backgroundColor": "#f8fafc"
+}

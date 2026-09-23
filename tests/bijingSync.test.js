@@ -15,6 +15,7 @@ function matches(value, filter) {
   if (filter && filter.op === 'or') return filter.values.some(part => matches(value, part));
   if (filter && filter.op === 'and') return filter.values.every(part => matches(value, part));
   if (filter && filter.op === 'gte') return typeof value === 'number' && value >= filter.value;
+  if (filter && filter.op === 'gt') return value > filter.value;
   if (filter && filter.op === 'lt') return typeof value === 'number' && value < filter.value;
   if (filter && typeof filter === 'object') return Object.entries(filter).every(([key, expected]) => matches(value[key], expected));
   return value === filter;
@@ -52,6 +53,7 @@ function createHarness(options = {}) {
       or: values => ({ op: 'or', values }),
       gte: value => comparison('gte', value),
       lt: value => comparison('lt', value),
+      gt: value => comparison('gt', value),
     },
     collection(name) {
       return {
@@ -67,6 +69,7 @@ function createHarness(options = {}) {
             field(value) { fields = clone(value); return this; },
             async get() {
               calls.reads.push({ name, filter: clone(filter), offset, maximum, order, fields });
+              if (options.onRead) options.onRead({ name, filter }, records);
               if (options.readError) throw new Error(options.readError);
               if (name === 'meditation_records' && options.detailReadError) throw new Error(options.detailReadError);
               assert.ok(['users', 'meditation_records'].includes(name));
@@ -259,8 +262,8 @@ test('selected sync includes legacy records for only the chosen date and current
   assert.equal(app.calls.now, 1);
 });
 
-test('a leftover batch environment flag cannot change manual or timer sync into asynchronous submission', async t => {
-  for (const mode of ['manual', 'timer']) {
+test('single-user sync retains its synchronous single-record API with a batch flag present', async t => {
+  for (const mode of ['manual']) {
     await t.test(mode, async () => {
       const app = createHarness({
         env: { BIJING_BATCH_ENABLED: 'true' },
@@ -360,27 +363,6 @@ test('repeated manual sync posts every time, recalculates changed totals and pre
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-10': true, '2026-09-16': true });
 });
 
-test('automatic and manual sync can repeat in either order and include late-arriving records', async t => {
-  for (const first of ['automatic', 'manual']) {
-    await t.test(first, async () => {
-      const app = createHarness({ records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] });
-      const automatic = () => app.timer();
-      const manual = () => app.select('2026-09-16');
-      const initial = first === 'automatic' ? automatic : manual;
-      const following = first === 'automatic' ? manual : automatic;
-      await initial();
-      assert.equal((await app.details('2026-09-16')).data.alreadySynced, true);
-      app.records.push({ _openid: 'user-a', date: '2026-09-17',
-        timestamp: Date.parse('2026-09-17T01:30:00+08:00'), duration: 10 });
-      await following();
-      await automatic();
-      assert.deepEqual(app.calls.posts.map(call => call.body), [20, 30, 30].map(durationMinutes => ({
-        studentNumber: '123456', recordDate: '2026-09-16', durationMinutes,
-      })));
-      assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-16': true });
-    });
-  }
-});
 
 test('failed resync reports the failure despite a previous success and remains retryable', async () => {
   const options = { records: [{ _openid: 'user-a', date: '2026-09-16', duration: 20 }] };
@@ -456,29 +438,6 @@ test('legacy syncPending can backfill all seven recent dates for a newly bound u
   assert.equal(app.calls.updates.length, 1);
 });
 
-test('automatic timer sync still synchronizes only yesterday for all bound users', async t => {
-  for (const [event, context] of [[{}, { source: 'timer' }], [{}, {}], [{ type: 'cronSyncAll' }, {}]]) {
-    await t.test(JSON.stringify({ event, context }), async () => {
-      const app = createHarness({
-        openid: undefined,
-        now: '2026-09-30T18:00:00Z',
-        users: [
-          { _id: 'doc-a', _openid: 'user-a', bijingBound: true, bijingStudentNumber: '123456' },
-          { _id: 'doc-b', _openid: 'user-b', bijingBound: true, bijingStudentNumber: '234567' },
-          { _id: 'doc-c', _openid: 'user-c', bijingBound: false },
-        ],
-        records: ['user-a', 'user-b', 'user-c'].flatMap(_openid => ['2026-09-29', '2026-09-30', '2026-10-01'].map(date => ({ _openid, date, duration: 30 }))),
-      });
-      assert.deepEqual(await app.timer(event, context), { success: true, data: {
-        date: '2026-09-30', total: 2, success: 2, failed: 0, skipped: 0, retries: 0, failedUsers: [],
-      } });
-      assert.deepEqual(app.calls.posts.map(value => value.body), [
-        { studentNumber: '123456', recordDate: '2026-09-30', durationMinutes: 30 },
-        { studentNumber: '234567', recordDate: '2026-09-30', durationMinutes: 30 },
-      ]);
-    });
-  }
-});
 
 test('date details paginate all matching records, omit private fields and match the uploaded day total', async () => {
   const selectedRecords = Array.from({ length: 205 }, (_, index) => ({
@@ -504,9 +463,11 @@ test('date details paginate all matching records, omit private fields and match 
   assert.equal(result.data.alreadySynced, false);
   assert.deepEqual(result.data.records, selectedRecords.slice().reverse().map(({ _id, timestamp, duration }) => ({ id: _id, timestamp, duration })));
   const pages = app.calls.reads.filter(call => call.name === 'meditation_records');
-  assert.deepEqual(pages.map(page => page.offset), [0, 100, 200]);
+  assert.deepEqual(pages.map(page => page.offset), [0, 0, 0]);
+  assert.ok(pages.slice(1).every(page => page.filter._id.op === 'gt'));
+  assert.ok(pages[2].filter._id.value > pages[1].filter._id.value);
   for (const page of pages) {
-    assert.deepEqual(page.filter, { _openid: 'user-a' });
+    assert.equal(page.filter._openid, 'user-a');
     assert.equal(page.maximum, 100);
     assert.deepEqual(page.order, { key: '_id', direction: 'asc' });
     assert.deepEqual(page.fields, { _id: true, date: true, timestamp: true, duration: true, source: true, dateSource: true, localId: true, idempotencyKey: true });
@@ -634,7 +595,7 @@ test('sync windows include next-day early hours across month, year and leap-day 
   }
 });
 
-test('before 02:00 manual calls reject the unfinished date and cron only uploads the latest finished day', async () => {
+test('before 02:00 manual calls reject the unfinished date and upload the latest finished day', async () => {
   const app = createHarness({ now: '2026-09-17T01:59:59.999+08:00', records: [
     { _id: 'finished', _openid: 'user-a', date: '2026-09-16', timestamp: Date.parse('2026-09-16T01:00:00+08:00'), duration: 10 },
     { _id: 'unfinished', _openid: 'user-a', date: '2026-09-17', timestamp: Date.parse('2026-09-17T01:00:00+08:00'), duration: 20 },
@@ -642,8 +603,8 @@ test('before 02:00 manual calls reject the unfinished date and cron only uploads
   assert.equal((await app.select('2026-09-16')).success, false);
   assert.equal((await app.details('2026-09-16')).success, false);
   assert.equal(app.calls.reads.length, 0);
-  const cron = await app.timer({ type: 'cronSyncAll' });
-  assert.equal(cron.data.date, '2026-09-15');
+  const selected = await app.select('2026-09-15');
+  assert.equal(selected.data.date, '2026-09-15');
   assert.deepEqual(app.calls.posts.map(item => item.body), [{ studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 10 }]);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-15': true });
 });
@@ -665,4 +626,15 @@ test('sync normalizes legacy string timestamps, preserves manual days and counts
   assert.equal((await app.details('2026-09-16')).data.count, 0);
   await app.select('2026-09-15');
   assert.equal(app.calls.posts[0].body.durationMinutes, 30);
+});
+
+
+test('record cursor does not lose the next page when an earlier historical record is deleted', async () => {
+  const records = Array.from({ length: 201 }, (_, i) => ({ _id: `r${String(i).padStart(3, '0')}`, _openid: 'user-a', date: i === 0 ? '2026-09-10' : '2026-09-16', duration: 1 }));
+  const app = createHarness({ records, onRead({ name, filter }, rows) {
+    if (name === 'meditation_records' && filter._id && rows[0]._id === 'r000') rows.shift();
+  } });
+  const result = await app.details('2026-09-16');
+  assert.equal(result.data.totalDuration, 200);
+  assert.equal(result.data.count, 200);
 });

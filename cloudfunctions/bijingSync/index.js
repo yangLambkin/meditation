@@ -90,17 +90,18 @@ async function postMeditationRecord(studentNumber, recordDate, durationMinutes) 
 
 // 预览和上报共用同一批云端记录。旧数据的 timestamp 可能是数字串或带时区 ISO，
 // 按用户分页读取后统一归属，避免数据库数值范围查询漏掉次日凌晨的历史记录。
-async function getDayRecords(openid, dateStr) {
+async function getDayRecords(openid, dateStr, deadline) {
   const { start, end } = getSyncDateWindow(dateStr);
   const records = [];
   const identities = new Set();
   const limit = 100;
-  for (let skip = 0; ; skip += limit) {
+  let cursor = '';
+  while (true) {
+    if (deadline && Date.now() >= deadline) throw new Error('该用户历史记录读取超时，请单独核查后重试');
     const result = await db.collection('meditation_records')
-      .where({ _openid: openid })
+      .where({ _openid: openid, ...(cursor ? { _id: db.command.gt(cursor) } : {}) })
       .field({ _id: true, date: true, timestamp: true, duration: true, source: true, dateSource: true, localId: true, idempotencyKey: true })
       .orderBy('_id', 'asc')
-      .skip(skip)
       .limit(limit)
       .get();
     for (const record of result.data) {
@@ -120,13 +121,14 @@ async function getDayRecords(openid, dateStr) {
       });
     }
     if (result.data.length < limit) break;
+    cursor = result.data[result.data.length - 1]._id;
   }
   records.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0) || String(a.id).localeCompare(String(b.id)));
   return records;
 }
 
-async function getDayDuration(openid, dateStr) {
-  const records = await getDayRecords(openid, dateStr);
+async function getDayDuration(openid, dateStr, deadline) {
+  const records = await getDayRecords(openid, dateStr, deadline);
   return Math.round(records.reduce((total, record) => total + record.duration, 0));
 }
 
@@ -299,76 +301,55 @@ async function markSynced(openid, dateStr, studentNumber) {
   }
 }
 
-// ===== 凌晨 2 点自动：同步所有绑定用户最近一个已结束的同步日 =====
-const CRON_MAX_RETRIES = 3;
-
-async function syncDateWithRetry(openid, dateStr) {
-  let result;
-  for (let attempt = 0; attempt <= CRON_MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      console.warn('⏳ 定时同步重试', { openid, date: dateStr, retry: attempt, error: result.error });
-      await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt - 1)));
-    }
-    try {
-      result = await syncDate(openid, dateStr);
-    } catch (error) {
-      result = { success: false, error: error.message || '用户同步异常' };
-    }
-    // 无记录/未绑定属于跳过，不重试；上报或本地标记失败都必须明确失败。
-    if (result.success === true || result.skipped === true) return { result, retries: attempt, attempts: attempt + 1 };
-    if (attempt === CRON_MAX_RETRIES) return { result, retries: attempt, attempts: attempt + 1 };
-  }
+// 全员同步由持久化分批任务执行；个人学号同步仍沿用上面的单条接口。
+function batchJobs() {
+  return require('./batchJobs').createBatchJobs({
+    db, getDayDuration, markSynced, now: () => Date.now(),
+    recentDates: (count) => {
+      const now = Date.now();
+      return Array.from({ length: count }, (_, index) => getSyncBusinessDate(now - (index + 1) * DAY_MS));
+    },
+    postBatch: async (recordDate, records) => {
+      const response = await axios.post(`${getApiBase()}/api/openapi/meditation/records/batch`,
+        { recordDate, records }, { headers: { 'X-Access-Token': getAccessToken() }, timeout: 15000 });
+      return response.data;
+    },
+    queryBatch: async (records) => {
+      const response = await axios.post(`${getApiBase()}/api/openapi/meditation/records/query`,
+        { records }, { headers: { 'X-Access-Token': getAccessToken() }, timeout: 15000 });
+      return response.data;
+    },
+  });
 }
 
-async function cronSyncAll() {
-  const yesterday = getSyncBusinessDate(Date.now() - DAY_MS);
-  console.log(`🚀 定时同步开始, 昨天=${yesterday}`);
-
-  let skip = 0;
-  const limit = 100;
-  let total = 0;
-  let success = 0;
-  let failed = 0;
-  let skipped = 0;
-  let retries = 0;
-  const failedUsers = [];
-
-  while (true) {
-    // 注意：定时触发 event 无 OPENID，需扫描全部绑定用户
-    // 这里只是数据库分页，所有用户仍在同一次云函数里依次执行，共用执行超时。
-    const res = await db.collection('users')
-      .where({ bijingBound: true })
-      .skip(skip)
-      .limit(limit)
-      .get();
-    const list = res.data;
-    if (list.length === 0) break;
-
-    for (const u of list) {
-      total++;
-      const attempt = await syncDateWithRetry(u._openid, yesterday);
-      retries += attempt.retries;
-      if (attempt.result.success === true) success++;
-      else if (attempt.result.skipped === true) skipped++;
-      else {
-        failed++;
-        const failure = { openid: u._openid, date: yesterday, attempts: attempt.attempts, error: attempt.result.error || '未知同步错误' };
-        failedUsers.push(failure);
-        console.error('❌ 定时同步重试后仍失败', failure);
-      }
+async function administration(event, openid) {
+  try {
+    if (event.type === 'adminStatus') {
+      const { BATCH_SIZE } = require('./batchJobs');
+      return { success: true, data: {
+        latestDate: getSyncBusinessDate(Date.now() - DAY_MS),
+        dates: Array.from({ length: 30 }, (_, index) => getSyncBusinessDate(Date.now() - (index + 1) * DAY_MS)),
+        timerEnabled: process.env.BIJING_TIMER_ENABLED === 'true' && process.env.BIJING_TIMER_SOURCE === 'wx_trigger',
+        apiConfigured: !!(process.env.BIJING_API_BASE && process.env.BIJING_ACCESS_TOKEN), batchSize: BATCH_SIZE,
+      } };
     }
-
-    if (list.length < limit) break;
-    skip += limit;
+    if (event.type === 'adminInitialize') return { success: true, data: await require('./setup').initialize(db) };
+    const jobs = batchJobs();
+    let data;
+    switch (event.type) {
+      case 'adminStartSync': data = await jobs.start(event.recordDate, 'manual', openid); break;
+      case 'adminContinueSync': data = await jobs.processChunk(event.runId); break;
+      case 'adminListSyncRuns': data = await jobs.listRuns(event.recordDate, event.cursor); break;
+      case 'adminSyncDetails': data = await jobs.details(event.runId, event.cursor); break;
+      case 'adminListSyncErrors': data = await jobs.listErrors(event.cursor); break;
+      case 'adminRetrySyncErrors': data = await jobs.retryErrors(openid); break;
+      default: data = await jobs.timer();
+    }
+    return { success: true, data };
+  } catch (error) {
+    console.error('批量同步任务异常:', error.message);
+    return { success: false, code: 'SYNC_JOB_ERROR', error: error.message || '同步任务执行失败' };
   }
-
-  const data = { date: yesterday, total, success, failed, skipped, retries, failedUsers };
-  if (failed > 0) {
-    console.error('❌ 定时同步部分失败', data);
-    return { success: false, code: 'PARTIAL_SYNC_FAILED', error: `${failed} 位同学同步失败，请查看失败明细后补同步`, data };
-  }
-  console.log('✅ 定时同步完成', data);
-  return { success: true, data };
 }
 
 // 手动同步仅允许最近七个已在次日 02:00 结束的同步日。
@@ -485,11 +466,14 @@ async function manualSyncPending(openid) {
 exports.main = async (event = {}, context) => {
   const wxContext = cloud.getWXContext();
   const openid = wxContext.OPENID;
-  // Missing type remains the timer dispatch shape, but never authenticates a caller.
-  if (!event.type || event.type === 'cronSyncAll') {
-    const { canRunMaintenance, forbidden } = require('./maintenanceAuth');
-    if (!canRunMaintenance(wxContext, typeof process === 'undefined' ? {} : process.env, true)) return forbidden();
-    return await cronSyncAll();
+  const timerDispatch = !event.type || event.type === 'cronSyncAll';
+  const adminDispatch = ['adminInitialize', 'adminStatus', 'adminStartSync', 'adminContinueSync', 'adminListSyncRuns', 'adminSyncDetails', 'adminListSyncErrors', 'adminRetrySyncErrors'].includes(event.type);
+  if (timerDispatch || adminDispatch) {
+    const { canRunMaintenance, canManageControlPanel, forbidden, panelForbidden } = require('./maintenanceAuth');
+    const environment = typeof process === 'undefined' ? {} : process.env;
+    const allowed = adminDispatch ? canManageControlPanel(wxContext, environment) : canRunMaintenance(wxContext, environment, true);
+    if (!allowed) return adminDispatch ? panelForbidden() : forbidden();
+    return administration(event, openid);
   }
 
   switch (event.type) {

@@ -14,8 +14,21 @@ function canRunMaintenance(wxContext = {}, environment = {}, allowTimer = false)
   return wxContext.SOURCE === expectedSource;
 }
 
+// The control panel has exactly one owner, configured only on the server.
+// Never treat the maintenance allowlist or a platform timer as panel access.
+function canManageControlPanel(wxContext = {}, environment = {}) {
+  const configured = typeof environment.ADMIN_OPENID === 'string' ? environment.ADMIN_OPENID.trim() : '';
+  if (!/^[A-Za-z0-9_-]+$/.test(configured)) return false;
+  const openid = typeof wxContext.OPENID === 'string' ? wxContext.OPENID.trim() : '';
+  return Boolean(openid && openid === configured);
+}
+
 function forbidden() {
   return { success: false, code: 'FORBIDDEN', error: '此操作仅允许已授权的运维身份或已验证的定时任务' };
 }
 
-module.exports = { canRunMaintenance, forbidden };
+function panelForbidden() {
+  return { success: false, code: 'FORBIDDEN', error: '仅指定的管理员微信账号可执行此操作' };
+}
+
+module.exports = { canRunMaintenance, canManageControlPanel, forbidden, panelForbidden };

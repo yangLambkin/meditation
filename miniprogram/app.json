@@ -6,6 +6,7 @@
     "pages/recorder/recorder",
     "pages/daily/daily1",
     "pages/me/me",
+    "pages/admin/admin",
     "pages/bijingHeatmap/bijingHeatmap",
     "pages/history/history",
     "pages/checkinHistory/checkinHistory",

@@ -1,0 +1,10 @@
+{
+  "name": "adminManager",
+  "version": "1.0.0",
+  "description": "管控中心访问资格、同步提醒及按昵称查询每日静坐记录",
+  "main": "index.js",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

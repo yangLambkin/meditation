@@ -7,6 +7,11 @@
       "name": "dailySyncBijing",
       "type": "timer",
       "config": "0 0 2 * * * *"
+    },
+    {
+      "name": "resumeBijingBatches",
+      "type": "timer",
+      "config": "0 */5 * * * * *"
     }
   ]
 }

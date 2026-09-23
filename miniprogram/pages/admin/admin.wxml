@@ -1,0 +1,197 @@
+<view class="admin-page">
+  <view wx:if="{{entryVerifying}}" class="empty-state">正在校验管理员身份…</view>
+  <view wx:elif="{{!entryAuthorized}}" class="card access-state">
+    <text class="card-title">暂时无法进入管控</text>
+    <text class="description">{{entryError || '请使用指定的管理员账号。'}}</text>
+    <button class="secondary-button" bindtap="retryAccess">重新校验</button>
+  </view>
+  <block wx:else>
+    <view class="page-heading">
+      <text class="eyebrow">静坐觉察</text>
+      <text class="page-title">管控中心</text>
+      <text class="description">查看同步进度，查询个人记录，维护团队。</text>
+    </view>
+    <view class="tabs">
+      <view class="tab {{tab === 'sync' ? 'active' : ''}}" data-tab="sync" bindtap="onTabChange">必经同步</view>
+      <view class="tab {{tab === 'query' ? 'active' : ''}}" data-tab="query" bindtap="onTabChange">记录查询</view>
+      <view class="tab {{tab === 'team' ? 'active' : ''}}" data-tab="team" bindtap="onTabChange">团队团长</view>
+      <view class="tab {{tab === 'audit' ? 'active' : ''}}" data-tab="audit" bindtap="onTabChange">操作记录</view>
+    </view>
+
+    <view wx:if="{{verifying}}" class="empty-state">正在加载并校验操作权限…</view>
+    <view wx:elif="{{!authorized}}" class="card">
+      <text class="card-title">{{tab === 'sync' ? '必经同步暂不可用' : tab === 'query' ? '记录查询暂不可用' : tab === 'team' ? '团队管控暂不可用' : '操作记录暂不可用'}}</text>
+      <text class="description">{{accessError || '请稍后重试。'}}</text>
+      <button class="secondary-button" bindtap="retryAccess">重新加载</button>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'sync'}}">
+      <view class="card">
+        <view class="row spread">
+          <text class="card-title">批量同步到必经</text>
+          <text class="small-label">北京时间</text>
+        </view>
+        <text class="description">每天 02:00 同步刚结束的静坐日。一个静坐日为当日 02:00 至次日 02:00。</text>
+        <view class="health-row">
+          <text class="health {{timerEnabled ? 'healthy' : 'warning'}}">{{timerEnabled ? '自动同步已启用' : '自动同步未启用'}}</text>
+          <text class="health {{apiConfigured ? 'healthy' : 'warning'}}">{{apiConfigured ? '必经接口已配置' : '必经接口待配置'}}</text>
+        </view>
+        <text class="field-label">同步日期</text>
+        <picker mode="selector" range="{{dates}}" value="{{dateIndex}}" disabled="{{syncBusy || !dates.length}}" bindchange="onDateChange">
+          <view class="select-field"><text>{{recordDate || '暂无可选日期'}}</text><text class="select-arrow">⌄</text></view>
+        </picker>
+        <text class="small-note">可选择最近 30 个已结束的静坐日进行补同步。</text>
+        <text wx:if="{{runningRecordDate}}" class="notice">当前执行日期：{{runningRecordDate}}</text>
+        <button class="primary-button" loading="{{syncBusy}}" disabled="{{syncBusy || !recordDate || !apiConfigured}}" bindtap="startSync">{{syncBusy ? '正在执行同步…' : runningRunId ? '一键继续同步' : '一键同步所选日期'}}</button>
+        <text wx:if="{{syncMessage}}" class="notice">{{syncMessage}}</text>
+        <text wx:if="{{syncError}}" class="error-message" selectable>{{syncError}}</text>
+      </view>
+
+      <view class="card">
+        <view class="row spread"><text class="card-title">待处理同步错误</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
+        <text class="description">按学号和日期核对必经的数据。未恢复的记录会在此显示，重试后复核通过会自动移除。</text>
+        <view wx:for="{{syncErrors}}" wx:key="_id" class="detail-item">
+          <view class="row spread"><text class="member-name" selectable>{{item.studentNumber || '未绑定学号'}}</text><text class="small-label">{{item.recordDate}}</text></view>
+          <text class="small-note">预期 {{item.expectedDurationMinutes}} 分钟 · 必经 {{item.actualText}}</text>
+          <text class="error-message" selectable>{{item.reasonText}}</text>
+          <text class="small-note">最近核对 {{item.updatedText}}</text>
+        </view>
+        <view wx:if="{{syncErrorsLoading}}" class="small-empty">正在读取待处理错误…</view>
+        <view wx:elif="{{!syncErrors.length && !syncErrorsError}}" class="small-empty">当前没有待处理的同步错误。</view>
+        <text wx:if="{{syncErrorsError}}" class="error-message">{{syncErrorsError}}</text>
+        <button wx:if="{{syncErrorsCursor}}" class="secondary-button compact" disabled="{{syncErrorsLoading}}" bindtap="loadMoreSyncErrors">加载更多错误</button>
+        <button wx:if="{{syncErrors.length}}" class="primary-button" loading="{{syncBusy}}" disabled="{{syncBusy || !apiConfigured}}" bindtap="retrySyncErrors">{{runningRunId ? '继续当前任务并复核' : '重试并复核错误记录'}}</button>
+        <text wx:if="{{syncErrors.length}}" class="small-note">每次修复一个有错误的日期；完成后可继续处理其他日期。</text>
+      </view>
+
+      <view class="section-heading">
+        <text class="card-title">每日执行记录</text>
+        <view class="text-button" bindtap="refreshTab">{{runsLoading ? '刷新中…' : '刷新'}}</view>
+      </view>
+      <view class="scope-switch">
+        <view class="scope-option {{showAllRuns ? 'selected' : ''}}" data-scope="all" bindtap="onHistoryScopeChange">最近记录</view>
+        <view class="scope-option {{!showAllRuns ? 'selected' : ''}}" data-scope="date" bindtap="onHistoryScopeChange">所选日期</view>
+      </view>
+      <view wx:if="{{!runs.length}}" class="empty-state">{{runsLoading ? '正在读取同步记录…' : syncError ? '执行记录暂时无法读取，请刷新重试。' : showAllRuns ? '暂无执行记录，可点击一键同步开始。' : recordDate + ' 尚未执行同步，可点击一键同步补齐。'}}</view>
+      <view wx:for="{{runs}}" wx:key="_id" class="card run-card">
+        <view class="row spread">
+          <text class="run-date">{{item.recordDate}}</text>
+          <text class="status status-{{item.status}}">{{item.statusText}}</text>
+        </view>
+        <view class="run-meta"><text>{{item.triggerText}}</text><text>用时 {{item.durationText}}</text></view>
+        <text wx:if="{{item.phaseText && item.status !== 'success'}}" class="notice">当前阶段：{{item.phaseText}}</text>
+        <view class="counts">
+          <view class="count"><text class="count-value">{{item.total || 0}}</text><text class="count-label">{{item.status === 'running' || item.status === 'interrupted' ? '已处理' : '总人数'}}</text></view>
+          <view class="count"><text class="count-value positive">{{item.successCount || 0}}</text><text class="count-label">{{item.verifiedCountLabel}}</text></view>
+          <view class="count"><text class="count-value {{item.failedCount ? 'negative' : ''}}">{{item.failedCount || 0}}</text><text class="count-label">失败</text></view>
+          <view class="count"><text class="count-value">{{item.skippedCount || 0}}</text><text class="count-label">跳过</text></view>
+        </view>
+        <text class="time-row">开始 {{item.startedText}}</text>
+        <text class="time-row">结束 {{item.finishedText}}</text>
+        <view wx:if="{{item.interruptions || item.status === 'interrupted'}}" class="interruption-note">
+          <text wx:if="{{item.status === 'interrupted'}}">执行曾中断，正在等待恢复，可点击一键继续同步。</text>
+          <text wx:if="{{item.interruptions}}">已恢复 {{item.interruptions}} 次 · {{item.interruptionText}}</text>
+          <text wx:if="{{item.lastInterruption}}">{{item.lastInterruption}}</text>
+        </view>
+        <text wx:if="{{item.error}}" class="error-message" selectable>{{item.error}}</text>
+        <view class="detail-toggle" data-id="{{item._id}}" bindtap="selectRun">{{selectedRunId === item._id ? '收起明细 ↑' : '查看同步明细与错误 ↓'}}</view>
+        <view wx:if="{{selectedRunId === item._id}}" class="details">
+          <view wx:for="{{items}}" wx:for-item="detail" wx:key="_id" class="detail-item">
+            <view class="row spread"><text class="member-name">{{detail.nickname || '未命名学员'}}</text><text class="status status-{{detail.status}}">{{detail.statusText}}</text></view>
+            <text class="small-note" selectable>{{detail.studentNumber || '未绑定学号'}} · {{detail.durationMinutes || 0}} 分钟 · 第 {{detail.attempts || 1}} 轮</text>
+            <text wx:if="{{detail.error}}" class="error-message" selectable>{{detail.error}}</text>
+            <text wx:if="{{detail.uploadError && detail.uploadError !== detail.error}}" class="small-note" selectable>上传阶段提示（以最终核对为准）：{{detail.uploadError}}</text>
+            <text wx:if="{{detail.markError}}" class="error-message" selectable>必经数据已核对，本地同步状态保存失败：{{detail.markError}}</text>
+          </view>
+          <view wx:if="{{itemsLoading}}" class="small-empty">读取明细中…</view>
+          <view wx:elif="{{!items.length && !itemsError}}" class="small-empty">暂无明细，任务开始后将陆续显示。</view>
+          <view wx:if="{{itemsError}}"><text class="error-message">{{itemsError}}</text><view class="text-button" bindtap="retryItems">重试读取明细</view></view>
+          <button wx:if="{{itemsCursor}}" class="secondary-button compact" disabled="{{itemsLoading}}" bindtap="loadMoreItems">加载更多明细</button>
+        </view>
+      </view>
+      <text class="footer-note">记录中的时间均为北京时间。执行中自动刷新；离开页面后，后台会继续处理未完成任务。</text>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'query'}}">
+      <view class="card">
+        <text class="card-title">按昵称查询记录</text>
+        <text class="description">输入完整昵称，查询指定日期的静坐明细和总时长。重名时可按学号或账号选择。</text>
+        <text class="field-label">昵称</text>
+        <input class="query-input" value="{{queryNickname}}" maxlength="100" placeholder="请输入完整昵称" confirm-type="search" bindinput="onQueryNicknameInput" bindconfirm="searchRecordUsers" />
+        <text class="field-label">静坐日期</text>
+        <picker mode="date" value="{{queryDate}}" end="{{queryMaxDate}}" bindchange="onQueryDateChange">
+          <view class="select-field"><text>{{queryDate}}</text><text class="select-arrow">⌄</text></view>
+        </picker>
+        <text class="small-note">按北京时间当日 02:00 至次日 02:00 统计，手动补录按所选日期归属。仅查询已上传到云端的记录。</text>
+        <button class="primary-button" loading="{{queryLoading || dayRecordsLoading}}" disabled="{{queryLoading || dayRecordsLoading}}" bindtap="searchRecordUsers">{{queryLoading ? '正在查找用户…' : dayRecordsLoading ? '正在查询记录…' : '查询记录'}}</button>
+        <text wx:if="{{queryError}}" class="error-message" selectable>{{queryError}}</text>
+        <view wx:if="{{querySearched && !queryUsers.length && !queryError}}" class="small-empty">未找到该昵称，请检查后重新查询。</view>
+        <block wx:if="{{queryUsers.length}}">
+          <text class="field-label">{{queryUsers.length === 1 && !queryUsersCursor ? '查询用户' : '存在重名，请选择用户'}}</text>
+          <picker mode="selector" range="{{queryUsers}}" range-key="displayName" value="{{queryUserIndex}}" bindchange="onQueryUserChange">
+            <view class="select-field"><text>{{selectedQueryUser ? selectedQueryUser.displayName : '请选择要查询的用户'}}</text><text class="select-arrow">⌄</text></view>
+          </picker>
+          <text wx:if="{{selectedQueryUser}}" class="small-note" selectable>账号：{{selectedQueryUser.openid}}</text>
+          <button wx:if="{{queryUsersCursor}}" class="secondary-button compact" loading="{{queryLoading}}" disabled="{{queryLoading}}" bindtap="loadMoreQueryUsers">加载更多同名用户</button>
+        </block>
+      </view>
+      <view wx:if="{{selectedQueryUser}}" class="card">
+        <view class="row spread"><text class="card-title query-name">{{selectedQueryUser.nickname}}</text><view class="text-button query-refresh" bindtap="loadDayRecords">刷新</view></view>
+        <text class="time-row">{{queryDate}} · 静坐记录</text>
+        <view wx:if="{{dayRecordsLoading}}" class="small-empty">正在读取记录…</view>
+        <view wx:elif="{{dayRecordsError}}">
+          <text class="error-message" selectable>{{dayRecordsError}}</text>
+          <button class="secondary-button compact" bindtap="loadDayRecords">重新查询</button>
+        </view>
+        <block wx:elif="{{dayRecordsLoaded}}">
+          <view class="counts">
+            <view class="count"><text class="count-value">{{dayTotalCount}}</text><text class="count-label">静坐次数</text></view>
+            <view class="count"><text class="count-value positive">{{dayTotalDuration}}</text><text class="count-label">总时长（分钟）</text></view>
+          </view>
+          <view wx:if="{{!dayRecords.length}}" class="small-empty">该用户在此静坐日暂无云端记录。</view>
+          <view wx:for="{{dayRecords}}" wx:key="_id" class="detail-item">
+            <view class="row spread"><text class="member-name">{{item.duration}} 分钟</text><text class="status">{{item.sourceText}}</text></view>
+            <text class="time-row">{{item.timeText}}</text>
+          </view>
+        </block>
+      </view>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'team'}}">
+      <view class="card">
+        <view class="row spread"><text class="card-title">更换团队团长</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
+        <text class="description">从现有团队成员中指定新团长，原团长保留成员身份。每次更换都会记录。</text>
+        <text class="field-label">选择团队</text>
+        <picker mode="selector" range="{{teams}}" range-key="name" value="{{teamIndex}}" disabled="{{transferBusy || !teams.length}}" bindchange="onTeamChange">
+          <view class="select-field"><text>{{selectedTeam ? selectedTeam.name : teamsLoading ? '正在加载团队…' : '请选择团队'}}</text><text class="select-arrow">⌄</text></view>
+        </picker>
+        <button wx:if="{{teamsCursor}}" class="secondary-button compact" loading="{{teamsLoading}}" disabled="{{teamsLoading || transferBusy}}" bindtap="loadMoreTeams">加载更多团队</button>
+        <text wx:if="{{!teams.length && !teamsLoading && !teamsError}}" class="small-note">暂无团队。</text>
+        <block wx:if="{{selectedTeam}}">
+          <view class="team-summary"><text>现任团长：{{selectedTeam.creatorName || '未命名成员'}}</text><text>团队成员：{{selectedTeam.memberCount}} 人</text></view>
+          <text class="field-label">新团长</text>
+          <picker mode="selector" range="{{candidates}}" range-key="displayName" value="{{candidateIndex}}" disabled="{{membersLoading || transferBusy || !candidates.length}}" bindchange="onCandidateChange">
+            <view class="select-field"><text>{{selectedCandidate ? selectedCandidate.displayName : membersLoading ? '正在加载成员…' : '请选择一位成员'}}</text><text class="select-arrow">⌄</text></view>
+          </picker>
+          <text wx:if="{{!membersLoading && !candidates.length && !teamsError}}" class="small-note">当前没有其他成员可接任团长。</text>
+          <button class="primary-button" disabled="{{transferBusy || membersLoading || !selectedCandidate}}" loading="{{transferBusy}}" bindtap="transferLeader">确认更换团长</button>
+        </block>
+        <text wx:if="{{teamsError}}" class="error-message" selectable>{{teamsError}}</text>
+      </view>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'audit'}}">
+      <view class="section-heading"><text class="card-title">管理操作记录</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
+      <text class="description audit-intro">记录团长更换的操作人、时间和前后变化。同步执行记录可在「必经同步」中查看。</text>
+      <text wx:if="{{logsError}}" class="error-message">{{logsError}}</text>
+      <view wx:if="{{!logs.length}}" class="empty-state">{{logsLoading ? '正在加载操作记录…' : '暂无管理操作记录。'}}</view>
+      <view wx:for="{{logs}}" wx:key="_id" class="card">
+        <view class="row spread"><text class="card-title">{{item.teamName}}</text><text class="small-label">团长更换</text></view>
+        <view class="leader-change"><text>{{item.previousLeader.nickname || '未命名成员'}}</text><text class="change-arrow">→</text><text>{{item.newLeader.nickname || '未命名成员'}}</text></view>
+        <text class="time-row">{{item.createdText}}</text>
+        <text class="operator" selectable>操作人：{{item.operator}}</text>
+      </view>
+      <button wx:if="{{logsCursor}}" class="secondary-button" loading="{{logsLoading}}" disabled="{{logsLoading}}" bindtap="loadMoreLogs">加载更多记录</button>
+    </view>
+  </block>
+</view>
