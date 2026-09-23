@@ -10,8 +10,22 @@ function harness(options = {}) {
   const state = { bijing_sync_runs: [], bijing_sync_days: [], bijing_sync_items: [], bijing_sync_errors: [], users: options.users || users(2) };
   let clock = 1790100000000, transaction = Promise.resolve();
   const posts = [], queries = [], markers = [], requests = [], remote = new Map();
-  const matches = (row, filter) => Object.entries(filter).every(([key, value]) => value && value.regexp ? new RegExp(value.regexp, value.options).test(row[key]) : value && value.op ? value.op === 'gt' ? row[key] > value.value : row[key] < value.value : row[key] === value);
-  const db = { RegExp: value => value, command: { gt: value => ({ op: 'gt', value }), lt: value => ({ op: 'lt', value }) },
+  function matches(row, filter) {
+    if (filter.op === 'and') return filter.value.every(value => matches(row, value));
+    if (filter.op === 'or') return filter.value.some(value => matches(row, value));
+    return Object.entries(filter).every(([key, value]) => {
+      if (value && value.regexp) return new RegExp(value.regexp, value.options).test(row[key]);
+      if (!value || !value.op) return row[key] === value;
+      if (value.op === 'gt') return row[key] > value.value;
+      if (value.op === 'lt') return row[key] < value.value;
+      if (value.op === 'in') return value.value.includes(row[key]);
+      throw new Error(`Unsupported query operator: ${value.op}`);
+    });
+  }
+  const db = { RegExp: value => value, command: {
+    gt: value => ({ op: 'gt', value }), lt: value => ({ op: 'lt', value }), in: value => ({ op: 'in', value }),
+    and: value => ({ op: 'and', value }), or: value => ({ op: 'or', value }),
+  },
     collection(name) {
       assert.ok(state[name], name);
       let filter = {}, order = [], maximum = 100;
@@ -261,6 +275,75 @@ test('recent date validation and timer backfill create only ended meditation day
   await assert.rejects(app.jobs.start('2026-02-30', 'manual'), /已结束/);
   await app.finish(await app.jobs.timer()); app.advance(300000); await app.finish(await app.jobs.timer());
   assert.deepEqual(app.state.bijing_sync_runs.map(r => r.recordDate), [date, '2026-09-21']);
+});
+
+function historyRun(recordDate, sequence, extra = {}) {
+  const startedAt = 1790100000000 + sequence;
+  return { _id: `${startedAt}_${String(sequence).padStart(16, '0')}`, recordDate, startedAt, updatedAt: startedAt,
+    status: 'success', phase: 'reverify', mode: 'full', trigger: 'manual', ...extra };
+}
+
+test('run history includes exactly the latest seven ended days even when older repairs ran more recently', async () => {
+  const app = harness();
+  const dates = Array.from({ length: 7 }, (_, index) => new Date(Date.parse(`${date}T00:00:00Z`) - index * 86400000).toISOString().slice(0, 10));
+  app.state.bijing_sync_runs.push(...dates.map((recordDate, index) => historyRun(recordDate, index)));
+  // New executions of old dates must not consume the first fifty history rows.
+  app.state.bijing_sync_runs.push(...Array.from({ length: 60 }, (_, index) => historyRun('2026-09-15', 100 + index)));
+  app.state.bijing_sync_runs.push(historyRun('2026-09-23', 200), historyRun('2026-01-10', 201));
+  const recent = await app.jobs.listRuns();
+  assert.deepEqual(recent.runs.map(run => run.recordDate), dates);
+  assert.equal(recent.nextCursor, null);
+  assert.equal((await app.jobs.listRuns('2026-09-16')).runs.length, 1);
+  assert.deepEqual((await app.jobs.listRuns('2026-09-15')).runs, []);
+  await assert.rejects(app.jobs.listRuns('2026-09-23'), /已结束/);
+});
+
+test('run history orders record dates first and newer executions first within each day', async () => {
+  const app = harness();
+  const newestDateEarlierRun = historyRun(date, 1);
+  const newestDateLaterRun = historyRun(date, 3);
+  const olderDateNewestRun = historyRun('2026-09-21', 100);
+  app.state.bijing_sync_runs.push(newestDateEarlierRun, olderDateNewestRun, newestDateLaterRun);
+  assert.deepEqual((await app.jobs.listRuns()).runs.map(run => run._id), [newestDateLaterRun, newestDateEarlierRun, olderDateNewestRun].map(run => run._id));
+  assert.deepEqual((await app.jobs.listRuns(date)).runs.map(run => run._id), [newestDateLaterRun._id, newestDateEarlierRun._id]);
+});
+
+test('run history paginates fifty rows across dates without repeating or skipping executions', async () => {
+  const app = harness();
+  const dates = [date, '2026-09-21', '2026-09-20'];
+  const rows = Array.from({ length: 125 }, (_, index) => historyRun(dates[index % dates.length], index));
+  app.state.bijing_sync_runs.push(...rows);
+  const expected = [...rows].sort((a, b) => b.recordDate.localeCompare(a.recordDate) || b._id.localeCompare(a._id));
+  const first = await app.jobs.listRuns();
+  const second = await app.jobs.listRuns(undefined, first.nextCursor);
+  const third = await app.jobs.listRuns(undefined, second.nextCursor);
+  assert.deepEqual([first.runs.length, second.runs.length, third.runs.length], [50, 50, 25]);
+  assert.equal(first.nextCursor, first.runs.at(-1)._id);
+  assert.equal(second.nextCursor, second.runs.at(-1)._id);
+  assert.equal(third.nextCursor, null);
+  const returned = [...first.runs, ...second.runs, ...third.runs].map(run => run._id);
+  assert.deepEqual(returned, expected.map(run => run._id));
+  assert.equal(new Set(returned).size, rows.length);
+  await assert.rejects(app.jobs.listRuns(undefined, '1790100999999_0000000000000000'), /分页游标无效/);
+});
+
+test('old active repairs remain separately resumable without appearing in recent history', async () => {
+  const app = harness();
+  app.seedError('BJ0', '2026-01-10');
+  const repair = await app.jobs.retryErrors('admin');
+  app.state.bijing_sync_runs.push(historyRun(date, 1));
+  Object.assign(app.state.bijing_sync_runs[0], { leaseToken: 'expired-worker', leaseUntil: repair.startedAt - 1 });
+  const result = await app.jobs.listRuns();
+  assert.deepEqual(result.runs.map(run => run.recordDate), [date]);
+  assert.equal(result.activeRun.runId, repair.runId);
+  assert.equal(result.activeRun.recordDate, '2026-01-10');
+  assert.equal(result.activeRun.status, 'interrupted');
+  assert.equal(result.activeRun.leaseToken, undefined);
+  assert.equal(result.activeRun.leaseUntil, undefined);
+  assert.equal((await app.jobs.listRuns('2026-09-15')).activeRun.runId, repair.runId);
+  const completed = await app.finish(repair);
+  assert.equal(completed.status, 'success');
+  assert.equal((await app.jobs.listRuns()).activeRun, null);
 });
 
 test('items and errors use stable fifty-row pagination', async () => {

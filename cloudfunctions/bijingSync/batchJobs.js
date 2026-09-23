@@ -338,10 +338,26 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   }
   async function listRuns(recordDate, cursor) {
     if (recordDate) validateDate(recordDate);
-    const filter = recordDate ? { recordDate } : {};
-    if (cursor) filter._id = db.command.lt(cursor);
-    const rows = (await db.collection(RUNS).where(filter).orderBy('_id', 'desc').limit(PAGE_SIZE).get()).data;
-    return { runs: rows.map(publicRun), nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1]._id : null };
+    const dates = recentDates(7);
+    // Active repairs can target older dates; keep their continuation independent
+    // of the bounded history, using the same indexed lookup as the timer.
+    const activeRun = (await db.collection(RUNS).where({ status: 'running' }).orderBy('startedAt', 'asc').limit(1).get()).data[0];
+    if (recordDate && !dates.includes(recordDate)) return { runs: [], nextCursor: null, activeRun: publicRun(activeRun) || null };
+    let filter = { recordDate: recordDate || db.command.in(dates) };
+    if (cursor) {
+      if (typeof cursor !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(cursor)) throw new Error('执行记录分页游标无效');
+      const anchor = await optional(db, RUNS, cursor);
+      if (!anchor || !dates.includes(anchor.recordDate) || (recordDate && anchor.recordDate !== recordDate)) throw new Error('执行记录分页游标无效');
+      filter = db.command.and([filter, db.command.or([
+        { recordDate: db.command.lt(anchor.recordDate) },
+        { recordDate: anchor.recordDate, _id: db.command.lt(cursor) },
+      ])]);
+    }
+    // IDs begin with the execution timestamp, so descending IDs order retries
+    // within a day while recordDate keeps newer meditation days first.
+    const rows = (await db.collection(RUNS).where(filter).orderBy('recordDate', 'desc').orderBy('_id', 'desc').limit(PAGE_SIZE).get()).data;
+    return { runs: rows.map(publicRun), nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1]._id : null,
+      activeRun: publicRun(activeRun) || null };
   }
   async function details(runId, cursor) {
     if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');

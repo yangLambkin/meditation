@@ -296,8 +296,13 @@ Page({
       const result = await this.callAdmin('bijingSync', 'adminListSyncRuns', this.data.showAllRuns ? {} : { recordDate });
       if (!this.isCurrent(generation) || request !== this._runsRequest || !this.data.authorized) return;
       const runs = (result.runs || []).map(presentRun);
-      const activeRuns = runs.filter(run => ['running', 'interrupted'].includes(run.status));
-      const active = activeRuns.find(run => run._id === this.data.runningRunId) || activeRuns.find(run => run.recordDate === recordDate)
+      const candidates = result.activeRun ? runs.concat(result.activeRun) : runs;
+      const activeRuns = candidates.filter(run => ['running', 'interrupted'].includes(run.status));
+      // A task just started for an older date (or beyond the first 50 rows) must
+      // keep polling even though it is absent from the recent history.
+      const tracked = this.data.runningRunId && !candidates.some(run => run._id === this.data.runningRunId)
+        ? { _id: this.data.runningRunId, recordDate: this.data.runningRecordDate } : null;
+      const active = activeRuns.find(run => run._id === this.data.runningRunId) || tracked || activeRuns.find(run => run.recordDate === recordDate)
         || (this.data.showAllRuns && activeRuns.find(run => run.mode === 'errors'));
       this.setData({ runs, runningRunId: active && active._id || '', runningRecordDate: active && active.recordDate || '' });
       if (!this._continuePaused) this.setData({ syncError: '' });
@@ -405,7 +410,7 @@ Page({
     }
     this._continuePaused = false;
     if (this.data.runningRunId) return this.continueSync(this.data.runningRunId);
-    // 修复可能属于另一个日期，使用最近记录保留该任务的续跑入口。
+    // 修复可能属于另一个日期；任务续跑状态独立于最近七天的历史列表。
     this.setData({ showAllRuns: true });
     await this.runSyncAction('adminRetrySyncErrors', {});
   },

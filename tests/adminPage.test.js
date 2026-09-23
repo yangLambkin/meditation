@@ -517,18 +517,48 @@ test('errors recovered by another worker before retry starts need no run or addi
   assert.deepEqual(calls.alerts, []);
 });
 
-test('returning to management resumes an older error-repair date from recent runs', async () => {
+test('returning to management resumes an older repair without adding it to recent history', async () => {
+  let completed = false;
   const { page, calls, runTimer } = harness({ api: (name, request) => {
     if (request.type === 'adminStatus') return success(STATUS);
-    if (request.type === 'adminListSyncErrors') return success({ errors: [{ _id: 'old-error' }] });
-    if (request.type === 'adminContinueSync') return success(run({ status: 'success', recordDate: '2025-01-01', phase: 'reverify' }));
-    return success({ runs: [run({ recordDate: '2025-01-01', mode: 'errors', phase: 'verify', trigger: 'manual-errors' })] });
+    if (request.type === 'adminListSyncErrors') return success({ errors: completed ? [] : [{ _id: 'old-error' }] });
+    if (request.type === 'adminContinueSync') {
+      completed = true;
+      return success(run({ status: 'success', recordDate: '2025-01-01', phase: 'reverify' }));
+    }
+    return success({ runs: [], activeRun: completed ? null : run({ recordDate: '2025-01-01', mode: 'errors', phase: 'verify', trigger: 'manual-errors' }) });
   } });
   await page.onShow();
   assert.equal(page.data.runningRecordDate, '2025-01-01');
-  assert.equal(page.data.runs[0].triggerText, '手动修复');
+  assert.equal(page.data.runs.length, 0);
   await runTimer();
   assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 1);
+  assert.equal(page.data.runningRunId, '');
+  assert.equal(page.data.runs.length, 0);
+});
+
+test('an older repair keeps polling when absent from both recent history and the oldest active run', async () => {
+  let completed = false;
+  const oldRun = run({ _id: 'old-repair', runId: 'old-repair', recordDate: '2025-01-01', mode: 'errors', phase: 'verify' });
+  const { page, calls, runTimer } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncErrors') return success({ errors: completed ? [] : [{ _id: 'old-error' }] });
+    if (request.type === 'adminRetrySyncErrors') return success(oldRun);
+    if (request.type === 'adminContinueSync') {
+      completed = true;
+      return success({ ...oldRun, status: 'success' });
+    }
+    return success({ runs: [], activeRun: run({ _id: 'other', recordDate: '2026-08-01', mode: 'full' }) });
+  } });
+  await page.onShow();
+  await page.retrySyncErrors();
+  assert.equal(page.data.runningRunId, 'old-repair');
+  assert.equal(page.data.runningRecordDate, '2025-01-01');
+  assert.equal(page.data.runs.length, 0);
+  await runTimer();
+  assert.equal(calls.cloud.find(call => call.data.type === 'adminContinueSync').data.runId, 'old-repair');
+  assert.equal(page.data.runningRunId, '');
+  assert.equal(page.data.runs.length, 0);
 });
 
 test('sync details preserve upload diagnostics while labeling unverified records as pending', async () => {

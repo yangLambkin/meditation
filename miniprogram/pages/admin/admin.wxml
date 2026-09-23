@@ -69,10 +69,11 @@
         <view class="text-button" bindtap="refreshTab">{{runsLoading ? '刷新中…' : '刷新'}}</view>
       </view>
       <view class="scope-switch">
-        <view class="scope-option {{showAllRuns ? 'selected' : ''}}" data-scope="all" bindtap="onHistoryScopeChange">最近记录</view>
+        <view class="scope-option {{showAllRuns ? 'selected' : ''}}" data-scope="all" bindtap="onHistoryScopeChange">最近七天</view>
         <view class="scope-option {{!showAllRuns ? 'selected' : ''}}" data-scope="date" bindtap="onHistoryScopeChange">所选日期</view>
       </view>
-      <view wx:if="{{!runs.length}}" class="empty-state">{{runsLoading ? '正在读取同步记录…' : syncError ? '执行记录暂时无法读取，请刷新重试。' : showAllRuns ? '暂无执行记录，可点击一键同步开始。' : recordDate + ' 尚未执行同步，可点击一键同步补齐。'}}</view>
+      <text class="small-note">仅显示最近 7 个已结束静坐日的执行记录，日期由近到远，同日最新执行的排在前面。</text>
+      <view wx:if="{{!runs.length}}" class="empty-state">{{runsLoading ? '正在读取同步记录…' : syncError ? '执行记录暂时无法读取，请刷新重试。' : showAllRuns ? '最近七天暂无执行记录。' : '所选日期暂无可展示的执行记录（仅限最近七天）。'}}</view>
       <view wx:for="{{runs}}" wx:key="_id" class="card run-card">
         <view class="row spread">
           <text class="run-date">{{item.recordDate}}</text>
