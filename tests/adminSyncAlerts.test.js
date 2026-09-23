@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function cloudHarness({ openid, records = [], fail = false } = {}) {
+function cloudHarness({ openid, records = [], fail = false, environment = {} } = {}) {
   const exports = {};
   const reads = [];
   vm.runInNewContext(fs.readFileSync(require.resolve('../cloudfunctions/adminManager/index.js'), 'utf8'), {
-    exports, process: { env: { ADMIN_OPENID: 'admin', MAINTENANCE_ADMIN_OPENIDS: 'maintenance' } },
+    exports, process: { env: { ADMIN_OPENID: 'admin', MAINTENANCE_ADMIN_OPENIDS: 'maintenance', ...environment } },
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/adminManager/maintenanceAuth');
       return { init() {}, getWXContext() { return { OPENID: openid }; }, database() {
@@ -26,6 +26,20 @@ test('ordinary and maintenance users never query sync errors or acquire alerts b
     const cloud = cloudHarness({ openid, records: [{ studentNumber: 'secret' }] });
     assert.deepEqual(await cloud.read({ OPENID: 'admin', isAdmin: true }), { success: true, data: { isAdmin: false, hasErrors: false } });
     assert.deepEqual(cloud.reads, []);
+  }
+});
+
+test('sync alerts admit the second administrator and hide errors from outsiders and the replaced legacy administrator', async () => {
+  const environment = { ADMIN_OPENIDS: 'first-admin,second-admin' };
+  const records = [{ studentNumber: 'secret', recordDate: '2026-09-22' }];
+  const authorized = cloudHarness({ openid: 'second-admin', environment, records });
+  assert.deepEqual(await authorized.read(), { success: true, data: { isAdmin: true, hasErrors: true } });
+  assert.deepEqual(authorized.reads, ['database', 'bijing_sync_errors', 1]);
+  for (const openid of ['outsider', 'admin', 'maintenance', 'second-admin-extra', undefined]) {
+    const denied = cloudHarness({ openid, environment, records });
+    assert.deepEqual(await denied.read({ OPENID: 'second-admin', ADMIN_OPENIDS: 'outsider', isAdmin: true }),
+      { success: true, data: { isAdmin: false, hasErrors: false } });
+    assert.deepEqual(denied.reads, []);
   }
 });
 

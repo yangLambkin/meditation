@@ -26,7 +26,7 @@ function harness(wxContext = {}, environment = {}, userProfile = null) {
     async run(event = { type: 'getAccess' }) { return JSON.parse(JSON.stringify(await exports.main(event))); } };
 }
 
-test('control-panel ownership requires exactly one valid server-configured openid', () => {
+test('legacy ADMIN_OPENID still requires exactly one valid server-configured openid', () => {
   for (const ADMIN_OPENID of [undefined, null, 12, [], {}, '', ' ', 'fixed,other', 'fixed,fixed',
     'fixed，other', 'fixed other', 'fixed\nother', 'fixed;other', 'fixed/other']) {
     assert.equal(canManageControlPanel({ OPENID: 'fixed' }, { ADMIN_OPENID, MAINTENANCE_ADMIN_OPENIDS: 'fixed' }), false);
@@ -35,6 +35,45 @@ test('control-panel ownership requires exactly one valid server-configured openi
     assert.equal(canManageControlPanel({ OPENID }, { ADMIN_OPENID: 'fixed' }), false);
   }
   assert.equal(canManageControlPanel({ OPENID: 'o_fixed-01' }, { ADMIN_OPENID: ' o_fixed-01 ' }), true);
+});
+
+test('the server allowlist admits either administrator, trims entries and accepts duplicate IDs', () => {
+  for (const ADMIN_OPENIDS of ['admin-one,admin_two', ' admin-one , admin_two ', 'admin-one,admin_two,admin-one']) {
+    for (const OPENID of ['admin-one', 'admin_two']) {
+      assert.equal(canManageControlPanel({ OPENID }, { ADMIN_OPENIDS }), true);
+    }
+    assert.equal(canManageControlPanel({ OPENID: ' admin-one ' }, { ADMIN_OPENIDS }), true);
+    for (const OPENID of ['outsider', 'admin', 'admin-one-extra', 'ADMIN-ONE', undefined, null, 12, '']) {
+      assert.equal(canManageControlPanel({ OPENID }, { ADMIN_OPENIDS }), false);
+    }
+  }
+});
+
+test('an invalid explicit allowlist rejects every account without falling back to legacy configuration', () => {
+  for (const ADMIN_OPENIDS of [null, 12, [], {}, '', ' ', ',', ',admin-one', 'admin-one,',
+    'admin-one,,admin-two', 'admin-one, ,admin-two', 'admin-one，admin-two', 'admin-one;admin-two',
+    'admin-one admin-two', 'admin-one,admin two', 'admin-one,admin/two', 'admin-one,admin\ntwo']) {
+    const environment = { ADMIN_OPENIDS, ADMIN_OPENID: 'admin-one', MAINTENANCE_ADMIN_OPENIDS: 'admin-two' };
+    for (const OPENID of ['admin-one', 'admin-two']) {
+      assert.equal(canManageControlPanel({ OPENID }, environment), false, JSON.stringify(ADMIN_OPENIDS));
+    }
+  }
+});
+
+test('an explicit allowlist replaces the legacy account and revocation applies on the next access probe', async () => {
+  const environment = { ADMIN_OPENIDS: 'admin-one,admin-two', ADMIN_OPENID: 'legacy-admin' };
+  const context = { OPENID: 'admin-two' };
+  const app = harness(context, environment);
+  assert.deepEqual(await app.run(), { success: true, data: { isAdmin: true } });
+  assert.equal(canManageControlPanel({ OPENID: 'legacy-admin' }, environment), false);
+  environment.ADMIN_OPENIDS = 'admin-one';
+  assert.deepEqual(await app.run(), { success: true, data: { isAdmin: false } });
+  context.OPENID = 'legacy-admin';
+  environment.ADMIN_OPENIDS = '';
+  assert.deepEqual(await app.run(), { success: true, data: { isAdmin: false } });
+  environment.ADMIN_OPENIDS = undefined;
+  assert.deepEqual(await app.run(), { success: true, data: { isAdmin: true } });
+  assert.equal(app.profileReads, 0);
 });
 
 test('access probe returns only a boolean and never exposes the configured account', async () => {
@@ -47,7 +86,67 @@ test('access probe returns only a boolean and never exposes the configured accou
   }
 });
 
-test('unconfigured, multi-account and forged client access checks fail closed without database access', async () => {
+test('multi-administrator access probes reveal neither the allowlist nor the legacy identity', async () => {
+  for (const [OPENID, isAdmin] of [['admin-one', true], ['admin-two', true], ['outsider', false], ['', false]]) {
+    const app = harness({ OPENID }, { ADMIN_OPENIDS: 'admin-one,admin-two', ADMIN_OPENID: 'legacy-admin' });
+    const result = await app.run();
+    assert.deepEqual(result, { success: true, data: { isAdmin } });
+    for (const account of ['admin-one', 'admin-two', 'legacy-admin']) {
+      assert.equal(JSON.stringify(result).includes(account), false);
+    }
+    assert.equal(app.contextReads, 1);
+    assert.equal(app.profileReads, 0);
+  }
+});
+
+test('access probes bind an expected identity to the trimmed SDK identity', async () => {
+  const environment = { ADMIN_OPENIDS: 'admin-one,admin-two' };
+  for (const OPENID of ['admin-one', ' admin-one ']) {
+    const app = harness({ OPENID, SOURCE: 'wx_client,scf' }, environment);
+    assert.deepEqual(await app.run({ type: 'getAccess', expectedOpenid: 'admin-one' }),
+      { success: true, data: { isAdmin: true } });
+    for (const expectedOpenid of ['admin-two', ' admin-one ', '', null, 12, true, [], {}, ['admin-one']]) {
+      assert.deepEqual(await app.run({ type: 'getAccess', expectedOpenid }),
+        { success: true, data: { isAdmin: false } }, JSON.stringify(expectedOpenid));
+    }
+    assert.equal(app.profileReads, 0);
+  }
+});
+
+test('lost or replaced nested SDK identity denies the original caller even when both identities are administrators', async () => {
+  const environment = { ADMIN_OPENIDS: 'admin-one,admin-two' };
+  for (const wxContext of [
+    { SOURCE: 'wx_client,scf' },
+    { OPENID: '', SOURCE: 'wx_client,scf' },
+    { FROM_OPENID: 'admin-one', SOURCE: 'wx_client,scf' },
+    { OPENID: 'admin-two', SOURCE: 'wx_client,scf' },
+    { OPENID: 'outsider', SOURCE: 'wx_client,scf' },
+  ]) {
+    const app = harness(wxContext, environment);
+    assert.deepEqual(await app.run({ type: 'getAccess', expectedOpenid: 'admin-one' }),
+      { success: true, data: { isAdmin: false } });
+    assert.equal(app.contextReads, 1);
+    assert.equal(app.profileReads, 0);
+  }
+});
+
+test('forged expected identity and cloud-call source cannot grant client access', async () => {
+  for (const wxContext of [
+    {}, { OPENID: 'outsider', SOURCE: 'wx_client' },
+    { OPENID: 'outsider', SOURCE: 'wx_client,scf' },
+    { SOURCE: 'scf', FROM_OPENID: 'admin-two' },
+  ]) {
+    const app = harness(wxContext, { ADMIN_OPENIDS: 'admin-one,admin-two' });
+    assert.deepEqual(await app.run({ type: 'getAccess', expectedOpenid: 'admin-two',
+      OPENID: 'admin-two', openid: 'admin-two', FROM_OPENID: 'admin-two',
+      SOURCE: 'wx_client,scf', source: 'scf', isAdmin: true,
+      data: { OPENID: 'admin-two', expectedOpenid: 'admin-two', isAdmin: true } }),
+    { success: true, data: { isAdmin: false } });
+    assert.equal(app.profileReads, 0);
+  }
+});
+
+test('unconfigured, malformed legacy and forged client access checks fail closed without database access', async () => {
   for (const env of [{}, { ADMIN_OPENID: '' }, { ADMIN_OPENID: 'fixed,other' }, { MAINTENANCE_ADMIN_OPENIDS: 'fixed' }]) {
     const app = harness({ OPENID: 'fixed' }, env);
     assert.deepEqual(await app.run(), { success: true, data: { isAdmin: false } });
@@ -58,13 +157,23 @@ test('unconfigured, multi-account and forged client access checks fail closed wi
       admin: true, source: 'wx_trigger', data: { OPENID: 'fixed', isAdmin: true } });
     assert.deepEqual(result, { success: true, data: { isAdmin: false } });
   }
+  for (const wxContext of [{}, { OPENID: 'outsider' }, { OPENID: 'maintenance' }, { SOURCE: 'wx_trigger' }]) {
+    const app = harness(wxContext, { ADMIN_OPENIDS: 'admin-one,admin-two', MAINTENANCE_ADMIN_OPENIDS: 'maintenance',
+      BIJING_TIMER_ENABLED: 'true', BIJING_TIMER_SOURCE: 'wx_trigger' });
+    assert.deepEqual(await app.run({ type: 'getAccess', OPENID: 'admin-two', openid: 'admin-two',
+      ADMIN_OPENIDS: 'outsider,maintenance', admin: true, source: 'wx_trigger',
+      data: { OPENID: 'admin-two', isAdmin: true } }), { success: true, data: { isAdmin: false } });
+    assert.equal(app.profileReads, 0);
+  }
 });
 
 test('control-panel account and legacy maintenance permissions stay independent', () => {
-  const env = { ADMIN_OPENID: 'fixed', MAINTENANCE_ADMIN_OPENIDS: 'maintenance-one,maintenance-two',
+  const env = { ADMIN_OPENIDS: 'fixed,second-admin', MAINTENANCE_ADMIN_OPENIDS: 'maintenance-one,maintenance-two',
     BIJING_TIMER_ENABLED: 'true', BIJING_TIMER_SOURCE: 'wx_trigger' };
-  assert.equal(canManageControlPanel({ OPENID: 'fixed' }, env), true);
-  assert.equal(canRunMaintenance({ OPENID: 'fixed' }, env), false);
+  for (const OPENID of ['fixed', 'second-admin']) {
+    assert.equal(canManageControlPanel({ OPENID }, env), true);
+    assert.equal(canRunMaintenance({ OPENID }, env), false);
+  }
   for (const OPENID of ['maintenance-one', 'maintenance-two']) {
     assert.equal(canRunMaintenance({ OPENID }, env), true);
     assert.equal(canManageControlPanel({ OPENID }, env), false);

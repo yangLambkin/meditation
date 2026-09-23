@@ -1,6 +1,6 @@
 const cloud = require('wx-server-sdk');
 const crypto = require('crypto');
-const { canManageControlPanel, panelForbidden } = require('./maintenanceAuth');
+const { authorizeControlPanel } = require('./maintenanceAuth');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
@@ -20,7 +20,10 @@ exports.main = async (event = {}) => {
     const { type, data = {} } = event;
     const wxContext = cloud.getWXContext();
     const openid = wxContext.OPENID;
-    if (ADMIN_ACTIONS.has(type) && !canManageControlPanel(wxContext, process.env)) return panelForbidden();
+    if (ADMIN_ACTIONS.has(type)) {
+      const authorization = await authorizeControlPanel(cloud, wxContext);
+      if (!authorization.success) return authorization;
+    }
     if (type !== 'getAllTeams' && type !== 'getTeamInfo') requireLogin(openid);
     switch (type) {
       case 'adminListTeams': return await adminListTeams(data);

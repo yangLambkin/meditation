@@ -469,10 +469,14 @@ exports.main = async (event = {}, context) => {
   const timerDispatch = !event.type || event.type === 'cronSyncAll';
   const adminDispatch = ['adminInitialize', 'adminStatus', 'adminStartSync', 'adminContinueSync', 'adminListSyncRuns', 'adminSyncDetails', 'adminListSyncErrors', 'adminRetrySyncErrors'].includes(event.type);
   if (timerDispatch || adminDispatch) {
-    const { canRunMaintenance, canManageControlPanel, forbidden, panelForbidden } = require('./maintenanceAuth');
+    const { canRunMaintenance, authorizeControlPanel, forbidden } = require('./maintenanceAuth');
     const environment = typeof process === 'undefined' ? {} : process.env;
-    const allowed = adminDispatch ? canManageControlPanel(wxContext, environment) : canRunMaintenance(wxContext, environment, true);
-    if (!allowed) return adminDispatch ? panelForbidden() : forbidden();
+    if (adminDispatch) {
+      const authorization = await authorizeControlPanel(cloud, wxContext);
+      if (!authorization.success) return authorization;
+    } else if (!canRunMaintenance(wxContext, environment, true)) {
+      return forbidden();
+    }
     return administration(event, openid);
   }
 

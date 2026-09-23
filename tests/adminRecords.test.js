@@ -90,7 +90,7 @@ function harness(options = {}) {
   };
 }
 
-test('record queries require the fixed server administrator before any database access', async () => {
+test('record queries require a configured server administrator before any database access', async () => {
   const contexts = [{ OPENID: 'ordinary' }, { OPENID: 'maintenance' }, {}, { SOURCE: 'wx_trigger' }];
   for (const context of contexts) {
     const app = harness({ context });
@@ -108,6 +108,28 @@ test('record queries require the fixed server administrator before any database 
     assert.equal((await app.search()).code, 'FORBIDDEN');
     assert.equal((await app.day()).code, 'FORBIDDEN');
     assert.equal(app.databaseReads, 0);
+  }
+});
+
+test('the second allowlisted administrator can search users and read records while outsiders fail before database access', async () => {
+  const environment = { ADMIN_OPENIDS: 'first-admin,second-admin', ADMIN_OPENID: ADMIN,
+    MAINTENANCE_ADMIN_OPENIDS: 'maintenance' };
+  const authorized = harness({ context: { OPENID: 'second-admin' }, environment, records: [record(1)] });
+  assert.equal((await authorized.search()).data.users[0].openid, OWNER);
+  const day = await authorized.day();
+  assert.equal(day.success, true);
+  assert.equal(day.data.totalCount, 1);
+  assert.equal(day.data.records[0]._id, record(1)._id);
+  for (const context of [{ OPENID: 'outsider' }, { OPENID: 'second-admin-extra' }, { OPENID: ADMIN },
+    { OPENID: 'maintenance' }, { SOURCE: 'wx_trigger' }]) {
+    const denied = harness({ context, environment });
+    for (const type of ['adminSearchUsers', 'adminGetDayRecords']) {
+      const result = await denied.run({ type, nickname: '静心者', openid: OWNER, recordDate: DATE,
+        OPENID: 'second-admin', ADMIN_OPENIDS: 'outsider', isAdmin: true });
+      assert.equal(result.code, 'FORBIDDEN');
+      assert.equal(result.data, undefined);
+    }
+    assert.equal(denied.databaseReads, 0);
   }
 });
 

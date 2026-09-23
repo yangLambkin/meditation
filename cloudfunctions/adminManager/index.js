@@ -7,8 +7,15 @@ exports.main = async (event = {}) => {
   if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords'].includes(event.type)) {
     return { success: false, error: '未知的操作类型' };
   }
-  const isAdmin = canManageControlPanel(cloud.getWXContext(), process.env);
-  if (event.type === 'getAccess') return { success: true, data: { isAdmin } };
+  const wxContext = cloud.getWXContext();
+  const isAdmin = canManageControlPanel(wxContext, process.env);
+  if (event.type === 'getAccess') {
+    // Nested calls must authenticate the same user as the calling function.
+    // expectedOpenid can only restrict access; it never supplies the identity.
+    const identityMatches = !Object.prototype.hasOwnProperty.call(event, 'expectedOpenid') ||
+      (typeof wxContext.OPENID === 'string' && event.expectedOpenid === wxContext.OPENID.trim());
+    return { success: true, data: { isAdmin: isAdmin && identityMatches } };
+  }
   if (event.type === 'adminSearchUsers' || event.type === 'adminGetDayRecords') {
     // 查询他人记录必须先检查云端指定的管理员身份，客户端资料不能授予权限。
     if (!isAdmin) return panelForbidden();

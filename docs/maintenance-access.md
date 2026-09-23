@@ -1,7 +1,11 @@
 # 第一批运维入口：配置与部署门槛
 
 
-2026-09-23 新增管控中心：七次版本点击由独立 `adminManager.getAccess` 检查唯一指定账号。三个管控云函数均使用单值 `ADMIN_OPENID`，`bijingSync` 的所有 `admin*` 操作及 `teamManager` 的四个管理操作都会再次核对该值。此权限与旧维护脚本的 `MAINTENANCE_ADMIN_OPENIDS` 分开，定时器身份不能调用这些管理操作。
+2026-09-23 新增管控中心：七次版本点击由独立 `adminManager.getAccess` 检查服务端管理员名单。**`ADMIN_OPENIDS` 只在 `adminManager` 云函数的环境变量中配置**，用英文逗号分隔完整 OpenID；未设置时兼容该函数原单值 `ADMIN_OPENID`。显式名单覆盖旧值，空名单或包含非法/空条目时拒绝授权，不回退旧值。名单内所有管理员同权。
+
+`bijingSync` 的所有 `admin*` 操作及 `teamManager` 的四个管理操作，每次都通过服务端 SDK `cloud.callFunction` 调用 `adminManager.getAccess`，不缓存授权。身份严格来自平台 SDK 上下文，内部参数 `expectedOpenid` 只用于校验两端身份一致，不能作为身份来源。中央鉴权故障或身份不一致时拒绝当前操作，服务恢复后可重试；两个业务函数自身的旧 `ADMIN_OPENID`、`ADMIN_OPENIDS` 已不再授权，也不作为兜底，可以保留或删除。此权限与旧维护脚本的 `MAINTENANCE_ADMIN_OPENIDS` 分开，定时器身份不能调用这些管理操作。
+
+首次上线须先部署 `adminManager`，再部署 `teamManager`、`bijingSync` 的新代码及本地模块，并确认三个函数均为 `Active`。之后增删管理员只需核对本人微信会话 OpenID，在 `adminManager` 更新完整 `ADMIN_OPENIDS`；配置生效后的下次权限检查即使用新名单，无需同步其他函数或重新上传代码。显式空串关闭管控权限，删除该变量则恢复 `adminManager` 原单值兼容行为。详细配置及验证步骤见 [管控中心说明](./2026-09-23-admin-batch-sync.md)。
 
 本次仅修改本地源码并使用隔离测试验证，未部署、未调用远程清理或重算。默认配置下所有运维任务关闭。个人绑定、预览、个人同步和打卡接口保持原身份行为。
 
@@ -11,7 +15,7 @@
 
 `bijingSync` 的全员任务也使用相同管理员白名单；没有 `type` 的调用只表示尝试调度，不再意味着已获授权。只有这一全员任务还允许经过下面门槛确认的定时来源。授权拒绝发生在业务数据库查询、写入和外部 API 调用之前。
 
-每个云函数包包含独立的 `maintenanceAuth.js`，源文件为 `shared/maintenanceAuth.js`。修改源文件后必须同步三个部署副本，测试会逐字检查它们一致。保留独立副本是因为云函数分别打包上传，不能依赖云端不存在的上级目录。
+每个云函数包包含独立的本地授权模块，不能依赖云端不存在的上级目录。`maintenanceAuth.js` 的源文件为 `shared/maintenanceAuth.js`；修改源文件后必须同步五份部署副本，测试会逐字检查它们一致。该模块的旧维护及定时器规则保持独立；业务函数的管理入口使用上述中央鉴权流程，不读取自身的管控管理员名单。
 
 ## 定时器：环境变量与部署步骤
 

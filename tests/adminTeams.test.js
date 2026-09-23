@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
+const { createAdminManagerCaller } = require('./helpers/adminManagerCaller');
 
 const NOW = Date.parse('2026-09-17T04:00:00Z');
 const clone = value => value === undefined ? value : JSON.parse(JSON.stringify(value));
@@ -13,6 +14,8 @@ const invitation = (extra = {}) => ({ _id: 'invite', teamId: 'team', inviterId: 
   status: 'pending', expireTime: new Date(NOW + 1000).toISOString(), ...extra });
 
 function harness(initial = {}, options = {}) {
+  const authorization = createAdminManagerCaller({ ...options,
+    centralEnvironment: options.centralEnvironment || { ADMIN_OPENID: 'operator' } });
   let stored = clone({ admin_audit_logs: [], teams: [], team_members: [], invites: [], invite_actions: [], users: [], meditation_records: [], ...initial });
   const reads = [];
   const writes = [];
@@ -161,18 +164,20 @@ function harness(initial = {}, options = {}) {
   function load(openid) {
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/teamManager/index.js'), 'utf8'), {
-      module, exports: module.exports, Date: FixedDate, process: { env: { ADMIN_OPENID: 'operator', ...(options.env || {}) } }, console: { log() {}, warn() {}, error() {} },
+      module, exports: module.exports, Date: FixedDate, process: { env: options.env || {} }, console: { log() {}, warn() {}, error() {} },
       require(name) {
         if (name === 'crypto') return crypto;
         if (name === './maintenanceAuth') return require('../cloudfunctions/teamManager/maintenanceAuth');
         assert.equal(name, 'wx-server-sdk');
-        return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => ({ OPENID: openid, ...(options.wxContext || {}) }) };
+        const wxContext = { OPENID: openid, ...(options.wxContext || {}) };
+        return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext,
+          callFunction: request => authorization.call(request, wxContext) };
       }
     });
     return module.exports.main;
   }
   return {
-    reads, writes,
+    reads, writes, authRequests: authorization.requests,
     get stored() { return clone(stored); },
     get transactions() { return transactions; },
     async call(type, data, openid = 'operator', extra = {}) { return clone(await load(openid)({ type, data, ...extra })); }
@@ -203,11 +208,101 @@ test('every admin action rejects anonymous, ordinary and timer callers before al
       assert.deepEqual([app.reads, app.writes], [[], []]);
     }
     for (const ADMIN_OPENID of ['', undefined, 'operator,other', 'operator operator', 'operator;other']) {
-      const disabled = harness(roster(), { env: { ADMIN_OPENID, MAINTENANCE_ADMIN_OPENIDS: 'operator' } });
+      const disabled = harness(roster(), { centralEnvironment: { ADMIN_OPENID },
+        env: { ADMIN_OPENIDS: 'operator', MAINTENANCE_ADMIN_OPENIDS: 'operator' } });
       assert.equal((await disabled.call(type, transfer)).code, 'FORBIDDEN');
       assert.deepEqual([disabled.reads, disabled.writes], [[], []]);
     }
   }
+});
+
+test('the second allowlisted administrator can manage teams and is recorded as the transfer operator', async () => {
+  const app = harness(roster(), { centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' } });
+  const list = await app.call('adminListTeams', {}, 'second-admin');
+  assert.equal(list.success, true);
+  assert.equal(list.data.teams[0]._id, 'team');
+  assert.equal((await app.call('adminTeamMembers', { teamId: 'team' }, 'second-admin')).data.members.length, 3);
+  assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin', { operator: 'forged' })).success, true);
+  assert.equal(app.stored.teams[0].creator, 'member');
+  assert.equal(app.stored.admin_audit_logs[0].operator, 'second-admin');
+  const audit = await app.call('adminAuditLogs', {}, 'second-admin');
+  assert.equal(audit.success, true);
+  assert.equal(audit.data.logs[0].operator, 'second-admin');
+});
+
+test('all team admin actions reject outsiders and the replaced legacy account under a multi-admin allowlist', async () => {
+  for (const type of ['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']) {
+    for (const openid of ['', 'outsider', 'operator', 'second-admin-extra', 'maintenance']) {
+      const app = harness(roster(), { wxContext: { SOURCE: 'wx_trigger' },
+        centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' }, env: {
+        ADMIN_OPENIDS: 'operator,outsider,maintenance,second-admin-extra', MAINTENANCE_ADMIN_OPENIDS: 'maintenance',
+        BIJING_TIMER_ENABLED: 'true', BIJING_TIMER_SOURCE: 'wx_trigger'
+      } });
+      const result = await app.call(type, { ...transfer, OPENID: 'second-admin', isAdmin: true }, openid,
+        { OPENID: 'second-admin', ADMIN_OPENIDS: 'outsider', isAdmin: true });
+      assert.equal(result.code, 'FORBIDDEN', `${type}/${openid}`);
+      assert.deepEqual([app.reads, app.writes], [[], []]);
+      assert.equal(app.transactions, 0);
+    }
+  }
+});
+
+test('team authorization failures expose no private details and prevent every administrative read or write', async () => {
+  for (const type of ['adminListTeams', 'adminTeamMembers', 'adminTransferLeader', 'adminAuditLogs']) {
+    for (const options of [
+      { authError: new Error('private authorization endpoint failure') },
+      { authResponse: { result: { success: true, data: { isAdmin: 'true' } } } },
+      { authResponse: { result: { success: false, error: 'private authorization error' } } }
+    ]) {
+      const app = harness(roster(), { ...options, env: { ADMIN_OPENID: 'operator', ADMIN_OPENIDS: 'operator' } });
+      assert.deepEqual(await app.call(type, transfer), {
+        success: false, code: 'ADMIN_AUTH_UNAVAILABLE', error: '管理员权限校验暂时不可用，请稍后重试'
+      });
+      assert.deepEqual([app.reads, app.writes], [[], []]);
+      assert.equal(app.transactions, 0);
+      assert.equal(app.authRequests.length, 1);
+    }
+  }
+});
+
+test('team actions wait for central authorization before touching business data', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const app = harness(roster(), { beforeAuthorize: () => gate });
+  const pending = app.call('adminListTeams', {});
+  assert.equal(app.authRequests.length, 1);
+  assert.deepEqual([app.reads, app.writes], [[], []]);
+  release();
+  assert.equal((await pending).success, true);
+  assert.ok(app.reads.length > 0);
+});
+
+test('central revocation applies to the next team request even when local configuration still lists the administrator', async () => {
+  const centralEnvironment = { ADMIN_OPENIDS: 'first-admin,second-admin' };
+  const app = harness(roster(), { centralEnvironment, env: { ADMIN_OPENIDS: 'second-admin' } });
+  assert.equal((await app.call('adminListTeams', {}, 'second-admin')).success, true);
+  const before = app.reads.length;
+  centralEnvironment.ADMIN_OPENIDS = 'first-admin';
+  assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin')).code, 'FORBIDDEN');
+  assert.equal(app.reads.length, before);
+  assert.equal(app.writes.length, 0);
+  assert.equal(app.authRequests.length, 2);
+});
+
+test('lost or substituted nested platform identity cannot authorize a team request', async () => {
+  for (const centralContext of [{}, { OPENID: 'first-admin', SOURCE: 'wx_client,scf' }]) {
+    const app = harness(roster(), { centralContext,
+      centralEnvironment: { ADMIN_OPENIDS: 'first-admin,second-admin' } });
+    assert.equal((await app.call('adminTransferLeader', transfer, 'second-admin')).code, 'FORBIDDEN');
+    assert.deepEqual([app.reads, app.writes], [[], []]);
+  }
+});
+
+test('normal team actions remain available without the central authorization service', async () => {
+  const app = harness(roster(), { authError: new Error('authorization unavailable') });
+  assert.equal((await app.call('getAllTeams', {}, '')).success, true);
+  assert.equal((await app.call('updateTeam', { teamId: 'team', teamData: { name: '正常改名' } }, 'owner')).success, true);
+  assert.deepEqual(app.authRequests, []);
 });
 
 test('team admin pagination excludes inactive rows and returns only administrative summary fields', async () => {
