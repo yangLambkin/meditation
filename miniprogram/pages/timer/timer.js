@@ -150,6 +150,9 @@ Page({
       if (this.isUnloaded) return;
       this.isPageVisible = false;
       this.restoreScreenSettings();
+      // 计时结束后收坐可能仍在播放，退出应用时也要停止，避免返回后续播。
+      this.stopSessionSound();
+      this.stopBackgroundMusic();
       // 微信不区分关闭和切后台：两种计时都在此刻结束，不累计离线时间。
       if (this.data.isRunning || this.data.isPaused) {
         this.finishSession(this.calculateElapsedTime(), { silent: true });

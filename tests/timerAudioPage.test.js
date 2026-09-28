@@ -495,6 +495,84 @@ test('the optional reflection dialog allows 收坐 to finish while the timer pag
   assert.deepEqual(plays(), [START_AUDIO, END_AUDIO]);
 });
 
+test('closing during 收坐 stops it in either lifecycle order and preserves the unsaved completion on return', () => {
+  const completions = [
+    { isCountdown: true, automatic: true },
+    { isCountdown: true, automatic: false },
+    { isCountdown: false, automatic: false }
+  ];
+  for (const { isCountdown, automatic } of completions) {
+    for (const pageHidesFirst of [false, true]) {
+      const { page, players, plays, records, storage, advance, emitApp } = createPage({ isCountdown, withGuide: true });
+      const scenario = `countdown=${isCountdown}, automatic=${automatic}, pageHidesFirst=${pageHidesFirst}`;
+      if (automatic) page.setData({ totalTime: 60, remainingTime: 60 });
+      page.startTimer();
+      advance(60000);
+      if (!automatic) page.handleStop();
+      page.onCompletionInput({ detail: { value: '下次打开继续填写' } });
+      const completion = { ...page.pendingCompletion };
+      const beforeExit = plays();
+      assert.equal(players[0].src, END_AUDIO, scenario);
+      assert.equal(players[0].paused, false, scenario);
+
+      if (pageHidesFirst) page.onHide();
+      emitApp('hide');
+      assert.equal(players[0].paused, true, `app hide must stop 收坐 immediately: ${scenario}`);
+      if (!pageHidesFirst) page.onHide();
+      players[0].emitEnded();
+      advance(60000);
+      emitApp('show');
+      page.onShow();
+      advance(6000);
+
+      assert.equal(players[0].paused, true, scenario);
+      assert.deepEqual(plays(), beforeExit, 'returning or a queued audio callback must not restart audio');
+      assert.equal(page.data.isRunning, false, scenario);
+      assert.equal(page.data.showCompletionDialog, true, scenario);
+      assert.equal(page.data.completionText, completion.text, scenario);
+      assert.deepEqual({ ...page.pendingCompletion }, completion, scenario);
+      assert.deepEqual({ ...storage.get('timerPendingCompletion') }, completion, scenario);
+      assert.equal(records.length, 0, 'closing and returning must not submit the unfinished reflection');
+    }
+  }
+});
+
+test('closing from the daily page stops 收坐 without saving twice and a new session still plays 起坐 after five seconds', async () => {
+  for (const isCountdown of [true, false]) {
+    const { page, players, plays, records, storage, navigations, advance, emitApp } = createPage({ isCountdown });
+    page.startTimer();
+    const sessionId = page.sessionId;
+    advance(60000);
+    page.handleStop();
+    await page.confirmCompletion();
+    assert.deepEqual(navigations, ['/pages/daily/daily1']);
+    assert.equal(players[0].src, END_AUDIO);
+    assert.equal(players[0].paused, false, 'navigation within the app allows 收坐 to finish');
+    assert.equal(records.length, 1);
+    const beforeExit = plays();
+
+    emitApp('hide');
+    assert.equal(players[0].paused, true, 'closing from another page must stop the retained timer player');
+    players[0].emitEnded();
+    advance(60000);
+    emitApp('show');
+    page.onShow();
+    await page.confirmCompletion();
+    assert.deepEqual(plays(), beforeExit, 'returning must not replay the saved session cue');
+    assert.equal(records.length, 1);
+    assert.equal(records[0][4], sessionId);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+
+    page.startTimer();
+    assert.notEqual(page.sessionId, sessionId);
+    advance(4999);
+    assert.deepEqual(plays(), beforeExit);
+    advance(1);
+    assert.deepEqual(plays(), [...beforeExit, START_AUDIO]);
+    assert.equal(records.length, 1, 'starting another session must not resubmit the saved completion');
+  }
+});
+
 test('unloading destroys the cue player and queued callbacks cannot start or restart audio', () => {
   for (const cue of ['waiting', 'start', 'end']) {
     const { page, players, plays, advance, emitApp } = createPage({ withGuide: true });
