@@ -54,6 +54,18 @@ test('invitation preview trusts the current server membership and never invents 
   assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
 });
 
+test('invitation previews show deputy roles from public flags and member team data with leader priority', async () => {
+  for (const team of [
+    { ...preview, members: [{ nickname: '团长', isCreator: true, isDeputy: true },
+      { nickname: '副团长', isDeputy: true }, { nickname: '成员' }] },
+    { ...preview, creator: 'owner', deputyLeaders: ['owner', 'deputy'], members: ['owner', 'deputy', 'member'] }
+  ]) {
+    const { page } = createPage({ cloud: () => success(team) });
+    await page.onLoad({ teamId: 'team-a', inviteId: 'deputy-invitation', inviterId: 'deputy' });
+    assert.deepEqual(Array.from(page.data.members, member => member.role), ['团长', '副团长', '成员']);
+  }
+});
+
 test('network or deleted-team errors discard the preview and allow an explicit retry', async () => {
   let fails = true;
   const { page } = createPage({ cloud: () => fails ? Promise.reject(new Error('网络不可用')) : success(preview) });
@@ -170,7 +182,7 @@ test('a bare team link or forged inviter context cannot start a join or a login 
     assert.equal(calls.cloud.some(call => call.type === 'joinTeam'), false);
     assert.equal(calls.navigate.length, 0);
     assert.equal(storage.has('pendingTeamInvitation'), false);
-    assert.match(calls.toasts.at(-1).title, /团长/);
+    assert.match(calls.toasts.at(-1).title, /团长或副团长/);
     assert.equal(calls.hiddenShares.length, 1);
   }
 });

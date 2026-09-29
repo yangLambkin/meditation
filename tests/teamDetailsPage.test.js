@@ -47,13 +47,13 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
   title: `邀请您加入${team.name}团队`
 });
 
-function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { cloud: [], deletes: [], removals: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { cloud: [], deletes: [], removals: [], deputyChanges: [], transfers: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -64,6 +64,14 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, check
     async removeTeamMember(teamId, memberOpenid) {
       calls.removals.push({ teamId, memberOpenid });
       return removeTeamMember ? removeTeamMember(teamId, memberOpenid) : { success: true };
+    },
+    async setTeamDeputy(teamId, memberOpenid, isDeputy) {
+      calls.deputyChanges.push({ teamId, memberOpenid, isDeputy });
+      return setTeamDeputy ? setTeamDeputy(teamId, memberOpenid, isDeputy) : { success: false, error: '未设置副团长接口' };
+    },
+    async transferTeamLeader(teamId, memberOpenid) {
+      calls.transfers.push({ teamId, memberOpenid });
+      return transferTeamLeader ? transferTeamLeader(teamId, memberOpenid) : { success: false, error: '未设置团长交接接口' };
     },
     async deleteTeam(id) {
       calls.deletes.push(id);
@@ -1119,7 +1127,7 @@ test('the creator explicitly prepares an invitation and shares it from the resul
   assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1);
   assert.equal(calls.toasts.length, 0);
   const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
-  const ownerActions = template.match(/<view wx:if="\{\{isCreator\}\}" class="hero-actions">([\s\S]*?)<\/view>/);
+  const ownerActions = template.match(/<view wx:if="\{\{isCreator \|\| isDeputy\}\}" class="hero-actions">([\s\S]*?)<\/view>/);
   assert.ok(ownerActions);
   assert.match(ownerActions[1], /class="invite-button"[^>]*bindtap="prepareInvite"/);
   assert.doesNotMatch(ownerActions[1], /open-type="share"/);
@@ -1906,10 +1914,10 @@ test('late image failure cannot revive a closed reminder or affect a newly gener
   }
 });
 
-test('reminder controls are creator-only and offer direct saving while retaining image preview', () => {
+test('reminder controls support creators and deputies and offer direct saving while retaining image preview', () => {
   const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
   const reminderButton = template.match(/<button[^>]*bindtap="showReminderList"[^>]*>/)[0];
-  assert.match(reminderButton, /wx:if="{{isCreator}}"/);
+  assert.match(reminderButton, /wx:if="{{isCreator \|\| isDeputy}}"/);
   const reminderImage = template.match(/<image[^>]*src="{{reminderImagePath}}"[^>]*>/)[0];
   assert.match(reminderImage, /show-menu-by-longpress="{{true}}"/);
   assert.match(reminderImage, /bindtap="previewReminderImage"/);
@@ -2100,5 +2108,321 @@ test('confirmation opened for one account cannot remove a member after identity 
     calls.modals.at(-1).success({ confirm: true });
     await request;
     assert.equal(calls.removals.length, 0);
+  }
+});
+
+const deputyTeam = { ...structuredClone(team), deputyLeaders: ['member'] };
+const roleReport = value => ({ ...structuredClone(report), creator: value.creator,
+  deputyLeaders: value.deputyLeaders || [],
+  members: value.members.map((item, index) => ({ ...member(item.openid || item, index ? 'below_goal' : 'qualified', 10, 10, 8, 0),
+    nickname: item.nickname || item.openid || item }))
+});
+const roleResult = value => ({ success: true, data: { teamId: value._id, creator: value.creator,
+  creatorName: value.creator, members: value.members.map(item => item.openid || item),
+  memberCount: value.members.length, deputyLeaders: value.deputyLeaders || [] } });
+
+test('deputies have badges and can invite and remind but cannot edit, remove, appoint or dissolve', async () => {
+  const { page, calls } = createPage({ openid: 'member',
+    cloud: type => success(type === 'getTeamInfo' ? deputyTeam : roleReport(deputyTeam)),
+    generateInvite: () => success(invitation('team-a', 'member'))
+  });
+  await page.onShow();
+  assert.equal(page.data.isDeputy, true);
+  assert.equal(page.data.isCreator, false);
+  assert.equal(page.data.deputyCount, 1);
+  assert.equal(page.data.teamMembers.find(item => item.openid === 'member').isDeputy, true);
+  await page.prepareInvite();
+  assert.equal(new URLSearchParams(page.onShareAppMessage().path.split('?')[1]).get('inviterId'), 'member');
+  await page.showReminderList();
+  assert.equal(page.data.reminderDialogOpen, true);
+  await page.previewReminderImage();
+  await page.saveReminderImage();
+  assert.equal(calls.previews.length, 1);
+  assert.equal(calls.albums.length, 1);
+  page.openSettings();
+  const originalName = page.data.draftName;
+  page.changeTeamName({ detail: { value: '不允许编辑' } });
+  assert.equal(page.data.draftName, originalName);
+  await page.saveSettings();
+  await page.confirmDeleteTeam();
+  await page.confirmRemoveMember(event('memberOpenid', 'third'));
+  await page.openMemberActions(event('memberOpenid', 'third'));
+  await page.confirmMemberRoleChange(event('memberOpenid', 'third'), 'deputy');
+  await page.confirmMemberRoleChange(event('memberOpenid', 'third'), 'leader');
+  assert.equal(calls.modals.length, 0);
+  assert.equal(calls.actionSheets.length, 0);
+  assert.equal(calls.deletes.length + calls.removals.length + calls.deputyChanges.length + calls.transfers.length, 0);
+  assert.equal(calls.cloud.some(call => call.type === 'updateTeam'), false);
+});
+
+test('old teams have zero deputies and forged deputy flags cannot grant assistant permissions', async () => {
+  const { page, calls } = createPage({ openid: 'member' });
+  await page.onShow();
+  assert.equal(page.data.isDeputy, false);
+  assert.equal(page.data.deputyCount, 0);
+  page.setData({ isDeputy: true });
+  await page.prepareInvite();
+  await page.showReminderList();
+  assert.equal(calls.cloud.some(call => call.type === 'generateInvite'), false);
+  assert.equal(calls.reminderImages.length, 0);
+});
+
+test('member management sheet exposes deputy appointment, leader transfer and existing removal', async () => {
+  for (const [tapIndex, expected] of [[0, '设为副团长'], [1, '交接团长'], [2, '移除成员']]) {
+    const { page, calls } = createPage({ confirm: false });
+    await page.onShow();
+    const request = page.openMemberActions(event('memberOpenid', 'member'));
+    assert.deepEqual(Array.from(calls.actionSheets[0].itemList), ['设为副团长', '交接团长', '移除成员']);
+    calls.actionSheets[0].success({ tapIndex });
+    await request;
+    assert.equal(calls.modals[0].title, expected);
+  }
+  const { page, calls } = createPage({ cloud: type => success(type === 'getTeamInfo' ? deputyTeam : roleReport(deputyTeam)) });
+  await page.onShow();
+  const request = page.openMemberActions(event('memberOpenid', 'member'));
+  assert.equal(calls.actionSheets[0].itemList[0], '取消副团长');
+  calls.actionSheets[0].fail({ errMsg: 'cancel' });
+  await request;
+  const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
+  assert.match(template, /catchlongpress="openMemberActions"/);
+  assert.match(template, /副团长 {{deputyCount}} \/ 7 位/);
+  assert.match(template, /wx:elif="{{item.isDeputy}}"/);
+  assert.match(template, /<button wx:if="{{isCreator}}" class="hero-dissolve"/);
+});
+
+test('a leader can appoint and dismiss deputies and role badges update from canonical results', async () => {
+  for (const appoint of [true, false]) {
+    let current = structuredClone(appoint ? team : deputyTeam);
+    const { page, calls, manager } = createPage({
+      cloud: type => success(type === 'getTeamInfo' ? current : roleReport(current)),
+      setTeamDeputy: async (teamId, memberOpenid, isDeputy) => {
+        current = { ...current, deputyLeaders: isDeputy ? [memberOpenid] : [] };
+        return roleResult(current);
+      }
+    });
+    await page.onShow();
+    await page.confirmMemberRoleChange(event('memberOpenid', 'member'), 'deputy');
+    assert.deepEqual(calls.deputyChanges, [{ teamId: 'team-a', memberOpenid: 'member', isDeputy: appoint }]);
+    assert.equal(page.data.deputyCount, appoint ? 1 : 0);
+    assert.equal(page.data.teamMembers.find(item => item.openid === 'member').isDeputy, appoint);
+    assert.equal(page.data.roleChangingMemberId, '');
+    assert.deepEqual(Array.from(manager.teams[0].deputyLeaders), appoint ? ['member'] : []);
+  }
+});
+
+test('seven deputies block another appointment but permit dismissal', async () => {
+  const ids = ['owner', 'member', 'third', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6'];
+  let current = { ...structuredClone(team), members: ids.map(openid => ({ openid, nickname: openid })),
+    deputyLeaders: ['member', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6'] };
+  const { page, calls } = createPage({
+    cloud: type => success(type === 'getTeamInfo' ? current : roleReport(current)),
+    setTeamDeputy: async (teamId, memberOpenid) => {
+      current = { ...current, deputyLeaders: current.deputyLeaders.filter(id => id !== memberOpenid) };
+      return roleResult(current);
+    }
+  });
+  await page.onShow();
+  await page.confirmMemberRoleChange(event('memberOpenid', 'third'), 'deputy');
+  assert.equal(calls.deputyChanges.length, 0);
+  assert.equal(calls.modals.length, 0);
+  assert.match(calls.toasts.at(-1).title, /最多 7 位/);
+  await page.confirmMemberRoleChange(event('memberOpenid', 'member'), 'deputy');
+  assert.equal(calls.deputyChanges.length, 1);
+  assert.equal(calls.deputyChanges[0].isDeputy, false);
+  assert.equal(page.data.deputyCount, 6);
+});
+
+test('leadership can transfer to a member or deputy and immediately revokes all old leader controls', async () => {
+  for (const recipient of ['third', 'member']) {
+    let current = structuredClone(deputyTeam);
+    let finishReport;
+    let transferred = false;
+    const { page, calls, manager } = createPage({
+      cloud: type => {
+        if (transferred) return new Promise(resolve => { finishReport = resolve; });
+        return success(type === 'getTeamInfo' ? current : roleReport(current));
+      },
+      transferTeamLeader: async (teamId, memberOpenid) => {
+        transferred = true;
+        current = { ...current, creator: memberOpenid, deputyLeaders: current.deputyLeaders.filter(id => id !== memberOpenid) };
+        return roleResult(current);
+      }
+    });
+    await page.onShow();
+    await page.prepareInvite();
+    await page.showReminderList();
+    const request = page.confirmMemberRoleChange(event('memberOpenid', recipient), 'leader');
+    await flushPromises();
+    assert.match(calls.modals[0].content, /成为普通成员/);
+    assert.match(calls.modals[0].content, /邀请成员或发送提醒/);
+    assert.equal(page.data.isCreator, false);
+    assert.equal(page.data.isDeputy, false);
+    assert.equal(page.data.teamInfo.creator, recipient);
+    assert.equal(page.data.inviteDialogOpen, false);
+    assert.equal(page.data.reminderDialogOpen, false);
+    assert.equal(page.data.settingsOpen, false);
+    assert.equal(page.canManageTeam(), false);
+    assert.equal(page.canAssistTeam(), false);
+    assert.equal(page.onShareAppMessage().path, '/pages/team/team');
+    assert.equal(manager.teams[0].creator, recipient);
+    finishReport({ result: { success: false, error: '刷新失败' } });
+    await request;
+    assert.equal(page.data.isCreator, false);
+    assert.equal(page.data.isDeputy, false);
+    assert.equal(calls.transfers.length, 1);
+  }
+});
+
+test('role changes reject self, missing members, cancelled confirmations and stale action sheets', async () => {
+  for (const role of ['deputy', 'leader']) {
+    for (const target of ['owner', 'missing', 'member']) {
+      const { page, calls } = createPage({ confirm: false });
+      await page.onShow();
+      await page.confirmMemberRoleChange(event('memberOpenid', target), role);
+      assert.equal(calls.deputyChanges.length + calls.transfers.length, 0);
+    }
+    for (const change of ['account', 'team', 'hide', 'refresh', 'permission']) {
+      const { page, calls, storage } = createPage({ confirm: null });
+      await page.onShow();
+      const pending = page.confirmMemberRoleChange(event('memberOpenid', 'member'), role);
+      if (change === 'account') storage.set('userOpenId', 'third');
+      if (change === 'team') page.setData({ teamId: 'other-team' });
+      if (change === 'hide') page.onHide();
+      if (change === 'refresh') await page.loadTeamData();
+      if (change === 'permission') page.setData({ teamInfo: { ...page.data.teamInfo, creator: 'third' } });
+      calls.modals[0].success({ confirm: true });
+      await pending;
+      assert.equal(calls.deputyChanges.length + calls.transfers.length, 0, `${role} ${change}`);
+    }
+  }
+  const { page, calls } = createPage();
+  await page.onShow();
+  const pending = page.openMemberActions(event('memberOpenid', 'member'));
+  await page.loadTeamData();
+  calls.actionSheets[0].success({ tapIndex: 0 });
+  await pending;
+  assert.equal(calls.modals.length, 0);
+});
+
+test('role mutations block duplicate writes, invitation preparation and reminder generation', async () => {
+  let finish;
+  const { page, calls } = createPage({ setTeamDeputy: () => new Promise(resolve => { finish = resolve; }) });
+  await page.onShow();
+  const request = page.confirmMemberRoleChange(event('memberOpenid', 'member'), 'deputy');
+  await flushPromises();
+  assert.equal(page.data.roleChangingMemberId, 'member');
+  await page.confirmMemberRoleChange(event('memberOpenid', 'third'), 'leader');
+  await page.confirmRemoveMember(event('memberOpenid', 'third'));
+  await page.prepareInvite();
+  await page.showReminderList();
+  assert.equal(calls.deputyChanges.length, 1);
+  assert.equal(calls.transfers.length + calls.removals.length + calls.reminderImages.length, 0);
+  assert.equal(calls.cloud.some(call => call.type === 'generateInvite'), false);
+  finish({ success: false, error: '副团长名额已满' });
+  await request;
+  assert.equal(page.data.roleChangingMemberId, '');
+  assert.equal(page.data.deputyCount, 0);
+  assert.equal(calls.modals.at(-1).content, '副团长名额已满');
+});
+
+test('a cloud report revoking deputy permissions prevents image generation and clears prepared invitations', async () => {
+  let revoked = false;
+  const { page, calls } = createPage({ openid: 'member',
+    cloud: type => success(type === 'getTeamInfo' ? deputyTeam : roleReport(revoked ? team : deputyTeam)),
+    generateInvite: () => success(invitation('team-a', 'member'))
+  });
+  await page.onShow();
+  await page.prepareInvite();
+  revoked = true;
+  await page.showReminderList();
+  assert.equal(page.data.isDeputy, false);
+  assert.equal(page.data.isPreparingReminder, false);
+  assert.equal(page.data.reminderDialogOpen, false);
+  assert.equal(page.data.inviteReady, false);
+  assert.equal(page.data.inviteDialogOpen, false);
+  assert.equal(calls.reminderImages.length, 0);
+});
+
+test('deputy invite and image results cannot survive revocation, account changes or hiding', async () => {
+  for (const change of ['revocation', 'account', 'hide']) {
+    let finishInvite;
+    let finishImage;
+    const { page, calls, storage } = createPage({ openid: 'member',
+      cloud: type => success(type === 'getTeamInfo' ? deputyTeam : roleReport(deputyTeam)),
+      generateInvite: () => new Promise(resolve => { finishInvite = resolve; }),
+      reminderImage: () => new Promise(resolve => { finishImage = resolve; })
+    });
+    await page.onShow();
+    const inviteRequest = page.prepareInvite();
+    const imageRequest = page.showReminderList();
+    await flushPromises();
+    if (change === 'revocation') page.setData({ teamInfo: { ...page.data.teamInfo, deputyLeaders: [] } });
+    if (change === 'account') storage.set('userOpenId', 'third');
+    if (change === 'hide') page.onHide();
+    finishInvite(success(invitation('team-a', 'member')));
+    finishImage({ tempFilePath: '/tmp/stale.png' });
+    await Promise.all([inviteRequest, imageRequest]);
+    assert.equal(page.data.inviteReady, false, change);
+    assert.equal(page.data.isPreparingInvite, false, change);
+    assert.equal(page.data.reminderDialogOpen, false, change);
+    assert.equal(page.data.isPreparingReminder, false, change);
+    assert.equal(calls.shareMenus.some(item => item.action === 'show'), false, change);
+  }
+});
+
+test('a report reflecting a leadership transfer refreshes role badges and the cached leader name', async () => {
+  const transferred = { ...structuredClone(team), creator: 'member', deputyLeaders: ['third'] };
+  const { page, manager } = createPage({ cloud: type => success(type === 'getTeamInfo'
+    ? { ...team, creatorName: '旧团长' } : roleReport(transferred)) });
+  await page.onShow();
+  assert.equal(page.data.isCreator, false);
+  assert.equal(page.data.teamInfo.creator, 'member');
+  assert.equal(page.data.teamInfo.creatorName, 'member');
+  assert.equal(manager.teams[0].creatorName, 'member');
+  assert.equal(page.data.teamMembers.find(item => item.openid === 'member').isCreator, true);
+  assert.equal(page.data.teamMembers.find(item => item.openid === 'owner').isCreator, false);
+});
+
+test('a denied role mutation refreshes current permissions before allowing another management action', async () => {
+  let current = structuredClone(team);
+  const { page, calls } = createPage({
+    cloud: type => success(type === 'getTeamInfo' ? current : roleReport(current)),
+    setTeamDeputy: async () => {
+      current = { ...current, creator: 'third' };
+      return { success: false, error: '仅团长可设置副团长' };
+    }
+  });
+  await page.onShow();
+  await page.confirmMemberRoleChange(event('memberOpenid', 'member'), 'deputy');
+  assert.equal(calls.modals.at(-1).content, '仅团长可设置副团长');
+  assert.equal(page.data.isCreator, false);
+  assert.equal(page.data.roleChangingMemberId, '');
+  await page.confirmRemoveMember(event('memberOpenid', 'member'));
+  await page.confirmMemberRoleChange(event('memberOpenid', 'member'), 'leader');
+  assert.equal(calls.transfers.length + calls.removals.length, 0);
+});
+
+test('a successful role response for a replaced account cannot overwrite the new viewer role', async () => {
+  for (const role of ['deputy', 'leader']) {
+    let finish;
+    let current = structuredClone(team);
+    const { page, storage } = createPage({
+      cloud: type => success(type === 'getTeamInfo' ? current : roleReport(current)),
+      setTeamDeputy: () => new Promise(resolve => { finish = resolve; }),
+      transferTeamLeader: () => new Promise(resolve => { finish = resolve; })
+    });
+    await page.onShow();
+    const pending = page.confirmMemberRoleChange(event('memberOpenid', 'member'), role);
+    await flushPromises();
+    storage.set('userOpenId', 'third');
+    await page.loadTeamData();
+    current = role === 'leader' ? { ...current, creator: 'member' } : { ...current, deputyLeaders: ['member'] };
+    finish(roleResult(current));
+    await pending;
+    assert.equal(page.data.isCreator, false, role);
+    assert.equal(page.data.isDeputy, false, role);
+    assert.equal(page.data.roleChangingMemberId, '', role);
+    assert.equal(page._viewerOpenid, 'third', role);
+    assert.equal(page.data.teamInfo.creator, current.creator, role);
   }
 });

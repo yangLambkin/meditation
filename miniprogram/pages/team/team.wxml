@@ -41,14 +41,14 @@
       <text class="team-description">{{item.description || ''}}</text>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
-      <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长，通过邀请加入团队。
+      <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长或副团长，通过邀请加入团队。
 也可以创建自己的团队，邀请伙伴一起练习。</text>
       <button class="primary-button" bindtap="createNewTeam">创建第一个团队</button>
     </view>
   </block>
 
   <block wx:if="{{currentTab === 'joined'}}">
-    <view class="list-caption">找到一起静坐的伙伴，联系团长获取邀请即可加入。</view>
+    <view class="list-caption">找到一起静坐的伙伴，联系团长或副团长获取邀请即可加入。</view>
     <view class="team-card" wx:for="{{allTeams}}" wx:key="_id">
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />

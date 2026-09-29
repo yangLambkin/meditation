@@ -20,7 +20,7 @@ function validDate(value) {
 Page({
   data: {
     teamId: '', teamInfo: null, report: null,
-    isLoading: false, isMember: false, isCreator: false,
+    isLoading: false, isMember: false, isCreator: false, isDeputy: false, deputyCount: 0,
     loadError: '', reportError: '',
     currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
     teamMembers: [], todayMembers: [], historyMembers: [], attentionCount: 0,
@@ -29,7 +29,7 @@ Page({
     settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', draftStartDate: '', draftGoalMinutes: '', dateMax: '',
     draftName: '', draftDescription: '', draftIcon: '', isChoosingIcon: false,
     draftPracticeRulesEnabled: false,
-    settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '',
+    settingsError: '', isSaving: false, isDeleting: false, removingMemberId: '', roleChangingMemberId: '',
     isPreparingInvite: false, inviteReady: false, inviteError: '',
     inviteDialogOpen: false, inviteExpiresLabel: '',
     isPreparingReminder: false, isSavingReminder: false,
@@ -101,9 +101,9 @@ Page({
     if (this._viewerOpenid !== openid || this._viewerTeamId !== teamId) {
       this.resetInvitation();
       this._reportMembers = [];
-      this.setData({ teamInfo: null, report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, settingsOpen: false, settingsError: '', isChoosingIcon: false });
+      this.setData({ teamInfo: null, report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
-    if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId) return;
+    if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId || this.data.roleChangingMemberId) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingTeamId === teamId) return;
     this.cancelReminder();
     const version = this._loadVersion = (this._loadVersion || 0) + 1;
@@ -124,15 +124,15 @@ Page({
         team.creator === openid || (team.members || []).some(member => (typeof member === 'string' ? member : member.openid) === openid));
       if (!isMember) {
         this.resetInvitation();
-        this.setData({ teamInfo: null, isMember: false, isCreator: false });
+        this.setData({ teamInfo: null, isMember: false, isCreator: false, isDeputy: false, deputyCount: 0 });
         wx.redirectTo({ url: `/subpackages/team/pages/joinTeam/joinTeam?teamId=${encodeURIComponent(teamId)}` });
         return;
       }
       this.updateLocalTeamCache(team);
-      this.setData({ teamInfo: team, teamMembers: this.profileMembers(team.members || []), isMember: true, isCreator: !!openid && team.creator === openid,
+      this.setData({ ...this.teamRoleData(team), teamMembers: this.profileMembers(team.members || [], team), isMember: true,
         hasGoal: Number.isInteger(team.dailyGoalMinutes) && team.dailyGoalMinutes > 0 });
       this._teamInfoReady = true;
-      if (!this.data.isCreator) {
+      if (!this.data.isCreator && !this.data.isDeputy) {
         this.resetInvitation();
       }
       wx.setNavigationBarTitle({ title: team.name });
@@ -147,7 +147,7 @@ Page({
       }
     } catch (error) {
       if (!isCurrent()) return;
-      this.setData({ teamInfo: null, isCreator: false, isMember: false, settingsOpen: false, loadError: error.message || '团队信息暂时无法加载' });
+      this.setData({ teamInfo: null, isCreator: false, isDeputy: false, deputyCount: 0, isMember: false, settingsOpen: false, loadError: error.message || '团队信息暂时无法加载' });
     } finally {
       if (isCurrent()) {
         this.setData({ isLoading: false });
@@ -169,6 +169,16 @@ Page({
       throw new Error('练习数据暂不完整，请刷新重试');
     }
     if (report.nextResetAt <= Date.now()) throw new Error('练习日已更新，请刷新查看最新数据');
+    if (typeof report.creator === 'string' && Array.isArray(report.deputyLeaders)) {
+      const leader = report.members.find(member => member.openid === report.creator);
+      this.setData(this.teamRoleData({ ...this.data.teamInfo, creator: report.creator,
+        creatorName: leader && leader.nickname || '团队成员', deputyLeaders: report.deputyLeaders, members: report.members }));
+      this.updateLocalTeamCache(this.data.teamInfo);
+      if (!this.data.isCreator && !this.data.isDeputy) {
+        this.resetInvitation();
+        this.cancelReminder();
+      }
+    }
     const goal = report.settings.dailyGoalMinutes;
     const hasGoal = goal !== null;
     const members = this.profileMembers(report.members).map(member => ({
@@ -191,7 +201,7 @@ Page({
       todayFilter: !hasGoal && ['below_goal', 'qualified'].includes(this.data.todayFilter) || hasGoal && this.data.todayFilter === 'practiced' ? 'attention' : this.data.todayFilter,
       overview: report.overview || null,
       historySummary: this.buildHistorySummary(report),
-      teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || a.nickname.localeCompare(b.nickname)),
+      teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || Number(b.isDeputy) - Number(a.isDeputy) || a.nickname.localeCompare(b.nickname)),
       teamInfo: { ...this.data.teamInfo, ...report.settings },
       attentionCount: report.summary.notPracticedCount + report.summary.belowGoalCount,
       historyMembers,
@@ -237,12 +247,27 @@ Page({
     return summary;
   },
 
-  profileMembers(members) {
-    return members.map(member => ({
-      ...(typeof member === 'string' ? { openid: member } : member),
-      avatar: typeof member.avatarUrl === 'string' && member.avatarUrl && !/^(wxfile:|https?:\/\/tmp\/)/.test(member.avatarUrl) ? member.avatarUrl : '/images/avatar.png',
-      nickname: member.nickname || '团队成员'
-    }));
+  teamRoleData(team) {
+    const openid = wx.getStorageSync('userOpenId');
+    const members = (team.members || []).map(member => typeof member === 'string' ? member : member.openid);
+    const deputyLeaders = [...new Set((Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])
+      .filter(id => typeof id === 'string' && id !== team.creator && members.includes(id)))];
+    const isCreator = !!openid && team.creator === openid;
+    return { teamInfo: { ...team, deputyLeaders }, isCreator,
+      isDeputy: !isCreator && !!openid && deputyLeaders.includes(openid), deputyCount: deputyLeaders.length,
+      ...(!isCreator ? { settingsOpen: false, isChoosingIcon: false } : {}) };
+  },
+
+  profileMembers(members, team = this.data.teamInfo) {
+    return members.map(value => {
+      const member = typeof value === 'string' ? { openid: value } : value;
+      return { ...member,
+        isCreator: !!team && member.openid === team.creator,
+        isDeputy: !!team && member.openid !== team.creator && (team.deputyLeaders || []).includes(member.openid),
+        avatar: typeof member.avatarUrl === 'string' && member.avatarUrl && !/^(wxfile:|https?:\/\/tmp\/)/.test(member.avatarUrl) ? member.avatarUrl : '/images/avatar.png',
+        nickname: member.nickname || '团队成员'
+      };
+    });
   },
 
   formatLastPractice(member) {
@@ -307,26 +332,27 @@ Page({
   },
 
   async showReminderList() {
-    const { teamId, teamInfo, isMember, isCreator } = this.data;
+    const { teamId, teamInfo } = this.data;
     const openid = wx.getStorageSync('userOpenId');
-    if (this._unloaded || !this._isVisible || !isMember || !isCreator || !teamInfo ||
-        teamInfo._id !== teamId || teamInfo.creator !== openid ||
+    if (this._unloaded || !this._isVisible || !this.canAssistTeam() || !teamInfo ||
+        teamInfo._id !== teamId ||
         !openid || this._viewerOpenid !== openid || this._viewerTeamId !== teamId ||
         !this.data.report || this.data.isLoading || this.data.isPreparingReminder ||
-        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId) return;
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId || this.data.roleChangingMemberId) return;
     this.cancelReminder();
     const version = this._reminderVersion;
     const loadVersion = this._loadVersion;
     const isCurrent = () => !this._unloaded && this._isVisible && version === this._reminderVersion &&
       loadVersion === this._loadVersion && this.data.teamId === teamId && this.data.isMember &&
-      this.data.isCreator && this.data.teamInfo && this.data.teamInfo.creator === openid &&
-      wx.getStorageSync('userOpenId') === openid && !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId;
+      this.canAssistTeam() && wx.getStorageSync('userOpenId') === openid &&
+      !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId && !this.data.roleChangingMemberId;
     this.setData({ isPreparingReminder: true });
     try {
       // 长图包含全体未达标成员，不受当前列表筛选影响；生成前重新获取云端统计。
       const report = await this.callTeam('getTeamPracticeReport', { teamId });
       if (!isCurrent()) return;
       this.applyReport(report);
+      if (!isCurrent()) return;
       this.scheduleReset(report.nextResetAt);
       const hasGoal = report.settings.dailyGoalMinutes !== null;
       const members = selectReminderMembers({ ...report, members: this._reportMembers });
@@ -355,11 +381,10 @@ Page({
 
   canUseReminderImage(context) {
     return !!context && this._reminderContext === context && !(this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
-        !this.data.reminderImagePath || !this.data.isMember || !this.data.isCreator ||
-        !this.data.teamInfo || this.data.teamInfo.creator !== context.openid ||
+        !this.data.reminderImagePath || !this.canAssistTeam() ||
         this.data.teamId !== context.teamId || this._viewerOpenid !== context.openid ||
         wx.getStorageSync('userOpenId') !== context.openid || this.data.isLoading ||
-        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId);
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId || this.data.roleChangingMemberId);
   },
 
   async getCurrentReminderContext() {
@@ -471,7 +496,8 @@ Page({
 
   openSettings() {
     const team = this.data.teamInfo;
-    if (!team || !this.data.isMember || this.data.isDeleting || this.data.isSaving || this.data.isChoosingIcon) return;
+    if (!team || !this.data.isMember || this.data.isDeleting || this.data.isSaving || this.data.isChoosingIcon ||
+        this.data.removingMemberId || this.data.roleChangingMemberId) return;
     const settings = this.data.report ? this.data.report.settings : team;
     this.setData({
       settingsOpen: true, keyboardHeight: 0, settingsScrollTarget: '',
@@ -580,11 +606,112 @@ Page({
 
   canManageTeam() {
     const openid = wx.getStorageSync('userOpenId');
-    return !this.data.removingMemberId && !!this.data.teamInfo && this.data.isCreator && this._viewerOpenid === openid && this.data.teamInfo.creator === openid;
+    return !this.data.removingMemberId && !this.data.roleChangingMemberId && this.data.isMember && !!openid &&
+      !!this.data.teamInfo && this.data.isCreator && this._viewerOpenid === openid &&
+      this._viewerTeamId === this.data.teamId && this.data.teamInfo._id === this.data.teamId && this.data.teamInfo.creator === openid;
+  },
+
+  canAssistTeam() {
+    const openid = wx.getStorageSync('userOpenId');
+    const team = this.data.teamInfo;
+    return !!openid && !!team && this.data.isMember && this._viewerOpenid === openid &&
+      this._viewerTeamId === this.data.teamId && team._id === this.data.teamId &&
+      ((this.data.isCreator && team.creator === openid) ||
+        (this.data.isDeputy && team.creator !== openid && (team.deputyLeaders || []).includes(openid)));
+  },
+
+  canChangeMemberRole() {
+    return this.canManageTeam() && this._isVisible && !this._unloaded &&
+      !this.data.isLoading && !this.data.isSaving && !this.data.isDeleting;
+  },
+
+  async openMemberActions(event) {
+    if (!this.canChangeMemberRole() || this._memberActionPrompt || this._rolePrompt || this._removePrompt) return;
+    const memberOpenid = event && event.currentTarget && event.currentTarget.dataset.memberOpenid;
+    const member = this.data.teamMembers.find(item => item.openid === memberOpenid);
+    if (!member || member.isCreator || memberOpenid === this.data.teamInfo.creator) return;
+    const teamId = this.data.teamId;
+    const openid = wx.getStorageSync('userOpenId');
+    const visibilityVersion = this._editVisibilityVersion || 0;
+    const loadVersion = this._loadVersion;
+    this._memberActionPrompt = true;
+    let action;
+    try {
+      action = await new Promise(resolve => wx.showActionSheet({
+        itemList: [member.isDeputy ? '取消副团长' : '设为副团长', '交接团长', '移除成员'],
+        success: result => resolve(result.tapIndex), fail: () => resolve(-1)
+      }));
+    } finally { this._memberActionPrompt = false; }
+    if (!this.canChangeMemberRole() || this.data.teamId !== teamId || wx.getStorageSync('userOpenId') !== openid ||
+        visibilityVersion !== (this._editVisibilityVersion || 0) || loadVersion !== this._loadVersion) return;
+    if (action === 0) return this.confirmMemberRoleChange(event, 'deputy');
+    if (action === 1) return this.confirmMemberRoleChange(event, 'leader');
+    if (action === 2) return this.confirmRemoveMember(event);
+  },
+
+  async confirmMemberRoleChange(event, role) {
+    if (!this.canChangeMemberRole() || this._rolePrompt || this._removePrompt || !['deputy', 'leader'].includes(role)) return;
+    const memberOpenid = event && event.currentTarget && event.currentTarget.dataset.memberOpenid;
+    const member = this.data.teamMembers.find(item => item.openid === memberOpenid);
+    if (!member || member.isCreator || memberOpenid === this.data.teamInfo.creator) return;
+    const isDeputy = !member.isDeputy;
+    if (role === 'deputy' && isDeputy && this.data.deputyCount >= 7) {
+      wx.showToast({ title: '副团长最多 7 位，请先取消一位', icon: 'none' });
+      return;
+    }
+    const title = role === 'leader' ? '交接团长' : isDeputy ? '设为副团长' : '取消副团长';
+    const content = role === 'leader'
+      ? `确定将团长身份交接给「${member.nickname}」吗？交接后你将成为普通成员，无法再管理团队、邀请成员或发送提醒。`
+      : isDeputy ? `将「${member.nickname}」设为副团长？副团长可提醒和邀请成员，不能移除成员、任免副团长、编辑或解散团队。`
+        : `确定取消「${member.nickname}」的副团长身份吗？对方将成为普通成员。`;
+    const teamId = this.data.teamId;
+    const openid = wx.getStorageSync('userOpenId');
+    const visibilityVersion = this._editVisibilityVersion || 0;
+    const loadVersion = this._loadVersion;
+    const isCurrent = () => !this._unloaded && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
+    this._rolePrompt = true;
+    let changed = false;
+    let attempted = false;
+    try {
+      const confirmed = await new Promise(resolve => wx.showModal({ title, content,
+        confirmText: role === 'leader' ? '确认交接' : '确定', cancelText: '取消',
+        success: result => resolve(result.confirm), fail: () => resolve(false)
+      }));
+      if (!confirmed || !isCurrent() || !this.canChangeMemberRole() ||
+          visibilityVersion !== (this._editVisibilityVersion || 0) || loadVersion !== this._loadVersion ||
+          !this.data.teamMembers.some(item => item.openid === memberOpenid && !item.isCreator)) return;
+      this._loadVersion = (this._loadVersion || 0) + 1;
+      this.resetInvitation();
+      this.cancelReminder();
+      this.clearResetTimer();
+      this.setData({ roleChangingMemberId: memberOpenid, isLoading: false });
+      attempted = true;
+      const result = role === 'leader' ? await teamManager.transferTeamLeader(teamId, memberOpenid)
+        : await teamManager.setTeamDeputy(teamId, memberOpenid, isDeputy);
+      if (!result || !result.success) throw new Error(result && result.error || `${title}失败，请重试`);
+      if (!isCurrent()) return;
+      changed = true;
+      const updatedTeam = { ...this.data.teamInfo, ...result.data, _id: teamId };
+      const profiles = new Map(this.data.teamMembers.map(item => [item.openid, item]));
+      updatedTeam.members = (updatedTeam.members || []).map(id => typeof id === 'string' ? profiles.get(id) || { openid: id } : id);
+      const roles = this.teamRoleData(updatedTeam);
+      this._reportMembers = [];
+      this.updateLocalTeamCache(roles.teamInfo);
+      this.setData({ ...roles, teamMembers: this.profileMembers(updatedTeam.members, roles.teamInfo),
+        report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], settingsOpen: false });
+      if (this._isVisible) wx.showToast({ title: role === 'leader' ? '已交接团长' : isDeputy ? '已设为副团长' : '已取消副团长', icon: 'success' });
+    } catch (error) {
+      if (isCurrent() && this._isVisible) wx.showModal({ title: `${title}失败`, content: error.message || '请稍后重试', showCancel: false });
+    } finally {
+      this._rolePrompt = false;
+      if (!this._unloaded) this.setData({ roleChangingMemberId: '' });
+      if (!this._unloaded && this._isVisible && (changed || attempted || !isCurrent())) await this.loadTeamData();
+      else if (isCurrent() && this.data.report) this.scheduleReset(this.data.report.nextResetAt);
+    }
   },
 
   async confirmRemoveMember(event) {
-    if (!this.canManageTeam() || !this._isVisible || this._unloaded || this._removePrompt ||
+    if (!this.canManageTeam() || !this._isVisible || this._unloaded || this._removePrompt || this._rolePrompt ||
         this.data.isLoading || this.data.isSaving || this.data.isDeleting) return;
     const memberOpenid = event && event.currentTarget && event.currentTarget.dataset.memberOpenid;
     const member = this.data.teamMembers.find(item => item.openid === memberOpenid);
@@ -613,7 +740,8 @@ Page({
       // 云端已确认移除，立即清除旧统计，避免刷新失败时继续显示该成员。
       this._reportMembers = [];
       const teamMembers = this.data.teamMembers.filter(item => item.openid !== memberOpenid);
-      this.setData({ teamMembers, teamInfo: { ...this.data.teamInfo, members: teamMembers, memberCount: teamMembers.length },
+      const roles = this.teamRoleData({ ...this.data.teamInfo, members: teamMembers, memberCount: teamMembers.length });
+      this.setData({ ...roles, teamMembers,
         report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [] });
       wx.showToast({ title: '已移除成员', icon: 'success' });
     } catch (error) {
@@ -695,7 +823,7 @@ Page({
 
   resetInvitation({ keepPrepared = false, keepDialog = false } = {}) {
     this._inviteVersion = (this._inviteVersion || 0) + 1;
-    // 暂停分享时保留有效邀请；页面重新验证团队及团长身份后才能恢复使用。
+    // 暂停分享时保留有效邀请；页面重新验证团队及邀请权限后才能恢复使用。
     if (!keepPrepared) this._preparedInvite = null;
     if (this._inviteExpiryTimer) clearTimeout(this._inviteExpiryTimer);
     this._inviteExpiryTimer = null;
@@ -711,8 +839,8 @@ Page({
   noop() {},
 
   canInviteTeam() {
-    return this.canManageTeam() && this.data.isMember && this._isVisible && !this._unloaded &&
-      this._teamInfoReady && !this.data.isSaving && !this.data.isDeleting &&
+    return this.canAssistTeam() && this.data.isMember && this._isVisible && !this._unloaded &&
+      this._teamInfoReady && !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId && !this.data.roleChangingMemberId &&
       this._viewerTeamId === this.data.teamId && this.data.teamInfo._id === this.data.teamId;
   },
 
@@ -764,7 +892,10 @@ Page({
         this.setData({ inviteReady: false, inviteError: error.message || '邀请准备失败，请重试' });
       }
     } finally {
-      if (isCurrent()) this.setData({ isPreparingInvite: false });
+      if (!this._unloaded && version === this._inviteVersion) {
+        if (!this.canInviteTeam()) this.resetInvitation();
+        else this.setData({ isPreparingInvite: false });
+      }
     }
   },
 
@@ -808,7 +939,7 @@ Page({
       const result = await teamManager.deleteTeam(this.data.teamInfo._id);
       if (!result || !result.success) throw new Error(result && result.error || '解散失败，请重试');
       if (this._unloaded || wx.getStorageSync('userOpenId') !== openid) return;
-      this.setData({ teamInfo: null, report: null, historySummary: null, isCreator: false, isMember: false, settingsOpen: false });
+      this.setData({ teamInfo: null, report: null, historySummary: null, isCreator: false, isDeputy: false, deputyCount: 0, isMember: false, settingsOpen: false });
       wx.showToast({ title: '团队解散成功', icon: 'success' });
       wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/team/team' }) });
     } catch (error) {

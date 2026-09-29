@@ -89,15 +89,18 @@ function layoutCard(context, member, hasGoal) {
   font(context, 28, '500');
   const nameLines = wrapText(context, member.nickname || '未设置昵称', nameWidth);
   const lastNameWidth = context.measureText(nameLines[nameLines.length - 1]).width;
-  const creatorOnNewLine = Boolean(member.isCreator && lastNameWidth + 66 > nameWidth);
-  const nameHeight = nameLines.length * 42 + (creatorOnNewLine ? 36 : 0);
+  const roleLabel = member.isCreator ? '团长' : member.isDeputy ? '副团长' : '';
+  font(context, 20);
+  const roleWidth = roleLabel ? context.measureText(roleLabel).width + 16 : 0;
+  const roleOnNewLine = Boolean(roleLabel && lastNameWidth + roleWidth + 10 > nameWidth);
+  const nameHeight = nameLines.length * 42 + (roleOnNewLine ? 36 : 0);
   const subtitle = member.todayStatus === 'not_practiced'
     ? '今天的练习，还未开始'
     : `距离目标还差 ${member.remainingMinutesLabel} 分钟`;
   font(context, 22);
   const subtitleLines = wrapText(context, subtitle, nameWidth);
   const headerHeight = Math.max(76, nameHeight + 8 + subtitleLines.length * 33);
-  return { member, status, statusWidth, nameLines, lastNameWidth, creatorOnNewLine,
+  return { member, status, statusWidth, nameLines, lastNameWidth, roleLabel, roleWidth, roleOnNewLine,
     nameHeight, subtitleLines, headerHeight, height: 24 + headerHeight + 22 + 44 + (hasGoal ? 20 : 0) + 24 };
 }
 
@@ -212,7 +215,7 @@ function drawAvatar(context, avatar, nickname, x, y) {
 }
 
 function drawCard(context, layout, avatar, top, goal) {
-  const { member, status, statusWidth, nameLines, lastNameWidth, creatorOnNewLine,
+  const { member, status, statusWidth, nameLines, lastNameWidth, roleLabel, roleWidth, roleOnNewLine,
     nameHeight, subtitleLines, headerHeight, height } = layout;
   roundedRect(context, 24, top, 702, height, 20, colors.card, colors.border);
   const left = 52;
@@ -223,13 +226,13 @@ function drawCard(context, layout, avatar, top, goal) {
   font(context, 28, '500');
   context.fillStyle = colors.text;
   nameLines.forEach((line, index) => context.fillText(line, identityLeft, headerTop + index * 42));
-  if (member.isCreator) {
-    const tagX = creatorOnNewLine ? identityLeft : identityLeft + lastNameWidth + 10;
-    const tagY = headerTop + (nameLines.length - 1) * 42 + (creatorOnNewLine ? 42 : 3);
-    roundedRect(context, tagX, tagY, 56, 32, 6, colors.goldTint);
+  if (roleLabel) {
+    const tagX = roleOnNewLine ? identityLeft : identityLeft + lastNameWidth + 10;
+    const tagY = headerTop + (nameLines.length - 1) * 42 + (roleOnNewLine ? 42 : 3);
+    roundedRect(context, tagX, tagY, roleWidth, 32, 6, colors.goldTint);
     font(context, 20);
     context.fillStyle = colors.goldText;
-    context.fillText('团长', tagX + 8, tagY + 4);
+    context.fillText(roleLabel, tagX + 8, tagY + 4);
   }
   font(context, 22);
   context.fillStyle = colors.muted;

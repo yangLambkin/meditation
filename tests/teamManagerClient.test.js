@@ -417,3 +417,118 @@ test('remove-member responses cannot overwrite another account cache', async () 
   assert.equal((await request).success, false);
   assert.deepEqual(app.storage.userTeams_second, []);
 });
+
+const roleTeam = () => ({ ...team('team'), creatorName: '原团长', members: ['owner', 'member', 'deputy'],
+  memberCount: 3, deputyLeaders: ['deputy'] });
+const roleResult = overrides => ({ teamId: 'team', creator: 'owner', creatorName: '原团长',
+  members: ['owner', 'member', 'deputy'], memberCount: 3, deputyLeaders: ['deputy', 'member'], ...overrides });
+
+test('deputy appointment and revocation update both caches only after cloud confirmation', async () => {
+  const saved = roleTeam();
+  const pending = deferred();
+  const app = harness({ stored: { userTeams_owner: [saved], joinedTeams_owner: [saved], allTeams_cache: [saved] },
+    cloud: () => pending.promise });
+  const request = app.manager.setTeamDeputy('team', 'member', true);
+  assert.deepEqual(app.storage.userTeams_owner[0].deputyLeaders, ['deputy']);
+  assert.deepEqual(app.calls[0], { type: 'setTeamDeputy', data: { teamId: 'team', memberOpenid: 'member', isDeputy: true }, openid: 'owner' });
+  pending.resolve({ success: true, data: roleResult() });
+  assert.equal((await request).success, true);
+  assert.deepEqual(app.storage.userTeams_owner[0].deputyLeaders, ['deputy', 'member']);
+  assert.deepEqual(app.storage.joinedTeams_owner[0].deputyLeaders, ['deputy', 'member']);
+  assert.equal(app.storage.allTeams_cache, undefined);
+  const revoke = harness({ stored: { userTeams_owner: [saved] },
+    cloud: async () => ({ success: true, data: roleResult({ deputyLeaders: [] }) }) });
+  assert.equal((await revoke.manager.setTeamDeputy('team', 'deputy', false)).success, true);
+  assert.deepEqual(revoke.storage.joinedTeams_owner[0].deputyLeaders, []);
+});
+
+test('leader transfers to members or deputies preserve membership and immediately drop old leader privileges', async () => {
+  for (const newLeader of ['member', 'deputy']) {
+    const saved = roleTeam();
+    const app = harness({ stored: { userTeams_owner: [saved], joinedTeams_owner: [saved] }, cloud: async () => ({
+      success: true, data: roleResult({ creator: newLeader, creatorName: '新团长', deputyLeaders: newLeader === 'deputy' ? [] : ['deputy'] })
+    }) });
+    assert.equal((await app.manager.transferTeamLeader('team', newLeader)).success, true);
+    assert.deepEqual(app.calls[0].data, { teamId: 'team', newLeaderOpenid: newLeader, expectedLeaderOpenid: 'owner' });
+    assert.equal(app.manager.getMyTeams().length, 0);
+    assert.equal(app.manager.getJoinedTeams().length, 1);
+    assert.equal(app.storage.joinedTeams_owner[0].creator, newLeader);
+    assert.equal((await app.manager.deleteTeam('team')).success, false);
+    assert.equal((await app.manager.setTeamDeputy('team', 'member', true)).success, false);
+    assert.equal(app.calls.length, 1);
+  }
+});
+
+test('deputies and members cannot modify roles, transfer, remove members or dissolve a team', async () => {
+  for (const viewer of ['member', 'deputy']) {
+    const app = harness({ stored: { userOpenId: viewer, [`userTeams_${viewer}`]: [roleTeam()] } });
+    assert.equal((await app.manager.setTeamDeputy('team', 'member', true)).success, false);
+    assert.equal((await app.manager.setTeamDeputy('team', 'deputy', false)).success, false);
+    assert.equal((await app.manager.transferTeamLeader('team', 'member')).success, false);
+    assert.equal((await app.manager.removeTeamMember('team', 'member')).success, false);
+    assert.equal((await app.manager.deleteTeam('team')).success, false);
+    assert.equal(app.calls.length, 0);
+  }
+});
+
+test('role changes reject invalid targets, inactive teams, invalid roles and an eighth deputy', async () => {
+  const deputies = Array.from({ length: 7 }, (_, i) => `deputy-${i}`);
+  const full = { ...roleTeam(), members: ['owner', 'member', ...deputies], deputyLeaders: deputies };
+  const app = harness({ stored: { userTeams_owner: [full, { ...roleTeam(), _id: 'inactive', isActive: false }] } });
+  for (const args of [['team', 'owner', true], ['team', 'missing', true], ['team', 'member', 'true'],
+    ['team', 'member', true], ['inactive', 'member', true], ['', 'member', true], ['team', null, true]]) {
+    assert.equal((await app.manager.setTeamDeputy(...args)).success, false);
+  }
+  assert.equal((await app.manager.transferTeamLeader('team', 'owner')).success, false);
+  assert.equal((await app.manager.transferTeamLeader('team', 'missing')).success, false);
+  assert.equal(app.calls.length, 0);
+});
+
+test('failed or malformed role results cannot change cached privileges', async () => {
+  for (const result of [{ success: false, error: '权限已变更' }, ...[
+    null, roleResult({ creator: 'other' }), roleResult({ teamId: 'other' }), roleResult({ members: ['member'] }),
+    roleResult({ deputyLeaders: ['owner'] }), roleResult({ deputyLeaders: ['missing'] }),
+    roleResult({ deputyLeaders: ['deputy'] }), roleResult({ deputyLeaders: ['member', 'member'] })
+  ].map(data => ({ success: true, data }))]) {
+    const saved = roleTeam();
+    const app = harness({ stored: { userTeams_owner: [saved], joinedTeams_owner: [saved] }, cloud: async () => result });
+    assert.equal((await app.manager.setTeamDeputy('team', 'member', true)).success, false);
+    assert.deepEqual(app.storage.userTeams_owner, [saved]);
+    assert.deepEqual(app.storage.joinedTeams_owner, [saved]);
+  }
+});
+
+test('role mutation response cannot contaminate another account after a switch', async () => {
+  for (const transfer of [false, true]) {
+    const pending = deferred();
+    const saved = roleTeam();
+    const app = harness({ stored: { userTeams_owner: [saved], userTeams_second: [] }, cloud: () => pending.promise });
+    const request = transfer ? app.manager.transferTeamLeader('team', 'member') : app.manager.setTeamDeputy('team', 'member', true);
+    app.storage.userOpenId = 'second';
+    pending.resolve({ success: true, data: roleResult({ creator: transfer ? 'member' : 'owner' }) });
+    assert.equal((await request).success, false);
+    assert.deepEqual(app.storage.userTeams_owner, [saved]);
+    assert.deepEqual(app.storage.userTeams_second, []);
+  }
+});
+
+test('an older team refresh cannot restore leader privileges after a transfer', async () => {
+  const refresh = deferred();
+  const saved = roleTeam();
+  const app = harness({ stored: { userTeams_owner: [saved] }, cloud: async request => request.type === 'getUserTeams'
+    ? refresh.promise : { success: true, data: roleResult({ creator: 'member', deputyLeaders: ['deputy'] }) } });
+  const refreshing = app.manager.loadTeamsFromCloud();
+  assert.equal((await app.manager.transferTeamLeader('team', 'member')).success, true);
+  refresh.resolve({ success: true, data: [saved] });
+  await refreshing;
+  assert.equal(app.manager.getMyTeams().length, 0);
+  assert.equal(app.storage.userTeams_owner[0].creator, 'member');
+});
+
+test('removing a deputy releases the cached deputy slot', async () => {
+  const app = harness({ stored: { userTeams_owner: [roleTeam()] }, cloud: async () => ({ success: true,
+    data: { teamId: 'team', members: ['owner', 'member'], memberCount: 2, deputyLeaders: [] } }) });
+  assert.equal((await app.manager.removeTeamMember('team', 'deputy')).success, true);
+  assert.deepEqual(app.storage.userTeams_owner[0].deputyLeaders, []);
+  assert.deepEqual(app.storage.joinedTeams_owner[0].deputyLeaders, []);
+});

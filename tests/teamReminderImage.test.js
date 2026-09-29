@@ -141,6 +141,29 @@ test('long names wrap in full and increase card height without overlapping the s
   assert.ok(minutes.y > subtitle.y + 22);
 });
 
+test('deputy badges fit their text and wrap below a name without colliding with the subtitle', async () => {
+  for (const nickname of ['小林', '一二三四五六七八九十一二']) {
+    const h = harness();
+    await h.generate([member(nickname, { isDeputy: true })]);
+    const role = h.text.find(item => item.value === '副团长');
+    const tag = h.fills.find(fill => fill.kind === 'path' && fill.color === '#f9f7f3');
+    const tagLeft = Math.min(...tag.points.map(point => point[0]));
+    const tagRight = Math.max(...tag.points.map(point => point[0]));
+    assert.equal(role.x - tagLeft, 8);
+    assert.equal(tagRight - role.x - role.width, 8);
+    const name = h.text.find(item => item.font === '500 28px sans-serif');
+    const subtitle = h.text.find(item => item.value === '距离目标还差 34 分钟');
+    if (nickname.length > 2) assert.ok(role.y > name.y + 28);
+    else assert.ok(role.x > name.x + name.width);
+    assert.ok(subtitle.y > role.y + 20);
+    assert.equal(h.text.some(item => item.value === '团长'), false);
+  }
+  const h = harness();
+  await h.generate([member('新团长', { isCreator: true, isDeputy: true })]);
+  assert.equal(h.text.filter(item => item.value === '团长').length, 1);
+  assert.equal(h.text.some(item => item.value === '副团长'), false);
+});
+
 test('loads local and HTTPS avatars and crops non-square images to a circle', async () => {
   const h = harness();
   await h.generate([member('本地', { avatar: '/images/custom-avatar.png' }), member('网络', { avatar: 'https://example.com/avatar.jpg' })]);

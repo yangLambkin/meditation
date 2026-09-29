@@ -80,7 +80,8 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
 const rendered = page => plain(page.data.groups.flatMap(group => group.items));
 
 test('loads team history and formats actual minutes without rounding into the goal', async () => {
-  const { page, calls } = createPage({ cloud: () => success(details([row('a'), row('b', '2026-09-18', 19.999), row('c', '2026-09-17', 12)])) });
+  const { page, calls } = createPage({ cloud: () => success(details([row('a'),
+    { ...row('b', '2026-09-18', 19.999), isDeputy: true }, row('c', '2026-09-17', 12)])) });
   await page.onShow();
   assert.deepEqual(calls.cloud[0], { name: 'teamManager', data: { type: 'getTeamHistoryDetails', data: { teamId: 'team-a', filter: 'unmet', month: '2026-09', limit: 50 } } });
   assert.equal(page.data.hasLoaded, true);
@@ -89,6 +90,8 @@ test('loads team history and formats actual minutes without rounding into the go
   assert.equal(page.data.groups.length, 2);
   assert.deepEqual(rendered(page).map(item => [item.minutesLabel, item.remainingLabel, item.statusLabel]),
     [['0', '', '未练习'], ['19.99', '少于0.01', '时长不足'], ['12', '8', '时长不足']]);
+  assert.equal(rendered(page)[0].isCreator, true);
+  assert.equal(rendered(page)[1].isDeputy, true);
 });
 
 test('pagination merges a date across pages without duplicate members and keeps stable order', async () => {

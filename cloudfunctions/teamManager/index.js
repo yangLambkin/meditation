@@ -5,6 +5,7 @@ const { authorizeControlPanel } = require('./maintenanceAuth');
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const MAX_MEMBERS = 50;
+const MAX_DEPUTIES = 7;
 const PAGE_SIZE = 100;
 const DEFAULT_ICON = '/images/icons/team.png';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,6 +37,8 @@ exports.main = async (event = {}) => {
       case 'joinTeam': return await joinTeam(data, openid);
       case 'leaveTeam': return await leaveTeam(data.teamId, openid);
       case 'removeTeamMember': return await removeTeamMember(data, openid);
+      case 'setTeamDeputy': return await setTeamDeputy(data, openid);
+      case 'transferTeamLeader': return await transferTeamLeader(data, openid);
       case 'updateTeam': return await updateTeam(data.teamId, data.teamData, openid);
       case 'getTeamInfo': return await getTeamInfo(data.teamId, openid);
       case 'checkTeamMember': {
@@ -94,7 +97,7 @@ async function adminTeamMembers(data) {
   }
   return { success: true, data: { teamId: team._id, members: ids.map(id => ({
     openid: id, nickname: profiles.get(id)?.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
-    isCreator: id === team.creator
+    ...memberRole(team, id)
   })) } };
 }
 
@@ -105,19 +108,31 @@ function validateLeaderTransfer(team, newLeaderOpenid, expectedLeaderOpenid) {
 }
 
 async function adminTransferLeader(data, operator) {
+  return transferLeadership(data, operator, true);
+}
+
+async function transferTeamLeader(data, openid) {
+  return transferLeadership(data, openid, false);
+}
+
+async function transferLeadership(data, operator, administrative) {
   const teamId = requireId(data.teamId);
   const newLeaderOpenid = requireId(data.newLeaderOpenid, '新团长');
   const expectedLeaderOpenid = requireId(data.expectedLeaderOpenid, '当前团长');
-  validateLeaderTransfer(await activeTeam(db, teamId), newLeaderOpenid, expectedLeaderOpenid);
+  const initialTeam = await activeTeam(db, teamId);
+  if (!administrative && initialTeam.creator !== operator) throw new Error('只有团长可以交接团长身份');
+  validateLeaderTransfer(initialTeam, newLeaderOpenid, expectedLeaderOpenid);
   // 事务只支持 doc 操作，先定位资料 ID，再于事务内重读资料和团队状态。
   const users = await db.collection('users').where({ _openid: newLeaderOpenid })
     .field({ _id: true }).orderBy('_id', 'asc').limit(1).get();
   const profileId = users.data[0]?._id;
-  const auditId = `audit_${String(Date.now()).padStart(13, '0')}_${crypto.randomBytes(16).toString('hex')}`;
+  const auditId = administrative ? `audit_${String(Date.now()).padStart(13, '0')}_${crypto.randomBytes(16).toString('hex')}` : null;
   const result = await db.runTransaction(async transaction => {
     const team = await activeTeam(transaction, teamId);
+    if (!administrative && team.creator !== operator) throw new Error('只有团长可以交接团长身份');
     validateLeaderTransfer(team, newLeaderOpenid, expectedLeaderOpenid);
     const members = memberIds(team);
+    const deputyLeaders = deputyIds(team).filter(id => id !== newLeaderOpenid);
     const user = profileId ? await optionalDocument(transaction, 'users', profileId) : null;
     const oldRelationId = `${teamId}_${team.creator}`;
     const newRelationId = `${teamId}_${newLeaderOpenid}`;
@@ -127,7 +142,7 @@ async function adminTransferLeader(data, operator) {
     const previousLeader = { openid: team.creator, nickname: team.creatorName || oldRelation?.nickname || '匿名用户' };
     const newLeader = { openid: newLeaderOpenid, nickname: creatorName };
     await transaction.collection('teams').doc(teamId).update({ data: {
-      creator: newLeaderOpenid, creatorName, members, memberCount: members.length, updatedAt: db.serverDate()
+      creator: newLeaderOpenid, creatorName, members, memberCount: members.length, deputyLeaders, updatedAt: db.serverDate()
     } });
     for (const [id, relation, leader, role] of [
       [oldRelationId, oldRelation, previousLeader, 'member'], [newRelationId, newRelation, newLeader, 'creator']
@@ -139,11 +154,14 @@ async function adminTransferLeader(data, operator) {
       } });
     }
     // 审计失败会回滚整次转移，避免无法追溯的团长变更。
-    await transaction.collection('admin_audit_logs').doc(auditId).set({ data: {
-      action: 'transfer_team_leader', teamId, teamName: team.name, operator,
-      previousLeader, newLeader, createdAt: db.serverDate()
-    } });
-    return { teamId, creator: newLeaderOpenid, creatorName, memberCount: members.length, auditId };
+    if (administrative) {
+      await transaction.collection('admin_audit_logs').doc(auditId).set({ data: {
+        action: 'transfer_team_leader', teamId, teamName: team.name, operator,
+        previousLeader, newLeader, createdAt: db.serverDate()
+      } });
+    }
+    return { teamId, creator: newLeaderOpenid, creatorName, members, memberCount: members.length,
+      deputyLeaders, ...(administrative ? { auditId } : {}) };
   });
   return { success: true, data: result };
 }
@@ -172,6 +190,28 @@ function memberIds(team) {
 
 function isMember(team, openid) {
   return Boolean(openid && memberIds(team).includes(openid));
+}
+
+function deputyIds(team) {
+  const members = new Set(memberIds(team));
+  return [...new Set(Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])]
+    .filter(id => id !== team.creator && members.has(id));
+}
+
+function memberRole(team, openid) {
+  const isCreator = openid === team.creator;
+  const isDeputy = deputyIds(team).includes(openid);
+  return { isCreator, isDeputy, role: isCreator ? 'creator' : isDeputy ? 'deputy' : 'member' };
+}
+
+function canInvite(team, openid) {
+  return Boolean(openid && (team.creator === openid || deputyIds(team).includes(openid)));
+}
+
+function rosterResult(team) {
+  const members = memberIds(team);
+  return { teamId: team._id, creator: team.creator, creatorName: team.creatorName || '匿名用户',
+    members, memberCount: members.length, deputyLeaders: deputyIds(team) };
 }
 
 async function activeTeam(database, teamId) {
@@ -205,7 +245,7 @@ async function userTeams(openid) {
     $or: [{ creator: openid }, { members: openid }]
   }).orderBy('createdAt', 'desc').orderBy('_id', 'asc'));
   const now = Date.now();
-  return teams.map(team => ({ ...team, ...practiceSettings(team, now) }));
+  return teams.map(team => ({ ...team, deputyLeaders: deputyIds(team), ...practiceSettings(team, now) }));
 }
 
 function validDate(value) {
@@ -305,7 +345,7 @@ async function createTeam(data, openid) {
   const team = {
     ...fields, creator: openid,
     creatorName: typeof data.creatorName === 'string' ? data.creatorName : '匿名用户',
-    members: [openid], memberCount: 1,
+    members: [openid], memberCount: 1, deputyLeaders: [],
     createdAt: db.serverDate(), updatedAt: db.serverDate(), isActive: true
   };
   // 兼容尚未拥有预留文档的历史团队；事务内部不能使用 where/add。
@@ -359,19 +399,20 @@ async function joinTeam(data, openid) {
     const members = memberIds(team);
     // 重试同一请求时返回成功，避免重复成员和人数增长。
     if (members.includes(openid)) return;
-    if (typeof inviteId !== 'string' || !inviteId.trim()) throw new Error('请通过团长的邀请加入团队');
+    if (typeof inviteId !== 'string' || !inviteId.trim()) throw new Error('请通过团长或副团长的邀请加入团队');
     const invite = await optionalDocument(transaction, 'invites', inviteId);
-    // 邀请必须由当前团长签发。忽略客户端 inviterId，也拒绝历史普通成员签发的邀请。
+    // 签发人须仍为当前团长或副团长，忽略客户端 inviterId。
     // 分享到群聊的邀请仍可被多人使用，但不能跨团队、撤销后或过期后使用。
-    if (!invite || invite.teamId !== teamId || invite.inviterId !== team.creator ||
+    if (!invite || invite.teamId !== teamId || !canInvite(team, invite.inviterId) ||
         !['pending', 'accepted'].includes(invite.status) ||
         !Number.isFinite(timestampValue(invite.expireTime)) || timestampValue(invite.expireTime) <= Date.now()) {
-      throw new Error('邀请链接已失效，请联系团长重新邀请');
+      throw new Error('邀请链接已失效，请联系团长或副团长重新邀请');
     }
     if (members.length >= MAX_MEMBERS) throw new Error('团队人数已达上限');
+    const deputyLeaders = deputyIds(team);
     members.push(openid);
     await transaction.collection('teams').doc(teamId).update({
-      data: { members, memberCount: members.length, updatedAt: db.serverDate() }
+      data: { members, memberCount: members.length, deputyLeaders, updatedAt: db.serverDate() }
     });
     // set 可以覆盖旧版本退出后遗留的关系，团队及关系写入必须一起成功。
     await transaction.collection('team_members').doc(`${teamId}_${openid}`).set({ data: {
@@ -387,10 +428,10 @@ async function joinTeam(data, openid) {
 async function leaveTeam(teamId, openid) {
   await db.runTransaction(async transaction => {
     const team = await activeTeam(transaction, teamId);
-    if (team.creator === openid) throw new Error('团队创建者不能离开团队，请删除团队');
+    if (team.creator === openid) throw new Error('团长不能离开团队，请先交接团长身份或解散团队');
     const members = memberIds(team).filter(id => id !== openid);
     await transaction.collection('teams').doc(teamId).update({
-      data: { members, memberCount: members.length, updatedAt: db.serverDate() }
+      data: { members, memberCount: members.length, deputyLeaders: deputyIds(team).filter(id => id !== openid), updatedAt: db.serverDate() }
     });
     await transaction.collection('team_members').doc(`${teamId}_${openid}`).remove();
   });
@@ -400,7 +441,7 @@ async function leaveTeam(teamId, openid) {
 async function removeTeamMember(data, openid) {
   const teamId = requireId(data.teamId);
   const memberOpenid = requireId(data.memberOpenid, '成员');
-  const members = await db.runTransaction(async transaction => {
+  const result = await db.runTransaction(async transaction => {
     const team = await activeTeam(transaction, teamId);
     if (team.creator !== openid) throw new Error('只有团长可以移除成员');
     if (memberOpenid === team.creator) throw new Error('不能移除团长本人');
@@ -409,13 +450,47 @@ async function removeTeamMember(data, openid) {
     // 团队文档是成员权限的依据。事务重试时重新读取并按实际成员计算人数，
     // 并发移除、加入或退出都不会造成重复扣减或负人数。
     const remaining = currentMembers.filter(id => id !== memberOpenid);
+    const deputyLeaders = deputyIds(team).filter(id => id !== memberOpenid);
     await transaction.collection('teams').doc(teamId).update({
-      data: { members: remaining, memberCount: remaining.length, updatedAt: db.serverDate() }
+      data: { members: remaining, memberCount: remaining.length, deputyLeaders, updatedAt: db.serverDate() }
     });
     await transaction.collection('team_members').doc(`${teamId}_${memberOpenid}`).remove();
-    return remaining;
+    return rosterResult({ ...team, members: remaining, deputyLeaders });
   });
-  return { success: true, data: { teamId, memberOpenid, members, memberCount: members.length } };
+  return { success: true, data: { ...result, memberOpenid } };
+}
+
+async function setTeamDeputy(data, openid) {
+  const teamId = requireId(data.teamId);
+  const memberOpenid = requireId(data.memberOpenid, '成员');
+  if (typeof data.isDeputy !== 'boolean') throw new Error('副团长设置无效');
+  const result = await db.runTransaction(async transaction => {
+    const team = await activeTeam(transaction, teamId);
+    if (team.creator !== openid) throw new Error('只有团长可以设置副团长');
+    if (memberOpenid === team.creator) throw new Error('团长不能兼任副团长');
+    if (!isMember(team, memberOpenid)) throw new Error('该成员已不在团队中');
+    let deputyLeaders = deputyIds(team);
+    if (data.isDeputy) {
+      if (!deputyLeaders.includes(memberOpenid)) {
+        if (deputyLeaders.length >= MAX_DEPUTIES) throw new Error('副团长最多设置7人');
+        deputyLeaders.push(memberOpenid);
+      }
+    } else deputyLeaders = deputyLeaders.filter(id => id !== memberOpenid);
+    const relationId = `${teamId}_${memberOpenid}`;
+    const relation = await optionalDocument(transaction, 'team_members', relationId);
+    const { _id, ...existing } = relation || {};
+    const canonical = rosterResult({ ...team, deputyLeaders });
+    await transaction.collection('teams').doc(teamId).update({ data: {
+      members: canonical.members, memberCount: canonical.memberCount, deputyLeaders, updatedAt: db.serverDate()
+    } });
+    await transaction.collection('team_members').doc(relationId).set({ data: {
+      joinedAt: team.createdAt || db.serverDate(), createdAt: db.serverDate(), checkInCount: 0,
+      ...existing, teamId, openid: memberOpenid, nickname: relation?.nickname || '匿名用户',
+      role: data.isDeputy ? 'deputy' : 'member', status: 'active', updatedAt: db.serverDate()
+    } });
+    return canonical;
+  });
+  return { success: true, data: result };
 }
 
 async function getTeamInfo(teamId, openid) {
@@ -430,10 +505,10 @@ async function getTeamInfo(teamId, openid) {
     return {
       ...(allowed ? { openid: memberOpenid } : {}),
       nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
-      avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: memberOpenid === team.creator
+      avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, memberOpenid)
     };
   }));
-  const info = allowed ? { ...team } : publicTeam(team);
+  const info = allowed ? { ...team, deputyLeaders: deputyIds(team) } : publicTeam(team);
   return { success: true, data: { ...info, ...practiceSettings(team), members, memberCount: members.length, isMember: allowed } };
 }
 
@@ -544,7 +619,7 @@ async function getTeamMemberPracticeRecords(data, openid) {
   const member = {
     openid: memberOpenid,
     nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
-    avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: memberOpenid === team.creator
+    avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, memberOpenid)
   };
   const records = [];
   let cursor = null;
@@ -661,7 +736,7 @@ function memberPracticeProfile(team, id, profiles) {
   const user = profiles.get(id) || {};
   return {
     openid: id, nickname: user.nickName || (id === team.creator ? team.creatorName : '') || '匿名用户',
-    avatarUrl: user.avatarUrl || '/images/avatar.png', isCreator: id === team.creator
+    avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, id)
   };
 }
 
@@ -709,7 +784,7 @@ async function getTeamPracticeReport(teamId, openid, month) {
     };
   });
   return { success: true, data: {
-    teamId, businessDate,
+    teamId, businessDate, creator: team.creator, deputyLeaders: deputyIds(team),
     nextResetAt: Date.parse(`${businessDate}T02:00:00+08:00`) + DAY_MS,
     settings, history, summary, members,
     overview: {
@@ -782,9 +857,10 @@ async function getTeamHistoryDetails(data, openid) {
 async function generateInvite(data, openid) {
   const invitation = await db.runTransaction(async transaction => {
     const team = await activeTeam(transaction, data.teamId);
-    if (team.creator !== openid) throw new Error('只有团长可以邀请新成员');
-    // 确定 ID 的指针让并发请求产生文档冲突并重试，实际入群凭证仍使用随机 ID。
-    const cacheId = `_invite_cache_${crypto.createHash('sha256').update(data.teamId).digest('hex')}`;
+    if (!canInvite(team, openid)) throw new Error('只有团长或副团长可以邀请新成员');
+    // 每位签发人独立缓存，团长及副团长相互分享时不会覆盖缓存或无谓重建凭证。
+    // 同一签发人的并发请求仍通过确定 ID 产生文档冲突并重试。
+    const cacheId = `_invite_cache_${crypto.createHash('sha256').update(JSON.stringify([data.teamId, openid])).digest('hex')}`;
     const cache = await optionalDocument(transaction, 'invites', cacheId);
     const cachedInvite = cache && cache._type === 'team_invite_cache' && cache.teamId === data.teamId &&
       typeof cache.inviteId === 'string' && cache.inviteId.trim()
@@ -819,7 +895,7 @@ async function generateInvite(data, openid) {
 
 async function recordInviteAction(data, openid) {
   const team = await activeTeam(db, data.teamId);
-  if (team.creator !== openid) throw new Error('只有团长可以记录邀请');
+  if (!canInvite(team, openid)) throw new Error('只有团长或副团长可以记录邀请');
   requireId(data.inviteId, '邀请');
   const invite = (await db.collection('invites').doc(data.inviteId).get()).data;
   if (!invite || invite.teamId !== data.teamId || invite.inviterId !== openid) throw new Error('邀请信息无效');

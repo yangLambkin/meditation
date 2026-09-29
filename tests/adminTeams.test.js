@@ -376,9 +376,9 @@ test('member administration displays authoritative roster and minimal profiles w
   const app = harness(initial);
   assert.deepEqual((await app.call('adminTeamMembers', { teamId: 'team' })).data, {
     teamId: 'team', members: [
-      { openid: 'owner', nickname: '队长', isCreator: true },
-      { openid: 'member', nickname: '新团长', isCreator: false },
-      { openid: 'third', nickname: '匿名用户', isCreator: false }
+      { openid: 'owner', nickname: '队长', isCreator: true, isDeputy: false, role: 'creator' },
+      { openid: 'member', nickname: '新团长', isCreator: false, isDeputy: false, role: 'member' },
+      { openid: 'third', nickname: '匿名用户', isCreator: false, isDeputy: false, role: 'member' }
     ]
   });
   assert.equal(JSON.stringify(app.reads).includes('meditation_records'), false);
@@ -411,6 +411,29 @@ test('leader transfer atomically normalizes roster, updates both roles and retai
     teamId: 'team', teamName: '一起冥想', operator: 'operator', previousLeader: { openid: 'owner', nickname: '队长' },
     newLeader: { openid: 'member', nickname: '新团长' }, createdAt: new Date(NOW).toISOString() });
   assert.ok(app.writes.every(write => write.inTransaction));
+});
+
+test('administrative transfer promotes a deputy and keeps the remaining deputies and audited roles consistent', async () => {
+  const initial = roster();
+  initial.teams[0].deputyLeaders = ['member', 'third', 'member', 'owner', 'former'];
+  initial.team_members[0].role = 'deputy';
+  const app = harness(initial);
+  const before = (await app.call('adminTeamMembers', { teamId: 'team' })).data.members;
+  assert.equal(before.find(row => row.openid === 'member').isDeputy, true);
+  assert.equal(before.find(row => row.openid === 'member').role, 'deputy');
+  assert.equal(before.find(row => row.openid === 'owner').isDeputy, false);
+  const response = await app.call('adminTransferLeader', transfer);
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data.members, ['owner', 'member', 'third']);
+  assert.deepEqual(response.data.deputyLeaders, ['third']);
+  assert.deepEqual(app.stored.teams[0].deputyLeaders, ['third']);
+  assert.equal(app.stored.team_members.find(row => row.openid === 'owner').role, 'member');
+  assert.equal(app.stored.team_members.find(row => row.openid === 'member').role, 'creator');
+  assert.equal(app.stored.admin_audit_logs[0].newLeader.openid, 'member');
+  const failed = harness(initial, { fail: 'admin_audit_logs:set' });
+  assert.equal((await failed.call('adminTransferLeader', transfer)).success, false);
+  assert.deepEqual(failed.stored.teams, initial.teams);
+  assert.deepEqual(failed.stored.team_members, initial.team_members);
 });
 
 test('transfer validates active roster, expected leader and no-op before profiles and writes', async () => {

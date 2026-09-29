@@ -86,11 +86,13 @@ Page({
           (typeof member === 'string' ? member : member.openid) === openid));
       const members = (teamInfo.members || []).map((entry, index) => {
         const member = typeof entry === 'string' ? { openid: entry } : entry;
+        const isCreator = member.isCreator || member.openid && member.openid === teamInfo.creator;
+        const isDeputy = member.isDeputy || member.openid && Array.isArray(teamInfo.deputyLeaders) && teamInfo.deputyLeaders.includes(member.openid);
         return {
           id: member.openid || `member_${index}`,
           openid: member.openid,
           name: member.nickname || '成员',
-          role: member.isCreator || member.openid && member.openid === teamInfo.creator ? '团长' : '成员',
+          role: isCreator ? '团长' : isDeputy ? '副团长' : '成员',
           avatar: member.avatarUrl || '/images/avatar.png',
           checkInCount: 0,
           monthlyCount: 0
@@ -142,7 +144,7 @@ Page({
     }
     if (this.data.isMember) return this.enterTeamDetails();
     if (!this.data.inviteId) {
-      wx.showToast({ title: '请联系团长获取邀请', icon: 'none' });
+      wx.showToast({ title: '请联系团长或副团长获取邀请', icon: 'none' });
       return;
     }
     if (!this.hasUserInfo()) {

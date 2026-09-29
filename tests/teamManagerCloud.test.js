@@ -309,7 +309,7 @@ test('membership and relation writes roll back together on join/leave/commit fai
   assert.deepEqual(app.stored.team_members, initial.team_members);
 });
 
-test('only the creator can generate an invitation even if an ordinary member impersonates them', async () => {
+test('ordinary members cannot generate an invitation by impersonating a leader', async () => {
   const app = harness({ teams: [team({ members: ['owner', 'member'] })] });
   for (const openid of ['outsider', 'member', '']) {
     const denied = await app.call('generateInvite', { teamId: 'team', inviterId: 'owner', creator: 'owner' }, openid, { openid: 'owner' });
@@ -501,7 +501,7 @@ test('invitation storage failures cannot be mistaken for permission to join', as
   assert.equal(app.writes.length, 0);
 });
 
-test('only the creator can record invitation generation, including historical member invitations', async () => {
+test('ordinary members cannot record invitation generation, including historical member invitations', async () => {
   const app = harness({ teams: [team({ members: ['owner', 'member'] })], invites: [
     invitation(), invitation({ _id: 'member-invite', inviterId: 'member' })
   ] });
@@ -733,7 +733,7 @@ test('practice report sums same-day sessions, keeps today separate, and counts q
   assert.deepEqual(report.overview, { memberCount: 3, totalPracticeCount: 7, activeMemberCount: 2, activityRate: 67 });
   assert.ok(Math.abs(report.members[0].totalMinutes - 39.99) < 1e-10);
   assert.ok(Math.abs(report.members[0].cumulativeMinutes - 59.99) < 1e-10);
-  assert.deepEqual({ ...report.members[0], totalMinutes: 39.99, cumulativeMinutes: 59.99 }, { openid: 'owner', nickname: '队长昵称', avatarUrl: 'cloud://avatar', isCreator: true,
+  assert.deepEqual({ ...report.members[0], totalMinutes: 39.99, cumulativeMinutes: 59.99 }, { openid: 'owner', nickname: '队长昵称', avatarUrl: 'cloud://avatar', isCreator: true, isDeputy: false, role: 'creator',
     todayMinutes: 20, todayStatus: 'qualified', practiceDays: 2, qualifiedDays: 1, belowGoalDays: 1, missedDays: 1, unmetDays: 2, totalMinutes: 39.99,
     totalPracticeCount: 5, todayPracticeCount: 2, cumulativeMinutes: 59.99, lastPracticeAt: null, lastPracticeDate: '2026-09-17' });
   const member = report.members.find(row => row.openid === 'member');
@@ -1010,7 +1010,7 @@ test('history details agree with report counts and identify each unpracticed or 
     ['2026-09-14', 'absent', 'not_practiced']
   ]);
   assert.deepEqual(details.items[1], { date: '2026-09-16', openid: 'member', nickname: '同修', avatarUrl: 'cloud://avatar',
-    isCreator: false, minutes: 19.99, status: 'below_goal' });
+    isCreator: false, isDeputy: false, role: 'member', minutes: 19.99, status: 'below_goal' });
   assert.equal(details.items[2].nickname, '队长');
   assert.equal(details.items[2].isCreator, true);
   assert.equal(details.items[0].nickname, '匿名用户');
@@ -1390,7 +1390,7 @@ test('member practice records require active membership for both requester and t
   assert.equal(inactive.reads.filter(read => ['users', 'meditation_records'].includes(read.name)).length, 0);
   const allowed = await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'owner' }, 'member');
   assert.equal(allowed.success, true);
-  assert.deepEqual(allowed.data.member, { openid: 'owner', nickname: '队长', avatarUrl: '/images/avatar.png', isCreator: true });
+  assert.deepEqual(allowed.data.member, { openid: 'owner', nickname: '队长', avatarUrl: '/images/avatar.png', isCreator: true, isDeputy: false, role: 'creator' });
 });
 
 test('member practice records match report business dates and accepted durations without exposing journal content', async () => {
@@ -1415,7 +1415,7 @@ test('member practice records match report business dates and accepted durations
   ] });
   const result = await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'member' });
   assert.equal(result.success, true);
-  assert.deepEqual(result.data.member, { openid: 'member', nickname: '成员昵称', avatarUrl: 'cloud://member', isCreator: false });
+  assert.deepEqual(result.data.member, { openid: 'member', nickname: '成员昵称', avatarUrl: 'cloud://member', isCreator: false, isDeputy: false, role: 'member' });
   assert.equal(result.data.startDate, '2026-09-16');
   assert.equal(result.data.businessDate, '2026-09-17');
   assert.deepEqual(result.data.records, [
@@ -1442,7 +1442,7 @@ test('member records use the effective team creation date and keep empty records
   ] });
   const result = await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'member' });
   assert.equal(result.success, true, 'creator is a member even if missing from the stored roster');
-  assert.deepEqual(result.data, { member: { openid: 'member', nickname: '匿名用户', avatarUrl: '/images/avatar.png', isCreator: false },
+  assert.deepEqual(result.data, { member: { openid: 'member', nickname: '匿名用户', avatarUrl: '/images/avatar.png', isCreator: false, isDeputy: false, role: 'member' },
     startDate: '2026-09-16', businessDate: '2026-09-17', records: [] });
 });
 
@@ -1494,7 +1494,7 @@ test('removing a member changes roster and relation atomically while retaining p
     team_members: [{ _id: 'team_member', teamId: 'team', openid: 'member' }],
     meditation_records: [{ _id: 'private-record', _openid: 'member', date: '2026-09-17', duration: 20 }] });
   const result = await app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'member' });
-  assert.deepEqual(result.data, { teamId: 'team', memberOpenid: 'member', members: ['owner', 'third'], memberCount: 2 });
+  assert.deepEqual(result.data, { teamId: 'team', creator: 'owner', creatorName: '队长', deputyLeaders: [], memberOpenid: 'member', members: ['owner', 'third'], memberCount: 2 });
   assert.deepEqual(app.stored.teams[0].members, ['owner', 'third']);
   assert.equal(app.stored.teams[0].memberCount, 2);
   assert.equal(app.stored.team_members.length, 0);
@@ -1607,4 +1607,246 @@ test('weekly member records retain manual date markers so clients preserve the s
   assert.deepEqual(week.records.map(getRecordBusinessDate), ['2026-08-31', '2026-08-30']);
   assert.equal(week.records[0].source, 'manual');
   assert.equal(week.records[1].dateSource, 'manual');
+});
+
+const deputyRoster = () => ({ teams: [team({ members: ['owner', 'deputy', 'member', 'third'], memberCount: 4,
+  deputyLeaders: ['deputy'] })], team_members: [
+  { _id: 'team_deputy', teamId: 'team', openid: 'deputy', nickname: '副团长', role: 'deputy',
+    status: 'active', joinedAt: '2026-09-02T00:00:00Z', checkInCount: 9 },
+  { _id: 'team_member', teamId: 'team', openid: 'member', nickname: '成员', role: 'member', status: 'active' }
+] });
+const selfTransfer = { teamId: 'team', newLeaderOpenid: 'member', expectedLeaderOpenid: 'owner' };
+
+test('only the authenticated leader may appoint deputies or transfer leadership; deputies have no destructive privileges', async () => {
+  const actions = [
+    ['setTeamDeputy', { teamId: 'team', memberOpenid: 'member', isDeputy: true }],
+    ['setTeamDeputy', { teamId: 'team', memberOpenid: 'deputy', isDeputy: false }],
+    ['transferTeamLeader', selfTransfer],
+    ['removeTeamMember', { teamId: 'team', memberOpenid: 'member' }],
+    ['deleteTeam', { teamId: 'team' }],
+    ['updateTeam', { teamId: 'team', teamData: { dailyGoalMinutes: 1 } }]
+  ];
+  for (const actor of ['deputy', 'member', 'outsider', '']) {
+    const app = harness(deputyRoster());
+    for (const [type, data] of actions) {
+      assert.equal((await app.call(type, { ...data, openid: 'owner', creator: 'owner', role: 'creator' }, actor,
+        { openid: 'owner' })).success, false, `${type}/${actor}`);
+    }
+    assert.deepEqual(app.writes, []);
+  }
+});
+
+test('deputy changes validate membership and a strict boolean before writes', async () => {
+  for (const data of [
+    { memberOpenid: 'owner', isDeputy: true }, { memberOpenid: 'outsider', isDeputy: true },
+    { memberOpenid: 'outsider', isDeputy: false }, { memberOpenid: 'member', isDeputy: 'true' },
+    { memberOpenid: 'member', isDeputy: 1 }, { memberOpenid: 'member' },
+    { memberOpenid: { $ne: '' }, isDeputy: true }
+  ]) {
+    const app = harness(deputyRoster());
+    assert.equal((await app.call('setTeamDeputy', { teamId: 'team', ...data })).success, false);
+    assert.deepEqual(app.writes, []);
+  }
+});
+
+test('deputy appointments enforce seven slots under concurrency and are retry-safe at capacity', async () => {
+  const members = ['owner', ...Array.from({ length: 8 }, (_, index) => `member-${index}`)];
+  const app = harness({ teams: [team({ members, memberCount: 99, deputyLeaders: members.slice(1, 7) })] });
+  const results = await Promise.all(members.slice(7).map(memberOpenid =>
+    app.call('setTeamDeputy', { teamId: 'team', memberOpenid, isDeputy: true })));
+  assert.equal(results.filter(result => result.success).length, 1);
+  assert.match(results.find(result => !result.success).error, /7/);
+  const roster = app.stored.teams[0];
+  assert.equal(roster.deputyLeaders.length, 7);
+  assert.equal(roster.memberCount, members.length);
+  const retry = await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: roster.deputyLeaders[0], isDeputy: true });
+  assert.equal(retry.success, true);
+  assert.deepEqual(retry.data, { teamId: 'team', creator: 'owner', creatorName: '队长',
+    members, memberCount: members.length, deputyLeaders: roster.deputyLeaders });
+  assert.equal(new Set(app.stored.teams[0].deputyLeaders).size, 7);
+  assert.ok(app.writes.every(write => write.inTransaction));
+});
+
+test('appointing and removing a deputy normalize the roster while preserving member relation metadata', async () => {
+  const initial = deputyRoster();
+  initial.teams[0].members = ['member', 'deputy', 'member', 'third'];
+  initial.teams[0].deputyLeaders = ['owner', 'deputy', 'deputy', 'outsider'];
+  const app = harness(initial);
+  const assigned = await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'member', isDeputy: true });
+  assert.equal(assigned.success, true);
+  assert.deepEqual(assigned.data.members, ['owner', 'member', 'deputy', 'third']);
+  assert.deepEqual(assigned.data.deputyLeaders, ['deputy', 'member']);
+  assert.equal(app.stored.team_members.find(row => row.openid === 'member').role, 'deputy');
+  const removed = await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'deputy', isDeputy: false });
+  assert.deepEqual(removed.data.deputyLeaders, ['member']);
+  const relation = app.stored.team_members.find(row => row.openid === 'deputy');
+  assert.equal(relation.role, 'member');
+  assert.equal(relation.nickname, '副团长');
+  assert.equal(relation.joinedAt, initial.team_members[0].joinedAt);
+  assert.equal(relation.checkInCount, 9);
+});
+
+test('legacy teams return no deputies and member roles derive solely from the authoritative team roster', async () => {
+  const legacy = harness({ teams: [team()] });
+  assert.deepEqual((await legacy.call('getUserTeams', {})).data[0].deputyLeaders, []);
+  assert.deepEqual((await legacy.call('getTeamInfo', { teamId: 'team' })).data.deputyLeaders, []);
+  const initial = deputyRoster();
+  initial.teams[0].deputyLeaders.push('outsider', 'owner', 'deputy');
+  initial.team_members[1].role = 'deputy';
+  const app = harness(initial);
+  const info = (await app.call('getTeamInfo', { teamId: 'team' }, 'deputy')).data;
+  assert.deepEqual(info.deputyLeaders, ['deputy']);
+  assert.deepEqual(info.members.map(row => [row.openid, row.isCreator, row.isDeputy, row.role]), [
+    ['owner', true, false, 'creator'], ['deputy', false, true, 'deputy'],
+    ['member', false, false, 'member'], ['third', false, false, 'member']
+  ]);
+  const report = (await app.call('getTeamPracticeReport', { teamId: 'team' }, 'deputy')).data;
+  assert.equal(report.creator, 'owner');
+  assert.deepEqual(report.deputyLeaders, ['deputy']);
+  assert.equal(report.members.find(row => row.openid === 'deputy').isDeputy, true);
+  const publicInfo = (await app.call('getTeamInfo', { teamId: 'team' }, '')).data;
+  assert.equal(publicInfo.deputyLeaders, undefined, 'public results must not leak deputy openids');
+  assert.equal(publicInfo.members.some(row => row.openid), false);
+  assert.equal((await app.call('generateInvite', { teamId: 'team' }, 'outsider')).success, false);
+});
+
+test('deputies can generate and record invitations; demotion immediately invalidates their old invitations', async () => {
+  const app = harness(deputyRoster());
+  const generated = await app.call('generateInvite', { teamId: 'team', inviterId: 'owner' }, 'deputy');
+  assert.equal(generated.success, true);
+  const inviteId = generated.data.inviteId;
+  assert.equal(app.stored.invites.find(row => row._id === inviteId).inviterId, 'deputy');
+  assert.equal((await app.call('generateInvite', { teamId: 'team' }, 'deputy')).data.inviteId, inviteId);
+  assert.equal((await app.call('recordInviteAction', { teamId: 'team', inviteId }, 'deputy')).success, true);
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId }, 'first')).success, true);
+  assert.equal((await app.call('recordInviteRelation', { teamId: 'team' }, 'first')).success, true);
+  assert.equal(app.stored.team_members.find(row => row.openid === 'first').invitedBy, 'deputy');
+  assert.equal((await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'deputy', isDeputy: false })).success, true);
+  for (const type of ['generateInvite', 'recordInviteAction']) {
+    assert.equal((await app.call(type, { teamId: 'team', inviteId }, 'deputy')).success, false);
+  }
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId }, 'second')).success, false);
+});
+
+test('all seven deputies and the leader keep independent reusable invitation credentials', async () => {
+  const deputies = Array.from({ length: 7 }, (_, index) => `deputy-${index}`);
+  const members = ['owner', ...deputies];
+  const app = harness({ teams: [team({ members, deputyLeaders: deputies })] });
+  const generated = await Promise.all(members.map(openid => app.call('generateInvite', { teamId: 'team' }, openid)));
+  assert.ok(generated.every(result => result.success));
+  assert.equal(new Set(generated.map(result => result.data.inviteId)).size, 8);
+  const writes = app.writes.length;
+  const reused = await Promise.all(members.map(openid => app.call('generateInvite', { teamId: 'team' }, openid)));
+  assert.deepEqual(reused, generated);
+  assert.equal(app.writes.length, writes);
+  for (const [index, openid] of members.entries()) {
+    const invite = app.stored.invites.find(row => row._id === generated[index].data.inviteId);
+    assert.equal(invite.inviterId, openid);
+  }
+});
+
+test('deputy departure or removal clears both authority sources and invalidates their invitations', async () => {
+  for (const remove of [false, true]) {
+    const initial = deputyRoster();
+    initial.invites = [invitation({ inviterId: 'deputy' })];
+    const app = harness(initial);
+    const result = remove
+      ? await app.call('removeTeamMember', { teamId: 'team', memberOpenid: 'deputy' })
+      : await app.call('leaveTeam', { teamId: 'team' }, 'deputy');
+    assert.equal(result.success, true);
+    assert.deepEqual(app.stored.teams[0].deputyLeaders, []);
+    assert.equal(app.stored.team_members.some(row => row.openid === 'deputy'), false);
+    assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'new')).success, false);
+  }
+  const app = harness(deputyRoster());
+  const results = await Promise.all([
+    app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'member', isDeputy: true }),
+    app.call('leaveTeam', { teamId: 'team' }, 'member')
+  ]);
+  assert.equal(results[1].success, true);
+  assert.equal(app.stored.teams[0].deputyLeaders.includes('member'), false);
+  assert.equal(app.stored.team_members.some(row => row.openid === 'member'), false);
+});
+
+test('leaders can transfer to members or deputies without changing membership, preserving metadata and demoting themselves', async () => {
+  for (const target of ['member', 'deputy']) {
+    const initial = deputyRoster();
+    initial.users = [{ _id: 'profile', _openid: target, nickName: '新团长' }];
+    const app = harness(initial);
+    const result = await app.call('transferTeamLeader', { ...selfTransfer, newLeaderOpenid: target,
+      creatorName: 'forged', deputyLeaders: ['owner'] });
+    assert.equal(result.success, true);
+    assert.deepEqual(result.data, { teamId: 'team', creator: target, creatorName: '新团长',
+      members: initial.teams[0].members, memberCount: 4, deputyLeaders: target === 'deputy' ? [] : ['deputy'] });
+    assert.equal(app.stored.team_members.find(row => row.openid === 'owner').role, 'member');
+    const promoted = app.stored.team_members.find(row => row.openid === target);
+    assert.equal(promoted.role, 'creator');
+    assert.equal(promoted.nickname, '新团长');
+    if (target === 'deputy') {
+      assert.equal(promoted.joinedAt, initial.team_members[0].joinedAt);
+      assert.equal(promoted.checkInCount, 9);
+    }
+    assert.equal((await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'third', isDeputy: true })).success, false);
+    assert.equal((await app.call('setTeamDeputy', { teamId: 'team', memberOpenid: 'third', isDeputy: true }, target)).success, true);
+    assert.equal((await app.call('leaveTeam', { teamId: 'team' }, target)).success, false);
+    assert.equal((await app.call('leaveTeam', { teamId: 'team' }, 'owner')).success, true);
+    assert.ok(app.writes.every(write => write.inTransaction));
+  }
+});
+
+test('leader transfer rejects invalid or stale targets and rechecks authority and membership within the transaction', async () => {
+  for (const data of [
+    { ...selfTransfer, newLeaderOpenid: 'owner' }, { ...selfTransfer, newLeaderOpenid: 'outsider' },
+    { ...selfTransfer, expectedLeaderOpenid: 'former' }, { ...selfTransfer, expectedLeaderOpenid: undefined }
+  ]) {
+    const app = harness(deputyRoster());
+    assert.equal((await app.call('transferTeamLeader', data)).success, false);
+    assert.deepEqual(app.writes, []);
+    assert.equal(app.reads.some(read => read.name === 'users'), false);
+  }
+  for (const change of ['leader', 'member']) {
+    const app = harness(deputyRoster(), { afterQuery({ name }, rows) {
+      if (name !== 'users') return;
+      if (change === 'leader') rows.teams[0].creator = 'third';
+      else rows.teams[0].members = rows.teams[0].members.filter(id => id !== 'member');
+    } });
+    assert.equal((await app.call('transferTeamLeader', selfTransfer)).success, false);
+    assert.deepEqual(app.writes, []);
+  }
+});
+
+test('concurrent leadership transfers cannot overwrite the first successful transfer', async () => {
+  const app = harness(deputyRoster());
+  const results = await Promise.all(['member', 'deputy'].map(newLeaderOpenid =>
+    app.call('transferTeamLeader', { ...selfTransfer, newLeaderOpenid })));
+  assert.equal(results.filter(result => result.success).length, 1);
+  const winner = results.find(result => result.success).data.creator;
+  assert.equal(app.stored.teams[0].creator, winner);
+  assert.equal(app.stored.team_members.filter(row => row.role === 'creator').length, 1);
+  assert.equal(app.stored.team_members.find(row => row.openid === winner).role, 'creator');
+});
+
+test('deputy and leader changes roll back team and relation together on write or commit failure', async () => {
+  for (const [type, data] of [
+    ['setTeamDeputy', { teamId: 'team', memberOpenid: 'member', isDeputy: true }],
+    ['setTeamDeputy', { teamId: 'team', memberOpenid: 'deputy', isDeputy: false }],
+    ['transferTeamLeader', { ...selfTransfer, newLeaderOpenid: 'deputy' }]
+  ]) {
+    for (const fail of ['teams:update', 'team_members:set', 'commit']) {
+      const initial = deputyRoster();
+      const app = harness(initial, { fail });
+      assert.equal((await app.call(type, data)).success, false, `${type}/${fail}`);
+      assert.deepEqual(app.stored.teams, initial.teams);
+      assert.deepEqual(app.stored.team_members, initial.team_members);
+    }
+  }
+});
+
+test('leadership handoff invalidates the old leader invite and preserves an incoming deputy invite', async () => {
+  const app = harness({ ...deputyRoster(), invites: [invitation(), invitation({ _id: 'deputy-invite', inviterId: 'deputy' })] });
+  assert.equal((await app.call('transferTeamLeader', { ...selfTransfer, newLeaderOpenid: 'deputy' })).success, true);
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'new')).success, false);
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: 'deputy-invite' }, 'new')).success, true);
+  assert.equal((await app.call('generateInvite', { teamId: 'team' }, 'owner')).success, false);
+  assert.equal((await app.call('generateInvite', { teamId: 'team' }, 'deputy')).success, true);
 });

@@ -96,6 +96,7 @@ button::after { border: none; }
 .member-identity { flex: 1; min-width: 160rpx; }
 .member-name-row { gap: 8rpx 10rpx; flex-wrap: wrap; align-items: baseline; }
 .member-name { max-width: 100%; font-size: 28rpx; font-weight: 500; line-height: 1.5; white-space: normal; word-break: break-all; overflow-wrap: anywhere; }
+.team-role-note { display: flex; flex-wrap: wrap; gap: 8rpx 20rpx; margin: -4rpx 0 22rpx; color: #8b9289; font-size: 22rpx; line-height: 1.6; }
 .creator-tag { flex: none; white-space: nowrap; padding: 2rpx 8rpx; font-size: 20rpx; color: #a68a57; background: #b2976414; border-radius: 6rpx; line-height: 1.5; }
 .member-subtitle { display: block; margin-top: 9rpx; color: #99a1ae; font-size: 22rpx; line-height: 1.5; }
 .status-badge { flex-shrink: 0; padding: 7rpx 12rpx; border-radius: 9rpx; font-size: 20rpx; white-space: nowrap; }
@@ -163,3 +164,5 @@ button::after { border: none; }
 .settings-error { display: block; color: #d9534f; font-size: 24rpx; line-height: 1.6; margin-top: 21rpx; }
 .dissolve-button { margin-top: 14rpx; width: 100%; line-height: 65rpx; font-size: 22rpx; color: #d9534f; background: transparent; }
 @media (max-width: 360px) { .team-stats { gap: 10rpx; } .status-badge { margin-left: auto; } .practice-detail { margin-left: 0; } }
+
+.deputy-tag { color: #66806c; background: #edf2ec; }

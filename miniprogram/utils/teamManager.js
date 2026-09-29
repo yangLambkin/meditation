@@ -5,6 +5,8 @@ const teamIdOf = team => team.cloudId || team._id;
 const memberIdsOf = team => Array.isArray(team.members)
   ? [...new Set(team.members.map(member => typeof member === 'string' ? member : member && member.openid).filter(Boolean))]
   : [];
+const deputyIdsOf = team => [...new Set((Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])
+  .filter(id => typeof id === 'string' && id !== team.creator && memberIdsOf(team).includes(id)))];
 const isLocalIcon = icon => typeof icon === 'string' && /^(wxfile:\/\/|https?:\/\/tmp\/|\/tmp\/)/.test(icon);
 
 class TeamManager {
@@ -87,7 +89,7 @@ class TeamManager {
         ...(teamInfo.practiceStartDate !== undefined ? { practiceStartDate: teamInfo.practiceStartDate } : {}),
         ...(teamInfo.dailyGoalMinutes !== undefined ? { dailyGoalMinutes: teamInfo.dailyGoalMinutes } : {}),
         creator: openid, creatorName: wx.getStorageSync('userNickname') || '匿名用户',
-        members: [openid], memberCount: 1,
+        members: [openid], memberCount: 1, deputyLeaders: [],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), isActive: true
       };
       const data = await this.syncTeamToCloud(draft);
@@ -182,7 +184,7 @@ class TeamManager {
       if (!openid) throw new Error('用户未登录');
       const team = this.teams.find(item => item._id === teamId || teamIdOf(item) === teamId);
       if (!team) throw new Error('团队不存在，请刷新后重试');
-      if (team.creator !== openid) throw new Error('只有创建者可以解散团队');
+      if (team.creator !== openid) throw new Error('只有团长可以解散团队');
       await this.syncDeleteTeamToCloud(teamId);
       if (openid === currentUser()) this.removeJoinedTeam(teamIdOf(team));
       return { success: true };
@@ -197,6 +199,61 @@ class TeamManager {
     if (!openid) throw new Error('用户未登录');
     const team = this.teams.find(item => item._id === teamId || teamIdOf(item) === teamId);
     return this.callCloud('deleteTeam', { teamId: team ? teamIdOf(team) : teamId }, openid);
+  }
+
+  setTeamDeputy(teamId, memberOpenid, isDeputy) {
+    return this.changeTeamRole('setTeamDeputy', teamId, memberOpenid, isDeputy);
+  }
+
+  transferTeamLeader(teamId, newLeaderOpenid) {
+    return this.changeTeamRole('transferTeamLeader', teamId, newLeaderOpenid);
+  }
+
+  async changeTeamRole(type, teamId, memberOpenid, isDeputy) {
+    try {
+      const openid = this.ensureCurrentUser();
+      if (!openid) throw new Error('用户未登录');
+      if (typeof teamId !== 'string' || !teamId.trim()) throw new Error('团队ID无效');
+      if (typeof memberOpenid !== 'string' || !memberOpenid.trim()) throw new Error('成员ID无效');
+      const team = this.teams.find(item => teamIdOf(item) === teamId);
+      if (!team || team.isActive === false) throw new Error('团队不存在，请刷新后重试');
+      if (team.creator !== openid) throw new Error('只有团长可以调整成员身份');
+      if (memberOpenid === openid) throw new Error('不能对团长本人执行此操作');
+      if (!memberIdsOf(team).includes(memberOpenid)) throw new Error('该成员已不在团队中');
+      const isTransfer = type === 'transferTeamLeader';
+      if (!isTransfer) {
+        if (type !== 'setTeamDeputy' || typeof isDeputy !== 'boolean') throw new Error('成员身份设置无效');
+        const deputies = deputyIdsOf(team);
+        if (isDeputy && !deputies.includes(memberOpenid) && deputies.length >= 7) {
+          throw new Error('副团长最多可设置7位');
+        }
+      }
+      const request = isTransfer ? { teamId, newLeaderOpenid: memberOpenid, expectedLeaderOpenid: openid }
+        : { teamId, memberOpenid, isDeputy };
+      const data = await this.callCloud(type, request, openid);
+      if (openid !== currentUser()) throw new Error('登录状态已变更，请重新进入团队');
+      if (!data || data.teamId !== teamId || data.creator !== (isTransfer ? memberOpenid : openid) ||
+          typeof data.creatorName !== 'string' || !Array.isArray(data.members) ||
+          data.members.some(id => typeof id !== 'string' || !id) ||
+          !data.members.includes(openid) || !data.members.includes(memberOpenid) ||
+          new Set(data.members).size !== data.members.length || data.memberCount !== data.members.length ||
+          !Array.isArray(data.deputyLeaders) || data.deputyLeaders.length > 7 ||
+          deputyIdsOf(data).length !== data.deputyLeaders.length ||
+          (!isTransfer && data.deputyLeaders.includes(memberOpenid) !== isDeputy)) {
+        throw new Error('成员身份变更结果异常，请刷新团队');
+      }
+      const update = { creator: data.creator, creatorName: data.creatorName, members: data.members,
+        memberCount: data.memberCount, deputyLeaders: data.deputyLeaders };
+      this.teams = this.loadTeamsFromStorage().map(item => teamIdOf(item) === teamId ? { ...item, ...update } : item);
+      this.cacheRevision++;
+      this.saveTeamsToStorage(openid);
+      this.cleanupJoinedTeamsFromCloud(this.teams);
+      try { wx.removeStorageSync('allTeams_cache'); } catch (_) {}
+      return { success: true, data };
+    } catch (error) {
+      console.error('调整团队成员身份失败:', error);
+      return { success: false, error: error.message };
+    }
   }
 
   async removeTeamMember(teamId, memberOpenid) {
@@ -214,7 +271,9 @@ class TeamManager {
         throw new Error('成员变更结果异常，请刷新团队');
       }
       this.teams = this.loadTeamsFromStorage().map(item => teamIdOf(item) === teamId
-        ? { ...item, members: [...new Set(data.members)], memberCount: new Set(data.members).size } : item);
+        ? { ...item, members: [...new Set(data.members)], memberCount: new Set(data.members).size,
+          deputyLeaders: deputyIdsOf({ ...item, members: data.members,
+            deputyLeaders: data.deputyLeaders || item.deputyLeaders }) } : item);
       this.cacheRevision++;
       this.saveTeamsToStorage(openid);
       this.cleanupJoinedTeamsFromCloud(this.teams);

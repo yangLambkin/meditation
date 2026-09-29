@@ -57,6 +57,7 @@
             <view class="member-heading">
               <text class="member-name">{{member.nickname}}</text>
               <text wx:if="{{member.isCreator}}" class="creator-tag">团长</text>
+              <text wx:elif="{{member.isDeputy}}" class="creator-tag">副团长</text>
             </view>
             <view class="member-status-row">
               <text class="status-badge status-{{member.status}}">{{member.statusLabel}}</text>

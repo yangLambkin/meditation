@@ -69,7 +69,7 @@
         {{isJoining ? '加入中...' : '接受邀请并加入'}}
       </button>
     </view>
-    <view wx:if="{{!isMember && !inviteId}}" class="join-tip">团队仅限团长邀请加入，请联系团长获取新邀请。</view>
+    <view wx:if="{{!isMember && !inviteId}}" class="join-tip">团队仅限邀请加入，请联系团长或副团长获取新邀请。</view>
 
     <view wx:if="{{isMember}}" class="member-container">
       <text class="member-tip">你已加入该团队</text>
