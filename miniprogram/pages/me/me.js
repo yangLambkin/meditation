@@ -7,6 +7,18 @@ const bijingApi = require('../../utils/bijingApi.js');
 const cloudApi = require('../../utils/cloudApi.js');
 const profileCache = require('../../utils/profileCache.js');
 
+const BIJING_STATUS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function bijingBindingStatus(profile) {
+  const bound = !!(profile && profile.bijingBound === true &&
+    typeof profile.bijingStudentNumber === 'string' && profile.bijingStudentNumber.trim());
+  return {
+    bijingBound: bound,
+    bijingStudentNumber: bound ? profile.bijingStudentNumber : '',
+    bijingBindingVersion: bound ? profile.bijingBindingVersion || null : null
+  };
+}
+
 Page({
   data: {
     userNickname: '觉察者', // 用户昵称
@@ -117,9 +129,61 @@ Page({
   },
 
   /**
-   * 加载必经之路绑定状态（来自云端 users 文档）
+   * 绑定缓存只保存展示字段，按账号隔离，不复用旧版未标记账号的 userInfo。
    */
-  async loadBijingStatus() {
+  readBijingStatusCache(account) {
+    let cached = this._bijingStatusCache;
+    if (!cached || cached.account !== account) {
+      try {
+        cached = wx.getStorageSync(`bijingStatus_${account}`);
+      } catch (error) {
+        return null;
+      }
+    }
+    if (!cached || cached.account !== account || !Number.isFinite(cached.updatedAt) ||
+        !cached.binding || typeof cached.binding.bijingBound !== 'boolean' ||
+        typeof cached.binding.bijingStudentNumber !== 'string' ||
+        (cached.binding.bijingBound && !cached.binding.bijingStudentNumber.trim())) return null;
+    return cached;
+  },
+
+  saveBijingStatusCache(binding, account) {
+    if (!profileCache.isCurrentAccount(account)) return;
+    const cached = { account, updatedAt: Date.now(), binding: bijingBindingStatus(binding) };
+    this._bijingStatusCache = cached;
+    try {
+      wx.setStorageSync(`bijingStatus_${account}`, cached);
+    } catch (error) {
+      // 本机存储不可用时仍保留当前页面的缓存，不影响已经完成的云端操作。
+      console.error('保存必经之路状态缓存失败:', error);
+    }
+  },
+
+  invalidateBijingStatusCache(account) {
+    const cached = this.readBijingStatusCache(account);
+    if (!cached) return;
+    this._bijingStatusCache = { ...cached, updatedAt: 0 };
+    try {
+      wx.setStorageSync(`bijingStatus_${account}`, this._bijingStatusCache);
+    } catch (error) {
+      console.error('更新必经之路状态缓存失败:', error);
+    }
+  },
+
+  applyBijingStatus(binding, { confirmed = false } = {}) {
+    const changed = Object.keys(binding).some(key => this.data[key] !== binding[key]);
+    if (changed) {
+      // 一次更新完成绑定切换，避免先清空再恢复造成卡片闪动。
+      this.clearBijingBindingView(binding);
+    }
+    if (changed || (confirmed && !binding.bijingBound)) {
+      // 缓存不授予权限；只有云端确认解绑才清除 App 的管理员提醒。
+      this.clearBijingAdminAccess({ clearAlert: confirmed && !binding.bijingBound });
+    }
+  },
+
+  /** 先展示缓存；有效期内不请求，过期后静默核对，操作冲突时强制刷新。 */
+  async loadBijingStatus({ force = false } = {}) {
     if (this._bijingHidden) return;
     const openid = wx.getStorageSync('userOpenId');
     if (this._bijingAccount !== undefined && this._bijingAccount !== openid) {
@@ -137,29 +201,41 @@ Page({
       return;
     }
     if (this._bijingOperation && this._bijingOperation.account === openid) return;
+    const cached = this.readBijingStatusCache(openid);
+    if (cached) {
+      this.applyBijingStatus(bijingBindingStatus(cached.binding));
+      const age = Date.now() - cached.updatedAt;
+      if (!force && cached.updatedAt > 0 && age >= 0 && age < BIJING_STATUS_CACHE_TTL_MS) return;
+    }
     const context = this.bijingContext();
+    const pending = this._bijingStatusRequest;
+    if (pending && pending.account === context.account && pending.generation === context.generation &&
+        pending.requestId === this._bijingStatusRequestId) return pending.promise;
     const requestId = this._bijingStatusRequestId = (this._bijingStatusRequestId || 0) + 1;
+    const request = { ...context, requestId };
+    this._bijingStatusRequest = request;
+    request.promise = this.fetchBijingStatus(context, requestId);
+    try {
+      await request.promise;
+    } finally {
+      if (this._bijingStatusRequest === request) this._bijingStatusRequest = null;
+    }
+  },
+
+  async fetchBijingStatus(context, requestId) {
     try {
       const result = await cloudApi.callCloudFunction('meditationManager', {
         type: 'getUserProfile',
-        openid: openid
+        openid: context.account
       });
-      const profile = result && result.result && result.result.data;
-      if (profile && this.isBijingContextCurrent(context) && requestId === this._bijingStatusRequestId) {
-        const hasBinding = profile.bijingBound === true &&
-          typeof profile.bijingStudentNumber === 'string' && !!profile.bijingStudentNumber.trim();
-        if (!hasBinding || profile.bijingStudentNumber !== this.data.bijingStudentNumber ||
-            (profile.bijingBindingVersion || null) !== this.data.bijingBindingVersion) {
-          this.clearBijingBindingView();
-          // 同账号资料首次加载/更新只重置入口权限，不能取消 App 的独立提醒查询。
-          // 云端已确认解绑时，才同时移除管理员来源，保留个人反馈结果提醒。
-          this.clearBijingAdminAccess({ clearAlert: !hasBinding });
-        }
-        this.setData({
-          bijingBound: hasBinding,
-          bijingStudentNumber: profile.bijingStudentNumber || '',
-          bijingBindingVersion: profile.bijingBindingVersion === undefined ? null : profile.bijingBindingVersion
-        });
+      const response = result && result.result;
+      const profile = response && response.data;
+      if (response && response.success === true &&
+          (profile === null || (profile && typeof profile === 'object' && !Array.isArray(profile))) &&
+          this.isBijingContextCurrent(context) && requestId === this._bijingStatusRequestId) {
+        const binding = bijingBindingStatus(profile);
+        this.saveBijingStatusCache(binding, context.account);
+        this.applyBijingStatus(binding, { confirmed: true });
       }
     } catch (e) {
       console.error('加载必经之路状态失败:', e);
@@ -526,15 +602,15 @@ Page({
     if (this.isBijingContextCurrent(operation)) {
       wx.hideLoading();
       this.setData({ bijingBinding: false, bijingUnbinding: false });
-      if (operation.refreshStatus) this.loadBijingStatus();
+      if (operation.refreshStatus) this.loadBijingStatus({ force: true });
     } else if (!this._bijingHidden && profileCache.isCurrentAccount(operation.account)) {
       // A page reopened while a request was pending must read fresh server state.
       this.setData({ bijingBinding: false, bijingUnbinding: false });
-      this.loadBijingStatus();
+      this.loadBijingStatus({ force: true });
     }
   },
 
-  clearBijingBindingView() {
+  clearBijingBindingView(binding = {}) {
     this._bijingSyncDetailsRequestId++;
     this.setData({
       bijingBound: false, bijingStudentNumber: '', bijingBindingVersion: null,
@@ -543,7 +619,8 @@ Page({
       bijingShowSyncDatePicker: false, bijingSyncDateOptions: [], bijingSyncDate: '',
       bijingSyncDetailsLoading: false, bijingSyncDetailsError: '', bijingSyncDetailsDate: '',
       bijingSyncRecords: [], bijingSyncRecordCount: 0, bijingSyncTotalDuration: 0,
-      bijingSyncDuration: 0, bijingSyncAlreadySynced: false, bijingLastSync: '', bijingIsAdmin: false
+      bijingSyncDuration: 0, bijingSyncAlreadySynced: false, bijingLastSync: '', bijingIsAdmin: false,
+      ...binding
     });
   },
 
@@ -551,7 +628,7 @@ Page({
     this._versionTapCount = 0;
     this._versionTapAt = 0;
     this._adminRequestId = (this._adminRequestId || 0) + 1;
-    this.setData({ bijingIsAdmin: false });
+    if (this.data.bijingIsAdmin) this.setData({ bijingIsAdmin: false });
     if (!clearAlert) return;
     const app = typeof getApp === 'function' ? getApp() : null;
     if (app && typeof app.clearAdminSyncAlert === 'function') app.clearAdminSyncAlert();
@@ -642,6 +719,7 @@ Page({
     if (!operation) return;
     wx.showLoading({ title: '绑定中...', mask: true });
     try {
+      this.invalidateBijingStatusCache(operation.account);
       const result = await bijingApi.bindBijing(sn);
       if (!this.isBijingContextCurrent(operation)) return;
       if (!result || !result.success || !result.data || result.data.studentNumber !== sn) {
@@ -656,6 +734,7 @@ Page({
       }
       this.setData({ bijingBound: true, bijingStudentNumber: sn, bijingBindingVersion: version,
         ...(patch.nickName ? { userNickname: patch.nickName } : {}) });
+      this.saveBijingStatusCache(patch, operation.account);
       try {
         if (patch.nickName) profileCache.discardPendingFields(['nickName'], operation.account);
         profileCache.updateProfile(patch, operation.account);
@@ -687,6 +766,7 @@ Page({
           !this.data.bijingBound || this.data.bijingStudentNumber !== studentNumber ||
           this.data.bijingBindingVersion !== bindingVersion) return;
       wx.showLoading({ title: '解绑中...', mask: true });
+      this.invalidateBijingStatusCache(operation.account);
       const result = await bijingApi.unbindBijing(studentNumber, bindingVersion);
       if (!this.isBijingContextCurrent(operation)) return;
       if (!result || !result.success) {
@@ -695,6 +775,7 @@ Page({
       }
       this.clearBijingBindingView();
       this.clearBijingAdminAccess();
+      this.saveBijingStatusCache({ bijingBound: false }, operation.account);
       try {
         profileCache.updateProfile({ bijingBound: false, bijingStudentNumber: '', bijingBindingVersion: null }, operation.account);
       } catch (error) {

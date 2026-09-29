@@ -15,6 +15,7 @@ function entryHarness(t) {
   const requests = [], profileRequests = [], tabDots = [], timers = new Set();
   const wx = {
     getStorageSync: key => storage[key],
+    setStorageSync: (key, value) => { storage[key] = value; },
     showTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(true); },
     hideTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(false); },
     hideLoading() {},

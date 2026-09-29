@@ -24,19 +24,20 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, bind, check, unbind, modal, cloud, pending = 0, retry, pendingByDate, uploadingByDate = {} } = {}) {
+function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, bind, check, unbind, modal, cloud, pending = 0, retry, pendingByDate, uploadingByDate = {}, sharedStorage } = {}) {
   let currentTime = Date.parse(now);
   let isLoggedIn = loggedIn;
   let definition;
-  const calls = { check: [], bind: [], unbind: [], modal: [], alerts: [], sync: [], preview: [], retry: [], summaries: [], cloud: [], toast: [], loading: [], hideLoading: 0 };
+  const calls = { check: [], bind: [], unbind: [], modal: [], alerts: [], sync: [], preview: [], retry: [], summaries: [], cloud: [], toast: [], loading: [], changes: [], hideLoading: 0 };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
   }
-  const storage = { userOpenId: loggedIn ? 'oz-test-account' : '' };
+  const storage = sharedStorage || { userOpenId: loggedIn ? 'oz-test-account' : '' };
   const wxMock = {
     getStorageSync: key => storage[key],
     setStorageSync: (key, value) => { storage[key] = value; },
+    removeStorageSync: key => { delete storage[key]; },
     showToast: value => calls.toast.push(value),
     showModal: value => { calls.modal.push(value); if (modal) modal(value); else value.success({ confirm: true }); },
     showLoading: value => calls.loading.push(value),
@@ -64,7 +65,7 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
         return retry ? retry(options) : { success: pending === 0, uploaded: 0, pending };
       }
     },
-    '../../utils/dateUtil.js': dateUtil,
+    '../../utils/dateUtil.js': { ...dateUtil, watchBusinessDate: () => () => {} },
     '../../utils/contentSec.js': {},
     '../../utils/bijingApi.js': {
       checkBijing: async studentNumber => {
@@ -107,7 +108,7 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   const page = {
     ...definition,
     data: { ...definition.data, bijingBound: bound, bijingStudentNumber: bound ? 'BJ2407000' : '', bijingBindingVersion: bound ? 'binding-old' : null },
-    setData(values) { Object.assign(this.data, values); }
+    setData(values) { calls.changes.push({ ...values }); Object.assign(this.data, values); }
   };
   return {
     page, calls, storage,
@@ -868,13 +869,15 @@ test('late bind, unbind and validation responses cannot change a hidden page or 
 
 test('an older profile response cannot restore a binding after unbind succeeds', async () => {
   const pending = deferred();
-  const { page } = createPage({ cloud: () => pending.promise });
+  const { page, storage } = createPage({ cloud: () => pending.promise });
   const reading = page.loadBijingStatus();
   await page.unbindBijing();
   pending.resolve({ result: { success: true, data: { bijingBound: true, bijingStudentNumber: 'BJ2407000', bijingBindingVersion: 'binding-old' } } });
   await reading;
   assert.equal(page.data.bijingBound, false);
   assert.equal(page.data.bijingStudentNumber, '');
+  assert.equal(storage['bijingStatus_oz-test-account'].binding.bijingBound, false,
+    'the old response must not restore the persisted binding either');
 });
 
 test('binding after unbind stores the new version and rechecks central admin access', async () => {
@@ -972,4 +975,245 @@ test('unbind API preserves stale-binding error codes for safe state refresh', as
   assert.equal(result.success, false);
   assert.equal(result.code, 'BINDING_STALE');
   assert.equal(result.error, '绑定已变化');
+});
+
+function bindingProfile(overrides = {}) {
+  return { bijingBound: true, bijingStudentNumber: 'BJ2407000', bijingBindingVersion: 'binding-old', ...overrides };
+}
+
+function profileResponse(binding = bindingProfile()) {
+  return { result: { success: true, data: binding } };
+}
+
+test('a confirmed binding persists across page recreation and renders once without a cloud request while fresh', async () => {
+  const first = createPage({ bound: false, cloud: async () => profileResponse() });
+  await first.page.loadBijingStatus();
+  const saved = first.storage['bijingStatus_oz-test-account'];
+  assert.equal(saved.account, 'oz-test-account');
+  assert.equal(saved.updatedAt, Date.parse('2026-09-17T04:05:00+08:00'));
+  assert.deepEqual({ ...saved.binding }, bindingProfile());
+
+  const reopened = createPage({ bound: false, sharedStorage: first.storage, now: '2026-09-17T04:09:59+08:00' });
+  const loading = reopened.page.loadBijingStatus();
+  assert.equal(reopened.page.data.bijingStudentNumber, 'BJ2407000', 'the cached card appears before awaiting');
+  assert.deepEqual(reopened.calls.changes.filter(change => Object.hasOwn(change, 'bijingBound'))
+    .map(change => change.bijingBound), [true], 'hydration never clears a bound card before restoring it');
+  await loading;
+  reopened.calls.changes.length = 0;
+  await reopened.page.loadBijingStatus();
+  assert.equal(reopened.calls.cloud.length, 0);
+  assert.equal(reopened.calls.changes.length, 0, 'repeated cache hits do not redraw the card');
+  assert.equal(reopened.page.data.bijingIsAdmin, false, 'cached binding never grants administrator access');
+});
+
+test('onLoad and onShow share one in-flight binding request', async () => {
+  const pending = deferred();
+  const { page, calls } = createPage({ bound: false, cloud: () => pending.promise });
+  const loads = [];
+  page.getUserData = () => {
+    const loading = page.loadBijingStatus();
+    loads.push(loading);
+    return loading;
+  };
+  page.onLoad();
+  page.onShow();
+  assert.equal(calls.cloud.length, 1);
+  pending.resolve(profileResponse());
+  await Promise.all(loads);
+  assert.equal(page.data.bijingBound, true);
+  assert.equal(page.data.bijingStudentNumber, 'BJ2407000');
+  page.onUnload();
+});
+
+test('the five-minute cache boundary revalidates while retaining the cached binding until the response', async () => {
+  const first = createPage({ cloud: async () => profileResponse() });
+  await first.page.loadBijingStatus();
+  const pending = deferred();
+  const reopened = createPage({ bound: false, sharedStorage: first.storage,
+    now: '2026-09-17T04:10:00+08:00', cloud: () => pending.promise });
+  const loading = reopened.page.loadBijingStatus();
+  assert.equal(reopened.calls.cloud.length, 1);
+  assert.equal(reopened.page.data.bijingStudentNumber, 'BJ2407000');
+  assert.deepEqual(reopened.calls.changes.filter(change => Object.hasOwn(change, 'bijingBound'))
+    .map(change => change.bijingBound), [true]);
+  pending.resolve(profileResponse(bindingProfile({ bijingStudentNumber: 'BJ2407159', bijingBindingVersion: 'newer' })));
+  await loading;
+  assert.equal(reopened.page.data.bijingStudentNumber, 'BJ2407159');
+  assert.equal(first.storage['bijingStatus_oz-test-account'].binding.bijingBindingVersion, 'newer');
+  assert.equal(first.storage['bijingStatus_oz-test-account'].updatedAt, Date.parse('2026-09-17T04:10:00+08:00'));
+  assert.deepEqual(reopened.calls.changes.filter(change => Object.hasOwn(change, 'bijingBound'))
+    .map(change => change.bijingBound), [true, true], 'updating a binding does not briefly show an unbound card');
+});
+
+test('forced refresh bypasses a fresh binding cache and identical data leaves an open sync preview intact', async () => {
+  const { page, calls } = createPage({ cloud: async () => profileResponse() });
+  await page.loadBijingStatus();
+  page.setData({ bijingShowSyncDatePicker: true, bijingSyncDate: '2026-09-16', bijingLastSync: '保留同步结果' });
+  calls.changes.length = 0;
+  await page.loadBijingStatus({ force: true });
+  assert.equal(calls.cloud.length, 2);
+  assert.equal(calls.changes.length, 0);
+  assert.equal(page.data.bijingShowSyncDatePicker, true);
+  assert.equal(page.data.bijingSyncDate, '2026-09-16');
+  assert.equal(page.data.bijingLastSync, '保留同步结果');
+});
+
+test('an unchanged unbound response preserves the binding form and typed student number', async () => {
+  const { page, calls } = createPage({ bound: false, cloud: async () => profileResponse(null) });
+  await page.loadBijingStatus();
+  page.toggleBindInput();
+  page.onBijingInput({ detail: { value: 'BJ2407159' } });
+  calls.changes.length = 0;
+  await page.loadBijingStatus({ force: true });
+  assert.equal(calls.cloud.length, 2);
+  assert.equal(calls.changes.length, 0);
+  assert.equal(page.data.bijingShowBindInput, true);
+  assert.equal(page.data.bijingInputValue, 'BJ2407159');
+});
+
+test('failed and malformed refreshes preserve the cached card without extending its freshness and can retry', async () => {
+  for (const failure of ['network', 'business', 'missing data', 'array data']) {
+    let failing = false;
+    const { page, calls, storage, setNow } = createPage({ cloud: async () => {
+      if (!failing) return profileResponse();
+      if (failure === 'network') throw new Error('offline');
+      if (failure === 'business') return { result: { success: false, data: { bijingBound: false } } };
+      return { result: { success: true, ...(failure === 'array data' ? { data: [] } : {}) } };
+    } });
+    await page.loadBijingStatus();
+    const savedAt = storage['bijingStatus_oz-test-account'].updatedAt;
+    setNow('2026-09-17T04:11:00+08:00');
+    failing = true;
+    calls.changes.length = 0;
+    await page.loadBijingStatus();
+    assert.equal(page.data.bijingStudentNumber, 'BJ2407000', failure);
+    assert.equal(storage['bijingStatus_oz-test-account'].updatedAt, savedAt, failure);
+    assert.equal(calls.changes.length, 0, failure);
+    failing = false;
+    await page.loadBijingStatus();
+    assert.equal(calls.cloud.length, 3, `${failure}: the failed request does not prevent retry`);
+    assert.equal(storage['bijingStatus_oz-test-account'].updatedAt, Date.parse('2026-09-17T04:11:00+08:00'));
+  }
+});
+
+test('unscoped profile data and foreign or malformed binding snapshots never hydrate the card', async () => {
+  const valid = { account: 'oz-test-account', updatedAt: Date.parse('2026-09-17T04:05:00+08:00'), binding: bindingProfile() };
+  for (const cached of [undefined, { ...valid, account: 'oz-other' }, { ...valid, updatedAt: NaN },
+    { ...valid, binding: { bijingBound: true, bijingStudentNumber: '' } },
+    { ...valid, binding: { bijingStudentNumber: 'BJ2407000' } }]) {
+    const pending = deferred();
+    const { page, calls, storage } = createPage({ bound: false, cloud: () => pending.promise });
+    storage.userInfo = bindingProfile();
+    storage['bijingStatus_oz-test-account'] = cached;
+    const loading = page.loadBijingStatus();
+    assert.equal(page.data.bijingBound, false);
+    assert.equal(page.data.bijingStudentNumber, '');
+    assert.equal(calls.cloud.length, 1);
+    pending.resolve(profileResponse(bindingProfile({ bijingStudentNumber: 'BJ2407159' })));
+    await loading;
+    assert.equal(page.data.bijingStudentNumber, 'BJ2407159');
+  }
+});
+
+test('switching accounts rejects the previous account response from both the card and persistent cache', async () => {
+  const first = deferred(), second = deferred();
+  const { page, calls, storage } = createPage({ bound: false,
+    cloud: (_name, data) => data.openid === 'oz-test-account' ? first.promise : second.promise });
+  storage.userInfo = bindingProfile();
+  const previousLoading = page.loadBijingStatus();
+  storage.userOpenId = 'oz-other';
+  const currentLoading = page.loadBijingStatus();
+  assert.equal(calls.cloud.length, 2);
+  assert.equal(page.data.bijingBound, false);
+  second.resolve(profileResponse(bindingProfile({ bijingStudentNumber: 'BJ2407159', bijingBindingVersion: 'other' })));
+  await currentLoading;
+  first.resolve(profileResponse());
+  await previousLoading;
+  assert.equal(page.data.bijingStudentNumber, 'BJ2407159');
+  assert.equal(storage['bijingStatus_oz-other'].binding.bijingBindingVersion, 'other');
+  assert.equal(storage['bijingStatus_oz-test-account'], undefined, 'a late response does not create an old-account cache');
+  const reopened = createPage({ bound: false, sharedStorage: storage });
+  await reopened.page.loadBijingStatus();
+  assert.equal(reopened.page.data.bijingStudentNumber, 'BJ2407159');
+  assert.equal(reopened.calls.cloud.length, 0);
+});
+
+test('reopening starts a new binding request and an older completion cannot clear its deduplication lock', async () => {
+  const first = deferred(), second = deferred();
+  let count = 0;
+  const { page, calls, storage } = createPage({ bound: false, cloud: () => ++count === 1 ? first.promise : second.promise });
+  const previousLoading = page.loadBijingStatus();
+  page.onHide();
+  page.getUserData = () => page.loadBijingStatus();
+  page.onShow();
+  assert.equal(calls.cloud.length, 2);
+  first.resolve(profileResponse());
+  await previousLoading;
+  assert.equal(storage['bijingStatus_oz-test-account'], undefined);
+  assert.equal(page.data.bijingBound, false);
+  const currentLoading = page.loadBijingStatus();
+  assert.equal(calls.cloud.length, 2, 'the current request remains shared after the old request finishes');
+  second.resolve(profileResponse(bindingProfile({ bijingStudentNumber: 'BJ2407159' })));
+  await currentLoading;
+  assert.equal(page.data.bijingStudentNumber, 'BJ2407159');
+  assert.equal(storage['bijingStatus_oz-test-account'].binding.bijingStudentNumber, 'BJ2407159');
+  page.onUnload();
+});
+
+test('a bind or unbind completed while hidden leaves its old cache expired so reopening confirms server state', async () => {
+  for (const kind of ['bind', 'unbind']) {
+    const pending = deferred();
+    const initial = kind === 'unbind' ? bindingProfile() : { bijingBound: false };
+    const { page, calls, storage } = createPage({ bound: kind === 'unbind',
+      cloud: async () => profileResponse(initial), [kind]: () => pending.promise });
+    await page.loadBijingStatus();
+    const running = kind === 'bind' ? page.doBindBijing('BJ2407159') : page.unbindBijing();
+    for (let attempt = 0; attempt < 10 && calls[kind].length === 0; attempt++) await Promise.resolve();
+    assert.equal(calls[kind].length, 1, kind);
+    page.onHide();
+    pending.resolve({ success: true, data: { studentNumber: 'BJ2407159', bindingVersion: 'new', bound: false } });
+    await running;
+    const latest = kind === 'bind'
+      ? bindingProfile({ bijingStudentNumber: 'BJ2407159', bijingBindingVersion: 'new' }) : { bijingBound: false };
+    const reopened = createPage({ bound: false, sharedStorage: storage, cloud: async () => profileResponse(latest) });
+    const loading = reopened.page.loadBijingStatus();
+    assert.equal(reopened.calls.cloud.length, 1, `${kind}: a five-minute-old policy cannot mask the completed mutation`);
+    await loading;
+    assert.equal(reopened.page.data.bijingBound, kind === 'bind', kind);
+    assert.equal(reopened.page.data.bijingStudentNumber, kind === 'bind' ? 'BJ2407159' : '', kind);
+  }
+});
+
+test('canceling an unbind keeps the confirmed cache fresh and does not trigger a reload', async () => {
+  const { page, calls, storage } = createPage({ cloud: async () => profileResponse(),
+    modal: request => request.success({ confirm: false }) });
+  await page.loadBijingStatus();
+  const before = storage['bijingStatus_oz-test-account'].updatedAt;
+  await page.unbindBijing();
+  await page.loadBijingStatus();
+  assert.equal(calls.unbind.length, 0);
+  assert.equal(calls.cloud.length, 1);
+  assert.equal(storage['bijingStatus_oz-test-account'].updatedAt, before);
+});
+
+test('binding conflicts refresh a previously fresh cache without automatically repeating the mutation', async () => {
+  for (const kind of ['bind', 'unbind']) {
+    let profileCalls = 0;
+    const { page, calls, storage } = createPage({ bound: kind === 'unbind',
+      cloud: async () => {
+        profileCalls++;
+        return profileResponse(profileCalls === 1 ? (kind === 'unbind' ? bindingProfile() : { bijingBound: false })
+          : bindingProfile({ bijingStudentNumber: 'BJ2407999', bijingBindingVersion: 'server-newer' }));
+      },
+      [kind]: async () => ({ success: false, code: kind === 'unbind' ? 'BINDING_STALE' : 'UNBIND_REQUIRED', error: '绑定已变化' })
+    });
+    await page.loadBijingStatus();
+    if (kind === 'bind') await page.doBindBijing('BJ2407159');
+    else await page.unbindBijing();
+    for (let attempt = 0; attempt < 10 && page.data.bijingBindingVersion !== 'server-newer'; attempt++) await Promise.resolve();
+    assert.equal(calls[kind].length, 1, kind);
+    assert.equal(profileCalls, 2, kind);
+    assert.equal(page.data.bijingStudentNumber, 'BJ2407999', kind);
+    assert.equal(storage['bijingStatus_oz-test-account'].binding.bijingBindingVersion, 'server-newer', kind);
+  }
 });
