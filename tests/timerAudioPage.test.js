@@ -72,6 +72,9 @@ function createPage({
         this.paused = true;
         // Retain registered callbacks so tests can deliver a queued callback after unload.
         for (const callback of callbacks.ended) callback();
+      },
+      emitError() {
+        for (const callback of callbacks.error) callback({ errCode: 10001, errMsg: 'queued audio error' });
       }
     };
     players.push(player);
@@ -514,10 +517,13 @@ test('closing during 收坐 stops it in either lifecycle order and preserves the
       const beforeExit = plays();
       assert.equal(players[0].src, END_AUDIO, scenario);
       assert.equal(players[0].paused, false, scenario);
+      players[0].currentTime = 8;
 
       if (pageHidesFirst) page.onHide();
       emitApp('hide');
       assert.equal(players[0].paused, true, `app hide must stop 收坐 immediately: ${scenario}`);
+      assert.equal(players[0].destroyed, true, `app hide must release the native cue context: ${scenario}`);
+      assert.equal(page.audioPlayer, null, scenario);
       if (!pageHidesFirst) page.onHide();
       players[0].emitEnded();
       advance(60000);
@@ -526,6 +532,7 @@ test('closing during 收坐 stops it in either lifecycle order and preserves the
       advance(6000);
 
       assert.equal(players[0].paused, true, scenario);
+      assert.equal(players.length, 1, 'returning must not recreate the old cue player');
       assert.deepEqual(plays(), beforeExit, 'returning or a queued audio callback must not restart audio');
       assert.equal(page.data.isRunning, false, scenario);
       assert.equal(page.data.showCompletionDialog, true, scenario);
@@ -553,6 +560,7 @@ test('closing from the daily page stops 收坐 without saving twice and a new se
 
     emitApp('hide');
     assert.equal(players[0].paused, true, 'closing from another page must stop the retained timer player');
+    assert.equal(players[0].destroyed, true, 'closing from another page must also release the native cue context');
     players[0].emitEnded();
     advance(60000);
     emitApp('show');
@@ -567,9 +575,41 @@ test('closing from the daily page stops 收坐 without saving twice and a new se
     assert.notEqual(page.sessionId, sessionId);
     advance(4999);
     assert.deepEqual(plays(), beforeExit);
+    assert.equal(page.audioPlayer, null, 'only the next cue needs a new native player');
     advance(1);
     assert.deepEqual(plays(), [...beforeExit, START_AUDIO]);
+    assert.notEqual(page.audioPlayer, players[0]);
     assert.equal(records.length, 1, 'starting another session must not resubmit the saved completion');
+  }
+});
+
+test('callbacks from the destroyed closing cue cannot interrupt the next opening cue or start its guide early', () => {
+  for (const event of ['emitEnded', 'emitError']) {
+    const { page, players, plays, advance, emitApp } = createPage({ withGuide: true });
+    page.startTimer();
+    advance(5000);
+    page.handleStop();
+    const closingPlayer = page.audioPlayer;
+    assert.equal(closingPlayer.src, END_AUDIO);
+
+    emitApp('hide');
+    page.onHide();
+    emitApp('show');
+    page.onShow();
+    page.startTimer();
+    advance(5000);
+    const openingPlayer = page.audioPlayer;
+    assert.notEqual(openingPlayer, closingPlayer);
+    assert.equal(closingPlayer.destroyed, true);
+
+    closingPlayer[event]();
+    assert.equal(page.currentSessionSound, 'start', 'old events must not clear the new cue state');
+    assert.equal(openingPlayer.paused, false);
+    assert.equal(players.length, 2, 'old events must not create the guide player');
+    assert.deepEqual(plays(), [START_AUDIO, END_AUDIO, START_AUDIO]);
+
+    openingPlayer.emitEnded();
+    assert.deepEqual(plays(), [START_AUDIO, END_AUDIO, START_AUDIO, GUIDE_AUDIO]);
   }
 });
 

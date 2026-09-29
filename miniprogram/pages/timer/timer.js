@@ -150,8 +150,8 @@ Page({
       if (this.isUnloaded) return;
       this.isPageVisible = false;
       this.restoreScreenSettings();
-      // 计时结束后收坐可能仍在播放，退出应用时也要停止，避免返回后续播。
-      this.stopSessionSound();
+      // 退出时释放提示音上下文，避免微信恢复未播完的收坐音频。
+      this.destroyAudioPlayer();
       this.stopBackgroundMusic();
       // 微信不区分关闭和切后台：两种计时都在此刻结束，不累计离线时间。
       if (this.data.isRunning || this.data.isPaused) {
@@ -675,11 +675,7 @@ Page({
     wx.offAppHide(this.appHideHandler);
     this.cleanupTimers();
     this.stopBackgroundMusic();
-    this.stopSessionSound();
-    if (this.audioPlayer) {
-      this.audioPlayer.destroy();
-      this.audioPlayer = null;
-    }
+    this.destroyAudioPlayer();
     this.saveTimerState();
     
     // 恢复屏幕设置
@@ -823,23 +819,37 @@ Page({
   },
 
   createAudioPlayer() {
+    if (this.audioPlayer || this.isUnloaded) return;
     this.currentSessionSound = null;
     this.startSoundTimer = null;
     this.startSoundRemaining = null;
     this.startSoundScheduledAt = 0;
-    this.audioPlayer = wx.createInnerAudioContext();
-    this.audioPlayer.loop = false;
-    this.audioPlayer.obeyMuteSwitch = false;
+    const player = wx.createInnerAudioContext();
+    this.audioPlayer = player;
+    player.loop = false;
+    player.obeyMuteSwitch = false;
 
-    this.audioPlayer.onPlay(() => {
+    player.onPlay(() => {
+      if (this.audioPlayer !== player || this.isUnloaded) return;
       console.log('🔔 打坐提示音开始播放:', this.currentSessionSound);
     });
 
-    this.audioPlayer.onEnded(() => this.handleSessionSoundEnded());
-    this.audioPlayer.onError((err) => {
+    player.onEnded(() => {
+      if (this.audioPlayer !== player || this.isUnloaded) return;
+      this.handleSessionSoundEnded();
+    });
+    player.onError((err) => {
+      if (this.audioPlayer !== player || this.isUnloaded) return;
       console.error('❌ 打坐提示音播放失败:', err);
       this.handleSessionSoundEnded();
     });
+  },
+
+  destroyAudioPlayer() {
+    this.stopSessionSound();
+    const player = this.audioPlayer;
+    this.audioPlayer = null;
+    if (player) player.destroy();
   },
 
   // 开始后留出 5 秒准备时间；暂停时保留剩余等待时间。
@@ -856,8 +866,9 @@ Page({
   },
 
   playSessionSound(type) {
-    if (!this.audioPlayer || this.isUnloaded) return;
+    if (this.isUnloaded) return;
     this.stopSessionSound();
+    if (!this.audioPlayer) this.createAudioPlayer();
     this.currentSessionSound = type;
     this.audioPlayer.src = type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3';
     this.audioPlayer.play();
