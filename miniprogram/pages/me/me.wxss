@@ -89,16 +89,12 @@ page {
 .me-menu-version {
   flex-shrink: 0;
 }
-.me-menu-version-info {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4rpx;
-}
 .me-design-credit {
+  align-self: center;
+  margin: 24rpx 32rpx 0;
   color: #99a1ae;
-  font-size: 20rpx;
-  line-height: 24rpx;
+  font-size: 22rpx;
+  line-height: 32rpx;
   white-space: nowrap;
 }
 .me-menu-chevron {
@@ -602,5 +598,8 @@ page {
     min-height: 88rpx;
     padding-top: 12rpx;
     padding-bottom: 12rpx;
+  }
+  .me-design-credit {
+    margin-top: 16rpx;
   }
 }
