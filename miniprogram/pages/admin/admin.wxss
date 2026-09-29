@@ -5,7 +5,7 @@ page { background: #f8fafc; color: #354152; }
 .page-title { display: block; margin-top: 10rpx; font-size: 44rpx; font-weight: 600; color: #333c47; }
 .description { display: block; margin-top: 14rpx; color: #77808b; font-size: 24rpx; line-height: 1.75; }
 .tabs { display: flex; padding: 8rpx; margin-bottom: 28rpx; background: #eaeef2; border-radius: 18rpx; }
-.tab { flex: 1; padding: 20rpx 4rpx; text-align: center; font-size: 25rpx; color: #77808b; border-radius: 12rpx; }
+.tab { flex: 1; padding: 20rpx 4rpx; text-align: center; font-size: 24rpx; color: #77808b; border-radius: 12rpx; white-space: nowrap; }
 .tab.active { color: #8c7345; background: #fff; font-weight: 600; box-shadow: 0 2rpx 6rpx #dde1e6; }
 .card { padding: 28rpx; margin-bottom: 24rpx; background: #fff; border: 1rpx solid #e9edf1; border-radius: 22rpx; }
 .card-title { font-size: 29rpx; font-weight: 600; color: #3b4654; }
@@ -65,3 +65,15 @@ page { background: #f8fafc; color: #354152; }
 .query-input { box-sizing: border-box; width: 100%; height: 92rpx; padding: 0 24rpx; border: 2rpx solid #e3e7ec; border-radius: 12rpx; font-size: 28rpx; }
 .query-name { min-width: 0; word-break: break-all; }
 .query-refresh { flex-shrink: 0; }
+.feedback-filters { flex-wrap: wrap; }
+.feedback-content { display: block; margin-top: 20rpx; color: #526171; font-size: 27rpx; line-height: 1.8; white-space: pre-wrap; word-break: break-all; }
+.feedback-response { padding: 20rpx; margin-top: 24rpx; border-radius: 12rpx; background: #faf8f3; }
+.feedback-response .feedback-content { margin-top: 10rpx; font-size: 25rpx; }
+.feedback-status-pending { background: #f8f0df; color: #a17d39; }
+.feedback-status-processing { background: #ecf2f8; color: #5b7895; }
+.feedback-status-resolved { background: #eef6f1; color: #527c69; }
+.feedback-textarea { box-sizing: border-box; width: 100%; min-height: 230rpx; padding: 22rpx 24rpx; border: 2rpx solid #e3e7ec; border-radius: 12rpx; font-size: 26rpx; line-height: 1.7; }
+.feedback-counter { text-align: right; }
+.feedback-message { margin: 0 8rpx 24rpx; }
+.feedback-delete-button { color: #b85b4f; background: #fff3f0; border-color: #f2d9d3; }
+.feedback-delete-button[disabled] { color: #cba9a3; background: #faf4f2; border-color: #f0e5e2; }

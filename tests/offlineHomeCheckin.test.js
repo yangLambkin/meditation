@@ -111,6 +111,7 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
   };
   page.setData({ currentYear: 2026, currentMonth: 9, userOpenId: OPENID });
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   const states = [];
   const observe = () => {
     page.refreshCheckinRecords();
@@ -427,6 +428,7 @@ test('saving a new check-in uploads only that new record and leaves previous fai
   app.setConnected(true);
   await app.advance(1000);
   app.page.openCheckinModal();
+  app.page.onCheckinDurationInput({ detail: { value: '7' } });
   await app.page.submitCheckin();
   await flush();
   assert.equal(app.rows().length, 2);

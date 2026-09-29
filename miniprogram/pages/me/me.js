@@ -16,6 +16,8 @@ Page({
     currentStreak: 0, // 当前连续天数
     medals: 0, // 勋章数量
     hasUserInfo: false, // 是否已获取用户信息
+    hasUnreadFeedback: false,
+    hasAdminAlert: false,
     // 必经之路绑定相关
     bijingBound: false, // 是否已绑定学号
     bijingStudentNumber: '', // 已绑定的学号
@@ -54,8 +56,22 @@ Page({
   },
 
   onShow() {
+    const alertGeneration = this._meAlertGeneration = (this._meAlertGeneration || 0) + 1;
     this._adminHidden = false;
     this._bijingHidden = false;
+    const app = typeof getApp === 'function' ? getApp() : null;
+    this.stopMeAlertWatch();
+    if (app && typeof app.watchSyncAlerts === 'function') {
+      this._stopMeAlertWatch = app.watchSyncAlerts(state => {
+        if (this._bijingHidden || alertGeneration !== this._meAlertGeneration) return;
+        const hasUnreadFeedback = state.user === true;
+        const hasAdminAlert = state.admin === true;
+        if (hasUnreadFeedback !== this.data.hasUnreadFeedback || hasAdminAlert !== this.data.hasAdminAlert) {
+          this.setData({ hasUnreadFeedback, hasAdminAlert });
+        }
+      });
+    }
+    if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
       this.calculateUserStatistics();
@@ -68,7 +84,7 @@ Page({
         if (changed) this.loadBijingSyncDetails(date);
       }
     });
-    // 页面显示时更新数据
+    // 页面显示只订阅 App 已缓存的提醒；提醒查询由打开小程序和业务变更触发。
     this.getUserData();
   },
 
@@ -81,10 +97,11 @@ Page({
     this.getUserAvatar();
 
     // 加载必经之路绑定状态
-    this.loadBijingStatus();
+    const profile = this.loadBijingStatus();
 
     // 获取用户统计信息
     this.calculateUserStatistics();
+    return profile;
   },
 
   /**
@@ -109,7 +126,10 @@ Page({
       this._bijingGeneration = (this._bijingGeneration || 0) + 1;
       this.clearBijingBindingView();
       this.setData({ bijingBinding: false, bijingUnbinding: false, bijingSyncing: false });
-      this.clearBijingAdminAccess();
+      // App 按账号隔离提醒；此时新账号查询可能已开始，不能使它失效。
+      this.clearBijingAdminAccess({ clearAlert: false });
+      const app = typeof getApp === 'function' ? getApp() : null;
+      if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
     }
     this._bijingAccount = openid;
     if (!checkinManager.isUserLoggedIn()) {
@@ -126,13 +146,17 @@ Page({
       });
       const profile = result && result.result && result.result.data;
       if (profile && this.isBijingContextCurrent(context) && requestId === this._bijingStatusRequestId) {
-        if (!profile.bijingBound || profile.bijingStudentNumber !== this.data.bijingStudentNumber ||
+        const hasBinding = profile.bijingBound === true &&
+          typeof profile.bijingStudentNumber === 'string' && !!profile.bijingStudentNumber.trim();
+        if (!hasBinding || profile.bijingStudentNumber !== this.data.bijingStudentNumber ||
             (profile.bijingBindingVersion || null) !== this.data.bijingBindingVersion) {
           this.clearBijingBindingView();
-          this.clearBijingAdminAccess();
+          // 同账号资料首次加载/更新只重置入口权限，不能取消 App 的独立提醒查询。
+          // 云端已确认解绑时，才同时移除管理员来源，保留个人反馈结果提醒。
+          this.clearBijingAdminAccess({ clearAlert: !hasBinding });
         }
         this.setData({
-          bijingBound: !!profile.bijingBound,
+          bijingBound: hasBinding,
           bijingStudentNumber: profile.bijingStudentNumber || '',
           bijingBindingVersion: profile.bijingBindingVersion === undefined ? null : profile.bijingBindingVersion
         });
@@ -298,6 +322,10 @@ Page({
     });
   },
 
+  goToFeedbackPage() {
+    wx.navigateTo({ url: '/pages/feedback/feedback' });
+  },
+
   /**
    * 修改头像
    */
@@ -441,7 +469,10 @@ Page({
         throw new Error(/^未知操作[：:]\s*getAccess$/.test(message)
           ? '管理员身份服务尚未更新，请先部署 adminManager 云函数' : message);
       }
-      if (!result.data || result.data.isAdmin !== true) return;
+      if (!result.data || result.data.isAdmin !== true) {
+        this.clearBijingAdminAccess();
+        return;
+      }
       wx.navigateTo({ url: '/pages/admin/admin' });
     } catch (error) {
       if (!this._adminHidden && requestId === this._adminRequestId) {
@@ -516,13 +547,15 @@ Page({
     });
   },
 
-  clearBijingAdminAccess() {
+  clearBijingAdminAccess({ clearAlert = true } = {}) {
     this._versionTapCount = 0;
     this._versionTapAt = 0;
     this._adminRequestId = (this._adminRequestId || 0) + 1;
     this.setData({ bijingIsAdmin: false });
+    if (!clearAlert) return;
     const app = typeof getApp === 'function' ? getApp() : null;
-    if (app && typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
+    if (app && typeof app.clearAdminSyncAlert === 'function') app.clearAdminSyncAlert();
+    else if (app && typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
   },
 
   async refreshBijingAdminAccess(context) {
@@ -534,7 +567,7 @@ Page({
       const allowed = !!(result && result.success === true && result.data && result.data.isAdmin === true);
       this.setData({ bijingIsAdmin: allowed });
       const app = typeof getApp === 'function' ? getApp() : null;
-      if (allowed && app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert();
+      if (allowed && app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
     } catch (error) {
       // Binding is already saved. A failed access probe must not undo it or grant access.
     }
@@ -881,10 +914,18 @@ Page({
   },
 
   onReady() {
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
+  },
 
+  stopMeAlertWatch() {
+    if (this._stopMeAlertWatch) this._stopMeAlertWatch();
+    this._stopMeAlertWatch = null;
+    this.setData({ hasUnreadFeedback: false, hasAdminAlert: false });
   },
 
   onHide() {
+    this.stopMeAlertWatch();
     this.resetAdminEntry();
     this.invalidateBijingRequests();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
@@ -893,6 +934,7 @@ Page({
   },
 
   onUnload() {
+    this.stopMeAlertWatch();
     this.resetAdminEntry();
     this.invalidateBijingRequests();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();

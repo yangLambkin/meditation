@@ -1,22 +1,116 @@
 /* pages/me/me.wxss */
+page {
+  overflow: hidden;
+}
+
+/* 功能列表：统一图标、行高与分隔线，跳转项显示箭头 */
+.me-menu {
+  margin: 20rpx 32rpx 0;
+  border: 1rpx solid #eef0f3;
+  border-radius: 24rpx;
+  background-color: #ffffff;
+  overflow: hidden;
+}
+.me-menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  min-height: 96rpx;
+  padding: 16rpx 28rpx;
+  gap: 16rpx;
+}
+.me-menu-row + .me-menu-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 108rpx;
+  right: 28rpx;
+  height: 1rpx;
+  background-color: #f0f2f5;
+}
+.me-menu-row-hover {
+  background-color: #faf8f3;
+}
+.me-menu-leading,
+.me-menu-trailing {
+  display: flex;
+  align-items: center;
+}
+.me-menu-leading {
+  min-width: 0;
+  gap: 20rpx;
+}
+.me-menu-trailing {
+  flex-shrink: 0;
+  gap: 12rpx;
+}
+.me-menu-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 60rpx;
+  height: 60rpx;
+  border-radius: 16rpx;
+  background-color: #faf7f0;
+}
+.me-menu-icon {
+  display: block;
+  width: 38rpx;
+  height: 38rpx;
+}
+.me-menu-label {
+  color: #354152;
+  font-size: 28rpx;
+  line-height: 1.5;
+}
+.me-menu-label-with-dot {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.me-menu-alert-dot {
+  position: absolute;
+  top: 50%;
+  right: -22rpx;
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background-color: #ff4d4f;
+  transform: translateY(-50%);
+}
+.me-menu-note {
+  color: #8b94a2;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+.me-menu-version {
+  flex-shrink: 0;
+}
+.me-menu-chevron {
+  flex-shrink: 0;
+  width: 28rpx;
+  height: 28rpx;
+  opacity: 0.65;
+}
 .ml-17 {
   margin-left: 34rpx;
 }
 .page {
-  padding-bottom: 448rpx;
+  padding-bottom: 32rpx;
   background-color: #f8fafc;
   overflow: hidden;
   width: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
   height: 100%;
 }
 .section {
-  padding: 36rpx 48rpx 48rpx;
+  padding: 16rpx 48rpx;
   background-color: #ffffff;
 }
 .group {
-  padding: 36rpx 0;
+  padding: 12rpx 0;
 }
 .text-wrapper {
   padding: 48rpx 0;
@@ -47,21 +141,16 @@
   color: #b29764;
   line-height: 38.08rpx;
 }
-.image {
-  width: 40rpx;
-  height: 40rpx;
-}
 .image_2 {
   margin-right: 16rpx;
 }
 .group_2 {
-  padding: 52rpx 0 4rpx;
+  padding: 20rpx 0 12rpx;
   border-top: solid 3rpx #f2f4f6;
 }
 .group_3 {
-  padding-top: 16rpx;
+  padding: 16rpx 0 24rpx;
   width: 218rpx;
-  height: 89.92rpx;
   border-right: solid 3rpx #f2f4f6;
 }
 .font_3 {
@@ -81,33 +170,8 @@
 .text_5 {
   line-height: 33.5rpx;
 }
-.section_2 {
-  background-color: #ffffff;
-}
-.group_5 {
-  padding: 32rpx 48rpx;
-}
-.image_3 {
-  width: 32rpx;
-  height: 32rpx;
-}
-.section_3 {
-  background-color: #ffffff;
-}
-.font_2 {
-  font-size: 26rpx;
-  font-family: Arimo;
-  line-height: 25.96rpx;
-  color: #354152;
-}
 .text_3 {
   color: #697282;
-}
-.group_7 {
-  padding: 32rpx 48rpx;
-}
-.text_9 {
-  line-height: 25.4rpx;
 }
 .font_4 {
   font-size: 24rpx;
@@ -119,6 +183,8 @@
   line-height: 22.12rpx;
 }
 .text_10 {
+  margin-top: auto;
+  padding-top: 16rpx;
   color: #99a1ae;
   line-height: 22.38rpx;
 }
@@ -180,8 +246,8 @@
 
 /* 必经之路同步：突出默认自动同步，手动操作保持次要层级 */
 .bijing-sync-card {
-  margin-bottom: 32rpx;
-  padding: 28rpx;
+  margin-bottom: 16rpx;
+  padding: 20rpx;
   border: 2rpx solid #eee7da;
   border-radius: 20rpx;
   background-color: #faf8f3;
@@ -226,10 +292,10 @@
   display: flex;
   align-items: center;
   gap: 20rpx;
-  margin-top: 20rpx;
+  margin-top: 12rpx;
 }
 .bijing-auto-note {
-  margin-top: 20rpx;
+  margin-top: 12rpx;
 }
 .bijing-auto-note-title {
   display: block;
@@ -253,8 +319,8 @@
 }
 .bijing-last {
   display: block;
-  margin-top: 20rpx;
-  padding-top: 16rpx;
+  margin-top: 12rpx;
+  padding-top: 12rpx;
   border-top: 2rpx solid #eee7da;
   font-size: 22rpx;
   color: #7c7569;
@@ -504,4 +570,35 @@
 .bijing-card {
   padding: 16rpx 48rpx 36rpx;
   background-color: #ffffff;
+}
+
+/* 短屏进一步收紧留白，禁用页面滚动后仍能看到底部菜单。 */
+@media (max-height: 600px) {
+  .section {
+    padding: 8rpx 40rpx;
+  }
+  .group {
+    padding: 8rpx 0;
+  }
+  .bijing-sync-card {
+    margin-bottom: 12rpx;
+    padding: 16rpx;
+  }
+  .group_2 {
+    padding-top: 12rpx;
+  }
+  .group_3 {
+    padding: 8rpx 0 20rpx;
+  }
+  .me-menu {
+    margin-top: 12rpx;
+  }
+  .me-menu-row {
+    min-height: 88rpx;
+    padding-top: 12rpx;
+    padding-bottom: 12rpx;
+  }
+  .text_10 {
+    padding-top: 12rpx;
+  }
 }

@@ -1,0 +1,48 @@
+<view class="feedback-page">
+  <view class="page-heading">
+    <text class="page-title">听听你的想法</text>
+    <text class="description">遇到的问题、希望改进的地方，都可以在这里告诉我们。</text>
+  </view>
+
+  <view class="card">
+    <text class="field-label">反馈内容</text>
+    <textarea class="content-input" value="{{content}}" placeholder="请描述遇到的问题或你的建议；如有问题，可补充发生时间和操作步骤。" placeholder-class="input-placeholder" maxlength="1000" disabled="{{submitting}}" bindinput="onContentInput" />
+    <text class="character-count">{{content.length}} / 1000</text>
+    <text class="field-label contact-label">联系方式 <text class="optional">（选填）</text></text>
+    <input class="contact-input" value="{{contact}}" placeholder="微信号或手机号，方便进一步沟通" placeholder-class="input-placeholder" maxlength="100" disabled="{{submitting}}" bindinput="onContactInput" />
+    <text class="privacy-note">反馈仅本人和管理员可见。请勿填写密码等敏感信息。</text>
+    <text wx:if="{{submitError}}" class="error-message" selectable>{{submitError}}</text>
+    <button wx:if="{{loggedIn}}" class="primary-button" loading="{{submitting}}" disabled="{{submitting || !canSubmit}}" bindtap="submitFeedback">{{submitting ? '正在提交…' : '提交反馈'}}</button>
+    <block wx:else>
+      <text class="login-note">登录后即可提交反馈、查看处理进度和回复。</text>
+      <button class="primary-button" bindtap="login">登录后反馈</button>
+    </block>
+  </view>
+
+  <block wx:if="{{loggedIn}}">
+    <view class="section-heading">
+      <text class="section-title">我的反馈</text>
+      <button class="refresh-button" disabled="{{loading}}" bindtap="loadFeedback">{{loading ? '刷新中…' : '刷新'}}</button>
+    </view>
+    <text class="history-note">处理进度和管理员回复会显示在这里。</text>
+    <view wx:for="{{feedbacks}}" wx:key="_id" class="card feedback-card">
+      <view class="feedback-meta"><text class="feedback-time">{{item.createdText}}</text><text class="status status-{{item.status}}">{{item.statusText}}</text></view>
+      <text class="feedback-content" selectable>{{item.content}}</text>
+      <text wx:if="{{item.contact}}" class="contact-text" selectable>联系方式：{{item.contact}}</text>
+      <view wx:if="{{item.reply}}" class="reply">
+        <text class="reply-title">管理员回复</text>
+        <text class="reply-content" selectable>{{item.reply}}</text>
+        <text class="reply-time">{{item.updatedText}}</text>
+      </view>
+      <text wx:elif="{{item.status === 'processing'}}" class="progress-note">管理员正在跟进你的反馈。</text>
+      <text wx:elif="{{item.status === 'resolved'}}" class="progress-note">你的反馈已处理，感谢你的建议。</text>
+    </view>
+    <view wx:if="{{loading}}" class="empty-state">正在加载反馈…</view>
+    <view wx:elif="{{loaded && !feedbacks.length && !listError}}" class="empty-state">还没有反馈记录，期待你的第一条建议。</view>
+    <view wx:if="{{listError}}" class="list-error">
+      <text class="error-message">{{listError}}</text>
+      <button class="secondary-button" disabled="{{loading}}" bindtap="loadFeedback">重新加载</button>
+    </view>
+    <button wx:if="{{nextCursor}}" class="secondary-button" disabled="{{loading}}" bindtap="loadMoreFeedback">加载更多</button>
+  </block>
+</view>

@@ -5,6 +5,16 @@ const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
 const dateUtil = require('../../utils/dateUtil.js');
 
+function applySyncAlertDot() {
+  const app = typeof getApp === 'function' ? getApp() : null;
+  if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
+}
+function refreshAlertsAfterAccountChange(previousAccount, account) {
+  if (previousAccount === account) return;
+  const app = typeof getApp === 'function' ? getApp() : null;
+  if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
+}
+
 Page({
   data: {
     currentYear: 2026,
@@ -20,7 +30,7 @@ Page({
     checkinTime: '',
     minCheckinDate: '',
     maxCheckinDate: '',
-    checkinDuration: '7',
+    checkinDuration: '',
     checkinExperience: '',
     showCheckinModal: false,
     showCheckinTimePicker: false,
@@ -50,7 +60,7 @@ Page({
     this.setData({
       showCheckinModal: true,
       showCheckinTimePicker: false,
-      checkinDuration: '7',
+      checkinDuration: '',
       checkinExperience: ''
     });
   },
@@ -459,6 +469,7 @@ Page({
       console.log('生成新的本地用户标识:', newLocalUserId);
       wx.setStorageSync('localUserId', newLocalUserId);
       wx.setStorageSync('userOpenId', newLocalUserId);
+      applySyncAlertDot();
       
       this.setData({
         userOpenId: newLocalUserId,
@@ -770,6 +781,7 @@ Page({
     wx.setStorageSync('userNickname', '微信用户');
     // 登录/换绑：将本地(local_)期间已解锁的勋章迁移到新 openid 缓存（修复风险③）
     require('../../utils/badgeManager.js').migrateBadges(oldUserOpenId, openid);
+    refreshAlertsAfterAccountChange(oldUserOpenId, openid);
     
     // 保存到云数据库（只有openid）
     this.saveBasicUserToCloud(openid);
@@ -797,6 +809,7 @@ Page({
     };
     
     wx.setStorageSync('userLoginData', userData);
+    refreshAlertsAfterAccountChange(oldUserOpenId, openid);
     
     // 异步保存用户信息到云数据库
     this.saveUserToCloud(userInfo, openid);
@@ -1424,13 +1437,14 @@ Page({
    * 生命周期函数--监听页面初次渲染完成
    */
   onReady() {
-
+    applySyncAlertDot();
   },
 
   /**
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    applySyncAlertDot();
     console.log('=== index页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {

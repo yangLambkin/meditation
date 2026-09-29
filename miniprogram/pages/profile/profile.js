@@ -455,6 +455,10 @@ Page({
       loginTime: new Date().toISOString(), profileVersion: '2.0'
     });
     require('../../utils/badgeManager.js').migrateBadges(expectedAccount, openid);
+    if (expectedAccount !== openid) {
+      const app = typeof getApp === 'function' ? getApp() : null;
+      if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
+    }
   },
 
   /** 网络调用成功后，仍需检查云函数是否确认业务保存成功。 */

@@ -9,18 +9,19 @@
     <view class="page-heading">
       <text class="eyebrow">静坐觉察</text>
       <text class="page-title">管控中心</text>
-      <text class="description">查看同步进度，查询个人记录，维护团队。</text>
+      <text class="description">查看同步进度，查询个人记录，处理反馈，维护团队。</text>
     </view>
     <view class="tabs">
       <view class="tab {{tab === 'sync' ? 'active' : ''}}" data-tab="sync" bindtap="onTabChange">必经同步</view>
       <view class="tab {{tab === 'query' ? 'active' : ''}}" data-tab="query" bindtap="onTabChange">记录查询</view>
+      <view class="tab {{tab === 'feedback' ? 'active' : ''}}" data-tab="feedback" bindtap="onTabChange">用户反馈</view>
       <view class="tab {{tab === 'team' ? 'active' : ''}}" data-tab="team" bindtap="onTabChange">团队团长</view>
       <view class="tab {{tab === 'audit' ? 'active' : ''}}" data-tab="audit" bindtap="onTabChange">操作记录</view>
     </view>
 
     <view wx:if="{{verifying}}" class="empty-state">正在加载并校验操作权限…</view>
     <view wx:elif="{{!authorized}}" class="card">
-      <text class="card-title">{{tab === 'sync' ? '必经同步暂不可用' : tab === 'query' ? '记录查询暂不可用' : tab === 'team' ? '团队管控暂不可用' : '操作记录暂不可用'}}</text>
+      <text class="card-title">{{tab === 'sync' ? '必经同步暂不可用' : tab === 'query' ? '记录查询暂不可用' : tab === 'feedback' ? '用户反馈暂不可用' : tab === 'team' ? '团队管控暂不可用' : '操作记录暂不可用'}}</text>
       <text class="description">{{accessError || '请稍后重试。'}}</text>
       <button class="secondary-button" bindtap="retryAccess">重新加载</button>
     </view>
@@ -156,6 +157,52 @@
           </view>
         </block>
       </view>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'feedback'}}">
+      <view class="section-heading"><text class="card-title">用户反馈</text><view class="text-button" bindtap="refreshTab">{{feedbackLoading ? '刷新中…' : '刷新'}}</view></view>
+      <text class="description audit-intro">查看用户遇到的问题和建议，更新处理状态并回复。用户可在自己的反馈记录中查看处理结果。</text>
+      <view class="scope-switch feedback-filters">
+        <view class="scope-option {{feedbackFilter === 'pending' ? 'selected' : ''}}" data-status="pending" bindtap="onFeedbackFilterChange">待处理</view>
+        <view class="scope-option {{feedbackFilter === 'processing' ? 'selected' : ''}}" data-status="processing" bindtap="onFeedbackFilterChange">处理中</view>
+        <view class="scope-option {{feedbackFilter === 'resolved' ? 'selected' : ''}}" data-status="resolved" bindtap="onFeedbackFilterChange">已处理</view>
+        <view class="scope-option {{feedbackFilter === 'all' ? 'selected' : ''}}" data-status="all" bindtap="onFeedbackFilterChange">全部</view>
+      </view>
+      <text wx:if="{{feedbackMessage}}" class="notice feedback-message">{{feedbackMessage}}</text>
+      <view wx:if="{{feedbackError}}" class="card">
+        <text class="error-message" selectable>{{feedbackError}}</text>
+        <button class="secondary-button compact" disabled="{{feedbackLoading || feedbackSaveBusy || feedbackDeleteBusy}}" bindtap="loadFeedback">重新加载反馈</button>
+      </view>
+      <view wx:if="{{!feedbacks.length && !feedbackLoading && !feedbackError}}" class="empty-state">{{feedbackFilter === 'pending' ? '暂无待处理的反馈。' : '该状态下暂无反馈。'}}</view>
+      <view wx:for="{{feedbacks}}" wx:key="_id" class="card">
+        <view class="row spread"><text class="member-name">{{item.nickname || '未命名用户'}}</text><text class="status feedback-status-{{item.status}}">{{item.statusText}}</text></view>
+        <text class="small-note" selectable>学号：{{item.studentNumber || '未绑定学号'}}</text>
+        <text class="small-note" selectable>联系方式：{{item.contact || '未填写'}}</text>
+        <text class="time-row">提交于 {{item.createdText}}</text>
+        <text class="feedback-content" selectable>{{item.content}}</text>
+        <view wx:if="{{item.reply}}" class="feedback-response">
+          <text class="small-label">管理员回复</text>
+          <text class="feedback-content" selectable>{{item.reply}}</text>
+        </view>
+        <text wx:if="{{item.handledAt}}" class="time-row">最近处理 {{item.handledText}}</text>
+        <view class="detail-toggle" data-id="{{item._id}}" bindtap="selectFeedback">{{selectedFeedback && selectedFeedback._id === item._id ? '收起处理 ↑' : '查看并处理 ↓'}}</view>
+        <view wx:if="{{selectedFeedback && selectedFeedback._id === item._id}}" class="feedback-editor">
+          <text class="field-label">处理状态</text>
+          <picker mode="selector" range="{{feedbackStatusOptions}}" value="{{feedbackStatusIndex}}" disabled="{{feedbackSaveBusy || feedbackDeleteBusy || feedbackLoading}}" bindchange="onFeedbackStatusChange">
+            <view class="select-field"><text>{{feedbackStatusOptions[feedbackStatusIndex]}}</text><text class="select-arrow">⌄</text></view>
+          </picker>
+          <text class="field-label">回复用户</text>
+          <textarea class="feedback-textarea" value="{{feedbackReply}}" maxlength="1000" placeholder="填写处理说明或回复（选填）" disabled="{{feedbackSaveBusy || feedbackDeleteBusy || feedbackLoading}}" bindinput="onFeedbackReplyInput" />
+          <text class="small-note feedback-counter">{{feedbackReply.length}} / 1000</text>
+          <text wx:if="{{feedbackSaveError}}" class="error-message" selectable>{{feedbackSaveError}}</text>
+          <button wx:if="{{feedbackConflict}}" class="secondary-button compact" disabled="{{feedbackLoading || feedbackSaveBusy || feedbackDeleteBusy}}" bindtap="loadFeedback">重新加载反馈</button>
+          <button class="primary-button" loading="{{feedbackSaveBusy}}" disabled="{{feedbackSaveBusy || feedbackDeleteBusy || feedbackLoading || feedbackConflict}}" bindtap="saveFeedback">{{feedbackSaveBusy ? '正在保存…' : '保存处理结果'}}</button>
+          <button class="secondary-button feedback-delete-button" loading="{{feedbackDeleteBusy}}" disabled="{{feedbackSaveBusy || feedbackDeleteBusy || feedbackLoading || feedbackConflict}}" bindtap="deleteFeedback">{{feedbackDeleteBusy ? '正在删除…' : '删除反馈'}}</button>
+        </view>
+      </view>
+      <view wx:if="{{feedbackLoading}}" class="small-empty">正在读取反馈…</view>
+      <button wx:if="{{feedbackCursor}}" class="secondary-button" loading="{{feedbackLoading}}" disabled="{{feedbackLoading || feedbackSaveBusy || feedbackDeleteBusy}}" bindtap="loadMoreFeedback">加载更多反馈</button>
+      <text class="footer-note">反馈按提交时间由近到远排列，时间均为北京时间。</text>
     </view>
 
     <view wx:if="{{authorized && tab === 'team'}}">

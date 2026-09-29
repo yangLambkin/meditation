@@ -149,6 +149,7 @@ function makePendingRecords(count) {
 test('home completes immediately after the local save and blocks repeated taps', async () => {
   const { page, calls } = createPage();
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   const saving = page.submitCheckin();
   assert.equal(page.data.checkinSubmitting, false);
   assert.equal(page.data.showCheckinModal, false);
@@ -401,13 +402,13 @@ test('home background read errors do not reject the page show lifecycle or uploa
   page.onUnload();
 });
 
-test('home form starts with seven minutes and the current business date and Beijing time', () => {
+test('home form starts with an empty duration and the current business date and Beijing time', () => {
   const { page } = createPage({ now: '2026-09-16T16:05:37.123Z' });
   page.refreshCheckinDefaults();
   assert.equal(page.data.checkinDate, '2026-09-16');
   assert.equal(page.data.checkinTime, '00:05');
   assert.equal(page.data.maxCheckinDate, '2026-09-16');
-  assert.equal(page.data.checkinDuration, '7');
+  assert.equal(page.data.checkinDuration, '');
   assert.equal(page.data.checkinExperience, '');
   assert.equal(page.data.checkinSubmitting, false);
 });
@@ -415,6 +416,7 @@ test('home form starts with seven minutes and the current business date and Beij
 test('time selection keeps a draft until confirmation and preserves the chosen minute on submit', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-09-17T08:59:37+08:00' });
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   page.openCheckinTimePicker();
   assert.equal(page.data.showCheckinTimePicker, true);
   setNow('2026-09-17T09:01:00+08:00');
@@ -448,16 +450,18 @@ test('cancelling time selection preserves both manual edits and automatic curren
   assert.equal(page._checkinTimeEdited, true);
 });
 
-test('closing the form discards the time picker and a new form uses current time', () => {
+test('closing the form discards the time picker and a new form uses current time and an empty duration', () => {
   const { page, setNow } = createPage();
   page.openCheckinTimePicker();
   assert.equal(page.data.showCheckinTimePicker, false);
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '20' } });
   page.openCheckinTimePicker();
   page.closeCheckinModal();
   assert.equal(page.data.showCheckinTimePicker, false);
   setNow('2026-09-17T08:30:00+08:00');
   page.openCheckinModal();
+  assert.equal(page.data.checkinDuration, '');
   page.openCheckinTimePicker();
   assert.equal(page.data.checkinTime, '08:30');
   page.closeCheckinTimePicker();
@@ -545,9 +549,10 @@ test('refresh preserves explicitly edited date and time independently', () => {
   assert.equal(timeOnly.page.data.checkinTime, '07:15');
 });
 
-test('unedited fields submit the actual current instant even after Beijing midnight', async () => {
+test('unedited date and time submit the actual current instant even after Beijing midnight', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-09-17T23:59:30+08:00' });
   page.refreshCheckinDefaults();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   setNow('2026-09-18T00:02:37.456+08:00');
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
@@ -621,6 +626,7 @@ test('impossible, malformed and future dates or times cannot be saved', async ()
     page.refreshCheckinDefaults();
     change(page, 'Date', date);
     change(page, 'Time', time);
+    page.onCheckinDurationInput({ detail: { value: '7' } });
     await page.submitCheckin();
     assert.equal(calls.record.length, 0, `${date} ${time}`);
     assert.equal(calls.content.length, 0, `${date} ${time}`);
@@ -632,6 +638,7 @@ test('impossible, malformed and future dates or times cannot be saved', async ()
 test('rejected text preserves the draft and never writes a check-in', async () => {
   const { page, calls } = createPage({ checkText: () => false });
   page.refreshCheckinDefaults();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   page.onCheckinExperienceInput({ detail: { value: '待修改的体验' } });
   await page.submitCheckin();
   assert.deepEqual(JSON.parse(JSON.stringify(calls.content)), [['待修改的体验', 2, { allowOffline: true, timeoutMs: 1500 }]]);
@@ -646,6 +653,7 @@ test('pending text approval locks submission and prevents duplicate check-ins', 
   const pending = new Promise(done => { resolve = done; });
   const { page, calls } = createPage({ checkText: () => pending });
   page.refreshCheckinDefaults();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   page.onCheckinExperienceInput({ detail: { value: '一次练习，一条记录' } });
   const first = page.submitCheckin();
   assert.equal(page.data.checkinSubmitting, true);
@@ -684,6 +692,7 @@ test('storage and moderation errors preserve inputs, report failure and release 
 
 test('rapid taps with an empty experience save once and allow a later check-in', async () => {
   const { page, calls, setNow } = createPage();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
@@ -999,6 +1008,7 @@ test('details resolve inline experiences and IDs from both local storage formats
 test('manual entries accept only the last three business dates and preserve one retry identity', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-10-01T01:30:00+08:00' });
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   assert.equal(page.data.checkinDate, '2026-09-30');
   assert.equal(page.data.minCheckinDate, '2026-09-28');
   assert.equal(page.data.maxCheckinDate, '2026-09-30');
@@ -1017,6 +1027,7 @@ test('manual entries accept only the last three business dates and preserve one 
   assert.ok(calls.record[0][4].idempotencyKey);
   setNow('2026-10-01T02:00:00+08:00');
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   change(page, 'Date', '2026-09-28');
   await page.submitCheckin();
   assert.equal(calls.record.length, 1, 'the third previous business date expires at 02:00');
@@ -1029,6 +1040,7 @@ test('failed manual saves retry with the same identity while a fresh modal creat
     return { success: true };
   } });
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
   setNow('2026-09-17T08:26:00+08:00');
   await page.submitCheckin();
@@ -1036,6 +1048,7 @@ test('failed manual saves retry with the same identity while a fresh modal creat
   assert.equal(calls.record[0][4].idempotencyKey, calls.record[1][4].idempotencyKey);
   setNow('2026-09-17T08:27:00+08:00');
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
   assert.notEqual(calls.record[1][4].idempotencyKey, calls.record[2][4].idempotencyKey);
 });

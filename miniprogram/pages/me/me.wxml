@@ -148,32 +148,44 @@
         </view>
       </view>
     </view>
-    <view class="mt-16 flex-col section_2">
-      <view class="flex-row justify-between items-center group_5" bindtap="goToBadgePage">
-        <view class="flex-row items-center">
-          <image
-            class="shrink-0 image"
-          />
-          <text class="font_2 ml-17">我的勋章</text>
+    <view class="me-menu">
+      <view class="me-menu-row" bindtap="goToBadgePage" hover-class="me-menu-row-hover">
+        <view class="me-menu-leading">
+          <view class="me-menu-icon-wrap">
+            <image class="me-menu-icon" src="/images/icons/medal.svg" mode="aspectFit" />
+          </view>
+          <text class="me-menu-label">我的勋章</text>
         </view>
-        <image
-          class="image_3"
-        />
+        <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
       </view>
-    </view>
-    <view class="mt-16 flex-col section_3">
-      <view class="flex-row justify-between items-center group_7" bindtap="onVersionTap">
-        <view class="flex-row items-center">
-          <image
-            class="shrink-0 image"
-          />
-          <text class="font_2 text_9 ml-17">版本 V2.10.2</text>
+      <view class="me-menu-row" bindtap="goToFeedbackPage" hover-class="me-menu-row-hover">
+        <view class="me-menu-leading">
+          <view class="me-menu-icon-wrap">
+            <image class="me-menu-icon" src="/images/icons/feedback.svg" mode="aspectFit" />
+          </view>
+          <view class="me-menu-label-with-dot">
+            <text class="me-menu-label">意见反馈</text>
+            <view wx:if="{{hasUnreadFeedback}}" class="me-menu-alert-dot" aria-label="有未读反馈结果" />
+          </view>
         </view>
-        <image
-          class="image_3"
-        />
+        <view class="me-menu-trailing">
+          <text class="me-menu-note">建议与问题</text>
+          <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
+        </view>
+      </view>
+      <view class="me-menu-row" bindtap="onVersionTap">
+        <view class="me-menu-leading">
+          <view class="me-menu-icon-wrap">
+            <image class="me-menu-icon" src="/images/icons/info.svg" mode="aspectFit" />
+          </view>
+          <view class="me-menu-label-with-dot">
+            <text class="me-menu-label">当前版本</text>
+            <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
+          </view>
+        </view>
+        <text class="me-menu-note me-menu-version">V2.10.3</text>
       </view>
     </view>
   </view>
-  <text class="mt-20 self-center font_4 text_10">Designed by GenXin</text>
+  <text class="self-center font_4 text_10">Designed by GenXin</text>
 </view>

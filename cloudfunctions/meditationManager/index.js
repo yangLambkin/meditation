@@ -79,6 +79,11 @@ exports.main = async (event = {}, context) => {
       return await updateUserProfile(openid, event.userInfo, event.userType);
     case "getUserProfile":
       return await getUserProfile(openid);
+    case "submitFeedback":
+    case "getMyFeedback":
+    case "getFeedbackAlert":
+    case "markFeedbackRead":
+      return require('./feedback').handleFeedback(event, { db, cloud, openid });
     case "migrateUserProfile":
       return await migrateUserProfile(openid, event.oldUserInfo);
     case "getRankingSnapshot":

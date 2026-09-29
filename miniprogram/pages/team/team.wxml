@@ -33,7 +33,7 @@
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
         <view class="team-identity">
-          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text></view>
+          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text><text class="role-badge owner" wx:elif="{{item.isSelfManaged}}">我管理的</text></view>
           <text class="team-owner">团长：{{item.creatorName || '匿名用户'}}</text>
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
@@ -53,7 +53,7 @@
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
         <view class="team-identity">
-          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text></view>
+          <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text><text class="role-badge owner" wx:elif="{{item.isSelfManaged}}">我管理的</text></view>
           <text class="team-owner">团长：{{item.creatorName || '匿名用户'}}</text>
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>

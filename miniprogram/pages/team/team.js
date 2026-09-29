@@ -1,6 +1,11 @@
 const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
 
+function applySyncAlertDot() {
+  const app = typeof getApp === 'function' ? getApp() : null;
+  if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
+}
+
 Page({
   data: {
     myTeams: [], joinedTeams: [], mergedJoinedTeams: [], allTeams: [],
@@ -48,7 +53,12 @@ Page({
     this.getUserInfo();
   },
 
+  onReady() {
+    applySyncAlertDot();
+  },
+
   onShow() {
+    applySyncAlertDot();
     this.getUserInfo();
     return this.loadTeamData();
   },
@@ -77,8 +87,14 @@ Page({
   },
 
   renderTeams(allTeams = this.getCachedAllTeams()) {
+    const openid = wx.getStorageSync('userOpenId') || '';
     const myTeams = teamManager.getMyTeams();
+    const memberTeams = teamManager.getJoinedTeams();
     const ownIds = new Set(myTeams.map(team => team.cloudId || team._id));
+    // 公开列表不含副团长身份，统一从当前账号已加入的团队判断。
+    const managedIds = new Set(memberTeams.filter(team => openid && team.creator !== openid &&
+      Array.isArray(team.deputyLeaders) && team.deputyLeaders.includes(openid))
+      .map(team => team.cloudId || team._id));
     const format = team => ({
       ...team,
       _id: team.cloudId || team._id,
@@ -87,10 +103,11 @@ Page({
       practiceStartDate: team.practiceStartDate === null ? null : team.practiceStartDate || this.getPracticeDate(team.createdAt),
       dailyGoalMinutes: team.dailyGoalMinutes === null ? null :
         Number.isInteger(team.dailyGoalMinutes) && team.dailyGoalMinutes > 0 ? team.dailyGoalMinutes : 20,
-      isSelfCreated: ownIds.has(team.cloudId || team._id)
+      isSelfCreated: ownIds.has(team.cloudId || team._id),
+      isSelfManaged: managedIds.has(team.cloudId || team._id)
     });
     const formattedMyTeams = myTeams.map(format);
-    const joinedTeams = teamManager.getJoinedTeams().map(format);
+    const joinedTeams = memberTeams.map(format);
     const mergedJoinedTeams = this.mergeJoinedTeams(formattedMyTeams, joinedTeams);
     this.setData({
       myTeams: formattedMyTeams, joinedTeams, mergedJoinedTeams,

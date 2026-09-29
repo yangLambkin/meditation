@@ -3,11 +3,14 @@ const dateUtil = require('../../utils/dateUtil.js');
 
 const STATUS_LABELS = { pending: '待核对', running: '同步中', success: '已完成', partial: '部分失败', failed: '失败', interrupted: '已中断', skipped: '已跳过' };
 const PHASE_LABELS = { upload: '批量上传', verify: '核对必经数据', retry: '重试缺失记录', reverify: '复核修复结果' };
+const FEEDBACK_STATUSES = ['pending', 'processing', 'resolved'];
+const FEEDBACK_LABELS = { pending: '待处理', processing: '处理中', resolved: '已处理' };
 function clearSyncAlert() {
   if (typeof getApp !== 'function') return;
   const app = getApp();
   if (!app) return;
-  if (typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
+  if (typeof app.clearAdminSyncAlert === 'function') app.clearAdminSyncAlert();
+  else if (typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
 }
 function errorText(error) {
   return typeof error === 'string' ? error : error && (error.message || error.errMsg) || '操作失败，请重试';
@@ -44,8 +47,19 @@ function clearedRecordQuery() {
 function clearedDayRecords() {
   return { dayRecords: [], dayRecordsLoading: false, dayRecordsLoaded: false, dayRecordsError: '', dayTotalCount: 0, dayTotalDuration: 0 };
 }
+function clearedFeedbackEditor() {
+  return { selectedFeedback: null, feedbackStatusIndex: 0, feedbackReply: '', feedbackSaveError: '', feedbackConflict: false };
+}
+function clearedFeedback() {
+  return { ...clearedFeedbackEditor(), feedbackFilter: 'pending', feedbacks: [], feedbackCursor: '',
+    feedbackLoading: false, feedbackError: '', feedbackMessage: '', feedbackSaveBusy: false, feedbackDeleteBusy: false };
+}
+function presentFeedback(feedback) {
+  return { ...feedback, statusText: FEEDBACK_LABELS[feedback.status] || '待处理',
+    createdText: timeText(feedback.createdAt), updatedText: timeText(feedback.updatedAt), handledText: timeText(feedback.handledAt) };
+}
 function clearedPrivateData() {
-  return { ...clearedRecordQuery(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
+  return { ...clearedRecordQuery(), ...clearedFeedback(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
     runs: [], runsLoading: false, showAllRuns: true, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
     syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
@@ -56,7 +70,8 @@ function clearedPrivateData() {
 
 Page({
   data: {
-    ...clearedRecordQuery(),
+    ...clearedRecordQuery(), ...clearedFeedback(),
+    feedbackStatusOptions: FEEDBACK_STATUSES.map(status => FEEDBACK_LABELS[status]),
     entryVerifying: true, entryAuthorized: false, entryError: '',
     verifying: true, authorized: false, accessError: '', tab: 'sync',
     dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
@@ -73,7 +88,8 @@ Page({
     const generation = this._generation = (this._generation || 0) + 1;
     this.clearPoll();
     this.setData({ ...clearedPrivateData(), entryVerifying: true, entryAuthorized: false, entryError: '',
-      verifying: false, accessError: '', syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy });
+      verifying: false, accessError: '', syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy,
+      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy });
     try {
       const access = await this.callAdmin('adminManager', 'getAccess');
       if (!this.isCurrent(generation)) return;
@@ -95,7 +111,8 @@ Page({
     this._continuePaused = false;
     this._workerBusy = false;
     this.setData({ ...clearedPrivateData(), tab, verifying: true, accessError: '',
-      syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy });
+      syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy,
+      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy });
     try {
       if (tab === 'sync') {
         const status = await this.callAdmin('bijingSync', 'adminStatus');
@@ -112,6 +129,11 @@ Page({
         if (access.isAdmin !== true) throw new Error('仅指定管理员可查询记录');
         const today = dateUtil.getBusinessDate(Date.now());
         this.setData({ authorized: true, verifying: false, queryDate: today, queryMaxDate: today });
+      } else if (tab === 'feedback') {
+        const result = await this.callAdmin('adminManager', 'adminListFeedback', { status: 'pending' });
+        if (!this.isCurrent(generation)) return;
+        this.setData({ authorized: true, verifying: false,
+          feedbacks: (result.feedbacks || []).map(presentFeedback), feedbackCursor: result.nextCursor || '' });
       } else if (tab === 'team') {
         const result = await this.callAdmin('teamManager', 'adminListTeams');
         if (!this.isCurrent(generation)) return;
@@ -164,7 +186,7 @@ Page({
 
   async onTabChange(event) {
     const tab = event.currentTarget.dataset.tab;
-    if (!this.data.entryAuthorized || !['sync', 'query', 'team', 'audit'].includes(tab) || tab === this.data.tab) return;
+    if (!this.data.entryAuthorized || !['sync', 'query', 'feedback', 'team', 'audit'].includes(tab) || tab === this.data.tab) return;
     await this.activateTab(tab);
   },
   async refreshTab() {
@@ -178,6 +200,7 @@ Page({
       if (this.data.selectedQueryUser) await this.loadDayRecords();
       else if (this.data.queryNickname.trim()) await this.searchRecordUsers();
     }
+    else if (this.data.tab === 'feedback') await this.loadFeedback();
     else if (this.data.tab === 'team') {
       await this.loadTeams();
       if (this.data.selectedTeam) await this.loadMembers();
@@ -188,6 +211,125 @@ Page({
     try { await this.refreshTab(); } finally { wx.stopPullDownRefresh(); }
   },
   retryAccess() { return this.data.entryAuthorized ? this.activateTab(this.data.tab) : this.onShow(); },
+
+  canManageFeedback() { return this._visible && this.data.authorized && this.data.tab === 'feedback'; },
+  isFeedbackMutationBusy() { return !!(this._feedbackSaveBusy || this._feedbackDeleteBusy); },
+  isCurrentFeedback(generation, feedback) {
+    return this.isCurrent(generation) && this.canManageFeedback() && this.data.selectedFeedback
+      && this.data.selectedFeedback._id === feedback._id && this.data.selectedFeedback.updatedAt === feedback.updatedAt;
+  },
+  async onFeedbackFilterChange(event) {
+    const status = event.currentTarget.dataset.status;
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || !['all', ...FEEDBACK_STATUSES].includes(status) || status === this.data.feedbackFilter) return;
+    this._feedbackListRequest = (this._feedbackListRequest || 0) + 1;
+    this.setData({ ...clearedFeedback(), feedbackFilter: status });
+    await this.loadFeedback();
+  },
+  loadMoreFeedback() { return this.loadFeedback(true); },
+  async loadFeedback(append = false) {
+    append = append === true;
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading || (append && !this.data.feedbackCursor)) return;
+    const generation = this._generation;
+    const request = this._feedbackListRequest = (this._feedbackListRequest || 0) + 1;
+    const status = this.data.feedbackFilter;
+    this.setData({ feedbackLoading: true, feedbackError: '' });
+    try {
+      const result = await this.callAdmin('adminManager', 'adminListFeedback', { status,
+        ...(append ? { cursor: this.data.feedbackCursor } : {}) });
+      if (!this.isCurrent(generation) || request !== this._feedbackListRequest || !this.canManageFeedback()) return;
+      const rows = (result.feedbacks || []).map(presentFeedback);
+      const feedbacks = append ? this.data.feedbacks.concat(rows).filter((row, index, all) => all.findIndex(other => other._id === row._id) === index) : rows;
+      this.setData({ feedbacks, feedbackCursor: result.nextCursor || '' });
+      if (!append) this.setData({ ...clearedFeedbackEditor(), feedbackMessage: '' });
+    } catch (error) {
+      if (this.isCurrent(generation) && request === this._feedbackListRequest && this.canManageFeedback()) this.setData({ feedbackError: errorText(error) });
+    } finally {
+      if (this.isCurrent(generation) && request === this._feedbackListRequest) this.setData({ feedbackLoading: false });
+    }
+  },
+  selectFeedback(event) {
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading) return;
+    const feedback = this.data.feedbacks.find(row => row._id === event.currentTarget.dataset.id);
+    if (!feedback) return;
+    if (this.data.selectedFeedback && this.data.selectedFeedback._id === feedback._id) {
+      this.setData(clearedFeedbackEditor());
+      return;
+    }
+    this.setData({ ...clearedFeedbackEditor(), selectedFeedback: feedback,
+      feedbackStatusIndex: Math.max(0, FEEDBACK_STATUSES.indexOf(feedback.status)), feedbackReply: feedback.reply || '', feedbackMessage: '' });
+  },
+  onFeedbackStatusChange(event) {
+    const index = Number(event.detail.value);
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading || !this.data.selectedFeedback || !FEEDBACK_STATUSES[index]) return;
+    this.setData({ feedbackStatusIndex: index });
+  },
+  onFeedbackReplyInput(event) {
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading || !this.data.selectedFeedback) return;
+    this.setData({ feedbackReply: event.detail.value });
+  },
+  async saveFeedback() {
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading || !this.data.selectedFeedback || this.data.feedbackConflict) return;
+    const feedback = this.data.selectedFeedback;
+    const status = FEEDBACK_STATUSES[this.data.feedbackStatusIndex];
+    const reply = this.data.feedbackReply.trim();
+    if (!status || reply.length > 1000) {
+      this.setData({ feedbackSaveError: '请选择处理状态，回复不超过 1000 字。' });
+      return;
+    }
+    const generation = this._generation;
+    this._feedbackSaveBusy = true;
+    this.setData({ feedbackSaveBusy: true, feedbackSaveError: '', feedbackMessage: '' });
+    try {
+      const result = await this.callAdmin('adminManager', 'adminUpdateFeedback', {
+        feedbackId: feedback._id, status, reply, expectedUpdatedAt: feedback.updatedAt
+      });
+      if (!this.isCurrent(generation) || !this.canManageFeedback()) return;
+      if (!result.feedback || result.feedback._id !== feedback._id) throw new Error('服务未返回有效结果，请刷新确认处理状态。');
+      const updated = presentFeedback(result.feedback);
+      const feedbacks = this.data.feedbacks.map(row => row._id === updated._id ? updated : row)
+        .filter(row => this.data.feedbackFilter === 'all' || row.status === this.data.feedbackFilter);
+      this.setData({ ...clearedFeedbackEditor(), feedbacks, feedbackMessage: '处理结果已保存，用户可在反馈记录中查看。' });
+      wx.showToast({ title: '处理结果已保存', icon: 'success' });
+      const app = typeof getApp === 'function' ? getApp() : null;
+      if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
+    } catch (error) {
+      if (this.isCurrent(generation) && this.canManageFeedback()) this.setData({ feedbackConflict: error.code === 'CONFLICT',
+        feedbackSaveError: error.code === 'CONFLICT' ? '该反馈已被其他管理员更新。请先保留草稿，再点击「重新加载反馈」查看最新处理结果。' : errorText(error) });
+    } finally {
+      this._feedbackSaveBusy = false;
+      if (this._visible) this.setData({ feedbackSaveBusy: false });
+    }
+  },
+  async deleteFeedback() {
+    if (!this.canManageFeedback() || this.isFeedbackMutationBusy() || this.data.feedbackLoading || !this.data.selectedFeedback || this.data.feedbackConflict) return;
+    const generation = this._generation;
+    const feedback = this.data.selectedFeedback;
+    this._feedbackDeleteBusy = true;
+    this.setData({ feedbackDeleteBusy: true });
+    try {
+      const confirmed = await new Promise((resolve, reject) => wx.showModal({ title: '确认删除反馈',
+        content: '删除后，反馈内容和管理员回复将无法恢复，用户也将无法查看该反馈及回复。确定删除吗？',
+        confirmText: '删除反馈', confirmColor: '#b85b4f', success: result => resolve(result.confirm === true), fail: reject }));
+      if (!confirmed || !this.isCurrentFeedback(generation, feedback)) return;
+      this.setData({ feedbackSaveError: '', feedbackMessage: '' });
+      const result = await this.callAdmin('adminManager', 'adminDeleteFeedback', {
+        feedbackId: feedback._id, expectedUpdatedAt: feedback.updatedAt
+      });
+      if (!this.isCurrentFeedback(generation, feedback)) return;
+      if (result.feedbackId !== feedback._id || result.deleted !== true) throw new Error('服务未返回有效结果，请刷新确认删除状态。');
+      this.setData({ ...clearedFeedbackEditor(), feedbacks: this.data.feedbacks.filter(row => row._id !== feedback._id),
+        feedbackMessage: '反馈已删除。' });
+      wx.showToast({ title: '反馈已删除', icon: 'success' });
+      const app = typeof getApp === 'function' ? getApp() : null;
+      if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
+    } catch (error) {
+      if (this.isCurrentFeedback(generation, feedback)) this.setData({ feedbackConflict: error.code === 'CONFLICT',
+        feedbackSaveError: error.code === 'CONFLICT' ? '该反馈已被其他管理员更新。请先保留草稿，再点击「重新加载反馈」确认最新内容后删除。' : errorText(error) });
+    } finally {
+      this._feedbackDeleteBusy = false;
+      if (this._visible) this.setData({ feedbackDeleteBusy: false });
+    }
+  },
 
   canQueryRecords() { return this._visible && this.data.authorized && this.data.tab === 'query'; },
   onQueryNicknameInput(event) {

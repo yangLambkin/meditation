@@ -5,8 +5,28 @@ const { resolveAccessIdentity } = require('./delegation');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
+function isMissingAlertCollection(error) {
+  const text = [error && error.code, error && error.errCode, error && error.message, error && error.errMsg]
+    .filter(value => value !== undefined).join(' ');
+  return [error && error.code, error && error.errCode].map(String).includes('-502005') ||
+    /\b(?:DATABASE_COLLECTION_NOT_EXIST|TCB_DB_COLLECTION_NOT_EXISTS)\b/i.test(text) ||
+    /\bcollection\b(?:\s+["'`]?[\w.-]+["'`]?)?\s+(?:(?:does|is)\s+)?(?:not exists?|not found)\b|集合\s*(?:["'`]?[\w.-]+["'`]?)?\s*不存在/i.test(text);
+}
+
+async function alertExists(read) {
+  try {
+    const result = await read();
+    if (!result || !Array.isArray(result.data)) throw new Error('Invalid alert response');
+    return { exists: result.data.length > 0, failed: false };
+  } catch (error) {
+    // Collections not yet initialized contain no alerts. Other failures remain
+    // unknown, so an unavailable source cannot silently clear a known reminder.
+    return { exists: false, failed: !isMissingAlertCollection(error) };
+  }
+}
+
 exports.main = async (event = {}) => {
-  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings'].includes(event.type)) {
+  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings', 'adminListFeedback', 'adminUpdateFeedback', 'adminDeleteFeedback'].includes(event.type)) {
     return { success: false, error: '未知的操作类型' };
   }
   const wxContext = cloud.getWXContext() || {};
@@ -26,6 +46,10 @@ exports.main = async (event = {}) => {
   if (event.type === 'getAccess') {
     return { success: true, data: { isAdmin } };
   }
+  if (event.type === 'adminListFeedback' || event.type === 'adminUpdateFeedback' || event.type === 'adminDeleteFeedback') {
+    if (!isAdmin) return panelForbidden();
+    return require('./feedback').handleFeedback(event, { db: getDatabase(), cloud, openid: wxContext.OPENID }, true);
+  }
   if (event.type === 'adminMigrateBindings') {
     if (!isAdmin) return panelForbidden();
     try {
@@ -44,12 +68,20 @@ exports.main = async (event = {}) => {
     const { handleRecordQuery } = require('./records');
     return handleRecordQuery(event, () => cloud.database({ throwOnNotFound: false }));
   }
-  // 鉴权必须先于错误表访问，普通用户只能获得空提醒，不能读取错误明细。
+  // 鉴权必须先于错误及反馈表访问，普通用户只能获得原有的空提醒响应。
   if (!isAdmin) return { success: true, data: { isAdmin: false, hasErrors: false } };
   try {
-    const result = await cloud.database().collection('bijing_sync_errors').limit(1).get();
-    return { success: true, data: { isAdmin: true, hasErrors: Array.isArray(result.data) && result.data.length > 0 } };
+    const db = getDatabase();
+    const [sync, feedback] = await Promise.all([
+      alertExists(() => db.collection('bijing_sync_errors').field({ _id: true }).limit(1).get()),
+      alertExists(() => db.collection('feedback').where({ status: db.command.in(['pending', 'processing']) })
+        .field({ _id: true }).limit(1).get())
+    ]);
+    // Either confirmed positive is enough to keep the reminder visible, even
+    // when the other source is temporarily unavailable.
+    if (!sync.exists && !feedback.exists && (sync.failed || feedback.failed)) throw new Error('Alert source unavailable');
+    return { success: true, data: { isAdmin: true, hasErrors: sync.exists, hasFeedback: feedback.exists } };
   } catch (error) {
-    return { success: false, error: '同步提醒暂时无法读取，请稍后重试' };
+    return { success: false, error: '管理员提醒暂时无法读取，请稍后重试' };
   }
 };

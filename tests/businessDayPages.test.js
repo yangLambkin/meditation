@@ -186,6 +186,7 @@ test('manual moderation crossing 02:00 keeps the date and timestamp captured at 
   page.setData({ currentYear: 2025, currentMonth: 12 });
   await page.onShow();
   page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   page.setData({ checkinExperience: '平静' });
   const saving = page.submitCheckin();
   advance('2026-01-01T02:00:00+08:00');

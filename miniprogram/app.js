@@ -56,49 +56,97 @@ App({
     const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
     if (typeof action === 'function') action.call(wx, { index: 3, fail() {} });
   },
-  clearSyncAlert() {
+  getSyncAlertState() {
+    const state = this._syncAlertState || {};
+    const current = this._syncAlertVisible && this._syncAlertAccount === this.syncAlertIdentity();
+    return { admin: !!(current && state.admin), user: !!(current && state.user) };
+  },
+  watchSyncAlerts(listener) {
+    if (!this._syncAlertListeners) this._syncAlertListeners = new Set();
+    this._syncAlertListeners.add(listener);
+    listener(this.getSyncAlertState());
+    return () => this._syncAlertListeners.delete(listener);
+  },
+  applySyncAlertDot() {
+    const state = this.getSyncAlertState();
+    this.setSyncAlertDot(state.admin || state.user);
+    if (this._syncAlertListeners) this._syncAlertListeners.forEach(listener => {
+      try { listener({ ...state }); }
+      catch (error) { console.warn('更新提醒入口失败:', error); }
+    });
+  },
+  clearAdminSyncAlert() {
+    this._adminAlertGeneration = (this._adminAlertGeneration || 0) + 1;
+    if (this._syncAlertState) this._syncAlertState.admin = false;
+    this.applySyncAlertDot();
+  },
+  clearSyncAlert({ preserveState = false } = {}) {
+    const state = preserveState && this._syncAlertAccount === this.syncAlertIdentity() ? this._syncAlertState : null;
     this._syncAlertGeneration = (this._syncAlertGeneration || 0) + 1;
     this._syncAlertRequest = null;
-    if (this._syncAlertCancel) this._syncAlertCancel(new Error('同步提醒已暂停'));
+    if (this._syncAlertCancel) this._syncAlertCancel();
     this._syncAlertCancel = null;
-    if (this._syncAlertDeadline) clearTimeout(this._syncAlertDeadline);
-    this._syncAlertDeadline = null;
-    this.setSyncAlertDot(false);
+    this._syncAlertState = state || { admin: false, user: false };
+    this.applySyncAlertDot();
   },
   startSyncAlertRefresh() {
-    if (typeof wx.cloud.callFunction !== 'function' || typeof wx.showTabBarRedDot !== 'function') return;
+    if (!wx.cloud || typeof wx.cloud.callFunction !== 'function' || typeof wx.showTabBarRedDot !== 'function') return;
+    // 同一次前台期间只自动读取一轮，重复生命周期通知复用当前结果。
+    if (this._syncAlertVisible) return this._syncAlertRequest || Promise.resolve();
     this._syncAlertVisible = true;
     this.clearSyncAlert();
-    this.refreshSyncAlert();
+    return this.refreshSyncAlert();
   },
-  // 仅在打开或返回小程序时核对一次，停留前台期间不轮询或自动重试。
-  refreshSyncAlert() {
+  // 管理员待办与本人的反馈处理结果独立核对，共用“我”的红点。
+  // 仅打开/返回小程序时自动刷新；页面切换使用缓存，不轮询或自动重试。
+  // 账号/权限变化、处理/删除/已读成功后可主动刷新，核对剩余提醒。
+  refreshSyncAlert({ force = false } = {}) {
     if (!this._syncAlertVisible || !wx.cloud || typeof wx.cloud.callFunction !== 'function') return Promise.resolve();
     const identity = this.syncAlertIdentity();
+    if (force || identity !== this._syncAlertAccount) this.clearSyncAlert({ preserveState: identity === this._syncAlertAccount });
     if (this._syncAlertRequest) return this._syncAlertRequest;
+    this._syncAlertAccount = identity;
     const generation = this._syncAlertGeneration;
-    let deadline;
+    const adminGeneration = this._adminAlertGeneration;
+    const cancellations = [];
     const current = () => this._syncAlertVisible && generation === this._syncAlertGeneration && identity === this.syncAlertIdentity();
-    const request = new Promise((resolve, reject) => {
-      this._syncAlertCancel = reject;
-      deadline = setTimeout(() => reject(new Error('同步提醒请求超时')), 10000);
-      this._syncAlertDeadline = deadline;
-      wx.cloud.callFunction({ name: 'adminManager', data: { type: 'getSyncAlert' }, success: resolve, fail: reject });
-    }).then(response => {
-      if (!current()) return;
-      const result = response && response.result;
-      this.setSyncAlertDot(!!(result && result.success && result.data && result.data.isAdmin === true && result.data.hasErrors === true));
-    }).catch(() => {
-      if (current()) this.setSyncAlertDot(false);
-    }).finally(() => {
-      clearTimeout(deadline);
+    const read = (source, name, type, hasAlert) => {
+      let deadline;
+      const valid = () => current() && (source !== 'admin' || adminGeneration === this._adminAlertGeneration);
+      return new Promise((resolve, reject) => {
+        const cancel = () => { clearTimeout(deadline); reject(new Error('提醒已暂停')); };
+        cancellations.push(cancel);
+        deadline = setTimeout(() => reject(new Error('提醒请求超时')), 10000);
+        wx.cloud.callFunction({ name, data: { type }, success: resolve, fail: reject });
+      }).then(response => {
+        if (!valid()) return;
+        const result = response && response.result;
+        if (!result || result.success !== true || !result.data) throw new Error('提醒读取失败');
+        this._syncAlertState[source] = hasAlert(result.data);
+        this.applySyncAlertDot();
+      }).catch(() => {
+        if (!valid()) return;
+        // 读取失败不能确认已无未读；保留同一账号上次已确认的提醒。
+        this.applySyncAlertDot();
+      }).finally(() => clearTimeout(deadline));
+    };
+    this._syncAlertCancel = () => cancellations.forEach(cancel => cancel());
+    const request = Promise.all([
+      read('admin', 'adminManager', 'getSyncAlert', data => {
+        if (typeof data.isAdmin !== 'boolean') throw new Error('管理员提醒数据无效');
+        return data.isAdmin && (data.hasErrors === true || data.hasFeedback === true);
+      }),
+      read('user', 'meditationManager', 'getFeedbackAlert', data => {
+        if (typeof data.hasUnreadFeedback !== 'boolean') throw new Error('反馈提醒数据无效');
+        return data.hasUnreadFeedback;
+      })
+    ]).finally(() => {
       if (generation !== this._syncAlertGeneration) return;
       this._syncAlertRequest = null;
       this._syncAlertCancel = null;
-      this._syncAlertDeadline = null;
       if (!this._syncAlertVisible) return;
       if (identity !== this.syncAlertIdentity()) {
-        this.setSyncAlertDot(false);
+        this.applySyncAlertDot();
       }
     });
     this._syncAlertRequest = request;
