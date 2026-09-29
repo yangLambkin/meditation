@@ -89,6 +89,18 @@ page {
 .me-menu-version {
   flex-shrink: 0;
 }
+.me-menu-version-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4rpx;
+}
+.me-design-credit {
+  color: #99a1ae;
+  font-size: 20rpx;
+  line-height: 24rpx;
+  white-space: nowrap;
+}
 .me-menu-chevron {
   flex-shrink: 0;
   width: 28rpx;
@@ -182,13 +194,6 @@ page {
 .text_6 {
   line-height: 22.12rpx;
 }
-.text_10 {
-  margin-top: auto;
-  padding-top: 16rpx;
-  color: #99a1ae;
-  line-height: 22.38rpx;
-}
-
 /* 登录按钮样式 */
 .login-button {
   background-color: #b29764;
@@ -597,8 +602,5 @@ page {
     min-height: 88rpx;
     padding-top: 12rpx;
     padding-bottom: 12rpx;
-  }
-  .text_10 {
-    padding-top: 12rpx;
   }
 }

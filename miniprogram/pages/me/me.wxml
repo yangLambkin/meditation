@@ -183,9 +183,11 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V2.10.3</text>
+        <view class="me-menu-version-info">
+          <text class="me-menu-note me-menu-version">V2.10.3</text>
+          <text class="me-design-credit">Designed By Genxin</text>
+        </view>
       </view>
     </view>
   </view>
-  <text class="self-center font_4 text_10">Designed by GenXin</text>
 </view>
