@@ -8,7 +8,7 @@ const clone = value => value === undefined ? value : JSON.parse(JSON.stringify(v
 function harness(options = {}) {
   let now = Date.parse(options.now || '2026-09-20T12:00:00+08:00');
   let openid = options.openid === undefined ? 'owner' : options.openid;
-  let state = { meditation_records: clone(options.records || []), user_stats: clone(options.stats || []), experience_records: [], meditation_locks: [] };
+  let state = { meditation_records: clone(options.records || []), user_stats: clone(options.stats || []), experience_records: [], meditation_locks: [], backfill_requests: clone(options.requests || []) };
   let queue = Promise.resolve();
   let transactions = 0;
   class Clock extends Date {
@@ -90,6 +90,7 @@ function harness(options = {}) {
     module, exports: module.exports, Date: Clock, process: { env: { MAINTENANCE_ADMIN_OPENIDS: options.adminOpenid || '', MAINTENANCE_ENV_ID: 'test-env' } }, console: { log() {}, error() {}, warn() {} },
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/meditationManager/maintenanceAuth');
+      if (name === './backfill') return require('../cloudfunctions/meditationManager/backfill');
       if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, database: () => database, getWXContext: () => ({ OPENID: openid, ENV: 'test-env' }) };
@@ -99,6 +100,7 @@ function harness(options = {}) {
     get records() { return clone(state.meditation_records); },
     get stats() { return clone(state.user_stats); },
     get experiences() { return clone(state.experience_records); },
+    get requests() { return clone(state.backfill_requests); },
     get transactions() { return transactions; },
     setNow(value) { now = Date.parse(value); }, setOpenid(value) { openid = value; },
     async call(event) { return clone(await module.exports.main(event)); },
@@ -151,6 +153,7 @@ test('explicit legacy recovery acknowledges an existing cloud record without dup
     assert.equal(result.data.recordId, 'old-cloud');
     assert.equal(result.data.date, '2026-09-19');
     assert.equal(result.data.duplicate, true);
+    assert.equal(result.data.autoSyncBijing, true, 'acknowledging a saved historical record should retry its day sync');
     assert.deepEqual({ records: app.records, stats: app.stats }, before);
   }
 });
@@ -325,6 +328,199 @@ test('invalid durations cannot write records or statistics', async () => {
   assert.equal(app.records.length, 0);
   assert.equal(app.stats.length, 0);
   assert.equal((await app.record({ localId: 'maximum', duration: 1440 })).success, true);
+});
+
+const backfillId = 'br_' + 'a'.repeat(64);
+function backfillGrant(extra = {}) {
+  return { _id: backfillId, kind: 'request', ownerOpenid: 'owner', status: 'approved',
+    startDate: '2026-08-20', endDate: '2026-09-18', expiresAt: '2026-09-25T18:00:00.000Z', ...extra };
+}
+function backfillRecord(extra = {}) {
+  return { source: 'manual', backfillRequestId: backfillId, idempotencyKey: 'retreat-session',
+    date: '2026-08-20', timestamp: Date.parse('2026-08-20T08:00:00+08:00'), duration: 30, ...extra };
+}
+
+test('confirmed historical manual, approved backfill and delayed timer uploads request automatic day sync, including retries', async () => {
+  const scenarios = [
+    { options: {}, data: { localId: 'historical-manual', source: 'manual', date: '2026-09-19', duration: 20 }, date: '2026-09-19' },
+    { options: { requests: [backfillGrant()] }, data: backfillRecord(), date: '2026-08-20' },
+    { options: {}, data: { localId: 'offline-timer', source: 'timer', timestamp: Date.parse('2026-08-01T01:30:00+08:00'), duration: 25 }, date: '2026-07-31' }
+  ];
+  for (const scenario of scenarios) {
+    const app = harness(scenario.options);
+    const first = await app.record(scenario.data);
+    assert.equal(first.success, true, JSON.stringify(first));
+    assert.equal(first.data.date, scenario.date);
+    assert.equal(first.data.autoSyncBijing, true);
+    assert.equal(first.data.duplicate, false);
+    assert.equal(Object.hasOwn(app.records[0], 'autoSyncBijing'), false, 'the sync instruction belongs to the confirmation response');
+    app.setNow('2026-10-05T12:00:00+08:00');
+    const retry = await app.record(scenario.data);
+    assert.equal(retry.success, true, JSON.stringify(retry));
+    assert.equal(retry.data.recordId, first.data.recordId);
+    assert.equal(retry.data.duplicate, true);
+    assert.equal(retry.data.autoSyncBijing, true, 'a lost sync response can be retried even beyond the recording/grant window');
+    assert.equal(app.records.length, 1);
+    assert.equal(app.stats[0].totalCount, 1);
+  }
+});
+
+test('current-day manual and timer confirmations omit automatic sync even when a client asks for it', async () => {
+  for (const source of ['manual', 'timer']) {
+    const app = harness();
+    const data = { localId: `today-${source}`, source, date: '2026-09-20', duration: 20, autoSyncBijing: true };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await app.record(data);
+      assert.equal(result.success, true);
+      assert.equal(result.data.date, '2026-09-20');
+      assert.equal(result.data.duplicate, attempt > 0);
+      assert.equal(Object.hasOwn(result.data, 'autoSyncBijing'), false);
+      assert.equal(Object.hasOwn(result, 'autoSyncBijing'), false);
+    }
+    assert.equal(app.records.length, 1);
+  }
+});
+
+test('automatic sync eligibility changes exactly at Beijing 02:00 using the confirmed record business date', async () => {
+  const app = harness({ now: '2026-10-01T01:59:59+08:00' });
+  const data = { localId: 'near-cutover', source: 'timer', timestamp: Date.parse('2026-10-01T01:59:30+08:00'), duration: 10 };
+  const before = await app.record(data);
+  assert.equal(before.success, true); assert.equal(before.data.date, '2026-09-30');
+  assert.equal(Object.hasOwn(before.data, 'autoSyncBijing'), false);
+  const sameDayRetry = await app.record(data);
+  assert.equal(sameDayRetry.data.duplicate, true);
+  assert.equal(Object.hasOwn(sameDayRetry.data, 'autoSyncBijing'), false);
+  app.setNow('2026-10-01T02:00:00+08:00');
+  const after = await app.record(data);
+  assert.equal(after.data.recordId, before.data.recordId);
+  assert.equal(after.data.duplicate, true); assert.equal(after.data.autoSyncBijing, true);
+  assert.equal(after.data.date, '2026-09-30');
+  const current = await app.record({ localId: 'new-business-day', source: 'timer', duration: 10 });
+  assert.equal(current.data.date, '2026-10-01'); assert.equal(Object.hasOwn(current.data, 'autoSyncBijing'), false);
+  const previous = await app.record({ localId: 'previous-manual-day', source: 'manual', date: '2026-09-30', duration: 15 });
+  assert.equal(previous.data.autoSyncBijing, true);
+});
+
+test('failed historical writes never request automatic sync or leave committed records, but successful retries do', async () => {
+  for (const failure of ['failStats', 'failCommit']) {
+    for (const data of [{ localId: 'historical-failure', source: 'manual', date: '2026-09-19', duration: 20 }, backfillRecord()]) {
+      const options = { [failure]: true, requests: [backfillGrant()] }, app = harness(options);
+      const failed = await app.record(data);
+      assert.equal(failed.success, false);
+      assert.equal(Object.hasOwn(failed, 'autoSyncBijing'), false);
+      assert.equal(Object.hasOwn(failed.data || {}, 'autoSyncBijing'), false);
+      assert.equal(app.records.length, 0); assert.equal(app.stats.length, 0);
+      assert.equal(app.requests[0].recordedDates, undefined);
+      options[failure] = false;
+      const retried = await app.record(data);
+      assert.equal(retried.success, true); assert.equal(retried.data.autoSyncBijing, true);
+      assert.equal(app.records.length, 1); assert.equal(app.stats[0].totalCount, 1);
+    }
+  }
+});
+
+test('approved backfill updates its original month and preserves provenance, with expired retries counted once', async () => {
+  const app = harness({ requests: [backfillGrant()] });
+  const data = backfillRecord();
+  const results = await Promise.all(Array.from({ length: 5 }, () => app.record(data)));
+  assert.ok(results.every(result => result.success), JSON.stringify(results));
+  assert.equal(app.records.length, 1);
+  assert.equal(app.records[0].source, 'manual');
+  assert.equal(app.records[0].backfillRequestId, backfillId);
+  assert.equal(app.records[0].recordType, 'backfill');
+  assert.deepEqual(app.requests[0].recordedDates, ['2026-08-20']);
+  assert.equal(app.stats[0].monthlyStats['2026-08'].totalDuration, 30);
+  assert.equal(app.stats[0].totalCount, 1);
+  app.setNow('2026-10-05T12:00:00+08:00');
+  assert.equal((await app.record(data)).data.duplicate, true);
+  assert.equal((await app.record(backfillRecord({ idempotencyKey: 'new-session' }))).code, 'BACKFILL_EXPIRED');
+  assert.equal(app.records.length, 1);
+});
+
+test('backfill requires ownership, approval and a selected date within the grant', async () => {
+  for (const grant of [null, backfillGrant({ ownerOpenid: 'other' }),
+    backfillGrant({ status: 'pending' }), backfillGrant({ status: 'rejected' }),
+    backfillGrant({ startDate: '2026-08-12', endDate: '2026-09-10' }),
+    backfillGrant({ startDate: '2026-08-21' })]) {
+    const app = harness({ requests: grant ? [grant] : [] });
+    assert.equal((await app.record(backfillRecord())).success, false);
+    assert.equal(app.records.length, 0);
+    assert.equal(app.stats.length, 0);
+  }
+});
+
+test('historical single-session achievements remain recoverable after leaving the recording page', async () => {
+  const app = harness({ requests: [backfillGrant()], records: [{ _id: 'latest-short', _openid: 'owner',
+    date: '2026-09-20', source: 'manual', timestamp: Date.parse('2026-09-20T08:00:00+08:00'), duration: 5 }] });
+  assert.equal((await app.record(backfillRecord())).success, true);
+  const stats = (await app.call({ type: 'getUserStats' })).data;
+  assert.equal(stats.lastCheckinDuration, 5);
+  assert.equal(stats.maxSingleDuration, 30);
+});
+
+test('backfill cannot disguise its source, mismatch date and time, reuse a changed payload or duplicate a prior record', async () => {
+  const app = harness({ requests: [backfillGrant()] });
+  for (const extra of [{ source: 'timer' }, { backfillRequestId: '' }, { idempotencyKey: '' },
+    { timestamp: Date.parse('2026-08-21T02:00:00+08:00') }]) {
+    assert.equal((await app.record(backfillRecord(extra))).code, 'BACKFILL_INVALID_RECORD');
+  }
+  assert.equal((await app.record(backfillRecord())).success, true);
+  assert.equal((await app.record(backfillRecord({ duration: 31 }))).code, 'REQUEST_ID_REUSED');
+  assert.equal((await app.record(backfillRecord({ idempotencyKey: 'second-form' }))).code, 'BACKFILL_DUPLICATE');
+  assert.equal(app.records.length, 1);
+});
+
+test('backfill daily cap counts existing sessions and is enforced across concurrent submissions', async () => {
+  const app = harness({ requests: [backfillGrant()], records: [{ _id: 'old', _openid: 'owner',
+    date: '2026-08-20', source: 'manual', timestamp: Date.parse('2026-08-20T06:00:00+08:00'), duration: 1400 }] });
+  const results = await Promise.all([8, 9].map(hour => app.record(backfillRecord({
+    idempotencyKey: `session-${hour}`, timestamp: Date.parse(`2026-08-20T0${hour}:00:00+08:00`), duration: 30
+  }))));
+  assert.equal(results.filter(result => result.success).length, 1);
+  assert.equal(results.filter(result => result.code === 'DAILY_DURATION_EXCEEDED').length, 1);
+  assert.equal(app.stats[0].totalDuration, 1430);
+});
+
+test('backfill respects the 02:00 deadline and leaves no record when statistics fail', async () => {
+  const options = { requests: [backfillGrant()], now: '2026-09-26T01:59:59+08:00', failStats: true };
+  const app = harness(options);
+  assert.equal((await app.record(backfillRecord())).success, false);
+  assert.equal(app.records.length, 0);
+  assert.equal(app.requests[0].recordedDates, undefined, 'sync evidence rolls back with the record');
+  options.failStats = false;
+  assert.equal((await app.record(backfillRecord())).success, true);
+  app.setNow('2026-09-26T02:00:00+08:00');
+  assert.equal((await app.record(backfillRecord({ idempotencyKey: 'after-cutoff' }))).code, 'BACKFILL_EXPIRED');
+});
+
+test('new backfill grants expire exactly 72 hours after approval and keep confirmed retries idempotent', async () => {
+  const grant = backfillGrant({ ruleVersion: 2, createdAt: '2026-09-19T03:00:00.000Z',
+    handledAt: '2026-09-19T04:00:00.123Z', expiresAt: '2026-09-22T04:00:00.123Z' });
+  const options = { requests: [grant], now: '2026-09-22T04:00:00.122Z', failStats: true };
+  const app = harness(options), data = backfillRecord();
+  assert.equal((await app.record(data)).success, false);
+  assert.equal(app.records.length, 0); assert.equal(app.requests[0].recordedDates, undefined);
+  options.failStats = false;
+  const saved = await app.record(data);
+  assert.equal(saved.success, true); assert.equal(saved.data.duplicate, false);
+  assert.equal(saved.data.date, grant.startDate, 'the submitted range stays fixed after another business day starts');
+  app.setNow(grant.expiresAt);
+  assert.equal((await app.record(backfillRecord({ idempotencyKey: 'after-72-hours' }))).code, 'BACKFILL_EXPIRED');
+  const retry = await app.record(data);
+  assert.equal(retry.success, true); assert.equal(retry.data.duplicate, true);
+  assert.equal(retry.data.recordId, saved.data.recordId); assert.equal(app.records.length, 1);
+  assert.equal(app.stats[0].totalCount, 1);
+  assert.equal((await app.record(backfillRecord({ duration: 31 }))).code, 'REQUEST_ID_REUSED');
+});
+
+test('new pending applications and approved applications without a deadline cannot create records', async () => {
+  for (const extra of [{ status: 'pending', expiresAt: null }, { status: 'approved', expiresAt: null },
+    { status: 'approved', expiresAt: undefined }, { status: 'approved', expiresAt: 'invalid' }]) {
+    const app = harness({ requests: [backfillGrant({ ruleVersion: 2, ...extra })] });
+    const result = await app.record(backfillRecord());
+    assert.equal(result.code, extra.status === 'pending' ? 'BACKFILL_INVALID_GRANT' : 'BACKFILL_EXPIRED');
+    assert.equal(app.records.length, 0); assert.equal(app.stats.length, 0);
+  }
 });
 
 test('maintenance defaults to dry run, preserves explicit dates and only merges stable duplicate identities', async () => {

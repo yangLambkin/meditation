@@ -23,7 +23,7 @@ function load(filename, globals) {
   return module.exports;
 }
 
-function harness({ call, timersEnabled = true } = {}) {
+function harness({ call, timersEnabled = true, autoSync } = {}) {
   const requests = [];
   const timers = new Map();
   let now = Date.parse('2026-09-20T12:00:00+08:00');
@@ -49,7 +49,11 @@ function harness({ call, timersEnabled = true } = {}) {
       if (call) call(request);
     } }
   };
-  const globals = { wx, Date: Clock, ...(timersEnabled ? clock : {}) };
+  const globals = { wx, Date: Clock, ...(timersEnabled ? clock : {}),
+    require(name) {
+      if (name === './bijingRecordSync.js') return { acceptSavedRecord: autoSync || (() => {}) };
+      throw new Error(`Unexpected dependency: ${name}`);
+    } };
   const api = load('utils/cloudApi.js', globals);
   return {
     api, globals, requests, timers, storage,
@@ -147,6 +151,68 @@ test('a synchronous SDK success clears its timer', async () => {
   const app = harness({ call(request) { request.success(response); } });
   assert.strictEqual(await app.api.callCloudFunction('meditationManager', { type: 'recordMeditation' }), response);
   assert.equal(app.timers.size, 0);
+});
+
+test('confirmed historical saves trigger independent bijing sync without delaying the upload acknowledgement', async () => {
+  const syncs = [];
+  const never = new Promise(() => {});
+  const app = harness({ autoSync(saved, identity) { syncs.push(clone({ saved, identity })); return never; } });
+  const response = { result: { success: true, data: { recordId: 'historical', date: '2026-09-19', autoSyncBijing: true } } };
+  const pending = app.api.callCloudFunction('meditationManager', { type: 'recordMeditation', data: { source: 'manual' } });
+  app.requests[0].success(response);
+  assert.strictEqual(await pending, response);
+  await flush();
+  assert.deepEqual(syncs, [{ saved: response.result.data, identity: { account: 'oz-timeout' } }]);
+  assert.equal(app.timers.size, 0, 'upload deadline is released while the external sync is still pending');
+});
+
+test('a late but valid historical save still synchronizes after the original upload timeout', async () => {
+  const syncs = [];
+  const app = harness({ autoSync(saved) { syncs.push(clone(saved)); } });
+  const upload = app.api.callCloudFunction('meditationManager', { type: 'recordMeditation' });
+  const rejected = assert.rejects(upload, error => error.code === 'CLOUD_TIMEOUT');
+  await app.advance(3000); await rejected;
+  app.requests[0].success({ result: { success: true, data: { recordId: 'late-saved', date: '2026-09-18', autoSyncBijing: true } } });
+  await flush();
+  assert.equal(syncs[0].recordId, 'late-saved');
+  await assert.rejects(upload, error => error.code === 'CLOUD_TIMEOUT');
+});
+
+test('today, failed, malformed and non-record responses never start historical sync', async () => {
+  const syncs = [];
+  const app = harness({ autoSync(saved) { syncs.push(saved); } });
+  const cases = [
+    ['recordMeditation', { success: true, data: { recordId: 'today', date: '2026-09-20' } }],
+    ['recordMeditation', { success: false, data: { recordId: 'failed', autoSyncBijing: true } }],
+    ['recordMeditation', { success: true, data: { autoSyncBijing: true } }],
+    ['getUserRecords', { success: true, data: { recordId: 'old', autoSyncBijing: true } }]
+  ];
+  for (const [type, result] of cases) {
+    const pending = app.api.callCloudFunction('meditationManager', { type });
+    app.requests.at(-1).success({ result }); await pending;
+  }
+  await flush(); assert.equal(syncs.length, 0);
+});
+
+test('switching account before a save acknowledgement retains the original task owner', async () => {
+  const syncs = [];
+  const app = harness({ autoSync(saved, owner) { syncs.push({ saved, owner }); } });
+  const pending = app.api.callCloudFunction('meditationManager', { type: 'recordMeditation' });
+  app.storage.set('userOpenId', 'oz-another');
+  app.requests[0].success({ result: { success: true, data: { recordId: 'old-account', date: '2026-09-19', autoSyncBijing: true } } });
+  await pending; await flush();
+  assert.equal(syncs.length, 1);
+  assert.equal(syncs[0].owner.account, 'oz-timeout');
+  assert.equal(syncs[0].saved.recordId, 'old-account');
+});
+
+test('an external synchronization failure never changes the successful cloud save result', async () => {
+  const app = harness({ autoSync() { throw new Error('external sync unavailable'); } });
+  const response = { result: { success: true, data: { recordId: 'saved', date: '2026-09-19', autoSyncBijing: true } } };
+  const pending = app.api.callCloudFunction('meditationManager', { type: 'recordMeditation' });
+  app.requests[0].success(response);
+  assert.strictEqual(await pending, response); await flush();
+  assert.equal(app.requests.length, 1, 'no repeat record write');
 });
 
 test('environments without timer globals preserve the callback interface', async () => {

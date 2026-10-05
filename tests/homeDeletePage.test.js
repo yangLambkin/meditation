@@ -53,9 +53,12 @@ function createPage({ records = [], dailyRecords: storedRecords, now = '2026-09-
     Page: page => { definition = page; },
     require(name) {
       const file = path.basename(name);
+      if (file === 'bijingRecordSync.js') return { getDayState: () => null, subscribe: () => () => {} };
       if (file === 'dailyWisdom.js') return { DEFAULT_QUOTE: '每日金句', watchDailyWisdom: () => () => {} };
       if (file === 'checkin.js') return checkinManager;
       if (file === 'homeCheckin.js') return homeCheckin;
+      if (file === 'homeBackfill.js') return { data: {}, methods: { refreshBackfillSelection() {} } };
+      if (file === 'bijingRecordSync.js') return { getDayState: () => null };
       if (file === 'dateUtil.js') return require('../miniprogram/utils/dateUtil.js');
       if (file === 'contentSec.js') return {};
       throw new Error(`Unexpected dependency: ${file}`);

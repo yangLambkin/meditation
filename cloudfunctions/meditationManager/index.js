@@ -84,6 +84,11 @@ exports.main = async (event = {}, context) => {
     case "getFeedbackAlert":
     case "markFeedbackRead":
       return require('./feedback').handleFeedback(event, { db, cloud, openid });
+    case "submitBackfillRequest":
+    case "getMyBackfillRequests":
+    case "getBackfillAlert":
+    case "markBackfillRead":
+      return require('./backfill').handleBackfill(event, { db, cloud, openid });
     case "migrateUserProfile":
       return await migrateUserProfile(openid, event.oldUserInfo);
     case "getRankingSnapshot":
@@ -213,8 +218,15 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
     const source = data.source === 'manual' || data.dateSource === 'manual' ? 'manual' : 'timer';
     const dateStr = source === 'manual' && data.date ? data.date : getBusinessDate(timestamp);
     if (!isDateLabel(dateStr)) throw new Error('打卡日期无效');
+    const backfillRequestId = data.backfillRequestId;
+    const isBackfill = backfillRequestId !== undefined;
+    if (isBackfill && (source !== 'manual' || !key || typeof backfillRequestId !== 'string' ||
+        !/^br_[a-f0-9]{64}$/.test(backfillRequestId) || !data.date || getBusinessDate(timestamp) !== dateStr)) {
+      throw deletionError('BACKFILL_INVALID_RECORD', '请选择获批的练习日期、实际时间和有效的补录申请');
+    }
     const record = {
       _openid: openid, date: dateStr, timestamp, duration, source, businessDayVersion: 2,
+      ...(isBackfill ? { backfillRequestId, recordType: 'backfill' } : {}),
       emotion: Array.isArray(data.emotion) ? data.emotion : [],
       experience: Array.isArray(data.experience) ? data.experience : (data.experience ? [data.experience] : []),
       createdAt: now, updatedAt: now
@@ -228,7 +240,27 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
     const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
       const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
       // 成功后的重试即使跨过三天窗口，仍返回原结果；不再次写心得或累计统计。
-      if (existing) return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true };
+      if (existing) {
+        if ((isBackfill || existing.backfillRequestId) && (existing.backfillRequestId !== backfillRequestId ||
+            getRecordBusinessDate(existing) !== dateStr || Number(existing.duration) !== duration ||
+            meditationTimestamp(existing.timestamp) !== timestamp)) {
+          throw deletionError('REQUEST_ID_REUSED', '本次记录已保存，请查看原记录后重新填写');
+        }
+        return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true };
+      }
+      if (isBackfill) {
+        // 与写记录处于同一事务：手机开关、篡改日期或迟到请求不能扩大授权。
+        const grant = await require('./backfill').assertBackfillGrant(transaction, openid, backfillRequestId, dateStr, Date.now());
+        const dayRecords = mergeDuplicateRecords(records).records.filter(row => getRecordBusinessDate(row) === dateStr);
+        if (dayRecords.some(row => meditationTimestamp(row.timestamp) === timestamp && Number(row.duration) === duration)) {
+          throw deletionError('BACKFILL_DUPLICATE', '当天已有相同时间和时长的记录，请核对，勿重复补录');
+        }
+        const dailyDuration = dayRecords.reduce((sum, row) => sum + Math.max(0, Number(row.duration) || 0), 0);
+        if (dailyDuration + duration > 1440) throw deletionError('DAILY_DURATION_EXCEEDED', '当天已有记录与补录合计不能超过 24 小时');
+        // 留存已获批写入的日期，之后删除或更正记录仍能将必经汇总纠正回来。
+        const recordedDates = [...new Set([...(Array.isArray(grant.recordedDates) ? grant.recordedDates : []), dateStr])].sort();
+        await transaction.collection('backfill_requests').doc(backfillRequestId).update({ data: { recordedDates } });
+      }
       if (data.recoverLegacy === true) {
         // 仅显式旧记录恢复使用此规则。旧版分别在本机、云端生成时间戳，
         // 同日同分钟数的无身份记录不能仅因毫秒不同就当作另一条再上传。
@@ -247,7 +279,7 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
           throw deletionError('AMBIGUOUS_RECORD', '云端存在同一天、时长相同的旧记录，请先核对，记录已保留在本机');
         }
       }
-      if (source === 'manual') {
+      if (source === 'manual' && !isBackfill) {
         const today = getBusinessDate(now);
         const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 2 * 86400000).toISOString().slice(0, 10);
         if (dateStr < earliest || dateStr > today) throw deletionError('DATE_OUT_OF_RANGE', '只能记录最近三天（含今天）的静坐');
@@ -258,7 +290,8 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       return { recordId: record._id, date: dateStr, timestamp, duplicate: false };
     });
     if (localUserId) await createUserMapping(openid, localUserId);
-    return { success: true, data: result };
+    return { success: true, data: { ...result,
+      ...(result.date < getBusinessDate() ? { autoSyncBijing: true } : {}) } };
   } catch (error) {
     console.error('记录冥想打卡失败:', error);
     return { success: false, code: error.code || error.errCode || 'RECORD_FAILED', error: error.message || error.errMsg || '云端保存失败，请稍后重试' };
@@ -374,6 +407,7 @@ function rebuildMeditationStats(records) {
   const days = new Map();
   const monthlyStats = {};
   let totalDuration = 0;
+  let maxSingleDuration = 0;
   let latestRecord;
   let latestDate = '';
   let latestTimestamp = -Infinity;
@@ -385,6 +419,7 @@ function rebuildMeditationStats(records) {
     const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
     const month = date.substring(0, 7);
     totalDuration += duration;
+    maxSingleDuration = Math.max(maxSingleDuration, duration);
     days.set(date, (days.get(date) || 0) + duration);
     if (!monthlyStats[month]) monthlyStats[month] = { days: [], count: 0, totalDuration: 0 };
     monthlyStats[month].count++;
@@ -412,6 +447,7 @@ function rebuildMeditationStats(records) {
     totalDays: dates.length,
     totalCount: records.length,
     totalDuration,
+    maxSingleDuration,
     // 与写入和排名逻辑一致：日/月累计对应最近一次打卡所在日/月。
     dailyTotalDuration: days.get(latestDate) || 0,
     monthlyTotalDuration: monthlyStats[latestDate.substring(0, 7)]?.totalDuration || 0,
@@ -706,6 +742,7 @@ async function getUserStats(openid) {
         totalDays: userStats.totalDays || 0,
         totalCount: userStats.totalCount || 0,
         totalDuration: userStats.totalDuration || 0,
+        maxSingleDuration: userStats.maxSingleDuration || userStats.lastCheckinDuration || 0,
         dailyTotalDuration: latestDate === today ? userStats.dailyTotalDuration || 0 : 0,
         monthlyTotalDuration: latestDate.slice(0, 7) === today.slice(0, 7) ? userStats.monthlyTotalDuration || 0 : 0,
         longestCheckInDays: userStats.longestCheckInDays || 0,

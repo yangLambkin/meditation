@@ -36,6 +36,7 @@ function createHarness(options = {}) {
   }]);
   const records = clone(options.records || []);
   const bindingRows = clone(options.bindings || []);
+  const backfillRequests = clone(options.requests || []);
   const calls = { reads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], gets: [], now: 0 };
 
   class FixedDate extends Date {
@@ -117,12 +118,12 @@ function createHarness(options = {}) {
         doc(id) {
           return {
             async get() {
-              const rows = name === 'users' ? users : bindingRows;
+              const rows = name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
               const row = rows.find(row => row._id === id);
               return { data: row ? clone(row) : null };
             },
             async set({ data }) {
-              const rows = name === 'users' ? users : bindingRows;
+              const rows = name === 'backfill_requests' ? backfillRequests : name === 'users' ? users : bindingRows;
               const previous = rows.find(row => row._id === id);
               if (previous) rows.splice(rows.indexOf(previous), 1);
               rows.push({ _id: id, ...clone(data) });
@@ -147,6 +148,8 @@ function createHarness(options = {}) {
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
       if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
+      if (name === './backfillSync') return require('../cloudfunctions/bijingSync/backfillSync');
+      if (name === './recordedSync') return require('../cloudfunctions/bijingSync/recordedSync');
       if (name === './bindings') return require('../cloudfunctions/bijingSync/bindings');
       if (name === 'wx-server-sdk') {
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
@@ -183,6 +186,112 @@ function createHarness(options = {}) {
     async details(recordDate) { return this.run({ type: 'getSyncDateDetails', recordDate }); },
   };
 }
+
+test('syncRecordedDate dispatch derives the saved owner and business date and posts all of that day', async () => {
+  const recordDate = '2026-08-18';
+  const app = createHarness({ records: [
+    { _id: 'manual-old', _openid: 'user-a', source: 'manual', date: recordDate, duration: 35 },
+    { _id: 'timer-old', _openid: 'user-a', source: 'timer', timestamp: Date.parse('2026-08-18T05:00:00Z'), duration: 25 },
+    { _id: 'another-owner', _openid: 'other', source: 'manual', date: recordDate, duration: 90 }
+  ] });
+  const result = await app.run({ type: 'syncRecordedDate', recordId: 'manual-old', expectedOpenid: 'user-a',
+    openid: 'other', recordDate: '2026-09-16', date: '2026-09-16', studentNumber: 'forged' });
+  assert.equal(result.success, true); assert.equal(result.data.date, recordDate); assert.equal(result.data.duration, 60);
+  assert.equal(app.calls.posts.length, 1); assert.equal(app.calls.posts[0].body.recordDate, recordDate);
+  assert.equal(app.calls.posts[0].body.durationMinutes, 60); assert.equal(app.calls.posts[0].body.studentNumber, '123456');
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'timer-old' })).success, true);
+  const foreign = await app.run({ type: 'syncRecordedDate', recordId: 'another-owner' });
+  assert.equal(foreign.code, 'RECORD_NOT_FOUND'); assert.equal(app.calls.posts.length, 2);
+});
+
+test('syncRecordedDate dispatch defers the current business day and preserves missing-account and record errors', async () => {
+  const app = createHarness({ records: [{ _id: 'today', _openid: 'user-a', source: 'manual', date: '2026-09-17', duration: 20 }] });
+  const today = await app.run({ type: 'syncRecordedDate', recordId: 'today' });
+  assert.equal(today.success, true); assert.equal(today.data.deferred, true); assert.equal(today.data.skipped, true);
+  assert.equal(app.calls.posts.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordDate: '2026-09-16' })).code, 'INVALID_ARGUMENT');
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'deleted' })).code, 'RECORD_NOT_FOUND');
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'today', expectedOpenid: 'other' })).code, 'ACCOUNT_CHANGED');
+  const loggedOut = createHarness({ openid: '' });
+  assert.equal((await loggedOut.run({ type: 'syncRecordedDate', recordId: 'today', openid: 'user-a' })).code, 'AUTH_REQUIRED');
+});
+
+test('authorized retreat sync covers older dates, includes all daily sessions and can retry after permission expiry', async () => {
+  const requestId = 'br_' + 'b'.repeat(64);
+  const recordDate = '2026-08-18';
+  const app = createHarness({ now: '2026-10-05T10:00:00+08:00', requests: [{ _id: requestId,
+    kind: 'request', ownerOpenid: 'user-a', status: 'approved', startDate: '2026-08-18', endDate: '2026-09-16',
+    expiresAt: '2026-09-23T18:00:00.000Z' }], records: [
+      { _id: 'retreat', _openid: 'user-a', source: 'manual', date: recordDate, backfillRequestId: requestId, duration: 45 },
+      { _id: 'ordinary', _openid: 'user-a', source: 'manual', date: recordDate, duration: 15 },
+      { _id: 'other-person', _openid: 'other', source: 'manual', date: recordDate, duration: 90 }
+    ] });
+  assert.equal((await app.select(recordDate)).success, false, 'ordinary seven-day window stays unchanged');
+  for (let count = 0; count < 2; count++) {
+    const result = await app.run({ type: 'syncBackfillDate', requestId, recordDate, expectedOpenid: 'user-a' });
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.equal(result.data.duration, 60);
+    assert.equal(app.calls.posts[count].body.durationMinutes, 60);
+    assert.equal(app.calls.posts[count].body.studentNumber, '123456');
+  }
+});
+
+test('retreat sync rejects foreign, pending, out-of-range or unwritten dates without external calls', async () => {
+  const requestId = 'br_' + 'c'.repeat(64), recordDate = '2026-08-18';
+  const request = { _id: requestId, kind: 'request', ownerOpenid: 'user-a', status: 'approved',
+    startDate: recordDate, endDate: '2026-09-16' };
+  const record = { _id: 'retreat', _openid: 'user-a', source: 'manual', date: recordDate, backfillRequestId: requestId, duration: 45 };
+  for (const scenario of [
+    { requests: [] }, { requests: [{ ...request, ownerOpenid: 'other' }] },
+    { requests: [{ ...request, status: 'pending' }] }, { requests: [{ ...request, startDate: '2026-08-19' }] },
+    { records: [] }, { records: [{ ...record, backfillRequestId: 'different' }] },
+    { records: [{ ...record, _openid: 'other' }] }, { expectedOpenid: 'other' }
+  ]) {
+    const app = createHarness({ requests: [request], records: [record], ...scenario });
+    assert.equal((await app.run({ type: 'syncBackfillDate', requestId, recordDate,
+      ...(scenario.expectedOpenid ? { expectedOpenid: scenario.expectedOpenid } : {}) })).success, false);
+    assert.equal(app.calls.posts.length, 0);
+    assert.equal(app.calls.updates.length, 0);
+  }
+});
+
+test('retreat sync reports unbound accounts and remote failures without changing saved meditation', async () => {
+  const requestId = 'br_' + 'd'.repeat(64), recordDate = '2026-08-18';
+  const requests = [{ _id: requestId, kind: 'request', ownerOpenid: 'user-a', status: 'approved',
+    startDate: recordDate, endDate: '2026-09-16' }];
+  const records = [{ _id: 'retreat', _openid: 'user-a', source: 'manual', date: recordDate, backfillRequestId: requestId, duration: 45 }];
+  const unbound = createHarness({ users: [], requests, records });
+  const skipped = await unbound.run({ type: 'syncBackfillDate', requestId, recordDate });
+  assert.equal(skipped.success, true);
+  assert.equal(skipped.data.skipped, true);
+  assert.equal(skipped.data.reason, '未绑定');
+  assert.equal(unbound.calls.posts.length, 0);
+  const failed = createHarness({ requests, records, postResponse: { success: false, message: '历史同步暂不可用' } });
+  const result = await failed.run({ type: 'syncBackfillDate', requestId, recordDate });
+  assert.equal(result.success, false);
+  assert.match(result.error, /历史同步/);
+  assert.deepEqual(failed.records, records);
+  assert.equal(failed.calls.updates.length, 0);
+});
+
+test('recorded-date evidence permits correcting deleted backfill, including an explicit zero total', async () => {
+  const requestId = 'br_' + 'e'.repeat(64), recordDate = '2026-08-18';
+  const requests = [{ _id: requestId, kind: 'request', ownerOpenid: 'user-a', status: 'approved',
+    startDate: recordDate, endDate: '2026-09-16', recordedDates: [recordDate] }];
+  for (const duration of [0, 10]) {
+    const app = createHarness({ requests, records: duration ? [{ _id: 'ordinary', _openid: 'user-a',
+      source: 'manual', date: recordDate, duration }] : [] });
+    const result = await app.run({ type: 'syncBackfillDate', requestId, recordDate });
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.equal(result.data.duration, duration);
+    assert.equal(app.calls.posts[0].body.durationMinutes, duration);
+  }
+  const deniedZero = createHarness({ requests, records: [], postResponse: { success: false, message: '不支持零时长覆盖' } });
+  const rejected = await deniedZero.run({ type: 'syncBackfillDate', requestId, recordDate });
+  assert.equal(rejected.success, false);
+  assert.match(rejected.error, /零时长/);
+  assert.equal(deniedZero.calls.updates.length, 0);
+});
 
 test('getHeatmap dispatches to OpenAPI with the server token and ignores client supplied identity and credentials', async () => {
   const app = createHarness({ getResponse: { success: true, data: {

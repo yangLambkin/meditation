@@ -75,6 +75,7 @@ function createPage(kind, options = {}) {
   const modules = { 'checkin.js': manager, 'teamManager.js': teamManager, 'lunar.js': { getLunarDate: () => '丙午年八月初七' } };
   function loadModule(name) {
     const filename = path.basename(name);
+    if (filename === 'bijingRecordSync.js') return { getDayState: () => null, subscribe: () => () => {} };
     if (Object.hasOwn(modules, filename)) return modules[filename];
     assert.ok(['dateUtil.js', 'homeCheckin.js', 'memberHistory.js'].includes(filename), `Unexpected dependency: ${name}`);
     const module = { exports: {} };

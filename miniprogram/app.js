@@ -35,6 +35,12 @@ App({
   onShow() {
     if (!wx.cloud) return;
     this.startSyncAlertRefresh();
+    // 接续已入账历史记录的必经任务，独立运行，不阻塞云端记录的读取/上传。
+    if (typeof checkinManager.resumeHistoricalBijingSync === 'function') {
+      Promise.resolve().then(() => checkinManager.resumeHistoricalBijingSync()).catch(error => {
+        console.warn('历史记录必经同步待重试:', error && error.message);
+      });
+    }
     // 打开/返回小程序补传当天记录，同时读取云端；历史记录仍需手动确认。
     const refresh = this.refreshRecordBackups();
     const upload = Promise.resolve().then(() => checkinManager.retryTodayBackups()).catch(error => {
@@ -56,20 +62,26 @@ App({
     const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
     if (typeof action === 'function') action.call(wx, { index: 3, fail() {} });
   },
-  getSyncAlertState() {
+  getSyncAlertState({ includeBackfill = false } = {}) {
     const state = this._syncAlertState || {};
     const current = this._syncAlertVisible && this._syncAlertAccount === this.syncAlertIdentity();
-    return { admin: !!(current && state.admin), user: !!(current && state.user) };
+    const result = { admin: !!(current && state.admin), user: !!(current && state.user) };
+    // 保留旧调用方的默认返回值；订阅和红点合并使用完整的四个提醒来源。
+    if (includeBackfill) {
+      result.backfillUser = !!(current && state.backfillUser);
+      result.backfillAdmin = !!(current && state.backfillAdmin);
+    }
+    return result;
   },
   watchSyncAlerts(listener) {
     if (!this._syncAlertListeners) this._syncAlertListeners = new Set();
     this._syncAlertListeners.add(listener);
-    listener(this.getSyncAlertState());
+    listener(this.getSyncAlertState({ includeBackfill: true }));
     return () => this._syncAlertListeners.delete(listener);
   },
   applySyncAlertDot() {
-    const state = this.getSyncAlertState();
-    this.setSyncAlertDot(state.admin || state.user);
+    const state = this.getSyncAlertState({ includeBackfill: true });
+    this.setSyncAlertDot(state.admin || state.user || state.backfillUser || state.backfillAdmin);
     if (this._syncAlertListeners) this._syncAlertListeners.forEach(listener => {
       try { listener({ ...state }); }
       catch (error) { console.warn('更新提醒入口失败:', error); }
@@ -77,7 +89,10 @@ App({
   },
   clearAdminSyncAlert() {
     this._adminAlertGeneration = (this._adminAlertGeneration || 0) + 1;
-    if (this._syncAlertState) this._syncAlertState.admin = false;
+    if (this._syncAlertState) {
+      this._syncAlertState.admin = false;
+      this._syncAlertState.backfillAdmin = false;
+    }
     this.applySyncAlertDot();
   },
   clearSyncAlert({ preserveState = false } = {}) {
@@ -86,7 +101,7 @@ App({
     this._syncAlertRequest = null;
     if (this._syncAlertCancel) this._syncAlertCancel();
     this._syncAlertCancel = null;
-    this._syncAlertState = state || { admin: false, user: false };
+    this._syncAlertState = state || { admin: false, user: false, backfillUser: false, backfillAdmin: false };
     this.applySyncAlertDot();
   },
   startSyncAlertRefresh() {
@@ -97,7 +112,7 @@ App({
     this.clearSyncAlert();
     return this.refreshSyncAlert();
   },
-  // 管理员待办与本人的反馈处理结果独立核对，共用“我”的红点。
+  // 管理员待办、反馈结果、补录审批与补录结果独立核对，共用“我”的红点。
   // 仅打开/返回小程序时自动刷新；页面切换使用缓存，不轮询或自动重试。
   // 账号/权限变化、处理/删除/已读成功后可主动刷新，核对剩余提醒。
   refreshSyncAlert({ force = false } = {}) {
@@ -112,7 +127,8 @@ App({
     const current = () => this._syncAlertVisible && generation === this._syncAlertGeneration && identity === this.syncAlertIdentity();
     const read = (source, name, type, hasAlert) => {
       let deadline;
-      const valid = () => current() && (source !== 'admin' || adminGeneration === this._adminAlertGeneration);
+      const adminSource = source === 'admin' || source === 'backfillAdmin';
+      const valid = () => current() && (!adminSource || adminGeneration === this._adminAlertGeneration);
       return new Promise((resolve, reject) => {
         const cancel = () => { clearTimeout(deadline); reject(new Error('提醒已暂停')); };
         cancellations.push(cancel);
@@ -121,6 +137,11 @@ App({
       }).then(response => {
         if (!valid()) return;
         const result = response && response.result;
+        if (source === 'backfillAdmin' && result && result.code === 'FORBIDDEN') {
+          this._syncAlertState.backfillAdmin = false;
+          this.applySyncAlertDot();
+          return;
+        }
         if (!result || result.success !== true || !result.data) throw new Error('提醒读取失败');
         this._syncAlertState[source] = hasAlert(result.data);
         this.applySyncAlertDot();
@@ -139,6 +160,15 @@ App({
       read('user', 'meditationManager', 'getFeedbackAlert', data => {
         if (typeof data.hasUnreadFeedback !== 'boolean') throw new Error('反馈提醒数据无效');
         return data.hasUnreadFeedback;
+      }),
+      read('backfillUser', 'meditationManager', 'getBackfillAlert', data => {
+        if (typeof data.hasUnreadBackfill !== 'boolean') throw new Error('补录结果提醒数据无效');
+        return data.hasUnreadBackfill;
+      }),
+      read('backfillAdmin', 'adminManager', 'adminGetBackfillAlert', data => {
+        if (data.isAdmin === false) return false;
+        if (typeof data.hasPendingBackfill !== 'boolean') throw new Error('补录审批提醒数据无效');
+        return data.hasPendingBackfill;
       })
     ]).finally(() => {
       if (generation !== this._syncAlertGeneration) return;

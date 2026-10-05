@@ -55,6 +55,12 @@ function harness({ loggedIn = true, online = true, missingLocks = false, uploadD
     cloud: { init() {} }
   };
   const api = {
+    async callCloudFunction(name, data) {
+      assert.equal(name, 'meditationManager');
+      assert.equal(data.type, 'getMyBackfillRequests');
+      return { result: connected ? { success: true, data: { requests: [], nextCursor: '' } }
+        : { success: false, error: '网络不可用' } };
+    },
     async recordMeditation(...args) {
       calls.uploads.push({ time: now, args: clone(args) });
       calls.operations.push('upload');
@@ -106,14 +112,24 @@ function harness({ loggedIn = true, online = true, missingLocks = false, uploadD
     app.setAudioOptions = () => {};
     app.onLaunch();
     const homeCheckin = load('utils/homeCheckin.js', { require: () => dateUtil });
+    const bijingRecordSync = load('utils/bijingRecordSync.js');
+    const contentSec = { checkText: async () => true };
+    const homeBackfill = load('utils/homeBackfill.js', { require(name) {
+      const modules = { './checkin.js': manager, './dateUtil.js': dateUtil, './homeCheckin.js': homeCheckin,
+        './bijingRecordSync.js': bijingRecordSync, './contentSec.js': contentSec, './cloudApi.js': api };
+      assert.ok(Object.hasOwn(modules, name), `Unexpected backfill dependency: ${name}`);
+      return modules[name];
+    } });
     load('pages/index/index.js', {
       Page: definition => { home = definition; },
       require(name) {
         if (name.endsWith('/checkin.js')) return manager;
         if (name.endsWith('/dateUtil.js')) return dateUtil;
         if (name.endsWith('/homeCheckin.js')) return homeCheckin;
+        if (name.endsWith('/homeBackfill.js')) return homeBackfill;
+        if (name.endsWith('/bijingRecordSync.js')) return bijingRecordSync;
         if (name.endsWith('/dailyWisdom.js')) return { DEFAULT_QUOTE: '', watchDailyWisdom: () => () => {} };
-        if (name.endsWith('/contentSec.js')) return { checkText: async () => true };
+        if (name.endsWith('/contentSec.js')) return contentSec;
         throw new Error(`Unexpected home dependency: ${name}`);
       }
     });

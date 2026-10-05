@@ -803,6 +803,40 @@
   line-height: 1.5;
 }
 
+.home-backfill-entry {
+  margin: 20rpx 28rpx 0;
+  padding: 16rpx;
+  color: #806735;
+  background: #f6f1e7;
+  border-radius: 12rpx;
+  font-size: 23rpx;
+  line-height: 1.6;
+}
+
+.home-backfill-entry::after { border: none; }
+
+.checkin-backfill-notice {
+  margin-top: 20rpx;
+  padding: 18rpx;
+  border-radius: 12rpx;
+  background: #f8f5ee;
+  color: #776442;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.checkin-backfill-heading,
+.checkin-backfill-day-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+  margin-top: 12rpx;
+}
+
+.checkin-backfill-day-row { color: #596273; font-size: 22rpx; }
+.checkin-backfill-success { display: block; margin-top: 20rpx; color: #4f785e; font-size: 24rpx; line-height: 1.6; }
+
 .checkin-fields-row {
   display: flex;
   align-items: flex-start;
@@ -1143,3 +1177,8 @@
 .checkin-pending-text { flex: 1; color: #8b642f; font-size: 24rpx; line-height: 1.5; }
 .checkin-retry-button { flex-shrink: 0; margin: 0; padding: 8rpx 16rpx; border-radius: 12rpx; background: #fff; color: #8b642f; font-size: 24rpx; line-height: 1.6; }
 .checkin-retry-button::after { border: none; }
+.record-bijing-sync { display: flex; align-items: flex-start; gap: 16rpx; margin-top: 14rpx; }
+.record-bijing-text { flex: 1; color: #9b8059; font-size: 22rpx; line-height: 1.7; word-break: break-all; }
+.record-bijing-synced { color: #859b88; }
+.record-bijing-retry { flex-shrink: 0; margin: 0; padding: 4rpx 12rpx; border-radius: 8rpx; background: #f7f1e5; color: #9b8059; font-size: 21rpx; line-height: 1.6; }
+.record-bijing-retry::after { border: none; }

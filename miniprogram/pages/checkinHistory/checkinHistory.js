@@ -2,6 +2,7 @@ const checkinManager = require('../../utils/checkin.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const memberHistory = require('../../utils/memberHistory.js');
+const bijingRecordSync = require('../../utils/bijingRecordSync.js');
 
 function isValidMonth(month) {
   return typeof month === 'string' && /^\d{4}-\d{2}$/.test(month)
@@ -38,6 +39,7 @@ Page({
 
   onShow() {
     this._unloaded = false;
+    this.watchBijingRecordSync();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => {
       this.showSelectedMonth(this.data.selectedMonth);
@@ -49,6 +51,7 @@ Page({
   },
 
   onHide() {
+    this.stopBijingRecordSync();
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
   },
@@ -65,7 +68,7 @@ Page({
         checkinManager,
         wx.getStorageSync('meditationTextRecords') || [],
         { openid: wx.getStorageSync('userOpenId') || '' }
-      );
+      ).map(record => this.decorateBijingSync(record));
       const months = homeCheckin.buildCheckinMonths(records);
       this._allCheckinRecords = records;
       this._allCheckinMonths = months;
@@ -75,6 +78,46 @@ Page({
       console.warn('月度打卡记录读取失败:', error);
       return false;
     }
+  },
+
+  decorateBijingSync(record) {
+    const owner = wx.getStorageSync('userOpenId') || '';
+    const date = record.dayDate || record.date;
+    const task = !this.data.isMemberHistory && owner.startsWith('oz') && record._id && date < homeCheckin.getCheckinDay()
+      ? bijingRecordSync.getDayState(date, owner) : null;
+    const labels = { pending: '等待同步必经', syncing: '正在同步必经', synced: '已同步必经',
+      failed: '必经同步未完成', unbound: '未绑定必经账号，绑定后可重试', deferred: '必经同步暂缓' };
+    return { ...record, bijingSyncText: task ? task.message || `云端已保存 · ${labels[task.status] || '必经同步待处理'}` : '',
+      bijingSyncStatus: task ? task.status : '', bijingCanRetry: !!(task && task.canRetry) };
+  },
+
+  watchBijingRecordSync() {
+    this.stopBijingRecordSync();
+    const owner = wx.getStorageSync('userOpenId') || '';
+    this._bijingPageVisible = true;
+    this._bijingPageAccount = owner;
+    const generation = this._bijingPageGeneration = (this._bijingPageGeneration || 0) + 1;
+    if (this.data.isMemberHistory || !owner.startsWith('oz')) return;
+    this._stopBijingRecordSync = bijingRecordSync.subscribe(change => {
+      if (change && change.account && change.account !== owner) return;
+      if (!this.data.isMemberHistory && this._bijingPageVisible && generation === this._bijingPageGeneration && owner === wx.getStorageSync('userOpenId')) this.refreshCheckinRecords();
+    });
+  },
+
+  stopBijingRecordSync() {
+    this._bijingPageVisible = false;
+    this._bijingPageGeneration = (this._bijingPageGeneration || 0) + 1;
+    if (this._stopBijingRecordSync) this._stopBijingRecordSync();
+    this._stopBijingRecordSync = null;
+  },
+
+  async retryBijingSync(event) {
+    const date = event.currentTarget.dataset.date, owner = this._bijingPageAccount, generation = this._bijingPageGeneration;
+    if (this.data.isMemberHistory || !this._bijingPageVisible || !owner || owner !== wx.getStorageSync('userOpenId') ||
+        !(this._allCheckinRecords || []).some(record => record._id && record.dayDate === date && record.bijingCanRetry)) return;
+    try { await bijingRecordSync.retryDate(date); }
+    catch (_) { /* The service persists its failure state; cloud records stay saved. */ }
+    if (!this.data.isMemberHistory && this._bijingPageVisible && generation === this._bijingPageGeneration && owner === wx.getStorageSync('userOpenId')) this.refreshCheckinRecords();
   },
 
   showSelectedMonth(requestedMonth) {

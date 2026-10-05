@@ -86,7 +86,7 @@ Page({
           // 连续勋章判定源：历史最长连续天数（取两个同义字段的较大值，兼容历史数据）
           longestStreak: Math.max(stats.longestStreak || 0, stats.longestCheckInDays || 0),
           totalCheckinDays: stats.totalDays || 0, // 云端字段名为 totalDays（累计打卡天数）
-          lastDuration: stats.lastCheckinDuration || 0,
+          lastDuration: Math.max(Number(stats.maxSingleDuration) || 0, Number(stats.lastCheckinDuration) || 0),
           totalDuration: stats.totalDuration || 0
         };
       }

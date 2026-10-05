@@ -33,6 +33,8 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
       }
     },
     require(module) {
+      if (module.endsWith('/homeBackfill.js')) return { data: {}, methods: { initHomeBackfill() {}, stopHomeBackfill() {}, refreshBackfillSelection() {} } };
+      if (module.endsWith('/bijingRecordSync.js')) return { getDayState: () => null, subscribe: () => () => {} };
       if (module.endsWith('/dailyWisdom.js')) return { DEFAULT_QUOTE: '', watchDailyWisdom: () => () => {} };
       if (module.endsWith('/dateUtil.js')) return { watchBusinessDate: () => () => {} };
       if (module.endsWith('/badgeManager.js')) return { migrateBadges: (...args) => calls.migrations.push(args) };

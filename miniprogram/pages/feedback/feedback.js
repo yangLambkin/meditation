@@ -139,9 +139,11 @@ Page({
       feedbackId: row._id, expectedUpdatedAt: row.updatedAt
     }));
     if (!feedbacks.length) return;
+    const account = this._account;
     try {
       const result = await this.callFeedback('markFeedbackRead', { feedbacks });
-      if (!this.isCurrent(generation) || request !== this._listRequest) return;
+      // 已读已写入云端；离开页面或刷新列表后也要核对同账号的全局提醒。
+      if (account !== (wx.getStorageSync('userOpenId') || '')) return;
       if (!Number.isInteger(result.markedCount) || result.markedCount < 0) return;
       const app = getApp();
       if (app && typeof app.refreshSyncAlert === 'function') await app.refreshSyncAlert({ force: true });

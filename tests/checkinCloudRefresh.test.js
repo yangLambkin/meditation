@@ -40,7 +40,7 @@ function harness({ local = [], cloud = [], nested = false, read, stats, remove, 
     ['cacheStatus', 'initialized'], ['needsRecovery', false],
     [STORAGE_KEY, localCache(local, nested)]
   ]);
-  const calls = { reads: 0, writes: 0, stats: 0, backups: 0, removes: 0 };
+  const calls = { reads: 0, writes: 0, stats: 0, backups: 0, removes: 0, historicalSyncs: [] };
   const api = {
     async getAllRecords() {
       const index = calls.reads++;
@@ -92,6 +92,9 @@ function harness({ local = [], cloud = [], nested = false, read, stats, remove, 
     require(name) {
       if (name === './dateUtil.js') return dateUtil;
       if (name === './cloudApi.js') return api;
+      if (name === './bijingRecordSync.js') return { acceptSavedRecord(saved, identity) {
+        calls.historicalSyncs.push(clone({ saved, identity }));
+      } };
       throw new Error(`Unexpected dependency: ${name}`);
     }
   });
@@ -222,6 +225,87 @@ test('localId matches an uploaded record and refresh corrects a stale natural da
   assert.equal(app.records()[0].localId, 'same-local');
   assert.deepEqual(Object.keys(app.data().dailyRecords), ['2026-09-16']);
 });
+
+for (const nested of [false, true]) {
+  test(`refresh resumes a newly cloud-confirmed historical upload once from ${nested ? 'nested' : 'flat'} cache`, async () => {
+    const pending = saved(undefined, EVENING, 7, { localId: 'pending-history', syncVersion: 1,
+      syncStatus: 'failed', syncOpenid: 'oz-refresh' });
+    const confirmed = saved('committed-history', EVENING, 7, { localId: 'pending-history', _openid: 'oz-refresh' });
+    const app = harness({ local: [pending], cloud: [confirmed], nested });
+    assert.equal(await app.manager.refreshFromCloud(), true);
+    assert.deepEqual(app.calls.historicalSyncs, [{ saved: {
+      recordId: 'committed-history', date: '2026-09-16', autoSyncBijing: true
+    }, identity: { account: 'oz-refresh' } }]);
+    assert.equal(app.records()[0].syncStatus, 'synced');
+    assert.equal(await app.manager.refreshFromCloud(), true);
+    assert.equal(app.calls.historicalSyncs.length, 1, 'an ordinary reread must not resend all past history');
+  });
+}
+
+test('refresh automatic sync respects an explicitly selected historical manual date', async () => {
+  const pending = saved(undefined, MORNING, 7, { localId: 'manual-history', syncVersion: 1,
+    source: 'manual', date: '2026-09-16', syncStatus: 'pending', syncOpenid: 'oz-refresh' });
+  const app = harness({ local: [pending], cloud: [{ ...pending, _id: 'manual-confirmed', _openid: 'oz-refresh' }] });
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  assert.equal(app.calls.historicalSyncs.length, 1);
+  assert.equal(app.calls.historicalSyncs[0].saved.date, '2026-09-16');
+});
+
+test('refresh never automatically resends today, established history, legacy, ignored or another account records', async () => {
+  const common = { syncVersion: 1, syncStatus: 'pending', syncOpenid: 'oz-refresh' };
+  const local = [
+    saved(undefined, MORNING, 1, { ...common, localId: 'today' }),
+    saved('already-cloud', EVENING, 2, { ...common, localId: 'already', syncStatus: 'synced' }),
+    saved(undefined, EVENING, 3, { localId: 'legacy' }),
+    saved(undefined, EVENING, 4, { ...common, localId: 'ignored', syncIgnored: true }),
+    saved(undefined, EVENING, 5, { ...common, localId: 'foreign', syncOpenid: 'oz-other' }),
+    saved(undefined, EVENING, 6, { syncVersion: 1, localId: 'foreign-cloud', syncStatus: 'pending' })
+  ];
+  const cloud = local.map((record, index) => ({ ...record, _id: record._id || `cloud-${index}`,
+    _openid: index >= 4 ? 'oz-other' : 'oz-refresh' }));
+  cloud.push(saved('other-device-history', EVENING, 8, { _openid: 'oz-refresh' }));
+  const app = harness({ local, cloud });
+  assert.equal(await app.manager.refreshFromCloud(), true);
+  assert.deepEqual(app.calls.historicalSyncs, []);
+});
+
+test('an account change while recovering a historical upload does not enqueue a sync', async () => {
+  const response = deferred();
+  const pending = saved(undefined, EVENING, 7, { localId: 'pending-history', syncVersion: 1,
+    syncStatus: 'pending', syncOpenid: 'oz-refresh' });
+  const app = harness({ local: [pending], read: () => response.promise });
+  const refresh = app.manager.refreshFromCloud();
+  app.storage.set('userOpenId', 'oz-another-account');
+  response.resolve({ success: true, data: [{ ...pending, _id: 'cloud-history', _openid: 'oz-refresh' }] });
+  assert.equal(await refresh, false);
+  assert.deepEqual(app.calls.historicalSyncs, []);
+});
+
+for (const method of ['safeRecoverFromCloud', 'recoverUserDataFromCloud']) {
+  test(`${method} also queues newly confirmed historical uploads before ordinary refresh can consume them`, async () => {
+    const pending = saved(undefined, EVENING, 7, { localId: 'pending-history', syncVersion: 1,
+      syncStatus: 'pending', syncOpenid: 'oz-refresh' });
+    const app = harness({ local: [pending], cloud: [{ ...pending, _id: 'cloud-history', _openid: 'oz-refresh' }] });
+    assert.equal(await app.manager[method](USER_ID), true);
+    assert.equal(app.calls.historicalSyncs.length, 1);
+    assert.equal(app.calls.historicalSyncs[0].saved.recordId, 'cloud-history');
+    assert.equal(await app.manager.refreshFromCloud(), true);
+    assert.equal(app.calls.historicalSyncs.length, 1);
+  });
+
+  test(`${method} does not save or enqueue an old account's delayed recovery`, async () => {
+    const response = deferred();
+    const pending = saved(undefined, EVENING, 7, { localId: 'pending-history', syncVersion: 1,
+      syncStatus: 'pending', syncOpenid: 'oz-refresh' });
+    const app = harness({ local: [pending], read: () => response.promise });
+    const recovery = app.manager[method](USER_ID);
+    app.storage.set('userOpenId', 'oz-another-account');
+    response.resolve({ success: true, data: [{ ...pending, _id: 'cloud-history', _openid: 'oz-refresh' }] });
+    assert.equal(await recovery, false);
+    assert.deepEqual(app.calls.historicalSyncs, []);
+    assert.equal(app.calls.writes, 0);
+  });
+}
 
 test('cloud values replace stale timestamp, duration and emotion for an already synced record', async () => {
   const local = saved('same-record', EVENING, 7, {

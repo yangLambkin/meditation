@@ -1,0 +1,8 @@
+Use case: photorealistic-natural
+Asset type: Cover background for a 16:9 Chinese presentation about an awareness meditation timer.
+Primary request: Wide 16:9 quiet water at dawn, subdued warm beige / soft muted charcoal and tea gold, sparse reeds at the far right edge reflected in still water, one gentle natural circular ripple positioned at right 70%.
+Style/medium: Minimalist fine art editorial photography with realistic water and understated organic grain.
+Composition/framing: Very large calm uncluttered negative space across the left 60% for later dark Chinese typography. Landscape 16:9 preferred.
+Lighting/mood: High key ivory mist, light background, tranquil early morning.
+Color palette: Warm ivory, subdued warm beige, soft muted charcoal, and subtle tea gold #b29764.
+Constraints: No text, no logos, no humans, no fake UI, no border.

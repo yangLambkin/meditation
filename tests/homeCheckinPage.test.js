@@ -71,6 +71,9 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
   };
   const modules = {
+    'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {}, acceptSavedRecord() {} },
+    'cloudApi.js': { callCloudFunction: async () => ({ result: { success: true, data: { requests: [], nextCursor: '' } } }) },
+    'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },
     'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句', watchDailyWisdom: () => () => {} },
     'checkin.js': checkinManager,
     'contentSec.js': {
@@ -83,10 +86,10 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
   function loadModule(name) {
     const filename = path.basename(name);
     if (Object.hasOwn(modules, filename)) return modules[filename];
-    assert.ok(['dateUtil.js', 'homeCheckin.js'].includes(filename), `Unexpected dependency: ${name}`);
+    assert.ok(['dateUtil.js', 'homeCheckin.js', 'homeBackfill.js'].includes(filename), `Unexpected dependency: ${name}`);
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(utilsPath, filename), 'utf8'), {
-      module, require: loadModule, Date: Clock, wx, console
+      module, require: loadModule, Date: Clock, wx, console, setTimeout, clearTimeout
     }, { filename });
     if (filename === 'dateUtil.js') module.exports.watchBusinessDate = () => () => {};
     modules[filename] = module.exports;

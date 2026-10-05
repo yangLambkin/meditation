@@ -129,6 +129,7 @@ function buildCheckinRecords(userData, experienceRecords = [], { openid } = {}) 
         timestamp: record.timestamp == null ? null : record.timestamp,
         sortTimestamp: hasTime ? timestamp : 0,
         duration: Number(record.duration) || 0,
+        ...(record.recordType === 'backfill' || record.backfillRequestId ? { isBackfill: true } : {}),
         emotion: Array.isArray(record.emotion) ? record.emotion : [],
         experienceTexts,
         ...getRecordSyncState(record),

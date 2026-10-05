@@ -76,7 +76,7 @@ function createPage(options = {}) {
       value.success({ confirm: options.confirm !== false });
     }
   };
-  const modules = { 'checkin.js': checkinManager };
+  const modules = { 'checkin.js': checkinManager, 'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} } };
   function loadModule(name) {
     const filename = path.basename(name);
     if (Object.hasOwn(modules, filename)) return modules[filename];

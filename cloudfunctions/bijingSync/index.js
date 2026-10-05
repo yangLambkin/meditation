@@ -179,7 +179,7 @@ async function checkStudentNumber(studentNumber) {
 }
 
 // ===== 核心：同步某用户某一天 =====
-async function syncDate(openid, dateStr) {
+async function syncDate(openid, dateStr, options = {}) {
   const userDoc = await getUserDoc(openid);
   if (!userDoc || !userDoc.bijingBound) {
     return { openid, date: dateStr, skipped: true, reason: '未绑定' };
@@ -187,7 +187,7 @@ async function syncDate(openid, dateStr) {
   // 同号同日由对端幂等覆盖；自动、手动同步都重新汇总最新记录。
   // bijingSyncedDates 仅表示曾同步成功，不用于拦截再次上报。
   const duration = await getDayDuration(openid, dateStr);
-  if (duration <= 0) {
+  if (duration <= 0 && !options.allowZero) {
     // 当天云端查不到打卡数据：不标记 synced。
     // 可能是备份异步未完成（暂时性），留待下次同步复查，
     // 避免把"查不到"误显示为"已同步"。
@@ -200,6 +200,8 @@ async function syncDate(openid, dateStr) {
   }
 
   try {
+    // 获批补录同步持有按用户/日期的租约，外部请求前再次检查避免迟到覆盖。
+    if (options.beforePost) await options.beforePost();
     const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration);
     if (resp && resp.success === true) {
       await markSynced(openid, dateStr, userDoc.bijingStudentNumber);
@@ -207,13 +209,13 @@ async function syncDate(openid, dateStr) {
     }
     // 对端返回失败；若为 400（通常因尝试上报当天数据）统一提示
     console.error(`❌ 上报失败 date=${dateStr}:`, resp && resp.message);
-    const is400 = (resp && resp.message && String(resp.message).indexOf('400') >= 0);
+    const is400 = !options.allowZero && (resp && resp.message && String(resp.message).indexOf('400') >= 0);
     return { openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : ((resp && resp.message) || '未知错误'), duration };
   } catch (e) {
     console.error(`❌ 上报异常 date=${dateStr}:`, e.message);
     // 请求异常且为 400（如手动同步恰为当天触发对端拦截）统一提示
-    const is400 = e.message && String(e.message).indexOf('400') >= 0;
-    return { openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : e.message, duration };
+    const is400 = !options.allowZero && e.message && String(e.message).indexOf('400') >= 0;
+    return { openid, date: dateStr, success: false, ...(e.code ? { code: e.code } : {}), error: is400 ? '不支持同步当天数据' : e.message, duration };
   }
 }
 
@@ -430,6 +432,14 @@ exports.main = async (event = {}, context) => {
       return await getSyncDateDetails(openid, event.recordDate);
     case 'syncSelectedDate':
       return await manualSyncSelectedDate(openid, event.recordDate);
+    case 'syncBackfillDate':
+      return await require('./backfillSync').syncBackfillDate({ db, openid,
+        requestId: event.requestId, recordDate: event.recordDate, expectedOpenid: event.expectedOpenid,
+        syncDate, getDayDuration, now: () => Date.now() });
+    case 'syncRecordedDate':
+      return await require('./recordedSync').syncRecordedDate({ db, openid,
+        recordId: event.recordId, expectedOpenid: event.expectedOpenid,
+        syncDate, getDayDuration, getBusinessDate, now: () => Date.now() });
     case 'syncPending':
       return await manualSyncPending(openid);
     default:

@@ -7,6 +7,7 @@
     "pages/daily/daily1",
     "pages/me/me",
     "pages/feedback/feedback",
+    "pages/backfill/backfill",
     "pages/admin/admin",
     "pages/bijingHeatmap/bijingHeatmap",
     "pages/history/history",

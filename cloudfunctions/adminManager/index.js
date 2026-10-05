@@ -26,7 +26,7 @@ async function alertExists(read) {
 }
 
 exports.main = async (event = {}) => {
-  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings', 'adminListFeedback', 'adminUpdateFeedback', 'adminDeleteFeedback'].includes(event.type)) {
+  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings', 'adminListFeedback', 'adminUpdateFeedback', 'adminDeleteFeedback', 'adminListBackfillRequests', 'adminReviewBackfillRequest', 'adminGetBackfillAlert'].includes(event.type)) {
     return { success: false, error: '未知的操作类型' };
   }
   const wxContext = cloud.getWXContext() || {};
@@ -45,6 +45,10 @@ exports.main = async (event = {}) => {
   }
   if (event.type === 'getAccess') {
     return { success: true, data: { isAdmin } };
+  }
+  if (['adminListBackfillRequests', 'adminReviewBackfillRequest', 'adminGetBackfillAlert'].includes(event.type)) {
+    if (!isAdmin) return event.type === 'adminGetBackfillAlert' ? { success: true, data: { hasPendingBackfill: false } } : panelForbidden();
+    return require('./backfill').handleBackfill(event, { db: getDatabase(), cloud, openid: wxContext.OPENID }, true);
   }
   if (event.type === 'adminListFeedback' || event.type === 'adminUpdateFeedback' || event.type === 'adminDeleteFeedback') {
     if (!isAdmin) return panelForbidden();

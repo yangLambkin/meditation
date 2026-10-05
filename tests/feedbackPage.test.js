@@ -456,10 +456,10 @@ test('read acknowledgement runs independently of list loading and failure can re
   assert.equal(page.data.listError, '');
 });
 
-test('late read acknowledgements from hidden pages, old accounts and superseded requests do not refresh reminders', async () => {
-  for (const change of ['hide', 'unload', 'account', 'refresh']) {
+test('successful read acknowledgements refresh same-account reminders after leaving or reloading the page', async () => {
+  for (const change of ['hide', 'unload', 'refresh', 'reopen']) {
     const pending = deferred();
-    const { page, calls, setAccount } = createPage({
+    const { page, calls } = createPage({
       fetch: (_, count) => list(count === 1 ? [row('unread', { unreadForUser: true })] : []),
       markRead: () => pending.promise
     });
@@ -467,13 +467,36 @@ test('late read acknowledgements from hidden pages, old accounts and superseded 
     assert.equal(calls.markRead.length, 1);
     if (change === 'hide') page.onHide();
     if (change === 'unload') page.onUnload();
-    if (change === 'account') setAccount('oz-other');
     if (change === 'refresh') await page.loadFeedback();
+    if (change === 'reopen') { page.onHide(); await page.onShow(); }
     const updates = calls.updates.length;
     pending.resolve(success({ markedCount: 1 }));
     await flushAsync();
-    assert.equal(calls.refreshAlert, 0, change);
-    assert.equal(calls.updates.length, updates, change);
+    assert.equal(calls.refreshAlert, 1, change);
+    assert.deepEqual(calls.refreshAlertOptions, [{ force: true }], change);
+    assert.equal(calls.updates.length, updates, `late acknowledgements must not update page data: ${change}`);
+    assert.equal(calls.toast.length, 0, change);
+  }
+});
+
+test('late read acknowledgements cannot refresh another account even after the page reopens', async () => {
+  for (const account of ['oz-other', '']) {
+    for (const reopen of [false, true]) {
+      const pending = deferred();
+      const { page, calls, setAccount } = createPage({
+        fetch: (_, count) => list(count === 1 ? [row('unread', { unreadForUser: true })] : []),
+        markRead: () => pending.promise
+      });
+      await page.onShow();
+      assert.equal(calls.markRead.length, 1);
+      setAccount(account);
+      if (reopen) { page.onHide(); await page.onShow(); }
+      const updates = calls.updates.length;
+      pending.resolve(success({ markedCount: 1 }));
+      await flushAsync();
+      assert.equal(calls.refreshAlert, 0);
+      assert.equal(calls.updates.length, updates);
+    }
   }
 });
 

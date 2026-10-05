@@ -1,0 +1,156 @@
+<view class="backfill-page">
+  <view class="page-heading">
+    <text class="eyebrow">安心静坐 · 回来再记录</text>
+    <text class="page-title">申请补录</text>
+    <text class="description">最近三天（含今天）可直接在首页「记录静坐」填写，无需申请。闭关期间未及时记录的更早日期，可在这里申请补录。</text>
+  </view>
+
+  <view wx:if="{{isAdmin}}" class="tabs">
+    <button class="tab {{tab === 'mine' ? 'active' : ''}}" data-tab="mine" bindtap="switchTab">我的申请</button>
+    <button class="tab {{tab === 'review' ? 'active' : ''}}" data-tab="review" bindtap="switchTab">待我审批</button>
+  </view>
+  <view wx:if="{{accessError && loggedIn}}" class="access-note">
+    <text>管理员权限暂未核实。</text><button bindtap="checkAccess" disabled="{{accessLoading}}" class="text-button">重新核实</button>
+  </view>
+
+  <block wx:if="{{tab === 'mine'}}">
+    <view class="application-flow">
+      <text class="section-title">补录流程</text>
+      <view class="flow-steps">
+        <view class="flow-step"><text class="step-number">1</text><view class="step-label"><text>选择日期区间</text><text>填写原因</text></view></view>
+        <text class="flow-arrow" aria-hidden="true">›</text>
+        <view class="flow-step"><text class="step-number">2</text><view class="step-label"><text>提交申请</text><text>等待管理员审批</text></view></view>
+        <text class="flow-arrow" aria-hidden="true">›</text>
+        <view class="flow-step"><text class="step-number">3</text><view class="step-label"><text>审批通过后</text><text>去首页逐次补录</text></view></view>
+      </view>
+      <text class="hint">审批通过后，首页「记录静坐」可选获批日期区间内的每一天，以及最近三天（含今天）。审批不会自动生成记录，请逐次填写实际静坐时间和时长。</text>
+    </view>
+    <view wx:if="{{selectedRequest}}" class="card">
+      <view class="section-heading compact">
+        <text class="section-title">查看补录记录</text>
+        <button class="text-button" disabled="{{syncBusy}}" bindtap="closeDayRecords">收起</button>
+      </view>
+      <text class="hint">获批范围：{{selectedRequest.startDate}} 至 {{selectedRequest.endDate}}</text>
+      <text wx:if="{{selectedRequest.canRecord}}" class="deadline">请在 {{selectedRequest.expiresText}}（北京时间）前完成补录</text>
+      <text wx:else class="notice">补录期限已结束，仍可查看记录、重试必经同步。</text>
+      <text class="field-label">静坐日期</text>
+      <picker mode="date" value="{{recordDate}}" start="{{selectedRequest.startDate}}" end="{{selectedRequest.endDate}}" disabled="{{syncBusy}}" bindchange="onRecordDateChange">
+        <view class="picker-value">{{recordDate}}<text class="chevron">⌄</text></view>
+      </picker>
+      <text class="hint">一天按北京时间当天 02:00 至次日 02:00 计算。</text>
+
+      <view class="day-summary">
+        <view class="section-heading compact"><text class="small-heading">当天已有记录</text><button class="text-button" disabled="{{dayLoading || syncBusy}}" bindtap="loadDayRecords">刷新</button></view>
+        <text wx:if="{{dayLoading}}" class="hint">正在读取…</text>
+        <block wx:elif="{{dayLoaded}}">
+          <text class="day-total">共 {{dayRecords.length}} 次 · {{dayTotal}} 分钟</text>
+          <view wx:for="{{dayRecords}}" wx:key="_id" class="day-row">
+            <view><text>{{item.timeText || '时间未记录'}}</text><text wx:if="{{item.isBackfill}}" class="backfill-tag">闭关补录</text></view>
+            <text class="duration">{{item.duration}} 分钟</text>
+          </view>
+          <text wx:if="{{!dayRecords.length}}" class="hint">这一天还没有静坐记录。</text>
+        </block>
+        <text wx:if="{{dayError}}" class="error-message">{{dayError}}</text>
+      </view>
+
+      <text wx:if="{{selectedRequest.canRecord}}" class="hint">需要新增记录时，请前往首页选择获批日期，填写本次静坐时间和时长。</text>
+      <button wx:if="{{selectedRequest.canRecord}}" class="primary-button" disabled="{{syncBusy}}" data-id="{{selectedRequest._id}}" bindtap="goHomeRecord">去首页补录</button>
+      <text wx:if="{{bijingTaskText}}" class="hint" selectable>{{bijingTaskText}}</text>
+      <text wx:if="{{syncMessage}}" class="hint" selectable>{{syncMessage}}</text>
+      <text wx:if="{{syncError}}" class="error-message" selectable>{{syncError}}</text>
+      <button wx:if="{{bijingCanRetry}}" class="secondary-button" disabled="{{syncBusy || bijingSyncing || dayLoading || !dayLoaded}}" loading="{{syncBusy}}" bindtap="syncDay">重试当天必经同步</button>
+      <button wx:if="{{canSyncDay}}" class="secondary-button" disabled="{{syncBusy || bijingSyncing || dayLoading || !dayLoaded}}" loading="{{syncBusy}}" bindtap="syncApprovedDay">{{syncBusy ? '正在同步到必经…' : '重新同步当天记录'}}</button>
+    </view>
+
+    <view wx:else class="card">
+      <text class="section-title">选择补录日期区间</text>
+      <text class="hint">仅可申请提交当天之前的最近 30 天，不含今天。当前可选 {{minStartDate}} 至 {{maxEndDate}}，含开始和结束当天。</text>
+      <text wx:if="{{activeRequest}}" class="notice">已有待审批或有效的已通过申请，请查看下方进度。待审批时暂不开通更早日期；通过后可点击「去首页补录」。</text>
+      <view class="field-grid">
+        <view class="field-cell">
+          <text class="field-label">开始日期</text>
+          <picker mode="date" value="{{startDate}}" start="{{minStartDate}}" end="{{endDate || maxEndDate}}" disabled="{{submitting || activeRequest}}" bindchange="onStartChange"><view class="picker-value {{!startDate ? 'placeholder' : ''}}">{{startDate || '请选择'}}<text class="chevron">⌄</text></view></picker>
+        </view>
+        <view class="field-cell">
+          <text class="field-label">结束日期</text>
+          <picker mode="date" value="{{endDate}}" start="{{minEndDate}}" end="{{maxEndDate}}" disabled="{{submitting || activeRequest}}" bindchange="onEndChange"><view class="picker-value {{!endDate ? 'placeholder' : ''}}">{{endDate || '请选择'}}<text class="chevron">⌄</text></view></picker>
+        </view>
+      </view>
+      <view wx:if="{{rangeDays}}" class="range-summary">
+        <text>已选 {{rangeDays}} 天（含首尾）</text>
+        <text class="deadline">审批通过后有 3 天（72 小时）补录，具体截止时间会显示在审批结果中。</text>
+      </view>
+      <text class="field-label">补录原因</text>
+      <textarea class="reason-input" value="{{reason}}" maxlength="500" disabled="{{submitting || activeRequest}}" placeholder="请简要说明闭关期间无法记录的原因，方便管理员审批。" placeholder-class="placeholder" bindinput="onReasonInput" />
+      <text class="character-count">{{reason.length}} / 500</text>
+      <view class="rules">
+        <text class="rules-title">申请须知</text>
+        <text>补录权限从管理员审批通过时起生效，有效期 3 天（72 小时）。等待审批不占用补录时间，到期后不能新增补录。</text>
+        <text>日期按北京时间每天 02:00 换日，00:00–01:59 的静坐计入前一天。</text>
+        <text>同一时间只能有一个待审批或有效的已通过申请。结果会在「我」页面以红点提醒，也可在下方「我的申请」查看。</text>
+        <text>仅可补录本人的真实记录，需联网保存。一天多次静坐请分次填写，已有记录请勿重复补录。</text>
+        <text>历史记录保存成功后会立即发起必经同步；未绑定或同步失败时，请按页面提示处理，无需重复录入。</text>
+      </view>
+      <text class="hint">获批后仅开放申请区间；区间外超过最近三天的日期仍不可选。逾期或特殊情况请联系管理员。</text>
+      <text wx:if="{{submitError}}" class="error-message" selectable>{{submitError}}</text>
+      <button wx:if="{{loggedIn}}" class="primary-button" loading="{{submitting}}" disabled="{{submitting || activeRequest || !startDate || !endDate || !reason}}" bindtap="submitRequest">{{submitting ? '正在提交…' : '提交申请'}}</button>
+      <button wx:else class="primary-button" bindtap="login">登录后申请补录</button>
+    </view>
+
+    <block wx:if="{{loggedIn}}">
+      <view class="section-heading"><text class="section-title">我的申请</text><button class="text-button" disabled="{{loading}}" bindtap="loadRequests">{{loading ? '刷新中…' : '刷新'}}</button></view>
+      <view wx:for="{{requests}}" wx:key="_id" class="card request-card">
+        <view class="request-meta"><text class="period">{{item.startDate}} 至 {{item.endDate}}</text><text class="status status-{{item.expired ? 'expired' : item.status}}">{{item.statusText}}</text></view>
+        <text class="time">申请于 {{item.createdText}}</text>
+        <text class="reason" selectable>{{item.reason}}</text>
+        <text wx:if="{{item.status === 'pending' && !item.expired}}" class="progress-note">申请已提交，等待管理员审批。审批通过前，首页仍仅可记录最近三天。</text>
+        <text wx:if="{{item.status === 'pending' && !item.expired}}" class="deadline">{{item.expiresText ? '审批和补录须在 ' + item.expiresText + '（北京时间）前完成，请留意审批进度。' : '审批通过后有 3 天（72 小时）补录，等待审批不占用补录时间。请留意「我」页面的审批结果提醒。'}}</text>
+        <text wx:if="{{item.status === 'approved' && !item.expired}}" class="progress-note">审批已通过。请在 {{item.expiresText}}（北京时间）前，到首页「记录静坐」选择获批日期并逐次填写；最近三天仍可正常记录。</text>
+        <text wx:if="{{item.status === 'rejected'}}" class="progress-note">审批未通过，尚未开通所申请的补录日期。可根据管理员回复调整，在可申请的日期范围内重新申请。</text>
+        <text wx:if="{{item.expired && item.status !== 'rejected'}}" class="progress-note">补录期限已结束。如仍需补录，请联系管理员。</text>
+        <view wx:if="{{item.reply}}" class="reply"><text class="reply-label">管理员回复</text><text class="reply-content" selectable>{{item.reply}}</text><text class="time">{{item.updatedText}}</text></view>
+        <button wx:if="{{item.canRecord}}" class="primary-button" disabled="{{syncBusy}}" data-id="{{item._id}}" bindtap="goHomeRecord">去首页补录</button>
+        <button wx:if="{{item.status === 'approved'}}" class="secondary-button" disabled="{{syncBusy}}" data-id="{{item._id}}" bindtap="openDayRecords">查看补录记录与同步</button>
+      </view>
+      <text wx:if="{{loading}}" class="empty-state">正在加载申请…</text>
+      <text wx:elif="{{loaded && !requests.length && !listError}}" class="empty-state">还没有申请记录。</text>
+      <text wx:if="{{listError}}" class="error-message">{{listError}}</text>
+      <button wx:if="{{listError}}" class="secondary-button" disabled="{{loading}}" bindtap="loadRequests">重新加载</button>
+      <button wx:if="{{nextCursor}}" class="secondary-button" disabled="{{loading}}" bindtap="loadMoreRequests">加载更多申请</button>
+    </block>
+  </block>
+
+  <block wx:elif="{{tab === 'review' && isAdmin}}">
+    <view class="filters"><button wx:for="{{filters}}" wx:key="value" class="filter {{adminFilter === item.value ? 'active' : ''}}" disabled="{{reviewing}}" data-status="{{item.value}}" bindtap="changeFilter">{{item.label}}</button></view>
+    <view class="section-heading"><text class="section-title">补录申请</text><button class="text-button" disabled="{{adminLoading || reviewing}}" bindtap="loadAdminRequests">{{adminLoading ? '刷新中…' : '刷新'}}</button></view>
+    <text class="hint section-note">请核对申请日期区间和原因。批准后，申请人可在首页逐次补录该区间，最近三天仍可正常记录。审批不会自动添加静坐记录。拒绝时请说明原因，结果将在申请人的「我」页面提醒。</text>
+    <view wx:for="{{adminRequests}}" wx:key="_id" class="card request-card">
+      <view class="request-meta"><text class="applicant">{{item.nickname || '未设置昵称'}}</text><text class="status status-{{item.expired ? 'expired' : item.status}}">{{item.statusText}}</text></view>
+      <text class="hint">学号：{{item.studentNumber || '未绑定'}}</text>
+      <text class="period admin-period">{{item.startDate}} 至 {{item.endDate}}</text>
+      <text class="time">申请于 {{item.createdText}}</text>
+      <text class="reason" selectable>{{item.reason}}</text>
+      <text wx:if="{{item.expiresText}}" class="deadline">{{item.status === 'pending' ? '审批及补录截止' : '补录截止'}}：{{item.expiresText}}（北京时间）</text>
+      <text wx:elif="{{item.status === 'pending'}}" class="deadline">批准后立即开通申请区间，有效期 3 天（72 小时）；等待审批不占用补录时间。</text>
+      <text wx:if="{{item.status === 'pending' && item.expired}}" class="notice">申请已过期，无法继续审批。</text>
+      <view wx:if="{{item.reply}}" class="reply"><text class="reply-label">审批回复</text><text class="reply-content" selectable>{{item.reply}}</text><text class="time">{{item.updatedText}}</text></view>
+      <view wx:if="{{reviewRequest && reviewRequest._id === item._id}}" class="review-editor">
+        <text class="field-label">审批回复 <text class="optional">（拒绝时必填）</text></text>
+        <textarea class="reason-input" value="{{reviewReply}}" maxlength="500" disabled="{{reviewing}}" placeholder="填写给申请人的说明" placeholder-class="placeholder" bindinput="onReplyInput" />
+        <text wx:if="{{reviewRequest.expired}}" class="notice">该申请已过补录期限，不能批准。</text>
+        <text wx:if="{{reviewError}}" class="error-message" selectable>{{reviewError}}</text>
+        <view class="review-buttons">
+          <button class="secondary-button" disabled="{{reviewing || reviewRequest.expired}}" data-status="rejected" bindtap="reviewRequest">拒绝申请</button>
+          <button class="primary-button" loading="{{reviewing}}" disabled="{{reviewing || reviewRequest.expired}}" data-status="approved" bindtap="reviewRequest">批准补录</button>
+        </view>
+        <button class="text-button close-button" disabled="{{reviewing}}" bindtap="closeReview">收起审批</button>
+      </view>
+      <button wx:elif="{{item.status === 'pending' && !item.expired}}" class="secondary-button" disabled="{{reviewing}}" data-id="{{item._id}}" bindtap="selectReview">审批此申请</button>
+    </view>
+    <text wx:if="{{adminLoading}}" class="empty-state">正在加载申请…</text>
+    <text wx:elif="{{adminLoaded && !adminRequests.length && !adminError}}" class="empty-state">{{adminFilter === 'pending' ? '暂时没有待审批申请。' : '暂无这类申请。'}}</text>
+    <text wx:if="{{adminError}}" class="error-message">{{adminError}}</text>
+    <button wx:if="{{adminError}}" class="secondary-button" disabled="{{adminLoading}}" bindtap="loadAdminRequests">重新加载</button>
+    <button wx:if="{{adminCursor}}" class="secondary-button" disabled="{{adminLoading}}" bindtap="loadMoreAdminRequests">加载更多申请</button>
+  </block>
+</view>

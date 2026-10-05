@@ -30,6 +30,8 @@ Page({
     hasUserInfo: false, // 是否已获取用户信息
     hasUnreadFeedback: false,
     hasAdminAlert: false,
+    hasUnreadBackfill: false,
+    hasPendingBackfill: false,
     // 必经之路绑定相关
     bijingBound: false, // 是否已绑定学号
     bijingStudentNumber: '', // 已绑定的学号
@@ -78,8 +80,11 @@ Page({
         if (this._bijingHidden || alertGeneration !== this._meAlertGeneration) return;
         const hasUnreadFeedback = state.user === true;
         const hasAdminAlert = state.admin === true;
-        if (hasUnreadFeedback !== this.data.hasUnreadFeedback || hasAdminAlert !== this.data.hasAdminAlert) {
-          this.setData({ hasUnreadFeedback, hasAdminAlert });
+        const hasUnreadBackfill = state.backfillUser === true;
+        const hasPendingBackfill = state.backfillAdmin === true;
+        if (hasUnreadFeedback !== this.data.hasUnreadFeedback || hasAdminAlert !== this.data.hasAdminAlert ||
+            hasUnreadBackfill !== this.data.hasUnreadBackfill || hasPendingBackfill !== this.data.hasPendingBackfill) {
+          this.setData({ hasUnreadFeedback, hasAdminAlert, hasUnreadBackfill, hasPendingBackfill });
         }
       });
     }
@@ -328,7 +333,7 @@ Page({
         badgeManager.checkBadgeUnlock({
           longestStreak: Math.max(stats.longestStreak || 0, stats.longestCheckInDays || 0),
           totalCheckinDays: stats.totalDays || 0, // 云端字段名为 totalDays（累计打卡天数）
-          lastDuration: stats.lastCheckinDuration || 0,
+          lastDuration: Math.max(Number(stats.maxSingleDuration) || 0, Number(stats.lastCheckinDuration) || 0),
           totalDuration: stats.totalDuration || 0
         });
         
@@ -400,6 +405,10 @@ Page({
 
   goToFeedbackPage() {
     wx.navigateTo({ url: '/pages/feedback/feedback' });
+  },
+
+  goToBackfillPage() {
+    wx.navigateTo({ url: '/pages/backfill/backfill' });
   },
 
   /**
@@ -1002,7 +1011,7 @@ Page({
   stopMeAlertWatch() {
     if (this._stopMeAlertWatch) this._stopMeAlertWatch();
     this._stopMeAlertWatch = null;
-    this.setData({ hasUnreadFeedback: false, hasAdminAlert: false });
+    this.setData({ hasUnreadFeedback: false, hasAdminAlert: false, hasUnreadBackfill: false, hasPendingBackfill: false });
   },
 
   onHide() {

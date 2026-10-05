@@ -37,6 +37,8 @@ function createPage(name, dailyWisdom) {
   let definition;
   let nextTimer = 0;
   const modules = {
+    'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },
+    'homeBackfill.js': { data: {}, methods: { initHomeBackfill() {}, stopHomeBackfill() {}, refreshBackfillSelection() {} } },
     'avatar.js': require('../miniprogram/utils/avatar.js'),
     'dailyWisdom.js': dailyWisdom,
     'dailyCardImage.js': { DEFAULT_IMAGE: '/images/p1.png' },
@@ -56,6 +58,7 @@ function createPage(name, dailyWisdom) {
     },
     console: { log() {}, warn() {}, error() {} },
     wx: {
+      getStorageSync() {},
       cloud: { callFunction() { assert.fail('pages must obtain wisdom through the shared daily service'); } },
       switchTab(options) { navigation.push(options.url); }
     },

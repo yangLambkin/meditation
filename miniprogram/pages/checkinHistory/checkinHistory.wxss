@@ -299,3 +299,8 @@ page {
 }
 
 .record-sync-error { display: block; margin-top: 16rpx; color: #9b6c36; font-size: 22rpx; line-height: 1.6; }
+.record-bijing-sync { display: flex; align-items: flex-start; gap: 16rpx; margin-top: 14rpx; }
+.record-bijing-text { flex: 1; color: #9b8059; font-size: 22rpx; line-height: 1.7; word-break: break-all; }
+.record-bijing-synced { color: #859b88; }
+.record-bijing-retry { flex-shrink: 0; margin: 0; padding: 4rpx 12rpx; border-radius: 8rpx; background: #f7f1e5; color: #9b8059; font-size: 21rpx; line-height: 1.6; }
+.record-bijing-retry::after { border: none; }

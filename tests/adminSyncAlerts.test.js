@@ -158,6 +158,12 @@ function appHarness({ manualFeedback = false, tabReady = true } = {}) {
     require() { return { async syncWithCloud() {}, async retryTodayBackups() {} }; },
     wx: {
       cloud: { callFunction(request) {
+        if (['getBackfillAlert', 'adminGetBackfillAlert'].includes(request.data.type)) {
+          // These cases isolate the existing feedback/sync sources; the four-source
+          // integration and backfill deployment failures are covered separately.
+          request.success({ result: { success: false, error: 'Backfill service unavailable in this fixture' } });
+          return;
+        }
         if (request.name === 'meditationManager') {
           assert.equal(request.data.type, 'getFeedbackAlert');
           feedbackRequests.push(request);

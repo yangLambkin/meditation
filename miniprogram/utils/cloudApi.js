@@ -9,10 +9,28 @@ function cloudTimeoutError(timeoutMs) {
   return error;
 }
 
+function recordAccount(functionName, data) {
+  if (functionName !== 'meditationManager' || !data || data.type !== 'recordMeditation') return '';
+  try { return typeof wx.getStorageSync === 'function' ? wx.getStorageSync('userOpenId') || '' : ''; }
+  catch (_) { return ''; }
+}
+
+function syncConfirmedHistoricalRecord(functionName, data, response, account) {
+  if (functionName !== 'meditationManager' || !data || data.type !== 'recordMeditation' || !account) return;
+  const result = response && response.result;
+  const saved = result && result.success === true && result.data;
+  if (!saved || saved.autoSyncBijing !== true || typeof saved.recordId !== 'string' || !saved.recordId) return;
+  // 云端入账与外部同步独立结算。即便保存回包迟于三秒，已确认的历史记录仍应同步。
+  // 切账号后仍为原账号保留待处理意图；任务模块仅在原账号活跃时发送。
+  Promise.resolve().then(() => require('./bijingRecordSync.js').acceptSavedRecord(saved, { account }))
+    .catch(error => console.warn('历史记录已入账，必经同步待重试:', error && error.message));
+}
+
 // 云存储API封装
 const cloudApi = {
   // 调用云函数
   callCloudFunction: function(functionName, data, options = {}) {
+    const account = recordAccount(functionName, data);
     const isUpload = data && ((functionName === 'meditationManager' && data.type === 'recordMeditation') ||
       (functionName === 'contentSecCheck' && data.type === 'text' && options.isUpload === true));
     const timeoutMs = isUpload ? UPLOAD_TIMEOUT_MS : CLOUD_REQUEST_TIMEOUT_MS;
@@ -47,8 +65,11 @@ const cloudApi = {
         wx.cloud.callFunction({
           name: functionName,
           data: data,
-          success: result => needsTimeout && Date.now() >= deadlineAt
-            ? finish(reject, cloudTimeoutError(timeoutMs)) : finish(resolve, result),
+          success: result => {
+            if (needsTimeout && Date.now() >= deadlineAt) finish(reject, cloudTimeoutError(timeoutMs));
+            else finish(resolve, result);
+            syncConfirmedHistoricalRecord(functionName, data, result, account);
+          },
           fail: error => needsTimeout && Date.now() >= deadlineAt
             ? finish(reject, cloudTimeoutError(timeoutMs)) : finish(reject, error)
         });

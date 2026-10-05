@@ -68,6 +68,28 @@ function notifySyncState() {
   });
 }
 
+function syncNewlyConfirmedHistoricalRecords(before, after, openid) {
+  const local = before.checkinRecords || before;
+  const pendingIds = new Set(Object.values(local.dailyRecords || {}).flatMap(day =>
+    (day.records || []).filter(record => record && record.localId && isPendingUpload(record, openid))
+      .map(record => record.localId)));
+  if (!pendingIds.size) return;
+  const confirmed = after.checkinRecords || after;
+  const today = dateUtil.getBusinessDate();
+  Object.entries(confirmed.dailyRecords || {}).forEach(([date, day]) => {
+    (day.records || []).forEach(record => {
+      if (!record || !record._id || !pendingIds.has(record.localId) ||
+          (record._openid && record._openid !== openid) ||
+          (record.syncOpenid && record.syncOpenid !== openid)) return;
+      const recordDate = dateUtil.getRecordBusinessDate(record, date);
+      if (!dateUtil.isDateLabel(recordDate) || recordDate >= today) return;
+      Promise.resolve().then(() => require('./bijingRecordSync.js').acceptSavedRecord({
+        recordId: record._id, date: recordDate, autoSyncBijing: true
+      }, { account: openid })).catch(error => console.warn('已恢复的历史记录待同步必经:', error && error.message));
+    });
+  });
+}
+
 function updateStoredUpload(userId, localId, update) {
   const storageKey = `meditation_checkin_${userId}`;
   const stored = wx.getStorageSync(storageKey);
@@ -579,6 +601,7 @@ const checkinManager = {
           wx.setStorageSync(`meditation_checkin_${userId}`, merged);
           bumpUserStorageRevision(userId);
           this.updateMonthlyStatsCache(merged.checkinRecords, 0, dateUtil.getBusinessMonth());
+          syncNewlyConfirmedHistoricalRecords(stored, merged, openid);
           notifySyncState();
           return true;
         }
@@ -592,6 +615,10 @@ const checkinManager = {
       if (pendingRefreshes.get(key) === refresh) pendingRefreshes.delete(key);
     });
     return refresh;
+  },
+
+  resumeHistoricalBijingSync() {
+    return require('./bijingRecordSync.js').resumePending();
   },
 
   // 完整云端快照校准已同步记录，保留离线打卡和体验；旧记录按时间/时长一对一匹配。
@@ -707,6 +734,8 @@ const checkinManager = {
   // 安全的云端数据恢复（含去重保护）
   async safeRecoverFromCloud(userId) {
     try {
+      const openid = currentUploadOpenid();
+      if (!openid || wx.getStorageSync('localUserId') !== userId) return false;
       const storageRevision = getUserStorageRevision(userId);
       console.log('🛡️ 开始安全数据恢复...');
       
@@ -730,7 +759,8 @@ const checkinManager = {
       console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
       
       // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
-      const mergedData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
+      const beforeMerge = this.getUserCheckinDataByUserId(userId);
+      const mergedData = this.mergeCloudRecordsIntoCache(beforeMerge, allRecordsResult.data);
       
       // 4. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();
@@ -739,11 +769,13 @@ const checkinManager = {
       }
       
       // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
-      if (!canCommitRecovery(userId, storageRevision)) return false;
+      if (!canCommitRecovery(userId, storageRevision) || currentUploadOpenid() !== openid ||
+          wx.getStorageSync('localUserId') !== userId) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
       bumpUserStorageRevision(userId);
       this.updateMonthlyStatsCache(mergedData.checkinRecords, 0, dateUtil.getBusinessMonth());
+      syncNewlyConfirmedHistoricalRecords(beforeMerge, mergedData, openid);
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -848,6 +880,8 @@ const checkinManager = {
       localId: cloudRecord.localId,
       idempotencyKey: cloudRecord.idempotencyKey,
       source: cloudRecord.source,
+      backfillRequestId: cloudRecord.backfillRequestId,
+      recordType: cloudRecord.recordType,
       dateSource: cloudRecord.dateSource,
       date: dateUtil.getRecordBusinessDate(cloudRecord),
       timestamp: cloudRecord.timestamp,
@@ -861,6 +895,8 @@ const checkinManager = {
   // 安全的云端数据恢复（含去重保护）
   async safeRecoverFromCloud(userId) {
     try {
+      const openid = currentUploadOpenid();
+      if (!openid || wx.getStorageSync('localUserId') !== userId) return false;
       const storageRevision = getUserStorageRevision(userId);
       console.log('🛡️ 开始安全数据恢复...');
       
@@ -884,7 +920,8 @@ const checkinManager = {
       console.log('📡 云端数据获取成功，记录数:', allRecordsResult.data?.length || 0);
       
       // 3. 智能合并（避免重复）- 使用与本地打卡记录一致的数据格式
-      const mergedData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
+      const beforeMerge = this.getUserCheckinDataByUserId(userId);
+      const mergedData = this.mergeCloudRecordsIntoCache(beforeMerge, allRecordsResult.data);
       
       // 4. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();
@@ -893,11 +930,13 @@ const checkinManager = {
       }
       
       // 5. 保存合并结果（使用与本地打卡记录一致的键名和格式）
-      if (!canCommitRecovery(userId, storageRevision)) return false;
+      if (!canCommitRecovery(userId, storageRevision) || currentUploadOpenid() !== openid ||
+          wx.getStorageSync('localUserId') !== userId) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, mergedData);
       bumpUserStorageRevision(userId);
       this.updateMonthlyStatsCache(mergedData.checkinRecords, 0, dateUtil.getBusinessMonth());
+      syncNewlyConfirmedHistoricalRecords(beforeMerge, mergedData, openid);
       
       console.log('✅ 安全数据恢复完成，合并结果:', {
         '恢复前记录数': Object.keys(currentData?.dailyRecords || {}).length,
@@ -985,6 +1024,8 @@ const checkinManager = {
       localId: cloudRecord.localId,
       idempotencyKey: cloudRecord.idempotencyKey,
       source: cloudRecord.source,
+      backfillRequestId: cloudRecord.backfillRequestId,
+      recordType: cloudRecord.recordType,
       dateSource: cloudRecord.dateSource,
       date: dateUtil.getRecordBusinessDate(cloudRecord),
       timestamp: cloudRecord.timestamp,
@@ -998,6 +1039,8 @@ const checkinManager = {
   // 从云端恢复用户数据
   async recoverUserDataFromCloud(userId) {
     try {
+      const openid = currentUploadOpenid();
+      if (!openid || wx.getStorageSync('localUserId') !== userId) return false;
       const storageRevision = getUserStorageRevision(userId);
       const cloudApi = require('./cloudApi.js');
       
@@ -1011,7 +1054,8 @@ const checkinManager = {
       }
       
       // 2. 重建本地缓存结构
-      const recoveredData = this.mergeCloudRecordsIntoCache(this.getUserCheckinDataByUserId(userId), allRecordsResult.data);
+      const beforeMerge = this.getUserCheckinDataByUserId(userId);
+      const recoveredData = this.mergeCloudRecordsIntoCache(beforeMerge, allRecordsResult.data);
       
       // 3. 获取用户统计信息
       const userStatsResult = await cloudApi.getUserStats();
@@ -1020,11 +1064,13 @@ const checkinManager = {
       }
       
       // 4. 保存到本地缓存
-      if (!canCommitRecovery(userId, storageRevision)) return false;
+      if (!canCommitRecovery(userId, storageRevision) || currentUploadOpenid() !== openid ||
+          wx.getStorageSync('localUserId') !== userId) return false;
       const storageKey = `meditation_checkin_${userId}`;
       wx.setStorageSync(storageKey, recoveredData);
       bumpUserStorageRevision(userId);
       this.updateMonthlyStatsCache(recoveredData.checkinRecords, 0, dateUtil.getBusinessMonth());
+      syncNewlyConfirmedHistoricalRecords(beforeMerge, recoveredData, openid);
       
       console.log('✅ 云端数据恢复完成，共恢复:', {
         checkinRecords: Object.keys(recoveredData.checkinRecords.dailyRecords || {}).length,
@@ -1080,6 +1126,8 @@ const checkinManager = {
         idempotencyKey: record.idempotencyKey || record.localId,
         source: record.source,
         dateSource: record.dateSource,
+        backfillRequestId: record.backfillRequestId,
+        recordType: record.recordType,
         date: dateStr,
         timestamp: record.timestamp,
         duration: record.duration || 0,

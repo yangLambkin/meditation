@@ -12,6 +12,21 @@ function clearSyncAlert() {
   if (typeof app.clearAdminSyncAlert === 'function') app.clearAdminSyncAlert();
   else if (typeof app.clearSyncAlert === 'function') app.clearSyncAlert();
 }
+function feedbackAccount() {
+  try { return wx.getStorageSync('userOpenId') || ''; }
+  catch (_) { return ''; }
+}
+function refreshFeedbackAlerts(account) {
+  // A confirmed mutation affects App reminders even after this page has gone.
+  // Only the initiating account may refresh them; reminder errors do not undo it.
+  try {
+    if (!account || account !== feedbackAccount()) return;
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.refreshSyncAlert === 'function') {
+      Promise.resolve(app.refreshSyncAlert({ force: true })).catch(() => {});
+    }
+  } catch (_) {}
+}
 function errorText(error) {
   return typeof error === 'string' ? error : error && (error.message || error.errMsg) || '操作失败，请重试';
 }
@@ -280,18 +295,18 @@ Page({
     this._feedbackSaveBusy = true;
     this.setData({ feedbackSaveBusy: true, feedbackSaveError: '', feedbackMessage: '' });
     try {
+      const account = feedbackAccount();
       const result = await this.callAdmin('adminManager', 'adminUpdateFeedback', {
         feedbackId: feedback._id, status, reply, expectedUpdatedAt: feedback.updatedAt
       });
-      if (!this.isCurrent(generation) || !this.canManageFeedback()) return;
       if (!result.feedback || result.feedback._id !== feedback._id) throw new Error('服务未返回有效结果，请刷新确认处理状态。');
+      refreshFeedbackAlerts(account);
+      if (account !== feedbackAccount() || !this.isCurrent(generation) || !this.canManageFeedback()) return;
       const updated = presentFeedback(result.feedback);
       const feedbacks = this.data.feedbacks.map(row => row._id === updated._id ? updated : row)
         .filter(row => this.data.feedbackFilter === 'all' || row.status === this.data.feedbackFilter);
       this.setData({ ...clearedFeedbackEditor(), feedbacks, feedbackMessage: '处理结果已保存，用户可在反馈记录中查看。' });
       wx.showToast({ title: '处理结果已保存', icon: 'success' });
-      const app = typeof getApp === 'function' ? getApp() : null;
-      if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
     } catch (error) {
       if (this.isCurrent(generation) && this.canManageFeedback()) this.setData({ feedbackConflict: error.code === 'CONFLICT',
         feedbackSaveError: error.code === 'CONFLICT' ? '该反馈已被其他管理员更新。请先保留草稿，再点击「重新加载反馈」查看最新处理结果。' : errorText(error) });
@@ -307,21 +322,21 @@ Page({
     this._feedbackDeleteBusy = true;
     this.setData({ feedbackDeleteBusy: true });
     try {
+      const account = feedbackAccount();
       const confirmed = await new Promise((resolve, reject) => wx.showModal({ title: '确认删除反馈',
         content: '删除后，反馈内容和管理员回复将无法恢复，用户也将无法查看该反馈及回复。确定删除吗？',
         confirmText: '删除反馈', confirmColor: '#b85b4f', success: result => resolve(result.confirm === true), fail: reject }));
-      if (!confirmed || !this.isCurrentFeedback(generation, feedback)) return;
+      if (!confirmed || !this.isCurrentFeedback(generation, feedback) || account !== feedbackAccount()) return;
       this.setData({ feedbackSaveError: '', feedbackMessage: '' });
       const result = await this.callAdmin('adminManager', 'adminDeleteFeedback', {
         feedbackId: feedback._id, expectedUpdatedAt: feedback.updatedAt
       });
-      if (!this.isCurrentFeedback(generation, feedback)) return;
       if (result.feedbackId !== feedback._id || result.deleted !== true) throw new Error('服务未返回有效结果，请刷新确认删除状态。');
+      refreshFeedbackAlerts(account);
+      if (account !== feedbackAccount() || !this.isCurrentFeedback(generation, feedback)) return;
       this.setData({ ...clearedFeedbackEditor(), feedbacks: this.data.feedbacks.filter(row => row._id !== feedback._id),
         feedbackMessage: '反馈已删除。' });
       wx.showToast({ title: '反馈已删除', icon: 'success' });
-      const app = typeof getApp === 'function' ? getApp() : null;
-      if (app && typeof app.refreshSyncAlert === 'function') app.refreshSyncAlert({ force: true });
     } catch (error) {
       if (this.isCurrentFeedback(generation, feedback)) this.setData({ feedbackConflict: error.code === 'CONFLICT',
         feedbackSaveError: error.code === 'CONFLICT' ? '该反馈已被其他管理员更新。请先保留草稿，再点击「重新加载反馈」确认最新内容后删除。' : errorText(error) });

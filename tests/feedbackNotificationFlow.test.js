@@ -80,6 +80,66 @@ function feedbackPage(backend) {
   };
 }
 
+// Exercise the real application cache as well as the page and cloud handlers.
+// Read acknowledgements can remain in flight while a page leaves the screen.
+function applicationWorkflow(t, backend, account = 'owner') {
+  let application, definition;
+  const alerts = [], tabDots = [], acknowledgements = [];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const wx = {
+    getStorageSync: () => account,
+    showTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(true); },
+    hideTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(false); },
+    cloud: { callFunction(request) {
+      alerts.push({ account, type: request.data.type });
+      backend.as(account, request.data).then(result => request.success({ result }), request.fail);
+    } }
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/app.js'), 'utf8'), {
+    App(value) { application = value; }, wx, console, setTimeout, clearTimeout,
+    require: () => ({})
+  });
+  vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/pages/feedback/feedback.js'), 'utf8'), {
+    Page(value) { definition = value; }, getApp: () => application, wx,
+    require(name) {
+      if (name.endsWith('/checkin.js')) return { isUserLoggedIn: () => true };
+      if (name.endsWith('/cloudApi.js')) return {
+        async callCloudFunction(functionName, event) {
+          assert.equal(functionName, 'meditationManager');
+          if (event.type === 'markFeedbackRead') {
+            const owner = account;
+            return new Promise(resolve => acknowledgements.push({ owner, event, resolve }));
+          }
+          return { result: await backend.as(account, event) };
+        }
+      };
+      throw new Error(`Unexpected dependency: ${name}`);
+    }
+  });
+  t.after(() => application.onHide());
+  return {
+    application, alerts, tabDots, acknowledgements,
+    setAccount(value) { account = value; },
+    createPage() {
+      const renders = [];
+      const page = { ...definition, data: structuredClone(definition.data), setData(value, callback) {
+        Object.assign(this.data, value);
+        if (callback) renders.push(callback);
+      } };
+      return { page, async render() { renders.splice(0).forEach(callback => callback()); await flush(); } };
+    },
+    async acknowledge() {
+      const acknowledgement = acknowledgements.shift();
+      assert.ok(acknowledgement, 'the displayed result must already have sent a read acknowledgement');
+      const result = await backend.as(acknowledgement.owner, acknowledgement.event);
+      assert.equal(result.success, true);
+      acknowledgement.resolve({ result });
+      await flush();
+      return result.data;
+    }
+  };
+}
+
 const submit = (backend, requestId) => backend.as('owner', {
   type: 'submitFeedback', requestId, content: '希望优化提醒', contact: ''
 });
@@ -179,4 +239,96 @@ test('a user acknowledgement after administrator deletion does not recreate feed
   assert.equal(backend.rows.length, 0);
   await view.page.loadFeedback();
   assert.equal(view.page.data.feedbacks.length, 0);
+});
+
+for (const lifecycle of ['onHide', 'onUnload']) {
+  test(`a successful read acknowledgement after ${lifecycle} clears the real application reminder`, async t => {
+    const backend = workflowHarness();
+    const submission = (await submit(backend, `late-read-${lifecycle}`)).data.feedback;
+    await handle(backend, submission, 'resolved', '处理完成');
+    const workflow = applicationWorkflow(t, backend);
+    await workflow.application.startSyncAlertRefresh();
+    assert.equal(workflow.application.getSyncAlertState().user, true);
+    assert.equal(workflow.tabDots.at(-1), true);
+
+    const view = workflow.createPage();
+    await view.page.onShow();
+    await view.render();
+    assert.equal(workflow.acknowledgements.length, 1);
+    view.page[lifecycle]();
+    assert.equal((await workflow.acknowledge()).markedCount, 1);
+    assert.equal(backend.rows[0].unreadForUser, false);
+    assert.equal(workflow.application.getSyncAlertState().user, false);
+    assert.equal(workflow.tabDots.at(-1), false);
+
+    const reopened = lifecycle === 'onHide' ? view : workflow.createPage();
+    await reopened.page.onShow();
+    await reopened.render();
+    assert.equal(reopened.page.data.feedbacks[0].unreadForUser, false);
+    assert.equal(workflow.acknowledgements.length, 0, 'already-read results need no second acknowledgement');
+    assert.equal(workflow.application.getSyncAlertState().user, false);
+    assert.equal(workflow.tabDots.at(-1), false);
+  });
+}
+
+test('a hidden-page acknowledgement retains a newer unread result in the real application reminder', async t => {
+  const backend = workflowHarness();
+  const original = (await submit(backend, 'late-read-original')).data.feedback;
+  await handle(backend, original, 'resolved', '第一条处理结果');
+  const workflow = applicationWorkflow(t, backend);
+  await workflow.application.startSyncAlertRefresh();
+  const view = workflow.createPage();
+  await view.page.onShow();
+  await view.render();
+  view.page.onHide();
+
+  const newer = (await submit(backend, 'late-read-newer')).data.feedback;
+  await handle(backend, newer, 'resolved', '另一条处理结果');
+  const alertCount = workflow.alerts.length;
+  assert.equal((await workflow.acknowledge()).markedCount, 1);
+  assert.equal(backend.rows.find(row => row._id === original._id).unreadForUser, false);
+  assert.equal(backend.rows.find(row => row._id === newer._id).unreadForUser, true);
+  assert.ok(workflow.alerts.length > alertCount, 'the remaining reminder is confirmed after the successful acknowledgement');
+  assert.equal(workflow.application.getSyncAlertState().user, true);
+  assert.equal(workflow.tabDots.at(-1), true);
+});
+
+test('a hidden-page acknowledgement clears personal unread state while retaining administrator work', async t => {
+  const backend = workflowHarness();
+  await submit(backend, 'pending-administrator-work');
+  const ownFeedback = (await backend.as('admin', {
+    type: 'submitFeedback', requestId: 'administrator-own-feedback', content: '我的反馈', contact: ''
+  })).data.feedback;
+  await handle(backend, ownFeedback, 'resolved', '处理完成');
+  const workflow = applicationWorkflow(t, backend, 'admin');
+  await workflow.application.startSyncAlertRefresh();
+  assert.equal(workflow.application.getSyncAlertState().admin, true);
+  assert.equal(workflow.application.getSyncAlertState().user, true);
+  const view = workflow.createPage();
+  await view.page.onShow();
+  await view.render();
+  view.page.onHide();
+  assert.equal((await workflow.acknowledge()).markedCount, 1);
+  assert.equal(workflow.application.getSyncAlertState().user, false);
+  assert.equal(workflow.application.getSyncAlertState().admin, true);
+  assert.equal(workflow.tabDots.at(-1), true);
+});
+
+test('an old account read acknowledgement cannot refresh the new account application reminder', async t => {
+  const backend = workflowHarness();
+  const submission = (await submit(backend, 'late-read-old-account')).data.feedback;
+  await handle(backend, submission, 'resolved', '处理完成');
+  const workflow = applicationWorkflow(t, backend);
+  await workflow.application.startSyncAlertRefresh();
+  const view = workflow.createPage();
+  await view.page.onShow();
+  await view.render();
+  view.page.onHide();
+  workflow.setAccount('other-user');
+  await workflow.application.refreshSyncAlert({ force: true });
+  const alertCount = workflow.alerts.length;
+  assert.equal((await workflow.acknowledge()).markedCount, 1);
+  assert.equal(workflow.alerts.length, alertCount, 'the previous account must not trigger an unrelated refresh');
+  assert.equal(workflow.application.getSyncAlertState().user, false);
+  assert.equal(workflow.tabDots.at(-1), false);
 });

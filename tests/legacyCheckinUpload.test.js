@@ -385,11 +385,11 @@ function pageHarness(options = {}) {
     static now() { return NOW; }
   }
   const silentConsole = { log() {}, warn() {}, error() {} };
-  const modules = { 'checkin.js': app.manager, 'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句' }, 'contentSec.js': {} };
+  const modules = { 'checkin.js': app.manager, 'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句' }, 'contentSec.js': {}, 'cloudApi.js': {} };
   function loadModule(name) {
     const filename = path.basename(name);
     if (modules[filename]) return modules[filename];
-    assert.ok(['homeCheckin.js', 'dateUtil.js'].includes(filename));
+    assert.ok(['homeCheckin.js', 'homeBackfill.js', 'bijingRecordSync.js', 'dateUtil.js'].includes(filename));
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', filename), 'utf8'), {
       module, require: loadModule, wx, Date: ClockDate, console: silentConsole

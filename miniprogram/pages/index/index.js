@@ -4,6 +4,8 @@ const contentSec = require('../../utils/contentSec.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
 const dateUtil = require('../../utils/dateUtil.js');
+const bijingRecordSync = require('../../utils/bijingRecordSync.js');
+const homeBackfill = require('../../utils/homeBackfill.js');
 
 function applySyncAlertDot() {
   const app = typeof getApp === 'function' ? getApp() : null;
@@ -16,7 +18,9 @@ function refreshAlertsAfterAccountChange(previousAccount, account) {
 }
 
 Page({
+  ...homeBackfill.methods,
   data: {
+    ...homeBackfill.data,
     currentYear: 2026,
     currentMonth: 1,
     calendarDays: [],
@@ -53,6 +57,7 @@ Page({
 
   openCheckinModal() {
     if (this.data.checkinSubmitting) return;
+    this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
     this._checkinDateEdited = false;
     this._checkinTimeEdited = false;
     this._checkinSubmissionId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -61,8 +66,12 @@ Page({
       showCheckinModal: true,
       showCheckinTimePicker: false,
       checkinDuration: '',
-      checkinExperience: ''
+      checkinExperience: '',
+      checkinBackfillError: '',
+      checkinBackfillMessage: ''
     });
+    this.initHomeBackfill();
+    this.refreshBackfillSelection();
   },
 
   closeCheckinModal() {
@@ -81,11 +90,15 @@ Page({
       checkinDate: this._checkinDateEdited ? this.data.checkinDate : today,
       checkinTime: this._checkinTimeEdited || this.data.showCheckinTimePicker ? this.data.checkinTime : current.time
     });
+    this.refreshBackfillSelection();
   },
 
   onCheckinDateChange(e) {
+    if (this.data.checkinSubmitting) return;
+    this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
     this._checkinDateEdited = true;
-    this.setData({ checkinDate: e.detail.value });
+    this.setData({ checkinDate: e.detail.value, checkinBackfillError: '', checkinBackfillMessage: '' });
+    this.refreshBackfillSelection();
   },
 
   openCheckinTimePicker() {
@@ -101,20 +114,33 @@ Page({
 
   onCheckinTimeChange(e) {
     if (this.data.checkinSubmitting) return;
+    this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
     this._checkinTimeEdited = true;
-    this.setData({ checkinTime: e.detail.value, showCheckinTimePicker: false });
+    this.setData({ checkinTime: e.detail.value, showCheckinTimePicker: false, checkinBackfillError: '', checkinBackfillMessage: '' });
+    this.refreshBackfillSelection();
   },
 
   onCheckinDurationInput(e) {
-    this.setData({ checkinDuration: e.detail.value });
+    if (this.data.checkinSubmitting) return;
+    this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
+    this.setData({ checkinDuration: e.detail.value, checkinBackfillError: '', checkinBackfillMessage: '' });
+    this.refreshBackfillSelection();
   },
 
   onCheckinExperienceInput(e) {
-    this.setData({ checkinExperience: e.detail.value });
+    if (this.data.checkinSubmitting) return;
+    this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
+    this.setData({ checkinExperience: e.detail.value, checkinBackfillError: '', checkinBackfillMessage: '' });
+    this.refreshBackfillSelection();
   },
 
   async submitCheckin() {
     if (this.data.checkinSubmitting || this.data.showCheckinTimePicker || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
+    if (this._homeBackfillAccount !== undefined && this._homeBackfillAccount !== (wx.getStorageSync('userOpenId') || '')) {
+      this.initHomeBackfill();
+      wx.showToast({ title: '账号已切换，请重新填写记录', icon: 'none' });
+      return;
+    }
     this.refreshCheckinDefaults();
     const durationText = String(this.data.checkinDuration).trim();
     const duration = Number(durationText);
@@ -123,13 +149,17 @@ Page({
       return;
     }
 
-    if (this.data.checkinDate < this.data.minCheckinDate || this.data.checkinDate > this.data.maxCheckinDate) {
-      wx.showToast({ title: '只能记录最近三天的静坐（含今天）', icon: 'none' });
-      return;
-    }
     const selectedTimestamp = homeCheckin.parseDateTime(this.data.checkinDate, this.data.checkinTime);
     if (!Number.isFinite(selectedTimestamp) || selectedTimestamp > Date.now()) {
       wx.showToast({ title: '请选择有效且不晚于当前的时间', icon: 'none' });
+      return;
+    }
+    const backfillInput = { duration, timestamp: selectedTimestamp, text: this.data.checkinExperience.trim() };
+    if (this.data.checkinBackfillGrant || this.matchingBackfillRetry(backfillInput)) {
+      return this.submitApprovedBackfill(backfillInput);
+    }
+    if (this.data.checkinDate < this.data.minCheckinDate || this.data.checkinDate > this.data.maxCheckinDate) {
+      wx.showToast({ title: this.data.hasBackfillDates ? '请选择最近三天或获批范围内的日期' : '只能记录最近三天的静坐（含今天）', icon: 'none' });
       return;
     }
     // 未修改日期时间时保留实际秒数，避免同一分钟内的正常打卡被同步去重。
@@ -174,7 +204,7 @@ Page({
     const pendingCheckinCount = checkinManager.getPendingSyncSummary().pending;
     this._allCheckinRecords = homeCheckin.readCheckinRecords(
       checkinManager, wx.getStorageSync('meditationTextRecords') || [], this.getCheckinDisplayOptions()
-    );
+    ).map(record => this.decorateBijingSync(record));
     const unconfirmedCount = this._allCheckinRecords.filter(record => record.syncStatus === 'unconfirmed').length;
     this.setData({ pendingCheckinCount: pendingCheckinCount + unconfirmedCount });
     this.updateCheckinGroups();
@@ -183,6 +213,53 @@ Page({
   getCheckinDisplayOptions() {
     const openid = wx.getStorageSync('userOpenId');
     return { openid: typeof openid === 'string' && openid.startsWith('oz') ? openid : '' };
+  },
+
+  decorateBijingSync(record) {
+    const owner = this.getCheckinDisplayOptions().openid;
+    const date = record.dayDate || record.date;
+    const task = owner && record._id && date < homeCheckin.getCheckinDay() ? bijingRecordSync.getDayState(date, owner) : null;
+    const labels = { pending: '等待同步必经', syncing: '正在同步必经', synced: '已同步必经',
+      failed: '必经同步未完成', unbound: '未绑定必经账号，绑定后可重试', deferred: '必经同步暂缓' };
+    return { ...record, bijingSyncText: task ? task.message || `云端已保存 · ${labels[task.status] || '必经同步待处理'}` : '',
+      bijingSyncStatus: task ? task.status : '', bijingCanRetry: !!(task && task.canRetry) };
+  },
+
+  watchBijingRecordSync() {
+    this.stopBijingRecordSync();
+    const owner = this.getCheckinDisplayOptions().openid;
+    this._bijingPageVisible = true;
+    this._bijingPageAccount = owner;
+    const generation = this._bijingPageGeneration = (this._bijingPageGeneration || 0) + 1;
+    if (!owner) return;
+    this._stopBijingRecordSync = bijingRecordSync.subscribe(change => {
+      if (change && change.account && change.account !== owner) return;
+      if (this._bijingPageVisible && generation === this._bijingPageGeneration && owner === this.getCheckinDisplayOptions().openid) {
+        this.refreshCheckinRecords();
+        this.refreshBackfillSyncState();
+      }
+    });
+    // Login and account switches can return here without triggering App.onShow.
+    // Resume only the service's pending work; page rendering must not wait for it.
+    try {
+      if (typeof bijingRecordSync.resumePending === 'function') Promise.resolve(bijingRecordSync.resumePending()).catch(() => {});
+    } catch (_) {}
+  },
+
+  stopBijingRecordSync() {
+    this._bijingPageVisible = false;
+    this._bijingPageGeneration = (this._bijingPageGeneration || 0) + 1;
+    if (this._stopBijingRecordSync) this._stopBijingRecordSync();
+    this._stopBijingRecordSync = null;
+  },
+
+  async retryBijingSync(event) {
+    const date = event.currentTarget.dataset.date, owner = this._bijingPageAccount, generation = this._bijingPageGeneration;
+    if (!this._bijingPageVisible || !owner || owner !== this.getCheckinDisplayOptions().openid ||
+        !this.data.checkinRecords.some(record => record._id && record.dayDate === date && record.bijingCanRetry)) return;
+    try { await bijingRecordSync.retryDate(date); }
+    catch (_) { /* The service persists its failure state; cloud records stay saved. */ }
+    if (this._bijingPageVisible && generation === this._bijingPageGeneration && owner === this.getCheckinDisplayOptions().openid) this.refreshCheckinRecords();
   },
 
   openCheckinUploadPreview() {
@@ -1444,6 +1521,8 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    this.initHomeBackfill();
+    this.watchBijingRecordSync();
     applySyncAlertDot();
     console.log('=== index页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();
@@ -1483,6 +1562,8 @@ Page({
    * 生命周期函数--监听页面隐藏
    */
   onHide() {
+    this.stopHomeBackfill();
+    this.stopBijingRecordSync();
     clearInterval(this._checkinClock);
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
@@ -1494,6 +1575,8 @@ Page({
    * 生命周期函数--监听页面卸载
    */
   onUnload() {
+    this.stopHomeBackfill();
+    this.stopBijingRecordSync();
     clearInterval(this._checkinClock);
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
     this._stopBusinessDayWatch = null;
@@ -1508,6 +1591,7 @@ Page({
    */
   async onPullDownRefresh() {
     try {
+      this.initHomeBackfill();
       this.refreshCheckinDefaults();
       const refreshed = await this.refreshCheckinsFromCloud({ force: true });
       if (!refreshed) this.refreshCalendarData();

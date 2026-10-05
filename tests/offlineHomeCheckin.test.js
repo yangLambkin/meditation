@@ -63,6 +63,12 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
     }
   };
   const api = {
+    async callCloudFunction(name, data) {
+      assert.equal(name, 'meditationManager');
+      assert.equal(data.type, 'getMyBackfillRequests');
+      return { result: connected ? { success: true, data: { requests: [], nextCursor: '' } }
+        : { success: false, error: 'Network unavailable' } };
+    },
     async recordMeditation(...args) {
       calls.uploads.push(clone(args));
       calls.uploadStorageSnapshots.push(savedRows());
@@ -96,7 +102,7 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
       require(request) {
         const name = path.basename(request);
         if (!dependencies.has(name)) {
-          assert.ok(['checkin.js', 'dateUtil.js', 'homeCheckin.js', 'contentSec.js', 'uploadNetwork.js'].includes(name), request);
+          assert.ok(['checkin.js', 'dateUtil.js', 'homeCheckin.js', 'homeBackfill.js', 'bijingRecordSync.js', 'contentSec.js', 'uploadNetwork.js'].includes(name), request);
           dependencies.set(name, load(`utils/${name}`));
         }
         return dependencies.get(name);

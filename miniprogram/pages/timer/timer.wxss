@@ -379,6 +379,8 @@ page {
   position: relative;
   /* 圆环随剩余高度缩放，操作区和设置卡片始终完整显示。 */
   height: 100%;
+  /* 同时约束可用宽度，窄窗口中也保持正圆。 */
+  height: min(100%, 500rpx, calc(100vw - 64rpx));
   max-height: 500rpx;
   max-width: 100%;
   aspect-ratio: 1;
@@ -531,6 +533,188 @@ page {
   .text_3 {
     font-size: 64rpx;
     line-height: 64rpx;
+  }
+}
+
+/* rpx 随窗口宽度增长；平板固定区使用 px，避免把圆环的剩余高度吃光。 */
+@media (min-width: 600px) {
+  .section {
+    padding: 12px 24px 24px;
+    width: 100%;
+    max-width: 1180px;
+    align-self: center;
+  }
+
+  .timer-heading .text_2 {
+    margin-top: 8px;
+    font-size: 20px;
+    line-height: 28px;
+  }
+
+  .section_2 {
+    margin: 20px 0;
+  }
+
+  .progress-circle-container {
+    height: min(100%, 480px, calc(100vw - 48px));
+    max-height: 480px;
+  }
+
+  .text_3 {
+    font-size: 56px;
+    line-height: 64px;
+    letter-spacing: -1px;
+  }
+
+  .text_4 {
+    margin-top: 8px;
+    font-size: 18px;
+    line-height: 24px;
+  }
+
+  .timer-button-container {
+    width: 100%;
+    max-width: 420px;
+    align-self: center;
+    padding: 0 28px;
+  }
+
+  .weui-btn-circle.main-btn,
+  .weui-btn-circle.pause-btn {
+    width: 88px;
+    height: 88px;
+  }
+
+  .reset-btn-wrapper,
+  .stop-btn-wrapper,
+  .reset-btn-placeholder,
+  .stop-btn-placeholder,
+  .weui-btn-circle.stop-btn,
+  .weui-btn-circle.reset-btn {
+    width: 56px;
+    height: 56px;
+  }
+
+  .main-btn-icon,
+  .pause-btn-icon {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 6px;
+  }
+
+  .stop-btn-icon,
+  .reset-btn-icon {
+    width: 22px;
+    height: 22px;
+    margin-bottom: 3px;
+  }
+
+  .main-btn-text,
+  .pause-btn-text {
+    font-size: 16px;
+    line-height: 20px;
+  }
+
+  .stop-btn-text,
+  .reset-btn-text {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .group_2 {
+    width: 100%;
+    max-width: 560px;
+    align-self: center;
+    margin-top: 20px;
+    padding: 0;
+  }
+
+  .section_3 {
+    padding: 0 20px 16px;
+    border-radius: 20px;
+  }
+
+  .group_3 {
+    padding: 16px 0;
+  }
+
+  .section_4 {
+    padding: 12px 20px;
+    border-width: 1px;
+    border-radius: 16px;
+  }
+
+  .section_5 {
+    margin-top: 12px;
+    padding: 16px 20px;
+    border-radius: 20px;
+  }
+
+  .group_2 .font {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .group_2 .font_2 {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .group_2 .ml-13 {
+    margin-left: 12px;
+  }
+
+  .group_2 .mt-8,
+  .group_2 .mt-7 {
+    margin-top: 6px;
+  }
+
+  .image_4 {
+    width: 24px;
+    height: 24px;
+  }
+
+  .image_6 {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* 横屏及较矮的分屏：设置区移至右侧，圆环和操作按钮留在左侧。 */
+@media (min-width: 600px) and (max-height: 800px) {
+  .section {
+    --timer-settings-width: 240px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--timer-settings-width);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    column-gap: 24px;
+  }
+
+  .timer-heading {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .section_2 {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: stretch;
+  }
+
+  .progress-circle-container {
+    height: min(100%, 480px, calc(100vw - 72px - var(--timer-settings-width)));
+  }
+
+  .timer-button-container {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: center;
+  }
+
+  .group_2 {
+    grid-column: 2;
+    grid-row: 2 / 4;
+    margin-top: 0;
   }
 }
 

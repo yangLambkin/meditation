@@ -16,14 +16,17 @@ function deferred() {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 }
-function harness({ api, access = true, confirm = true } = {}) {
+function harness({ api, access = true, confirm = true, account = 'oz-admin', refreshAlert } = {}) {
   let definition;
   const calls = { cloud: [], toast: [], alerts: [], refresh: [], modal: [] };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/pages/admin/admin.js'), 'utf8'), {
     Page(value) { definition = value; },
     getApp() { return {
       clearAdminSyncAlert() { calls.alerts.push('clear'); },
-      refreshSyncAlert(options) { calls.alerts.push(options.force === true ? 'force-refresh' : 'refresh'); }
+      refreshSyncAlert(options) {
+        calls.alerts.push(options.force === true ? 'force-refresh' : 'refresh');
+        return refreshAlert && refreshAlert();
+      }
     }; },
     require(name) {
       if (name.includes('dateUtil')) return dateUtil;
@@ -40,13 +43,14 @@ function harness({ api, access = true, confirm = true } = {}) {
       } };
       throw new Error(`Unexpected require: ${name}`);
     },
-    wx: { showToast(value) { calls.toast.push(value); }, stopPullDownRefresh() { calls.refresh.push('stopped'); },
+    wx: { getStorageSync(key) { return key === 'userOpenId' ? account : undefined; },
+      showToast(value) { calls.toast.push(value); }, stopPullDownRefresh() { calls.refresh.push('stopped'); },
       showModal(options) { calls.modal.push(options); if (typeof confirm === 'function') confirm(options); else options.success({ confirm }); } },
     Date, console, setTimeout, clearTimeout
   });
   const page = { ...definition, data: structuredClone(definition.data), setData(values) { Object.assign(this.data, values); } };
   page.data.tab = 'feedback';
-  return { page, calls };
+  return { page, calls, setAccount(value) { account = value; } };
 }
 async function open(options) {
   const result = harness(options);
@@ -243,15 +247,16 @@ test('hide, unload and tab changes clear private feedback and discard late page 
   }
 });
 
-test('a save completing after leaving or reentering cannot restore private drafts or toast', async () => {
-  for (const reenter of [false, true]) {
+test('a confirmed save refreshes reminders after leaving without restoring private drafts or toast', async () => {
+  for (const leave of ['onHide', 'onUnload', 'tab', 'reenter']) {
     const pending = deferred();
     const { page, calls } = await open({ api: (name, data) => data.type === 'adminUpdateFeedback' ? pending.promise : undefined });
     draft(page);
     const saving = page.saveFeedback();
-    page.onHide();
+    if (leave === 'tab') await page.onTabChange(event({ tab: 'team' }));
+    else page[leave === 'reenter' ? 'onHide' : leave]();
     assertCleared(page);
-    if (reenter) {
+    if (leave === 'reenter') {
       await page.onShow();
       draft(page, '新草稿');
       await page.saveFeedback();
@@ -260,8 +265,9 @@ test('a save completing after leaving or reentering cannot restore private draft
     pending.resolve(success({ feedback: feedback({ status: 'resolved', reply: '旧回复' }) }));
     await saving;
     assert.equal(calls.toast.length, 0);
+    assert.deepEqual(calls.alerts, ['force-refresh']);
     assert.equal(page.data.feedbackSaveBusy, false);
-    if (reenter) assert.equal(page.data.feedbacks[0].status, 'pending');
+    if (leave === 'reenter') assert.equal(page.data.feedbacks[0].status, 'pending');
     else assertCleared(page);
   }
 });
@@ -444,12 +450,13 @@ test('conflicting deletions require a reload before deleting or saving again', a
 });
 
 test('leaving or changing the selected row while confirmation is open never sends a late deletion', async () => {
-  for (const leave of ['onHide', 'onUnload', 'tab', 'reenter', 'selection']) {
-    const { page, calls } = await open({ confirm() {} });
+  for (const leave of ['onHide', 'onUnload', 'tab', 'reenter', 'selection', 'account']) {
+    const { page, calls, setAccount } = await open({ confirm() {} });
     draft(page);
     const deleting = page.deleteFeedback();
     if (leave === 'tab') await page.onTabChange(event({ tab: 'team' }));
     else if (leave === 'selection') page.setData({ selectedFeedback: feedback({ _id: 'feedback-2' }) });
+    else if (leave === 'account') setAccount('oz-other');
     else if (leave === 'reenter') { page.onHide(); await page.onShow(); }
     else page[leave]();
     calls.modal[0].success({ confirm: true });
@@ -457,11 +464,11 @@ test('leaving or changing the selected row while confirmation is open never send
     assert.equal(requests(calls, 'adminDeleteFeedback').length, 0);
     assert.equal(calls.toast.length, 0);
     assert.equal(page.data.feedbackDeleteBusy, false);
-    if (!['reenter', 'selection'].includes(leave)) assertCleared(page);
+    if (!['reenter', 'selection', 'account'].includes(leave)) assertCleared(page);
   }
 });
 
-test('late deletion responses cannot restore private rows, clear newer feedback or display a toast', async () => {
+test('confirmed late deletions refresh reminders without restoring private rows or changing newer feedback', async () => {
   for (const leave of ['onHide', 'onUnload', 'tab', 'reenter', 'selection']) {
     const pending = deferred();
     const { page, calls } = await open({ api: (name, data) => data.type === 'adminDeleteFeedback' ? pending.promise : undefined });
@@ -480,10 +487,84 @@ test('late deletion responses cannot restore private rows, clear newer feedback 
     pending.resolve(success({ feedbackId: 'feedback-1', deleted: true }));
     await deleting;
     assert.equal(calls.toast.length, 0);
-    assert.equal(calls.alerts.length, 0);
+    assert.deepEqual(calls.alerts, ['force-refresh']);
     assert.equal(page.data.feedbackDeleteBusy, false);
     if (['reenter', 'selection'].includes(leave)) assert.equal(page.data.feedbacks.length, 1);
     else assertCleared(page);
+  }
+});
+
+test('feedback mutation responses never refresh another account, including after page reentry', async () => {
+  for (const method of ['saveFeedback', 'deleteFeedback']) {
+    for (const leave of ['current', 'onHide', 'reenter']) {
+      const type = method === 'saveFeedback' ? 'adminUpdateFeedback' : 'adminDeleteFeedback';
+      const pending = deferred();
+      const { page, calls, setAccount } = await open({ api: (name, data) => data.type === type ? pending.promise : undefined });
+      draft(page);
+      const mutation = page[method]();
+      await Promise.resolve();
+      assert.equal(requests(calls, type).length, 1);
+      if (leave !== 'current') page.onHide();
+      setAccount('oz-other');
+      if (leave === 'reenter') {
+        await page.onShow();
+      }
+      pending.resolve(success(method === 'saveFeedback'
+        ? { feedback: feedback({ status: 'resolved', reply: '旧账号回复' }) }
+        : { feedbackId: 'feedback-1', deleted: true }));
+      await mutation;
+      assert.equal(calls.alerts.length, 0, `${method}/${leave}`);
+      assert.equal(calls.toast.length, 0);
+      if (leave === 'current') {
+        assert.equal(page.data.feedbacks.length, 1);
+        assert.equal(page.data.feedbacks[0].status, 'pending');
+        assert.equal(page.data.feedbackReply, '我们会核实这个问题');
+      }
+      if (leave === 'reenter') {
+        assert.equal(page.data.feedbacks.length, 1);
+        assert.equal(page.data.feedbacks[0].status, 'pending');
+        assert.equal(page.data.feedbackReply, '');
+      }
+    }
+  }
+});
+
+test('failed or malformed late feedback mutations never refresh reminders', async () => {
+  for (const method of ['saveFeedback', 'deleteFeedback']) {
+    const type = method === 'saveFeedback' ? 'adminUpdateFeedback' : 'adminDeleteFeedback';
+    const malformed = method === 'saveFeedback'
+      ? [{}, { feedback: null }, { feedback: feedback({ _id: 'different-feedback' }) }]
+      : [{}, { feedbackId: 'feedback-1', deleted: false }, { feedbackId: 'different-feedback', deleted: true }];
+    for (const response of [{ success: false, error: '保存失败' }, ...malformed.map(success)]) {
+      const pending = deferred();
+      const { page, calls } = await open({ api: (name, data) => data.type === type ? pending.promise : undefined });
+      draft(page);
+      const mutation = page[method]();
+      await Promise.resolve();
+      page.onHide();
+      pending.resolve(response);
+      await mutation;
+      assert.equal(calls.alerts.length, 0, `${method}/${JSON.stringify(response)}`);
+      assert.equal(calls.toast.length, 0);
+      assertCleared(page);
+    }
+  }
+});
+
+test('reminder refresh failures do not invalidate confirmed feedback saves or deletions', async () => {
+  for (const method of ['saveFeedback', 'deleteFeedback']) {
+    for (const refreshAlert of [() => { throw new Error('刷新失败'); }, () => Promise.reject(new Error('刷新失败'))]) {
+      const { page, calls } = await open({ refreshAlert });
+      draft(page);
+      await page[method]();
+      await Promise.resolve();
+      assert.equal(page.data.feedbacks.length, 0);
+      assert.equal(page.data.selectedFeedback, null);
+      assert.equal(page.data.feedbackSaveError, '');
+      assert.equal(page.data.feedbackConflict, false);
+      assert.equal(calls.toast.length, 1);
+      assert.deepEqual(calls.alerts, ['force-refresh']);
+    }
   }
 });
 
