@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const COLLECTION = 'backfill_requests';
 const LEASE_MS = 90000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const RETRY_DELAYS_MS = [1000, 1000, 1000];
+// 四轮上传与回查留在客户端 45 秒等待窗口内，租约仍有 90 秒保护。
+const SYNC_TIMEOUT_MS = 40000;
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function isRequestId(value) {
   return typeof value === 'string' && /^br_[a-f0-9]{64}$/.test(value);
@@ -152,7 +156,7 @@ async function releaseLease(db, lease, now) {
 
 // 仅同步本人获批且曾补录的日期。过期仅禁止新增，不阻止失败重试和删除后的总量修正。
 async function syncBackfillDate({ db, openid, requestId, recordDate, expectedOpenid,
-  syncDate, getDayDuration, now = Date.now, logger = console }) {
+  syncDate, getDayDuration, now = Date.now, logger = console, sleep = wait }) {
   if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录' };
   if (expectedOpenid !== undefined && expectedOpenid !== openid) {
     return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变化，请重新进入申请补录' };
@@ -170,7 +174,7 @@ async function syncBackfillDate({ db, openid, requestId, recordDate, expectedOpe
       if (!saved || !Array.isArray(saved.data)) throw new Error('补录记录暂时无法读取');
       if (!saved.data.length) return { success: false, code: 'BACKFILL_RECORD_REQUIRED', error: '这一天尚无已保存的获批补录记录' };
     }
-    return syncDayWithLease({ db, openid, recordDate, syncDate, getDayDuration, now, logger });
+    return syncDayWithLease({ db, openid, recordDate, syncDate, getDayDuration, now, logger, sleep });
   } catch (error) {
     return { success: false, code: 'BACKFILL_SYNC_FAILED', error: '补录已保存，同步暂未完成，请稍后重试' };
   }
@@ -192,29 +196,50 @@ async function syncSelectedBackfillDate(options) {
 }
 
 // 已保存普通记录和获批补录共用账户/日期租约及总量复核，避免各自上报旧总量。
-async function syncDayWithLease({ db, openid, recordDate, syncDate, getDayDuration, now = Date.now, logger = console }) {
+async function syncDayWithLease({ db, openid, recordDate, syncDate, getDayDuration,
+  now = Date.now, logger = console, sleep = wait }) {
   let lease;
   try {
+    const deadlineAt = now() + SYNC_TIMEOUT_MS;
     lease = await acquireLease(db, openid, recordDate, now);
-    const beforePost = () => verifyLease(db, lease, now);
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const beforePost = async () => {
+      await verifyLease(db, lease, now);
+      if (now() >= deadlineAt) throw syncError('BACKFILL_SYNC_TIMEOUT', '必经同步核对超时，请稍后重试');
+    };
+    let lastFailure;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
       await beforePost();
-      const synced = await syncDate(openid, recordDate, { beforePost, allowZero: true });
-      if (synced && synced.skipped === true) return { success: true, data: { date: recordDate, ...synced } };
-      if (!synced || synced.success !== true) {
-        return { success: false, code: synced && synced.code === 'BACKFILL_SYNC_BUSY' ? 'BACKFILL_SYNC_BUSY' : 'BACKFILL_SYNC_FAILED',
-          error: synced && synced.error || '同步失败，请重试' };
+      try {
+        // 单轮包含上传与必经回查；失败后重新读取最新总量再上传，不能只重试旧快照。
+        const synced = await syncDate(openid, recordDate, { beforePost, allowZero: true, verifyRemote: true, deadlineAt });
+        if (synced && synced.skipped === true) return { success: true, data: { date: recordDate, ...synced } };
+        if (!synced || synced.success !== true) {
+          throw syncError(synced && synced.code || 'BACKFILL_SYNC_FAILED', synced && synced.error || '同步失败，请重试');
+        }
+        const latestDuration = await getDayDuration(openid, recordDate, deadlineAt);
+        await beforePost();
+        if (Number.isFinite(latestDuration) && latestDuration === synced.duration) {
+          return { success: true, data: { date: recordDate, ...synced } };
+        }
+        if (!Number.isFinite(latestDuration)) throw new Error('当天静坐时长暂时无法核实');
+        throw syncError('BACKFILL_SYNC_RETRY', '同步期间这一天的记录有变动，请稍后重新同步');
+      } catch (error) {
+        // 失去租约或耗尽本轮预算时不能继续发请求；未绑定在上面的 skipped 分支结束。
+        if (error && ['BACKFILL_SYNC_BUSY', 'BACKFILL_SYNC_TIMEOUT'].includes(error.code)) throw error;
+        lastFailure = { success: false,
+          code: error && error.code === 'BACKFILL_SYNC_RETRY' ? error.code : 'BACKFILL_SYNC_FAILED',
+          error: error && error.message || '同步失败，请重试' };
       }
-      const latestDuration = await getDayDuration(openid, recordDate);
       await beforePost();
-      if (Number.isFinite(latestDuration) && latestDuration === synced.duration) {
-        return { success: true, data: { date: recordDate, ...synced } };
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await sleep(Math.min(RETRY_DELAYS_MS[attempt], deadlineAt - now()));
       }
-      if (!Number.isFinite(latestDuration)) throw new Error('Invalid backfill day duration');
     }
-    return { success: false, code: 'BACKFILL_SYNC_RETRY', error: '同步期间这一天的记录有变动，请稍后重新同步' };
+    return { ...lastFailure, error: `已自动重试3次，${lastFailure.error}` };
   } catch (error) {
-    if (error && error.code === 'BACKFILL_SYNC_BUSY') return { success: false, code: error.code, error: error.message };
+    if (error && ['BACKFILL_SYNC_BUSY', 'BACKFILL_SYNC_TIMEOUT'].includes(error.code)) {
+      return { success: false, code: error.code, error: error.message };
+    }
     return { success: false, code: 'BACKFILL_SYNC_FAILED', error: '记录已保存，同步暂未完成，请稍后重试' };
   } finally {
     if (lease) {

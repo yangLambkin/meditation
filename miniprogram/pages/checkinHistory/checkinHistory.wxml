@@ -24,11 +24,15 @@
   </view>
 
   <view class="checkin-section-heading"><text class="checkin-section-title">当月记录</text><text class="checkin-section-summary">{{monthDayCount}} 天有记录</text></view>
-  <view wx:if="{{!monthCount}}" class="checkin-empty"><text class="checkin-empty-title">本月暂无打卡记录</text><text class="checkin-empty-hint">可以切换月份，回顾其他静坐时光</text></view>
+  <view wx:if="{{!monthDays.length}}" class="checkin-empty"><text class="checkin-empty-title">本月暂无打卡记录</text><text class="checkin-empty-hint">可以切换月份，回顾其他静坐时光</text></view>
   <view class="checkin-day-group" wx:for="{{monthDays}}" wx:for-item="day" wx:key="date">
     <view class="checkin-day-heading" bindtap="openCheckinHistory" data-date="{{day.date}}" hover-class="history-control-active">
       <text class="checkin-day-date">{{day.date}}</text>
       <view class="checkin-day-summary"><text>{{day.count}} 次 · {{day.totalDuration}} 分钟</text><text class="checkin-day-chevron">›</text></view>
+    </view>
+    <view wx:if="{{day.bijingSyncText && !isMemberHistory}}" class="record-bijing-sync checkin-day-bijing-sync">
+      <text class="record-bijing-text record-bijing-{{day.bijingSyncStatus}}">{{day.bijingSyncText}}</text>
+      <button wx:if="{{day.bijingCanRetry}}" class="record-bijing-retry" catchtap="retryBijingSync" data-date="{{day.date}}" hover-class="checkin-record-active">重试必经同步</button>
     </view>
     <view class="checkin-record" wx:for="{{day.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{day.date}}" hover-class="checkin-record-active">
       <view class="checkin-record-heading">

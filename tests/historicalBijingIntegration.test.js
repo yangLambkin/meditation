@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const OWNER = 'oz-historical-owner';
 const HISTORICAL_DATE = '2026-10-03';
+const DELETION_ID = 'md_' + 'a'.repeat(64);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const plain = value => value === undefined ? value : JSON.parse(JSON.stringify(value));
 
@@ -47,9 +48,19 @@ function harness() {
   }
   const api = load('cloudApi.js'), sync = load('bijingRecordSync.js');
   const saveRequests = () => requests.filter(request => request.name === 'meditationManager' && request.data.type === 'recordMeditation');
-  const syncRequests = () => requests.filter(request => request.name === 'bijingSync' && request.data.type === 'syncRecordedDate');
+  const syncRequests = () => requests.filter(request => request.name === 'bijingSync' && ['syncRecordedDate', 'syncDeletedDate'].includes(request.data.type));
+  const deleteRequests = () => requests.filter(request => request.name === 'meditationManager' && request.data.type === 'deleteMeditationRecord');
   return { api, sync, requests, timers, storage, storageWrites,
     get saves() { return saveRequests(); }, get syncs() { return syncRequests(); },
+    get deletions() { return deleteRequests(); },
+    remove() {
+      return api.deleteMeditationRecord({ recordId: 'med_first', expectedOpenid: OWNER });
+    },
+    confirmDeletion(index = 0, changes = {}) {
+      deleteRequests()[index].success({ result: { success: true, data: {
+        recordId: 'med_first', date: HISTORICAL_DATE, deletionId: DELETION_ID, autoSyncBijing: true, ...changes
+      } } });
+    },
     upload(localId = 'local-first', options = {}) {
       return api.recordMeditation(30, [], '', Date.parse('2026-10-03T04:00:00.000Z'), localId,
         { source: 'manual', date: HISTORICAL_DATE, expectedOpenid: OWNER, ...options });
@@ -81,6 +92,72 @@ function harness() {
     }
   };
 }
+
+test('confirmed deletion syncs through its receipt and accepts zero without delaying the deletion result', async () => {
+  const app = harness();
+  const deletion = app.remove(); await flush();
+  assert.equal(app.syncs.length, 0);
+  app.confirmDeletion();
+  assert.equal((await deletion).success, true); await flush();
+  assert.equal(app.syncs.length, 1);
+  assert.deepEqual(plain(app.syncs[0].data), { type: 'syncDeletedDate', deletionId: DELETION_ID, expectedOpenid: OWNER });
+  assert.match(app.sync.getDayState(HISTORICAL_DATE).message, /已删除|已更新/);
+  app.synced(0, 0); await flush();
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+  app.confirmDeletion(); await flush();
+  assert.equal(app.syncs.length, 1, 'repeated SDK callbacks cannot double-count a deletion');
+  assert.equal(app.saves.length, 0); assert.equal(app.timers.size, 0);
+});
+
+test('failed deletion synchronization preserves deletion success and retries only the day total', async () => {
+  const app = harness(); const deletion = app.remove(); await flush(); app.confirmDeletion();
+  assert.equal((await deletion).success, true); await flush();
+  app.failed(0, '不支持零时长覆盖'); await flush();
+  const task = app.sync.getDayState(HISTORICAL_DATE);
+  assert.equal(task.status, 'failed'); assert.equal(task.canRetry, true);
+  assert.match(task.message, /不支持零时长覆盖/);
+  const retry = app.sync.retryDate(HISTORICAL_DATE); await flush();
+  assert.deepEqual(plain(app.syncs[1].data), plain(app.syncs[0].data));
+  app.synced(1, 0); assert.equal((await retry).status, 'synced');
+  assert.equal(app.deletions.length, 1); assert.equal(app.saves.length, 0);
+});
+
+test('failed or current-day deletion confirmations never schedule an external correction', async () => {
+  for (const result of [
+    { success: false, code: 'RECORD_NOT_FOUND' },
+    { success: false, code: 'DELETE_FAILED' },
+    { success: true, data: { recordId: 'med_first', date: '2026-10-05', deletionId: DELETION_ID } },
+    { success: true, data: { recordId: 'med_first', date: HISTORICAL_DATE, autoSyncBijing: true } }
+  ]) {
+    const app = harness(); const deletion = app.remove(); await flush();
+    app.deletions[0].success({ result }); await deletion; await flush();
+    assert.equal(app.syncs.length, 0); assert.equal(app.sync.getTasks().length, 0);
+  }
+});
+
+test('late deletion confirmation stays with its original account until that account returns', async () => {
+  const app = harness(); const deletion = app.remove(); await flush();
+  app.storage.set('userOpenId', 'oz-other'); app.confirmDeletion();
+  assert.equal((await deletion).success, true); await flush();
+  assert.equal(app.syncs.length, 0); assert.equal(app.sync.getTasks().length, 0);
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE, OWNER).status, 'pending');
+  app.storage.set('userOpenId', OWNER);
+  const resume = app.sync.resumePending(); await flush();
+  assert.equal(app.syncs.length, 1); app.synced(0, 0); await resume;
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+});
+
+test('deleting during an upload sync sends a subsequent correction even after the upload reports success', async () => {
+  const app = harness(); const upload = app.upload(); await flush(); app.confirm(); await upload; await flush();
+  const deletion = app.remove(); await flush(); app.confirmDeletion(); await deletion; await flush();
+  assert.equal(app.syncs.length, 1);
+  app.synced(0, 30); await flush();
+  assert.equal(app.syncs.length, 2);
+  assert.equal(app.syncs[1].data.type, 'syncDeletedDate');
+  app.synced(1, 0); await flush();
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+  assert.equal(app.saves.length, 1); assert.equal(app.deletions.length, 1);
+});
 
 test('real cloudApi returns a confirmed historical upload immediately while a separate day sync remains pending', async () => {
   const app = harness();

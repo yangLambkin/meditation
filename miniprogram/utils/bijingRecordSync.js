@@ -1,4 +1,4 @@
-// 小程序记录入账与必经同步分别确认。本模块只同步已获云端确认的历史日期，
+// 小程序记录变更与必经同步分别确认。本模块只同步已获云端确认的历史日期，
 // 不修改静坐记录，也不依赖某个页面的生命周期。
 const STORAGE_PREFIX = 'bijing_record_sync_';
 const REQUEST_TIMEOUT_MS = 45000;
@@ -24,24 +24,33 @@ function validRecordId(id) {
   return typeof id === 'string' && id.length <= 200 && Boolean(id.trim()) && id === id.trim();
 }
 
-function copy(task) {
-  return task ? { ...task, recordIds: [...task.recordIds] } : null;
+function validDeletionId(id) {
+  return typeof id === 'string' && /^md_[0-9a-f]{64}$/.test(id);
 }
 
-function messageFor(status) {
+function copy(task) {
+  return task ? { ...task, recordIds: [...task.recordIds], deletionIds: [...task.deletionIds] } : null;
+}
+
+function changeMessage(task) {
+  return task && task.deletionId ? '当天记录已更新' : '记录已保存';
+}
+
+function messageFor(status, task) {
+  const changed = changeMessage(task);
   return {
-    pending: '记录已保存，等待同步必经',
-    syncing: '记录已保存，正在同步必经',
+    pending: `${changed}，等待同步必经`,
+    syncing: `${changed}，正在同步必经`,
     synced: '当天记录已同步到必经',
-    failed: '记录已保存，必经同步未完成，请重试',
-    unbound: '记录已保存，绑定必经账号后可重试同步',
-    deferred: '记录已保存，该日结束后可同步必经'
+    failed: `${changed}，必经同步未完成，请重试`,
+    unbound: `${changed}，绑定必经账号后可重试同步`,
+    deferred: `${changed}，该日结束后可同步必经`
   }[status];
 }
 
 function setStatus(task, status, message) {
   task.status = status;
-  task.message = message || messageFor(status);
+  task.message = message || messageFor(status, task);
   task.canRetry = ['pending', 'failed', 'unbound', 'deferred'].includes(status);
 }
 
@@ -53,13 +62,20 @@ function tasksFor(account) {
   if (stored && stored.version === 1 && stored.tasks && typeof stored.tasks === 'object' && !Array.isArray(stored.tasks)) {
     Object.keys(stored.tasks).forEach(date => {
       const task = stored.tasks[date];
-      if (!validDate(date) || !task || task.date !== date || !validRecordId(task.recordId) ||
+      if (!validDate(date) || !task || task.date !== date ||
+          (!validRecordId(task.recordId) && !validDeletionId(task.deletionId)) ||
           (!STATUSES.has(task.status) && task.status !== 'queued')) return;
-      const recordIds = [...new Set([...(Array.isArray(task.recordIds) ? task.recordIds : []), task.recordId].filter(validRecordId))];
-      const revision = Number.isSafeInteger(task.revision) && task.revision >= recordIds.length ? task.revision : recordIds.length;
+      const deletionId = validDeletionId(task.deletionId) ? task.deletionId : '';
+      const recordIds = [...new Set([...(Array.isArray(task.recordIds) ? task.recordIds : []),
+        ...(!deletionId ? [task.recordId] : [])].filter(validRecordId))];
+      const deletionIds = [...new Set([...(Array.isArray(task.deletionIds) ? task.deletionIds : []), deletionId].filter(validDeletionId))];
+      const mutationCount = recordIds.length + deletionIds.length;
+      const revision = Number.isSafeInteger(task.revision) && task.revision >= mutationCount ? task.revision : mutationCount;
       const completedRevision = Number.isSafeInteger(task.completedRevision) && task.completedRevision >= 0
         ? Math.min(task.completedRevision, revision) : 0;
-      const restored = { date, recordId: task.recordId, revision, completedRevision, recordIds };
+      const restored = { date, revision, completedRevision, recordIds, deletionIds };
+      if (validRecordId(task.recordId)) restored.recordId = task.recordId;
+      if (deletionId) restored.deletionId = deletionId;
       // 进程内任务由 inFlight 维护；磁盘上的 syncing 表示上次运行被中断。
       const status = task.status === 'syncing' || task.status === 'queued' ? 'pending' : task.status;
       setStatus(restored, status, status === task.status && typeof task.message === 'string' ? task.message : '');
@@ -74,7 +90,7 @@ function persist(account) {
   try {
     wx.setStorageSync(STORAGE_PREFIX + account, { version: 1, tasks: tasksFor(account) });
   } catch (_) {
-    // 静坐已在云端入账；磁盘写入失败只能影响重启恢复，不能撤销入账或阻止本次同步。
+    // 记录已在云端变更；磁盘写入失败只能影响重启恢复，不能撤销变更或阻止本次同步。
   }
 }
 
@@ -100,12 +116,13 @@ function getDayState(date, account = currentAccount()) {
   return copy(tasksFor(account)[date]);
 }
 
-function failure(error) {
+function failure(error, task) {
   const detail = typeof error === 'string' ? error : error && (error.message || error.errMsg || error.error);
-  return { status: 'failed', message: detail ? `记录已保存，必经同步未完成：${detail}` : messageFor('failed') };
+  return { status: 'failed', message: detail ? `${changeMessage(task)}，必经同步未完成：${detail}` : messageFor('failed', task) };
 }
 
-function requestSync(account, date, recordId) {
+function requestSync(account, date, mutation) {
+  const timeoutMessage = mutation.deletionId ? '同步超时，请重试同步' : '同步超时，请重试同步，无需重新录入';
   return new Promise(resolve => {
     let settled = false, timer;
     const deadlineAt = Date.now() + REQUEST_TIMEOUT_MS;
@@ -115,7 +132,7 @@ function requestSync(account, date, recordId) {
       clearTimeout(timer);
       resolve(result);
     };
-    timer = setTimeout(() => finish(failure('同步超时，请重试同步，无需重新录入')), REQUEST_TIMEOUT_MS);
+    timer = setTimeout(() => finish(failure(timeoutMessage, mutation)), REQUEST_TIMEOUT_MS);
     try {
       if (currentAccount() !== account) {
         finish({ status: 'pending' });
@@ -123,30 +140,32 @@ function requestSync(account, date, recordId) {
       }
       wx.cloud.callFunction({
         name: 'bijingSync',
-        data: { type: 'syncRecordedDate', recordId, expectedOpenid: account },
+        data: mutation.deletionId
+          ? { type: 'syncDeletedDate', deletionId: mutation.deletionId, expectedOpenid: account }
+          : { type: 'syncRecordedDate', recordId: mutation.recordId, expectedOpenid: account },
         success(response) {
           try {
             if (Date.now() >= deadlineAt) {
-              finish(failure('同步超时，请重试同步，无需重新录入'));
+              finish(failure(timeoutMessage, mutation));
               return;
             }
             const result = response && response.result, data = result && result.data;
             if (!result || result.success !== true || !data || typeof data !== 'object' ||
                 (data.date !== undefined && data.date !== date)) {
-              finish(failure(result && result.error || '未收到有效同步确认，请重试'));
+              finish(failure(result && result.error || '未收到有效同步确认，请重试', mutation));
             } else if (data.skipped === true && data.reason === '未绑定') {
               finish({ status: 'unbound' });
             } else if (data.skipped === true && data.deferred === true) {
-              finish({ status: 'deferred', message: data.reason ? `记录已保存，${data.reason}` : '' });
+              finish({ status: 'deferred', message: data.reason ? `${changeMessage(mutation)}，${data.reason}` : '' });
             } else if (data.success === true && data.date === date && typeof data.duration === 'number' &&
                 Number.isFinite(data.duration) && data.duration >= 0) {
               finish({ status: 'synced' });
-            } else finish(failure('未收到有效同步确认，请重试'));
-          } catch (error) { finish(failure(error)); }
+            } else finish(failure('未收到有效同步确认，请重试', mutation));
+          } catch (error) { finish(failure(error, mutation)); }
         },
-        fail(error) { finish(failure(error)); }
+        fail(error) { finish(failure(error, mutation)); }
       });
-    } catch (error) { finish(failure(error)); }
+    } catch (error) { finish(failure(error, mutation)); }
   });
 }
 
@@ -158,12 +177,12 @@ function runTask(account, date) {
   // 先登记 Promise，再执行网络请求；同步回调和订阅者重入也复用同一任务。
   const running = Promise.resolve().then(async () => {
     while (currentAccount() === account && task.status === 'pending') {
-      const revision = task.revision, recordId = task.recordId;
+      const revision = task.revision, mutation = { recordId: task.recordId, deletionId: task.deletionId };
       setStatus(task, 'syncing');
       save(account, date);
-      const result = await requestSync(account, date, recordId);
+      const result = await requestSync(account, date, mutation);
       if (result.status === 'synced') task.completedRevision = Math.max(task.completedRevision, revision);
-      // 同日新增需要再读最新总量，不能把新记录吞进旧请求的成功状态。
+      // 同日新增或删除需要再读最新总量，不能把新变更吞进旧请求的成功状态。
       if (task.revision > revision) setStatus(task, 'pending');
       else setStatus(task, result.status, result.message);
       save(account, date);
@@ -172,7 +191,7 @@ function runTask(account, date) {
     }
     return copy(task);
   }).catch(error => {
-    setStatus(task, 'failed', failure(error).message);
+    setStatus(task, 'failed', failure(error, task).message);
     save(account, date);
     return copy(task);
   }).finally(() => {
@@ -193,7 +212,7 @@ function acceptSavedRecord(saved, { account } = {}) {
       // 重复入账确认不是重试授权，失败与未绑定状态等待显式重试。
       return inFlight.get(`${account}:${saved.date}`) || Promise.resolve(copy(existing));
     }
-    const task = existing || { date: saved.date, revision: 0, completedRevision: 0, recordIds: [] };
+    const task = existing || { date: saved.date, revision: 0, completedRevision: 0, recordIds: [], deletionIds: [] };
     task.recordId = saved.recordId;
     task.recordIds.push(saved.recordId);
     task.revision++;
@@ -201,6 +220,29 @@ function acceptSavedRecord(saved, { account } = {}) {
     tasks[saved.date] = task;
     save(account, saved.date);
     return continueTask(account, saved.date);
+  } catch (_) { return Promise.resolve(null); }
+}
+
+function acceptDeletedRecord(deleted, { account } = {}) {
+  try {
+    if (!deleted || deleted.autoSyncBijing !== true || !validRecordId(deleted.recordId) ||
+        !validDeletionId(deleted.deletionId) || !validDate(deleted.date) ||
+        typeof account !== 'string' || !account) return Promise.resolve(null);
+    const tasks = tasksFor(account), existing = tasks[deleted.date];
+    if (existing && existing.deletionIds.includes(deleted.deletionId)) {
+      return inFlight.get(`${account}:${deleted.date}`) || Promise.resolve(copy(existing));
+    }
+    const task = existing || { date: deleted.date, revision: 0, completedRevision: 0, recordIds: [], deletionIds: [] };
+    task.recordId = deleted.recordId;
+    // 删除凭据授权重算当天总量，即使之后保存回包延迟到达、对应记录已不存在也可同步。
+    task.deletionId = deleted.deletionId;
+    task.deletionIds.push(deleted.deletionId);
+    task.revision++;
+    if (task.status !== 'syncing') setStatus(task, 'pending');
+    else setStatus(task, 'syncing');
+    tasks[deleted.date] = task;
+    save(account, deleted.date);
+    return continueTask(account, deleted.date);
   } catch (_) { return Promise.resolve(null); }
 }
 
@@ -247,4 +289,4 @@ function subscribe(listener) {
   return () => listeners.delete(listener);
 }
 
-module.exports = { acceptSavedRecord, subscribe, getTasks, getDayState, retryDate, resumePending };
+module.exports = { acceptSavedRecord, acceptDeletedRecord, subscribe, getTasks, getDayState, retryDate, resumePending };

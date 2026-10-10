@@ -14,7 +14,7 @@ const UPLOAD_TIMEOUT_MS = 3000;
 const UPLOAD_RETRY_DELAY_MS = 100;
 const MAX_UPLOAD_RETRIES = 3;
 const NON_RETRYABLE_UPLOAD_CODES = new Set([
-  'INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD',
+  'INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD', 'RECORD_DELETED',
   'AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'RECORD_NOT_FOUND', 'STORAGE_FAILED', 'UPLOAD_IGNORED',
   'UPLOAD_PAUSED'
 ]);
@@ -1361,7 +1361,7 @@ const checkinManager = {
             summary.failed++;
             summary.error = result.error || '部分记录仍待上传';
             summary.code = result.code;
-            if (!['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD'].includes(result.code)) break;
+            if (!['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD', 'RECORD_DELETED'].includes(result.code)) break;
           }
         }
       } catch (error) {
@@ -1662,7 +1662,7 @@ const checkinManager = {
             record.syncStatus = 'failed';
             record.syncAttempts = (Number(record.syncAttempts) || 0) + 1;
             delete record.syncNextRetryAt;
-            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD'].includes(record.syncErrorCode);
+            record.syncBlocked = ['INVALID_RECORD', 'DATE_OUT_OF_RANGE', 'CONTENT_REJECTED', 'AMBIGUOUS_RECORD', 'RECORD_DELETED'].includes(record.syncErrorCode);
           }
         }
       });
@@ -1680,6 +1680,7 @@ const checkinManager = {
   // 云端确认后再删除本地记录；失败保留列表，重试不会重复扣减统计。
   deleteCheckin: async function(dateStr, identity = {}) {
     const userId = this.getUserId();
+    const account = wx.getStorageSync('userOpenId') || '';
     const storageKey = `meditation_checkin_${userId}`;
     let key;
     let locked = false;
@@ -1698,6 +1699,9 @@ const checkinManager = {
 
       // 等待已提交的备份，避免删除后尚未完成的上传又把记录写回云端。
       if (pendingBackups.has(key)) await pendingBackups.get(key);
+      if ((wx.getStorageSync('userOpenId') || '') !== account || this.getUserId() !== userId) {
+        return { success: false, error: '登录账号已变化，请切换回原账号后重试' };
+      }
       const latest = this.getUserCheckinDataByUserId(userId);
       const latestData = latest.checkinRecords || latest;
       const latestRecords = (latestData.dailyRecords[dateStr] || {}).records || [];
@@ -1710,7 +1714,8 @@ const checkinManager = {
           recordId: record._id,
           ...(record.localId ? { localId: record.localId } : {}),
           timestamp: record.timestamp,
-          date: dateStr
+          date: dateStr,
+          expectedOpenid: account
         });
         if (!cloudResult.success && cloudResult.code !== 'RECORD_NOT_FOUND') {
           return { success: false, error: cloudResult.error || '删除记录失败，请重试' };

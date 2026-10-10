@@ -9,6 +9,8 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 const OWNER = 'oz-owner';
 const DATE = '2026-10-03';
 const saved = (recordId = 'record-1', date = DATE) => ({ recordId, date, autoSyncBijing: true });
+const deleted = (recordId = 'record-1', deletionId = `md_${'a'.repeat(64)}`, date = DATE) =>
+  ({ recordId, deletionId, date, autoSyncBijing: true });
 
 function harness({ storage = new Map(), account = OWNER, storageFails = false, callThrows = false } = {}) {
   const requests = [], timers = new Map(), writes = [];
@@ -31,10 +33,15 @@ function harness({ storage = new Map(), account = OWNER, storageFails = false, c
       },
       cloud: { callFunction(request) {
         assert.equal(request.name, 'bijingSync');
-        assert.equal(request.data.type, 'syncRecordedDate');
-        assert.ok(request.data.recordId);
+        if (request.data.type === 'syncDeletedDate') {
+          assert.match(request.data.deletionId, /^md_[0-9a-f]{64}$/);
+          assert.deepEqual(Object.keys(request.data).sort(), ['deletionId', 'expectedOpenid', 'type']);
+        } else {
+          assert.equal(request.data.type, 'syncRecordedDate');
+          assert.ok(request.data.recordId);
+          assert.deepEqual(Object.keys(request.data).sort(), ['expectedOpenid', 'recordId', 'type']);
+        }
         assert.equal(request.data.expectedOpenid, account);
-        assert.deepEqual(Object.keys(request.data).sort(), ['expectedOpenid', 'recordId', 'type']);
         if (callThrows) throw new Error('cloud unavailable');
         requests.push(request);
       } }
@@ -46,6 +53,7 @@ function harness({ storage = new Map(), account = OWNER, storageFails = false, c
     account(value) { account = value; },
     now(value) { now = value; },
     confirm(value = saved()) { return api.acceptSavedRecord(value, { account }); },
+    confirmDeleted(value = deleted()) { return api.acceptDeletedRecord(value, { account }); },
     result(index, value) { requests[index].success({ result: value }); },
     synced(index = requests.length - 1, date = DATE, duration = 30) {
       requests[index].success({ result: { success: true, data: { date, success: true, duration } } });
@@ -73,6 +81,211 @@ test('only explicit server-authorized saved records with a captured account are 
   assert.equal(h.requests.length, 0);
   assert.deepEqual(plain(h.api.getTasks()), []);
   assert.equal(h.writes.length, 0);
+});
+
+test('only explicit server-authorized deletions with a receipt and captured account are queued', async () => {
+  const h = harness();
+  for (const value of [null, {}, { ...deleted(), autoSyncBijing: false }, { ...deleted(), autoSyncBijing: 'true' },
+    { ...deleted(), recordId: '' }, { ...deleted(), date: '2026-02-30' },
+    ...['', 'record-1', `md_${'x'.repeat(64)}`, `md_${'a'.repeat(63)}`, ` md_${'a'.repeat(64)}`, null]
+      .map(deletionId => ({ ...deleted(), deletionId }))]) {
+    assert.equal(await h.confirmDeleted(value), null);
+  }
+  for (const account of ['', null, 12, {}]) {
+    assert.equal(await h.api.acceptDeletedRecord(deleted(), { account }), null);
+  }
+  assert.equal(await h.api.acceptDeletedRecord(deleted()), null);
+  assert.equal(h.requests.length, 0);
+  assert.deepEqual(plain(h.api.getTasks()), []);
+  assert.equal(h.writes.length, 0);
+});
+
+test('deleting the last record syncs zero by receipt and deduplicates repeated confirmations', async () => {
+  const h = harness();
+  const first = h.confirmDeleted(), second = h.confirmDeleted();
+  assert.equal(h.requests.length, 0);
+  assert.match(h.api.getDayState(DATE).message, /当天记录已更新/);
+  await flush();
+  const third = h.confirmDeleted();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(plain(h.requests[0].data), {
+    type: 'syncDeletedDate', deletionId: deleted().deletionId, expectedOpenid: OWNER
+  });
+  assert.doesNotMatch(h.api.getDayState(DATE).message, /记录已保存/);
+  h.synced(0, DATE, 0);
+  await Promise.all([first, second, third]);
+  const last = await h.confirmDeleted();
+  assert.equal(last.status, 'synced');
+  assert.equal(last.revision, 1);
+  assert.equal(last.completedRevision, 1);
+  assert.deepEqual(plain(last.recordIds), []);
+  assert.deepEqual(plain(last.deletionIds), [deleted().deletionId]);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.writes.every(write => write.key === `bijing_record_sync_${OWNER}`), true);
+});
+
+test('a deletion during save sync forces another sync and later saves keep the day receipt', async () => {
+  const h = harness();
+  const first = h.confirm();
+  await flush();
+  const second = h.confirmDeleted();
+  assert.doesNotMatch(h.api.getDayState(DATE).message, /记录已保存/);
+  h.synced(0, DATE, 30);
+  await flush();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].data.type, 'syncDeletedDate');
+  assert.equal(h.api.getDayState(DATE).completedRevision, 1);
+  const third = h.confirm(saved('record-2'));
+  h.synced(1, DATE, 0);
+  await flush();
+  assert.equal(h.requests.length, 3);
+  assert.equal(h.requests[2].data.type, 'syncDeletedDate');
+  assert.equal(h.requests[2].data.deletionId, deleted().deletionId);
+  h.synced(2, DATE, 50);
+  await Promise.all([first, second, third]);
+  const task = h.api.getDayState(DATE);
+  assert.equal(task.completedRevision, 3);
+  assert.equal(task.revision, 3);
+  assert.deepEqual(plain(task.recordIds), ['record-1', 'record-2']);
+  assert.deepEqual(plain(task.deletionIds), [deleted().deletionId]);
+});
+
+test('delayed save acknowledgements cannot replace a deletion receipt with a removed record', async () => {
+  const h = harness();
+  const removal = h.confirmDeleted();
+  await flush();
+  h.synced(0, DATE, 0);
+  await removal;
+  const delayedSave = h.confirm();
+  await flush();
+  assert.equal(h.requests[1].data.type, 'syncDeletedDate');
+  h.synced(1, DATE, 0);
+  await delayedSave;
+  await h.confirm();
+  await h.confirmDeleted();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.api.getDayState(DATE).completedRevision, 2);
+});
+
+test('distinct deletion receipts advance the date revision and sync the latest remaining total', async () => {
+  const h = harness();
+  const first = h.confirmDeleted();
+  await flush();
+  const next = deleted('record-2', `md_${'b'.repeat(64)}`);
+  const second = h.confirmDeleted(next);
+  h.fail(0);
+  await flush();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].data.deletionId, next.deletionId);
+  h.synced(1, DATE, 20);
+  await Promise.all([first, second]);
+  const task = h.api.getDayState(DATE);
+  assert.equal(task.status, 'synced');
+  assert.equal(task.completedRevision, 2);
+  assert.deepEqual(plain(task.deletionIds), [deleted().deletionId, next.deletionId]);
+});
+
+for (const [response, status] of [
+  [{ success: false, error: '必经服务暂不可用' }, 'failed'],
+  [{ success: true, data: { date: DATE, skipped: true, reason: '未绑定' } }, 'unbound'],
+  [{ success: true, data: { date: DATE, skipped: true, deferred: true, reason: '该日尚未结束' } }, 'deferred']
+]) {
+  test(`deletion ${status} can retry only external synchronization without recreating the record`, async () => {
+    const h = harness();
+    const operation = h.confirmDeleted();
+    await flush();
+    h.result(0, response);
+    const task = await operation;
+    assert.equal(task.status, status);
+    assert.equal(task.canRetry, true);
+    assert.match(task.message, /当天记录已更新/);
+    assert.doesNotMatch(task.message, /记录已保存/);
+    await h.confirmDeleted();
+    await h.api.resumePending();
+    assert.equal(h.requests.length, 1);
+    const retry = h.api.retryDate(DATE);
+    await flush();
+    assert.deepEqual(plain(h.requests[1].data), plain(h.requests[0].data));
+    h.synced(1, DATE, 0);
+    assert.equal((await retry).status, 'synced');
+    assert.equal(h.api.getDayState(DATE).revision, 1);
+    assert.equal(h.writes.every(write => write.key === `bijing_record_sync_${OWNER}`), true);
+  });
+}
+
+test('a deletion received after account switching stays isolated and resumes with the original owner', async () => {
+  const h = harness(), events = [];
+  h.api.subscribe(event => events.push(plain(event)));
+  const savedOperation = h.confirm();
+  await flush();
+  h.account('oz-other');
+  const beforeDeletion = events.length;
+  const removal = h.api.acceptDeletedRecord(deleted(), { account: OWNER });
+  h.synced(0);
+  await Promise.all([savedOperation, removal]);
+  await h.api.resumePending();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(plain(h.api.getTasks()), []);
+  assert.equal(h.api.getDayState(DATE, OWNER).status, 'pending');
+  assert.equal(events.length, beforeDeletion);
+  assert.equal(await h.api.retryDate(DATE), null);
+  h.account(OWNER);
+  const resumed = h.api.resumePending();
+  await flush();
+  assert.equal(h.requests[1].data.type, 'syncDeletedDate');
+  h.synced(1, DATE, 0);
+  await resumed;
+  assert.equal(h.api.getDayState(DATE).completedRevision, 2);
+});
+
+test('restart retains deletion-only revisions, interrupted work and completed-receipt deduplication', async () => {
+  const storage = new Map();
+  const original = harness({ storage });
+  const pending = original.confirmDeleted();
+  await flush();
+  const restored = harness({ storage, account: 'oz-other' });
+  await restored.api.resumePending();
+  assert.equal(restored.requests.length, 0);
+  restored.account(OWNER);
+  const restoredTask = restored.api.getDayState(DATE);
+  assert.equal(restoredTask.status, 'pending');
+  assert.equal(restoredTask.revision, 1);
+  assert.deepEqual(plain(restoredTask.recordIds), []);
+  assert.deepEqual(plain(restoredTask.deletionIds), [deleted().deletionId]);
+  const resumed = restored.api.resumePending();
+  await flush();
+  assert.equal(restored.requests[0].data.type, 'syncDeletedDate');
+  restored.synced(0, DATE, 0);
+  await resumed;
+  const completed = harness({ storage });
+  await completed.confirmDeleted();
+  await completed.api.resumePending();
+  assert.equal(completed.requests.length, 0);
+  assert.equal(completed.api.getDayState(DATE).completedRevision, 1);
+  original.fail();
+  await pending;
+});
+
+test('legacy saved-only queue entries retain their exact syncRecordedDate request', async () => {
+  const storage = new Map([[`bijing_record_sync_${OWNER}`, { version: 1, tasks: {
+    [DATE]: { date: DATE, recordId: 'legacy-record', recordIds: ['legacy-record'],
+      revision: 1, completedRevision: 0, status: 'pending' }
+  } }]]);
+  const h = harness({ storage });
+  const operation = h.api.resumePending();
+  await flush();
+  assert.deepEqual(plain(h.requests[0].data), {
+    type: 'syncRecordedDate', recordId: 'legacy-record', expectedOpenid: OWNER
+  });
+  assert.deepEqual(plain(h.api.getDayState(DATE).deletionIds), []);
+  h.synced();
+  await operation;
+  const removal = h.confirmDeleted(deleted('legacy-record'));
+  await flush();
+  assert.equal(h.requests[1].data.type, 'syncDeletedDate');
+  h.synced(1, DATE, 0);
+  await removal;
+  assert.equal(h.api.getDayState(DATE).completedRevision, 2);
 });
 
 test('confirmation queues a separate nonblocking 45-second sync and exposes a saved-record status', async () => {

@@ -37,7 +37,8 @@ function createHarness(options = {}) {
   const records = clone(options.records || []);
   const bindingRows = clone(options.bindings || []);
   const backfillRequests = clone(options.requests || []);
-  const calls = { reads: [], documentReads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], gets: [], now: 0 };
+  const deletionReceipts = clone(options.receipts || []);
+  const calls = { reads: [], documentReads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], queries: [], gets: [], sleeps: [], now: 0 };
 
   class FixedDate extends Date {
     constructor(...args) {
@@ -121,7 +122,7 @@ function createHarness(options = {}) {
             async get() {
               calls.documentReads.push({ name, id });
               if (name === 'backfill_requests' && options.backfillReadError) throw options.backfillReadError;
-              const rows = name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
+              const rows = name === 'meditation_locks' ? deletionReceipts : name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
               const row = rows.find(row => row._id === id);
               return { data: row ? clone(row) : null };
             },
@@ -142,6 +143,27 @@ function createHarness(options = {}) {
       };
     },
   };
+  // Load the real historical-sync implementations with only their retry delay
+  // accelerated. Recorded/deleted entrypoints must share this same lease loop.
+  const historicalModules = new Map();
+  function historicalModule(name) {
+    if (historicalModules.has(name)) return historicalModules.get(name).exports;
+    const module = { exports: {} };
+    historicalModules.set(name, module);
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/bijingSync', `${name.slice(2)}.js`), 'utf8'), {
+      module,
+      exports: module.exports,
+      Date: FixedDate,
+      console: { log() {}, warn() {}, error() {} },
+      setTimeout(callback, delay) { calls.sleeps.push(delay); return setTimeout(callback, 0); },
+      clearTimeout,
+      require(dependency) {
+        if (dependency === './backfillSync') return historicalModule(dependency);
+        return require(dependency);
+      },
+    }, { filename: `bijingSync/${name.slice(2)}.js` });
+    return module.exports;
+  }
   const exports = {};
   vm.runInNewContext(source, {
     exports,
@@ -151,8 +173,8 @@ function createHarness(options = {}) {
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
       if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
-      if (name === './backfillSync') return require('../cloudfunctions/bijingSync/backfillSync');
-      if (name === './recordedSync') return require('../cloudfunctions/bijingSync/recordedSync');
+      if (['./backfillSync', './recordedSync', './deletedSync'].includes(name)) return historicalModule(name);
+      if (name === './verifyRecord') return require('../cloudfunctions/bijingSync/verifyRecord');
       if (name === './bindings') return require('../cloudfunctions/bijingSync/bindings');
       if (name === 'wx-server-sdk') {
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
@@ -165,7 +187,18 @@ function createHarness(options = {}) {
             throw new Error('Unexpected external GET');
           },
           async post(url, body, config) {
+            if (url.endsWith('/meditation/records/query')) {
+              calls.queries.push(clone({ url, body, config }));
+              if (options.onQuery) return { data: await options.onQuery({ url, body, config, attempt: calls.queries.length }, records) };
+              if (options.queryError) throw new Error(options.queryError);
+              if (Object.hasOwn(options, 'queryResponse')) return { data: clone(options.queryResponse) };
+              const requested = body.records[0];
+              const uploaded = [...calls.posts].reverse().find(call => call.body.studentNumber === requested.studentNumber && call.body.recordDate === requested.recordDate);
+              return { data: { success: true, data: { total: 1, results: [{ index: 0, ...requested,
+                exists: !!uploaded, durationMinutes: uploaded ? uploaded.body.durationMinutes : 0 }] } } };
+            }
             calls.posts.push(clone({ url, body, config }));
+            if (options.onPost) return { data: await options.onPost({ url, body, config, attempt: calls.posts.length }, records) };
             if (options.postError) throw new Error(options.postError);
             return { data: options.postResponse || { success: true } };
           },
@@ -202,9 +235,174 @@ test('syncRecordedDate dispatch derives the saved owner and business date and po
   assert.equal(result.success, true); assert.equal(result.data.date, recordDate); assert.equal(result.data.duration, 60);
   assert.equal(app.calls.posts.length, 1); assert.equal(app.calls.posts[0].body.recordDate, recordDate);
   assert.equal(app.calls.posts[0].body.durationMinutes, 60); assert.equal(app.calls.posts[0].body.studentNumber, '123456');
+  assert.deepEqual(app.calls.queries, [{ url: 'https://example.test/api/openapi/meditation/records/query',
+    body: { records: [{ studentNumber: '123456', recordDate }] },
+    config: { headers: { 'X-Access-Token': 'test-token' }, timeout: 4000 } }]);
+  assert.equal(app.calls.posts[0].config.timeout, 4000);
   assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'timer-old' })).success, true);
   const foreign = await app.run({ type: 'syncRecordedDate', recordId: 'another-owner' });
   assert.equal(foreign.code, 'RECORD_NOT_FOUND'); assert.equal(app.calls.posts.length, 2);
+});
+
+function remoteRecordResult(recordDate, durationMinutes, fields = {}) {
+  return { success: true, data: { total: 1, results: [{ index: 0, studentNumber: '123456',
+    recordDate, exists: true, durationMinutes, ...fields }] } };
+}
+
+function historicalVerificationScenario(type, options = {}) {
+  const recordDate = '2026-08-18', requestId = 'br_' + '2'.repeat(64), deletionId = 'md_' + '3'.repeat(64);
+  const app = createHarness({ requests: [{ _id: requestId, kind: 'request', ownerOpenid: 'user-a',
+    status: 'approved', startDate: recordDate, endDate: '2026-09-16', recordedDates: [recordDate] }],
+    receipts: [{ _id: deletionId, kind: 'deletion_receipt', ownerOpenid: 'user-a', recordId: 'deleted', date: recordDate }],
+    records: [{ _id: 'historical', _openid: 'user-a', source: 'manual', date: recordDate, duration: 20 }],
+    ...options });
+  return { app, recordDate, event: { type, recordId: 'historical', requestId, backfillRequestId: requestId,
+    deletionId, recordDate, expectedOpenid: 'user-a' } };
+}
+
+test('every saved historical entrypoint uploads and confirms remote data before reporting success', async t => {
+  for (const type of ['syncRecordedDate', 'syncBackfillDate', 'syncDeletedDate', 'syncSelectedDate']) {
+    await t.test(type, async () => {
+      const { app, event, recordDate } = historicalVerificationScenario(type);
+      const result = await app.run(event);
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(app.calls.posts.length, 1); assert.equal(app.calls.queries.length, 1);
+      assert.equal(app.calls.posts[0].config.timeout, 4000);
+      assert.equal(app.calls.queries[0].config.timeout, 4000);
+      assert.deepEqual(app.calls.queries[0].body, { records: [{ studentNumber: '123456', recordDate }] });
+      assert.equal(app.users[0].bijingSyncedDates[recordDate], true);
+    });
+  }
+});
+
+test('historical uploads retry missing, mismatched, malformed and failed remote checks at most three times', async t => {
+  const recordDate = '2026-08-18';
+  const cases = [
+    ['missing record', { queryResponse: remoteRecordResult(recordDate, 0, { exists: false }) }],
+    ['wrong duration', { queryResponse: remoteRecordResult(recordDate, 19) }],
+    ['wrong date', { queryResponse: remoteRecordResult('2026-08-19', 20) }],
+    ['wrong account', { queryResponse: remoteRecordResult(recordDate, 20, { studentNumber: 'someone-else' }) }],
+    ['HTTP failure', { queryError: 'Request failed with status code 503' }],
+    ['invalid response', { queryResponse: { success: true, data: { total: 1, results: [] } } }],
+    ['query rejection', { queryResponse: { success: false, message: '查询暂不可用' } }],
+  ];
+  for (const [label, options] of cases) {
+    await t.test(label, async () => {
+      const { app, event } = historicalVerificationScenario('syncRecordedDate', options);
+      const result = await app.run(event);
+      assert.equal(result.success, false);
+      assert.equal(app.calls.posts.length, 4, 'one initial upload and at most three retries');
+      assert.equal(app.calls.queries.length, 4);
+      assert.deepEqual(app.calls.sleeps, [1000, 1000, 1000]);
+      assert.equal(app.calls.updates.length, 0);
+      assert.equal(app.users[0].bijingSyncedDates[recordDate], undefined);
+      assert.equal(app.records[0].duration, 20, 'a failed sync retains the saved meditation');
+    });
+  }
+});
+
+test('a historical upload succeeds when the fourth remote check finally matches', async () => {
+  const { app, event, recordDate } = historicalVerificationScenario('syncBackfillDate', {
+    onQuery({ attempt }) { return remoteRecordResult('2026-08-18', attempt < 4 ? 19 : 20); },
+  });
+  const result = await app.run(event);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.data.duration, 20);
+  assert.equal(app.calls.posts.length, 4); assert.equal(app.calls.queries.length, 4);
+  assert.deepEqual(app.calls.sleeps, [1000, 1000, 1000]);
+  assert.equal(app.calls.updates.length, 1);
+  assert.equal(app.users[0].bijingSyncedDates[recordDate], true);
+});
+
+test('failed historical uploads retry three times without checking remote data until an upload succeeds', async t => {
+  for (const failForever of [false, true]) {
+    await t.test(failForever ? 'retries exhausted' : 'fourth upload succeeds', async () => {
+      const { app, event, recordDate } = historicalVerificationScenario('syncRecordedDate', {
+        onPost({ attempt }) {
+          if (attempt < 4 || failForever) throw new Error('network unavailable');
+          return { success: true };
+        },
+      });
+      const result = await app.run(event);
+      assert.equal(result.success, !failForever);
+      assert.equal(app.calls.posts.length, 4);
+      assert.equal(app.calls.queries.length, failForever ? 0 : 1);
+      assert.equal(app.calls.updates.length, failForever ? 0 : 1);
+      assert.equal(app.users[0].bijingSyncedDates[recordDate], failForever ? undefined : true);
+    });
+  }
+});
+
+test('a historical query in flight never writes a success marker', async () => {
+  let releaseQuery, queryStarted;
+  const started = new Promise(resolve => { queryStarted = resolve; });
+  const response = new Promise(resolve => { releaseQuery = resolve; });
+  const { app, event, recordDate } = historicalVerificationScenario('syncRecordedDate', {
+    async onQuery() { queryStarted(); return response; },
+  });
+  const pending = app.run(event);
+  await started;
+  try {
+    assert.equal(app.calls.posts.length, 1); assert.equal(app.calls.queries.length, 1);
+    assert.equal(app.calls.updates.length, 0);
+    assert.equal(app.users[0].bijingSyncedDates[recordDate], undefined);
+  } finally { releaseQuery(remoteRecordResult(recordDate, 20)); }
+  assert.equal((await pending).success, true);
+  assert.equal(app.calls.updates.length, 1);
+});
+
+test('each historical retry uploads the latest total and only a locally current verified total is marked synced', async () => {
+  let app;
+  const scenario = historicalVerificationScenario('syncRecordedDate', {
+    onQuery({ attempt }, rows) {
+      const remoteDuration = rows[0].duration;
+      assert.equal(app.calls.updates.length, 0, 'earlier confirmations must not mark an outdated local total');
+      if (attempt < 4) rows[0].duration += 10;
+      return remoteRecordResult('2026-08-18', remoteDuration);
+    },
+  });
+  app = scenario.app;
+  const result = await app.run(scenario.event);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.data.duration, 50);
+  assert.deepEqual(app.calls.posts.map(call => call.body.durationMinutes), [20, 30, 40, 50]);
+  assert.equal(app.calls.queries.length, 4);
+  assert.equal(app.calls.updates.length, 1);
+});
+
+test('continuous local edits exhaust historical retries without marking any outdated confirmed total', async () => {
+  const { app, event, recordDate } = historicalVerificationScenario('syncRecordedDate', {
+    onQuery(_query, rows) {
+      const remoteDuration = rows[0].duration;
+      rows[0].duration += 10;
+      return remoteRecordResult('2026-08-18', remoteDuration);
+    },
+  });
+  const result = await app.run(event);
+  assert.equal(result.success, false);
+  assert.deepEqual(app.calls.posts.map(call => call.body.durationMinutes), [20, 30, 40, 50]);
+  assert.equal(app.calls.queries.length, 4);
+  assert.equal(app.calls.updates.length, 0);
+  assert.equal(app.users[0].bijingSyncedDates[recordDate], undefined);
+});
+
+test('zero-total corrections require remote zero or confirmed absence and reject remaining remote minutes', async t => {
+  for (const [label, exists, durationMinutes, succeeds] of [
+    ['stored zero', true, 0, true], ['absent zero', false, 0, true], ['stale nonzero', true, 20, false],
+  ]) {
+    await t.test(label, async () => {
+      const { app, event, recordDate } = historicalVerificationScenario('syncDeletedDate', {
+        records: [], queryResponse: remoteRecordResult('2026-08-18', durationMinutes, { exists }),
+      });
+      const result = await app.run(event);
+      assert.equal(result.success, succeeds, JSON.stringify(result));
+      assert.equal(app.calls.posts.length, succeeds ? 1 : 4);
+      assert.equal(app.calls.queries.length, succeeds ? 1 : 4);
+      assert.ok(app.calls.posts.every(call => call.body.durationMinutes === 0));
+      assert.equal(app.calls.updates.length, succeeds ? 1 : 0);
+      assert.equal(app.users[0].bijingSyncedDates[recordDate], succeeds ? true : undefined);
+    });
+  }
 });
 
 test('syncRecordedDate dispatch defers the current business day and preserves missing-account and record errors', async () => {
@@ -217,6 +415,40 @@ test('syncRecordedDate dispatch defers the current business day and preserves mi
   assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'today', expectedOpenid: 'other' })).code, 'ACCOUNT_CHANGED');
   const loggedOut = createHarness({ openid: '' });
   assert.equal((await loggedOut.run({ type: 'syncRecordedDate', recordId: 'today', openid: 'user-a' })).code, 'AUTH_REQUIRED');
+});
+
+test('syncDeletedDate uses server-owned deletion evidence and replaces the remaining day total, including zero', async () => {
+  const deletionId = 'md_' + '7'.repeat(64), recordDate = '2026-09-16';
+  const receipts = [{ _id: deletionId, kind: 'deletion_receipt', ownerOpenid: 'user-a',
+    recordId: 'deleted', date: recordDate, timestamp: Date.parse('2026-09-16T04:00:00Z') }];
+  for (const duration of [0, 25]) {
+    const app = createHarness({ receipts, records: [
+      ...(duration ? [{ _id: 'remaining', _openid: 'user-a', source: 'manual', date: recordDate, duration }] : []),
+      { _id: 'foreign', _openid: 'other', source: 'manual', date: recordDate, duration: 500 }
+    ] });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await app.run({ type: 'syncDeletedDate', deletionId, expectedOpenid: 'user-a',
+        openid: 'other', recordDate: '2000-01-01', date: '2000-01-01', durationMinutes: 999, studentNumber: 'forged' });
+      assert.equal(result.success, true); assert.equal(result.data.date, recordDate); assert.equal(result.data.duration, duration);
+      assert.deepEqual(app.calls.posts[attempt].body, { studentNumber: '123456', recordDate, durationMinutes: duration });
+    }
+    assert.equal(app.users[0].bijingSyncedDates[recordDate], true);
+  }
+  const rejected = createHarness({ receipts, postResponse: { success: false, message: '不支持零时长覆盖' } });
+  const result = await rejected.run({ type: 'syncDeletedDate', deletionId });
+  assert.equal(result.success, false); assert.match(result.error, /零时长/);
+  assert.equal(rejected.calls.posts[0].body.durationMinutes, 0); assert.equal(rejected.calls.updates.length, 0);
+});
+
+test('syncDeletedDate dispatch rejects absent receipts, foreign receipts and account switches without posting', async () => {
+  const deletionId = 'md_' + '8'.repeat(64);
+  const app = createHarness({ receipts: [{ _id: deletionId, kind: 'deletion_receipt',
+    ownerOpenid: 'other', date: '2026-09-16', recordId: 'foreign-deleted' }] });
+  assert.equal((await app.run({ type: 'syncDeletedDate', deletionId })).code, 'DELETION_NOT_FOUND');
+  assert.equal((await app.run({ type: 'syncDeletedDate', deletionId: 'md_' + '9'.repeat(64) })).code, 'DELETION_NOT_FOUND');
+  assert.equal((await app.run({ type: 'syncDeletedDate', recordDate: '2026-09-16' })).code, 'INVALID_ARGUMENT');
+  assert.equal((await app.run({ type: 'syncDeletedDate', deletionId, expectedOpenid: 'other' })).code, 'ACCOUNT_CHANGED');
+  assert.equal(app.calls.posts.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
 });
 
 test('authorized retreat sync covers older dates, includes all daily sessions and can retry after permission expiry', async () => {
@@ -419,6 +651,7 @@ test('selected sync includes legacy records for only the chosen date and current
   });
   assert.equal(app.calls.reads.filter(call => call.name === 'meditation_records').length, 1);
   assert.equal(app.calls.posts.length, 1);
+  assert.equal(app.calls.queries.length, 0, 'ordinary seven-day selection keeps its existing upload-only API');
   assert.equal(app.calls.posts[0].url, 'https://example.test/api/openapi/meditation/records');
   assert.deepEqual(app.calls.posts[0].config, { headers: { 'X-Access-Token': 'test-token' }, timeout: 10000 });
   assert.deepEqual(app.calls.posts[0].body, { studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 40 });
@@ -965,6 +1198,7 @@ test('the seven completed dates keep ordinary preview and sync semantics even wi
       assert.equal(result.success, true);
       assert.equal(result.data[type === 'getSyncDateDetails' ? 'totalDuration' : 'duration'], 25);
       assert.equal(app.calls.documentReads.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
+      assert.equal(app.calls.queries.length, 0);
       assert.equal(app.calls.now, 1);
     }
   }

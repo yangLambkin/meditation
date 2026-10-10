@@ -24,6 +24,32 @@ function stableDocumentId(prefix, openid, key) {
   return prefix + require('crypto').createHash('sha256').update(JSON.stringify([openid, key])).digest('hex');
 }
 
+function meditationRecordIdentities(record) {
+  return [['recordId', record._id], ...[...new Set([record.localId, record.idempotencyKey]
+    .filter(key => typeof key === 'string' && key))].map(key => ['localId', key])];
+}
+
+function legacyMeditationIdentity(record) {
+  const date = getRecordBusinessDate(record), timestamp = meditationTimestamp(record.timestamp), duration = Number(record.duration);
+  return isDateLabel(date) && Number.isFinite(timestamp) && Number.isInteger(duration) && duration > 0 && duration <= 1440
+    ? ['legacy', date, timestamp, duration] : null;
+}
+
+async function assertMeditationNotDeleted(transaction, openid, record, recoverLegacy = false) {
+  const identities = meditationRecordIdentities(record);
+  const legacyIdentity = recoverLegacy && legacyMeditationIdentity(record);
+  if (legacyIdentity) identities.push(legacyIdentity);
+  for (const identity of identities) {
+    const tombstone = await optionalDocument(transaction, 'meditation_locks', stableDocumentId('mt_', openid, identity));
+    if (!tombstone) continue;
+    if (tombstone.kind !== 'record_tombstone' || tombstone.ownerOpenid !== openid ||
+        JSON.stringify(tombstone.identity) !== JSON.stringify(identity)) {
+      throw deletionError('INVALID_DELETION_RECEIPT', '记录删除凭据无效，请刷新后重试');
+    }
+    throw deletionError('RECORD_DELETED', '这条记录已删除，不能再次上传；如需新增静坐，请重新记录');
+  }
+}
+
 // 云函数入口函数
 exports.main = async (event = {}, context) => {
   // 管理操作先授权，不记录完整请求（可能包含私密用户资料）。
@@ -238,9 +264,12 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
     }
     if (!record._id) record._id = stableDocumentId('med_', openid, require('crypto').randomBytes(16).toString('hex'));
     const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+      // 与删除事务共享锁：离线旧设备的迟到重传不能复活已经删除的记录。
+      await assertMeditationNotDeleted(transaction, openid, record, data.recoverLegacy === true);
       const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
       // 成功后的重试即使超出今天和昨天的窗口，仍返回原结果；不再次写心得或累计统计。
       if (existing) {
+        await assertMeditationNotDeleted(transaction, openid, existing);
         if ((isBackfill || existing.backfillRequestId) && (existing.backfillRequestId !== backfillRequestId ||
             getRecordBusinessDate(existing) !== dateStr || Number(existing.duration) !== duration ||
             meditationTimestamp(existing.timestamp) !== timestamp)) {
@@ -273,6 +302,7 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
         if (matches.length > 1) throw deletionError('AMBIGUOUS_RECORD', '云端存在多条相同的旧记录，请先核对，记录已保留在本机');
         if (matches.length === 1) {
           const matched = matches[0];
+          await assertMeditationNotDeleted(transaction, openid, matched);
           return { recordId: matched._id, date: getRecordBusinessDate(matched), timestamp: matched.timestamp, duplicate: true };
         }
         if (similar.some(row => !row.localId && !row.idempotencyKey)) {
@@ -468,6 +498,9 @@ async function deleteMeditationRecord(openid, data = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { success: false, code: 'INVALID_RECORD', error: '删除记录参数无效' };
   }
+  if (data.expectedOpenid !== undefined && data.expectedOpenid !== openid) {
+    return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变更，请切换回删除记录时的账号后重试' };
+  }
   const recordId = data.recordId;
   if (recordId !== undefined && recordId !== null && recordId !== '' &&
       (typeof recordId !== 'string' || !recordId.trim())) {
@@ -478,16 +511,30 @@ async function deleteMeditationRecord(openid, data = {}) {
     return { success: false, code: 'INVALID_RECORD', error: '本地记录标识无效' };
   }
   const timestamp = meditationTimestamp(data.timestamp);
-  if (!recordId && !localId && (!Number.isFinite(timestamp) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date || ''))) {
+  if (!recordId && !localId && (!Number.isFinite(timestamp) || !isDateLabel(data.date))) {
     return { success: false, code: 'INVALID_RECORD', error: '缺少记录标识或打卡日期、时间' };
   }
+  // 凭据绑定实际请求使用的定位方式；响应丢失后可用原请求重试，不能降级匹配另一条记录。
+  const requestIdentity = recordId ? ['recordId', recordId]
+    : localId ? ['localId', localId] : ['timestamp', data.date, timestamp];
+  const deletionId = stableDocumentId('md_', openid, requestIdentity);
   try {
     const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+      const receipt = await optionalDocument(transaction, 'meditation_locks', deletionId);
+      if (receipt) {
+        if (receipt.kind !== 'deletion_receipt' || receipt.ownerOpenid !== openid ||
+            JSON.stringify(receipt.requestIdentity) !== JSON.stringify(requestIdentity)) {
+          throw deletionError('INVALID_DELETION_RECEIPT', '删除凭据无效，请刷新后重试');
+        }
+        // 先查凭据，即使旧时间位置出现了新记录，也只能重放原删除的结果。
+        return { recordId: receipt.recordId, date: receipt.date, timestamp: receipt.timestamp,
+          deletionId, stats: rebuildMeditationStats(records), duplicate: true };
+      }
       // 新本地记录的备份可能失败，此时 localId 未命中不能降级为时间匹配，
       // 否则会误删云端恰好同一时间的另一条记录。仅旧缓存使用时间定位。
       const matches = records.filter(record => recordId
         ? record._id === recordId
-        : localId ? record.localId === localId
+        : localId ? record.localId === localId || record.idempotencyKey === localId
           : getRecordBusinessDate(record) === data.date && meditationTimestamp(record.timestamp) === timestamp);
       if (!matches.length) throw deletionError('RECORD_NOT_FOUND', '记录不存在或已被删除');
       if (matches.length !== 1) throw deletionError('AMBIGUOUS_RECORD', '存在多条匹配记录，请刷新记录后重试');
@@ -512,9 +559,28 @@ async function deleteMeditationRecord(openid, data = {}) {
           data: { _openid: openid, ...stats, businessDayVersion: 2, createdAt: new Date() }
         });
       }
-      return { recordId: target._id, date: getRecordBusinessDate(target), timestamp: target.timestamp, stats };
+      const date = getRecordBusinessDate(target) || null;
+      const deletedTimestamp = target.timestamp === undefined ? null : target.timestamp;
+      // 记录真实标识及旧数据的两个别名；请求通过何种方式定位，都拦截同一条记录的迟到重传。
+      const deletedIdentities = meditationRecordIdentities(target);
+      // 无身份旧记录曾被恢复接口匹配时，客户端请求键并未存入云端。
+      // 仅显式旧记录恢复核对此指纹，正常新建仍允许相同时间和时长的独立记录。
+      const legacyIdentity = deletedIdentities.length === 1 && legacyMeditationIdentity(target);
+      if (legacyIdentity) deletedIdentities.push(legacyIdentity);
+      for (const identity of deletedIdentities) {
+        await transaction.collection('meditation_locks').doc(stableDocumentId('mt_', openid, identity)).set({ data: {
+          kind: 'record_tombstone', ownerOpenid: openid, identity, recordId: target._id,
+          deletionId, createdAt: new Date()
+        } });
+      }
+      await transaction.collection('meditation_locks').doc(deletionId).set({ data: {
+        kind: 'deletion_receipt', ownerOpenid: openid, requestIdentity,
+        recordId: target._id, date, timestamp: deletedTimestamp, createdAt: new Date()
+      } });
+      return { recordId: target._id, date, timestamp: deletedTimestamp, stats, deletionId };
     });
-    return { success: true, data: result };
+    return { success: true, data: { ...result,
+      ...(isDateLabel(result.date) && result.date < getBusinessDate() ? { autoSyncBijing: true } : {}) } };
   } catch (error) {
     console.error('删除冥想记录失败:', error);
     return { success: false, code: error.code || 'DELETE_FAILED', error: error.message || '删除失败，请重试' };

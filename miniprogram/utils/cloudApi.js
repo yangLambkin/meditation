@@ -10,20 +10,24 @@ function cloudTimeoutError(timeoutMs) {
 }
 
 function recordAccount(functionName, data) {
-  if (functionName !== 'meditationManager' || !data || data.type !== 'recordMeditation') return '';
+  if (functionName !== 'meditationManager' || !data || !['recordMeditation', 'deleteMeditationRecord'].includes(data.type)) return '';
   try { return typeof wx.getStorageSync === 'function' ? wx.getStorageSync('userOpenId') || '' : ''; }
   catch (_) { return ''; }
 }
 
 function syncConfirmedHistoricalRecord(functionName, data, response, account) {
-  if (functionName !== 'meditationManager' || !data || data.type !== 'recordMeditation' || !account) return;
+  if (functionName !== 'meditationManager' || !data || !['recordMeditation', 'deleteMeditationRecord'].includes(data.type) || !account) return;
   const result = response && response.result;
   const saved = result && result.success === true && result.data;
   if (!saved || saved.autoSyncBijing !== true || typeof saved.recordId !== 'string' || !saved.recordId) return;
+  const isDeletion = data.type === 'deleteMeditationRecord';
+  if (isDeletion && (typeof saved.deletionId !== 'string' || !saved.deletionId)) return;
   // 云端入账与外部同步独立结算。即便保存回包迟于三秒，已确认的历史记录仍应同步。
   // 切账号后仍为原账号保留待处理意图；任务模块仅在原账号活跃时发送。
-  Promise.resolve().then(() => require('./bijingRecordSync.js').acceptSavedRecord(saved, { account }))
-    .catch(error => console.warn('历史记录已入账，必经同步待重试:', error && error.message));
+  Promise.resolve().then(() => {
+    const sync = require('./bijingRecordSync.js');
+    return isDeletion ? sync.acceptDeletedRecord(saved, { account }) : sync.acceptSavedRecord(saved, { account });
+  }).catch(error => console.warn('历史记录已更新，必经同步待重试:', error && error.message));
 }
 
 // 云存储API封装

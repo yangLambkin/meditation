@@ -1184,3 +1184,5 @@
 .record-bijing-synced { color: #859b88; }
 .record-bijing-retry { flex-shrink: 0; margin: 0; padding: 4rpx 12rpx; border-radius: 8rpx; background: #f7f1e5; color: #9b8059; font-size: 21rpx; line-height: 1.6; }
 .record-bijing-retry::after { border: none; }
+.checkin-deletion-sync { margin: 16rpx 0; padding: 18rpx 20rpx; border-radius: 12rpx; background: #faf7f0; }
+.checkin-deletion-sync .record-bijing-sync { margin-top: 8rpx; }

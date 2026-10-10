@@ -14,7 +14,7 @@ const leaseId = (openid = 'owner', date = RECORD_DATE) => 'bs_' + crypto.createH
 function harness(options = {}) {
   const rows = structuredClone(options.rows || [request()]);
   const records = structuredClone(options.records || []);
-  const reads = [], writes = [], posts = [], warnings = [], checks = [];
+  const reads = [], writes = [], posts = [], warnings = [], checks = [], calls = [], waits = [];
   let clock = Date.parse('2026-10-09T04:00:00.000Z'), total = options.total === undefined ? 30 : options.total;
   let conflicts = 0, queryCount = 0, didWrite = false;
   function collection(name, state = rows, inTransaction = false) {
@@ -62,13 +62,17 @@ function harness(options = {}) {
     }
   };
   const app = {
-    rows, records, reads, writes, posts, warnings, checks, db,
+    rows, records, reads, writes, posts, warnings, checks, calls, waits, db,
     get conflicts() { return conflicts; }, get queryCount() { return queryCount; },
     get now() { return clock; }, set now(value) { clock = value; },
     get total() { return total; }, set total(value) { total = value; },
     async run(event = {}) {
       return syncBackfillDate({ db, openid: 'owner', requestId: REQUEST_ID, recordDate: RECORD_DATE,
         now: () => clock, logger: { warn(...args) { warnings.push(args); } },
+        async sleep(ms) {
+          waits.push(ms); clock += ms;
+          if (options.onSleep) await options.onSleep(app);
+        },
         async getDayDuration(openid, date) {
           checks.push({ openid, date });
           if (options.onRecheck) await options.onRecheck(app);
@@ -76,6 +80,9 @@ function harness(options = {}) {
         },
         async syncDate(openid, date, controls) {
           assert.equal(controls.allowZero, true);
+          assert.equal(controls.verifyRemote, true);
+          assert.ok(Number.isFinite(controls.deadlineAt));
+          calls.push({ openid, date, deadlineAt: controls.deadlineAt });
           if (options.skipped) return { openid, date, skipped: true, reason: '未绑定' };
           const duration = total;
           if (options.beforePost) await options.beforePost(app, controls);
@@ -83,7 +90,8 @@ function harness(options = {}) {
           // before the external write, after reading the current day total.
           await controls.beforePost();
           posts.push({ openid, date, duration });
-          if (options.onPost) await options.onPost(app, controls);
+          const result = options.onPost && await options.onPost(app, controls);
+          if (result !== undefined) return result;
           if (options.syncFailure) return { success: false, error: 'external failure', ...options.syncFailure };
           return { success: true, duration, openid, date };
         }, ...event });
@@ -140,13 +148,92 @@ test('a concurrent change during POST is re-synced using the latest total before
   assert.equal(app.checks.length, 2);
 });
 
-test('continuously changing data makes at most three attempts and returns a retry result', async () => {
+test('continuously changing data makes at most four attempts and returns a retry result', async () => {
   const app = harness({ onPost(app) { app.total += 10; } });
   const result = await app.run();
   assert.equal(result.success, false); assert.equal(result.code, 'BACKFILL_SYNC_RETRY');
-  assert.match(result.error, /重新同步/); assert.equal(app.posts.length, 3);
-  assert.deepEqual(app.posts.map(post => post.duration), [30, 40, 50]);
+  assert.match(result.error, /重新同步/); assert.equal(app.posts.length, 4);
+  assert.deepEqual(app.posts.map(post => post.duration), [30, 40, 50, 60]);
   assert.equal(app.rows.find(row => row.kind === 'sync_lock').token, '');
+});
+
+test('a failed upload is retried and checked against the latest saved duration', async () => {
+  const app = harness({ onPost(app) {
+    if (app.posts.length === 1) return { success: false, error: 'temporary failure' };
+  } });
+  const started = app.now, result = await app.run();
+  assert.equal(result.success, true); assert.equal(result.data.duration, 30);
+  assert.equal(app.posts.length, 2); assert.equal(app.checks.length, 1);
+  assert.deepEqual(app.waits, [1000]);
+  assert.deepEqual(app.calls.map(call => call.deadlineAt), [started + 40000, started + 40000]);
+  assert.equal(app.rows.find(row => row.kind === 'sync_lock').token, '');
+});
+
+test('three failed uploads allow the fourth and final upload to succeed', async () => {
+  const app = harness({ onPost(app) {
+    if (app.posts.length <= 3) return { success: false, error: 'temporary failure' };
+  } });
+  const result = await app.run();
+  assert.equal(result.success, true); assert.equal(app.posts.length, 4);
+  assert.deepEqual(app.waits, [1000, 1000, 1000]);
+  assert.equal(app.checks.length, 1);
+});
+
+test('returned failures and thrown errors both stop after three retries', async t => {
+  for (const throws of [false, true]) {
+    await t.test(throws ? 'thrown error' : 'returned failure', async () => {
+      const app = harness({ onPost() {
+        if (throws) throw new Error('temporary failure');
+        return { success: false, error: 'temporary failure' };
+      } });
+      const result = await app.run();
+      assert.equal(result.success, false); assert.equal(result.code, 'BACKFILL_SYNC_FAILED');
+      assert.equal(app.posts.length, 4); assert.equal(app.checks.length, 0);
+      assert.deepEqual(app.waits, [1000, 1000, 1000]);
+      assert.equal(app.rows.find(row => row.kind === 'sync_lock').token, '');
+    });
+  }
+});
+
+test('a failed attempt and a later concurrent edit share the same retry budget and use fresh totals', async () => {
+  const app = harness({ onPost(app) {
+    if (app.posts.length === 1) {
+      app.total = 45;
+      return { success: false, error: 'temporary failure' };
+    }
+    if (app.posts.length === 2) app.total = 65;
+  } });
+  const result = await app.run();
+  assert.equal(result.success, true); assert.equal(result.data.duration, 65);
+  assert.deepEqual(app.posts.map(post => post.duration), [30, 45, 65]);
+  assert.equal(app.checks.length, 2);
+});
+
+test('the 40-second budget stops retries while the 90-second lease is still valid', async () => {
+  const app = harness({ onPost(app) {
+    app.now += 40000;
+    return { success: false, error: 'slow remote failure' };
+  } });
+  const result = await app.run();
+  assert.equal(result.success, false); assert.equal(result.code, 'BACKFILL_SYNC_TIMEOUT');
+  assert.equal(app.posts.length, 1); assert.equal(app.checks.length, 0);
+  assert.equal(app.rows.find(row => row.kind === 'sync_lock').token, '');
+});
+
+test('a retry cannot POST or release a successor lease when ownership changes immediately before upload', async () => {
+  const app = harness({
+    beforePost(app) {
+      if (app.calls.length !== 2) return;
+      const lease = app.rows.find(row => row.kind === 'sync_lock');
+      lease.token = 'successor'; lease.leaseUntil = app.now + 90000;
+    },
+    onPost() { return { success: false, error: 'temporary failure' }; }
+  });
+  const result = await app.run();
+  assert.equal(result.code, 'BACKFILL_SYNC_BUSY'); assert.equal(app.posts.length, 1);
+  assert.equal(app.calls.length, 2); assert.deepEqual(app.waits, [1000]);
+  assert.equal(app.rows.find(row => row.kind === 'sync_lock').token, 'successor');
+  assert.equal(app.writes.length, 1, 'old worker does not clear a newer lease');
 });
 
 test('an expired grant with a recorded-date receipt can correct deletion to zero without a current record', async () => {
@@ -213,13 +300,16 @@ test('remote failures and unbound skips release leases and preserve the original
   const failed = harness({ syncFailure: {} });
   const result = await failed.run();
   assert.equal(result.code, 'BACKFILL_SYNC_FAILED'); assert.match(result.error, /external failure/);
+  assert.equal(failed.posts.length, 4);
   assert.equal(failed.rows.find(row => row.kind === 'sync_lock').token, '');
   const busy = harness({ syncFailure: { code: 'BACKFILL_SYNC_BUSY', error: 'lease expired' } });
   assert.equal((await busy.run()).code, 'BACKFILL_SYNC_BUSY');
+  assert.equal(busy.calls.length, 1); assert.deepEqual(busy.waits, []);
   const unbound = harness({ skipped: true });
   const skip = await unbound.run();
   assert.equal(skip.success, true); assert.equal(skip.data.skipped, true); assert.equal(skip.data.reason, '未绑定');
   assert.equal(unbound.posts.length, 0); assert.equal(unbound.checks.length, 0);
+  assert.equal(unbound.calls.length, 1); assert.deepEqual(unbound.waits, []);
   assert.equal(unbound.rows.find(row => row.kind === 'sync_lock').token, '');
 });
 

@@ -74,7 +74,7 @@ async function checkStudentExists(studentNumber) {
 }
 
 // 调外部系统：POST /api/openapi/meditation/records
-async function postMeditationRecord(studentNumber, recordDate, durationMinutes) {
+async function postMeditationRecord(studentNumber, recordDate, durationMinutes, timeoutMs = 10000) {
   const url = `${getApiBase()}/api/openapi/meditation/records`;
   console.log(`📤 上报静坐时长: sn=${studentNumber}, date=${recordDate}, min=${durationMinutes}`);
   const res = await axios.post(url, {
@@ -83,7 +83,7 @@ async function postMeditationRecord(studentNumber, recordDate, durationMinutes) 
     durationMinutes,
   }, {
     headers: { 'X-Access-Token': getAccessToken() },
-    timeout: 10000,
+    timeout: timeoutMs,
   });
   return res.data; // { success, data } 或 { success:false, message }
 }
@@ -180,13 +180,22 @@ async function checkStudentNumber(studentNumber) {
 
 // ===== 核心：同步某用户某一天 =====
 async function syncDate(openid, dateStr, options = {}) {
+  // 历史记录每轮两次外部请求；四轮最多 32 秒，剩余时间用于退避与数据库复核。
+  const requestTimeout = () => {
+    if (!options.verifyRemote) return 10000;
+    const remaining = options.deadlineAt - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      throw Object.assign(new Error('必经同步核对超时，请稍后重试'), { code: 'BACKFILL_SYNC_TIMEOUT' });
+    }
+    return Math.min(4000, remaining);
+  };
   const userDoc = await getUserDoc(openid);
   if (!userDoc || !userDoc.bijingBound) {
     return { openid, date: dateStr, skipped: true, reason: '未绑定' };
   }
   // 同号同日由对端幂等覆盖；自动、手动同步都重新汇总最新记录。
   // bijingSyncedDates 仅表示曾同步成功，不用于拦截再次上报。
-  const duration = await getDayDuration(openid, dateStr);
+  const duration = await getDayDuration(openid, dateStr, options.deadlineAt);
   if (duration <= 0 && !options.allowZero) {
     // 当天云端查不到打卡数据：不标记 synced。
     // 可能是备份异步未完成（暂时性），留待下次同步复查，
@@ -202,8 +211,24 @@ async function syncDate(openid, dateStr, options = {}) {
   try {
     // 获批补录同步持有按用户/日期的租约，外部请求前再次检查避免迟到覆盖。
     if (options.beforePost) await options.beforePost();
-    const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration);
+    const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration, requestTimeout());
     if (resp && resp.success === true) {
+      if (options.verifyRemote) {
+        await options.beforePost();
+        await require('./verifyRecord').verifyRecord({
+          axios, apiBase: getApiBase(), accessToken: getAccessToken(),
+          studentNumber: userDoc.bijingStudentNumber, recordDate: dateStr,
+          durationMinutes: duration, timeoutMs: requestTimeout()
+        });
+        await options.beforePost();
+        // 回查期间仍可能新增或删除记录；变化时交给外层用最新总量重新上传。
+        const latestDuration = await getDayDuration(openid, dateStr, options.deadlineAt);
+        await options.beforePost();
+        if (latestDuration !== duration) {
+          return { openid, date: dateStr, success: false, code: 'BACKFILL_SYNC_RETRY',
+            error: '同步期间这一天的记录有变动，请稍后重新同步', duration };
+        }
+      }
       await markSynced(openid, dateStr, userDoc.bijingStudentNumber);
       return { openid, date: dateStr, success: true, duration };
     }
@@ -454,6 +479,10 @@ exports.main = async (event = {}, context) => {
     case 'syncRecordedDate':
       return await require('./recordedSync').syncRecordedDate({ db, openid,
         recordId: event.recordId, expectedOpenid: event.expectedOpenid,
+        syncDate, getDayDuration, getBusinessDate, now: () => Date.now() });
+    case 'syncDeletedDate':
+      return await require('./deletedSync').syncDeletedDate({ db, openid,
+        deletionId: event.deletionId, expectedOpenid: event.expectedOpenid,
         syncDate, getDayDuration, getBusinessDate, now: () => Date.now() });
     case 'syncPending':
       return await manualSyncPending(openid);

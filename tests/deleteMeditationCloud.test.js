@@ -17,7 +17,7 @@ function record(id, date, duration = 10, extra = {}) {
 }
 
 function createHarness(records, stats = [], options = {}) {
-  let stored = clone({ meditation_records: records, user_stats: stats, meditation_locks: [] });
+  let stored = clone({ meditation_records: records, user_stats: stats, meditation_locks: options.receipts || [] });
   const queries = [];
   const writes = [];
   let transactionCount = 0;
@@ -50,10 +50,15 @@ function createHarness(records, stats = [], options = {}) {
             where() { throw new Error('Transactions must use doc APIs'); },
             doc(id) {
               return {
-                async get() { return { data: clone(pending[name].find(row => row._id === id)) || null }; },
+                async get() {
+                  if (options.fail === 'receipt-read' && id.startsWith('md_')) throw new Error('receipt read unavailable');
+                  return { data: clone(pending[name].find(row => row._id === id)) || null };
+                },
                 async set({ data }) {
                   writes.push({ name, id, action: 'set' });
                   if (options.fail === 'add') throw new Error('stats insert unavailable');
+                  if (options.fail === 'receipt-write' && id.startsWith('md_')) throw new Error('receipt write unavailable');
+                  if (options.fail === 'tombstone-write' && id.startsWith('mt_')) throw new Error('tombstone write unavailable');
                   const index = pending[name].findIndex(row => row._id === id);
                   if (index < 0) pending[name].push({ _id: id, ...clone(data) });
                   else pending[name][index] = { _id: id, ...clone(data) };
@@ -108,6 +113,8 @@ function createHarness(records, stats = [], options = {}) {
     queries, writes,
     get records() { return clone(stored.meditation_records); },
     get stats() { return clone(stored.user_stats); },
+    get receipts() { return clone(stored.meditation_locks.filter(row => row.kind === 'deletion_receipt')); },
+    get tombstones() { return clone(stored.meditation_locks.filter(row => row.kind === 'record_tombstone')); },
     get transactionCount() { return transactionCount; },
     async remove(data, extra = {}) {
       return clone(await module.exports.main({ type: 'deleteMeditationRecord', data, ...extra }));
@@ -126,8 +133,12 @@ test('deletion trusts authenticated OPENID only; missing auth, foreign IDs and r
   assert.equal(denied.code, 'RECORD_NOT_FOUND');
   assert.deepEqual(app.records, [own, foreign]);
   assert.equal(app.writes.length, 0);
-  assert.equal((await app.remove({ recordId: 'own' })).success, true);
-  assert.equal((await app.remove({ recordId: 'own' })).code, 'RECORD_NOT_FOUND');
+  const removed = await app.remove({ recordId: 'own' });
+  assert.equal(removed.success, true);
+  const repeated = await app.remove({ recordId: 'own' });
+  assert.equal(repeated.success, true);
+  assert.equal(repeated.data.duplicate, true);
+  assert.equal(repeated.data.deletionId, removed.data.deletionId);
   assert.deepEqual(app.records, [foreign]);
   const unauthenticated = createHarness([own], [], { openid: '' });
   assert.equal((await unauthenticated.remove({ recordId: 'own' })).code, 'AUTH_REQUIRED');
@@ -277,14 +288,184 @@ test('same-day deletion preserves the day and rebuilds sums from every page', as
 test('read, delete, stats update, and commit failures preserve the original record and all stats', async () => {
   const rows = [record('target', '2026-09-17')];
   const stats = [{ _id: 'stats', _openid: OPENID, totalCount: 1, totalDuration: 10 }];
-  for (const fail of ['read', 'remove', 'remove-zero', 'update', 'update-zero', 'commit']) {
+  for (const fail of ['read', 'remove', 'remove-zero', 'update', 'update-zero', 'receipt-read', 'receipt-write', 'tombstone-write', 'commit']) {
     const app = createHarness(rows, stats, { fail });
     assert.equal((await app.remove({ recordId: 'target' })).success, false, fail);
     assert.deepEqual(app.records, rows, fail);
     assert.deepEqual(app.stats, stats, fail);
+    assert.deepEqual(app.receipts, [], fail);
+    assert.deepEqual(app.tombstones, [], fail);
   }
   const missingStats = createHarness(rows, [], { fail: 'add' });
   assert.equal((await missingStats.remove({ recordId: 'target' })).success, false);
   assert.deepEqual(missingStats.records, rows);
   assert.deepEqual(missingStats.stats, []);
+  assert.deepEqual(missingStats.receipts, []);
+});
+
+test('deletion receipts capture only the saved business date and request auto sync for ended days', async () => {
+  for (const [target, expectedDate, autoSync] of [
+    [record('manual', '2026-09-16', 20, { source: 'manual', timestamp: NOW }), '2026-09-16', true],
+    [record('timer', '2026-09-17', 20, { timestamp: Date.parse('2026-09-16T17:59:59.999Z') }), '2026-09-16', true],
+    [record('boundary', '2026-09-16', 20, { timestamp: Date.parse('2026-09-16T18:00:00Z') }), '2026-09-17', undefined],
+    [record('today', '2026-09-17'), '2026-09-17', undefined],
+    [record('future', '2026-09-18', 20, { source: 'manual' }), '2026-09-18', undefined],
+    [record('legacy', '2026-09-16', 20, { timestamp: undefined }), '2026-09-16', true]
+  ]) {
+    const app = createHarness([target]);
+    const result = await app.remove({ recordId: target._id, date: '2000-01-01', autoSyncBijing: true,
+      ownerOpenid: 'forged', deletionId: 'md_' + '0'.repeat(64) });
+    assert.equal(result.success, true);
+    assert.equal(result.data.date, expectedDate);
+    assert.equal(result.data.autoSyncBijing, autoSync);
+    assert.match(result.data.deletionId, /^md_[a-f0-9]{64}$/);
+    assert.equal(app.receipts.length, 1);
+    assert.equal(app.receipts[0]._id, result.data.deletionId);
+    assert.equal(app.receipts[0].ownerOpenid, OPENID);
+    assert.equal(app.receipts[0].recordId, target._id);
+    assert.equal(app.receipts[0].timestamp, target.timestamp === undefined ? null : target.timestamp);
+    assert.equal(app.receipts[0].date, expectedDate);
+    assert.deepEqual(app.receipts[0].requestIdentity, ['recordId', target._id]);
+  }
+});
+
+test('account changes are rejected before all reads and writes, including successful deletion retries', async () => {
+  const app = createHarness([record('target', '2026-09-16')]);
+  const denied = await app.remove({ recordId: 'target', expectedOpenid: 'other' });
+  assert.equal(denied.code, 'ACCOUNT_CHANGED');
+  assert.equal(app.transactionCount, 0); assert.equal(app.queries.length, 0); assert.equal(app.writes.length, 0);
+  assert.equal((await app.remove({ recordId: 'target', expectedOpenid: OPENID })).success, true);
+  const writes = app.writes.length;
+  assert.equal((await app.remove({ recordId: 'target', expectedOpenid: 'other' })).code, 'ACCOUNT_CHANGED');
+  assert.equal(app.writes.length, writes);
+});
+
+test('lost responses can retry the exact record, local or normalized legacy identity without deleting a replacement', async () => {
+  const target = record('target', '2026-09-16', 20, { localId: 'local-target', source: 'manual' });
+  for (const [request, retry] of [
+    [{ recordId: 'target', localId: 'ignored' }, { recordId: 'target', localId: 'also-ignored', date: '2000-01-01' }],
+    [{ localId: 'local-target' }, { localId: 'local-target', date: '2000-01-01', timestamp: 1 }],
+    [{ date: target.date, timestamp: target.timestamp }, { date: target.date, timestamp: new Date(target.timestamp).toISOString() }]
+  ]) {
+    const app = createHarness([target]);
+    const result = await app.remove(request);
+    assert.equal(result.success, true); assert.equal(result.data.stats.totalDuration, 0);
+    // The replacement deliberately shares the timestamp of the removed record.
+    assert.equal((await app.record({ source: 'manual', date: target.date, timestamp: target.timestamp,
+      duration: 35, localId: 'replacement' })).success, true);
+    const writes = app.writes.length;
+    const repeated = await app.remove(retry);
+    assert.equal(repeated.success, true); assert.equal(repeated.data.duplicate, true);
+    assert.equal(repeated.data.deletionId, result.data.deletionId);
+    assert.equal(repeated.data.recordId, target._id); assert.equal(repeated.data.date, target.date);
+    assert.equal(repeated.data.autoSyncBijing, true); assert.equal(repeated.data.stats.totalDuration, 35);
+    assert.equal(app.records.length, 1); assert.equal(app.records[0].localId, 'replacement');
+    assert.equal(app.writes.length, writes); assert.equal(app.receipts.length, 1);
+  }
+});
+
+test('arbitrary missing records and foreign or mismatched receipts never authorize a deletion result', async () => {
+  const target = record('target', '2026-09-16');
+  const source = createHarness([target]);
+  await source.remove({ recordId: target._id });
+  const receipt = source.receipts[0];
+  for (const changed of [{ ownerOpenid: 'other' }, { kind: 'sync_lock' }, { requestIdentity: ['recordId', 'different'] }]) {
+    const app = createHarness([target], [], { receipts: [{ ...receipt, ...changed }] });
+    assert.equal((await app.remove({ recordId: target._id })).code, 'INVALID_DELETION_RECEIPT');
+    assert.deepEqual(app.records, [target]); assert.equal(app.writes.length, 0);
+  }
+  const app = createHarness([]);
+  assert.equal((await app.remove({ recordId: 'arbitrary', date: target.date })).code, 'RECORD_NOT_FOUND');
+  assert.equal(app.writes.length, 0); assert.equal(app.receipts.length, 0);
+});
+
+test('deleted stable records reject stale upload retries without resurrecting data or blocking new sessions', async () => {
+  for (const locateBy of ['recordId', 'localId', 'timestamp']) {
+    const app = createHarness([]);
+    const original = { localId: 'original-session', source: 'manual', date: '2026-09-16',
+      duration: 25, timestamp: Date.parse('2026-09-16T04:00:00Z') };
+    const saved = await app.record(original);
+    assert.equal(saved.success, true);
+    const request = locateBy === 'recordId' ? { recordId: saved.data.recordId }
+      : locateBy === 'localId' ? { localId: original.localId } : { date: original.date, timestamp: original.timestamp };
+    const removed = await app.remove(request);
+    assert.equal(removed.success, true); assert.equal(app.tombstones.length, 2);
+    const writes = app.writes.length;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const replay = await app.record(original);
+      assert.equal(replay.success, false); assert.equal(replay.code, 'RECORD_DELETED');
+      assert.match(replay.error, /已删除/); assert.equal(replay.data, undefined);
+      assert.equal(app.records.length, 0); assert.equal(app.stats[0].totalDuration, 0);
+      const repeated = await app.remove(request);
+      assert.equal(repeated.success, true); assert.equal(repeated.data.deletionId, removed.data.deletionId);
+    }
+    assert.equal(app.writes.length, writes);
+    assert.equal((await app.record({ ...original, localId: 'new-session' })).success, true);
+    assert.equal(app.records.length, 1); assert.equal(app.records[0].localId, 'new-session');
+    assert.equal(app.stats[0].totalDuration, 25);
+  }
+});
+
+test('tombstones cover legacy IDs and both stored aliases, including records whose aliases were lost', async () => {
+  const original = record('legacy-document', '2026-09-16', 25, { localId: 'legacy-local', idempotencyKey: 'legacy-key' });
+  const app = createHarness([original]);
+  assert.equal((await app.remove({ localId: original.localId })).success, true);
+  assert.equal(app.tombstones.length, 3);
+  assert.deepEqual(app.tombstones.map(row => row.identity), [
+    ['recordId', original._id], ['localId', original.localId], ['localId', original.idempotencyKey]
+  ]);
+  for (const key of [original.localId, original.idempotencyKey]) {
+    assert.equal((await app.record({ localId: key, source: 'manual', date: original.date,
+      timestamp: original.timestamp, duration: original.duration })).code, 'RECORD_DELETED');
+  }
+  assert.equal(app.records.length, 0);
+
+  const key = 'id-only-session';
+  const id = 'med_' + require('node:crypto').createHash('sha256').update(JSON.stringify([OPENID, key])).digest('hex');
+  const idOnly = createHarness([record(id, '2026-09-16', 25)]);
+  assert.equal((await idOnly.remove({ recordId: id })).success, true);
+  assert.equal(idOnly.tombstones.length, 2);
+  assert.equal((await idOnly.record({ localId: key, source: 'manual', date: '2026-09-16',
+    timestamp: original.timestamp, duration: 25 })).code, 'RECORD_DELETED');
+  assert.equal(idOnly.records.length, 0);
+
+  const otherAccount = createHarness([], [], { openid: 'other', receipts: app.tombstones });
+  assert.equal((await otherAccount.record({ localId: original.localId, source: 'manual', date: original.date,
+    timestamp: original.timestamp, duration: 25 })).success, true);
+});
+
+test('local deletion also finds idempotency-only legacy records while ambiguous aliases remain protected', async () => {
+  const target = record('legacy-key-only', '2026-09-16', 25, { idempotencyKey: 'original-key' });
+  const app = createHarness([target]);
+  const removed = await app.remove({ localId: 'original-key' });
+  assert.equal(removed.success, true); assert.equal(removed.data.recordId, target._id);
+  assert.equal(removed.data.autoSyncBijing, true); assert.equal(app.records.length, 0);
+  const repeated = await app.remove({ localId: 'original-key' });
+  assert.equal(repeated.success, true); assert.equal(repeated.data.deletionId, removed.data.deletionId);
+  const ambiguous = createHarness([target, record('other', target.date, 30, { localId: 'original-key' })]);
+  assert.equal((await ambiguous.remove({ localId: 'original-key' })).code, 'AMBIGUOUS_RECORD');
+  assert.equal(ambiguous.records.length, 2); assert.equal(ambiguous.writes.length, 0);
+});
+
+test('explicit recovery cannot recreate an acknowledged unkeyed legacy record after deletion', async () => {
+  const timestamp = Date.parse('2026-09-16T04:00:00Z');
+  // A string timestamp and duration normalize to the same identity used by an upload.
+  const target = record('legacy-unkeyed', '2026-09-16', '25', { timestamp: new Date(timestamp).toISOString() });
+  const app = createHarness([target]);
+  const recovery = { localId: 'recovery-key', recoverLegacy: true, source: 'manual', date: target.date, timestamp, duration: 25 };
+  const saved = await app.record(recovery);
+  assert.equal(saved.success, true); assert.equal(saved.data.recordId, target._id); assert.equal(saved.data.duplicate, true);
+  assert.deepEqual(app.records, [target]); assert.equal(app.writes.length, 0);
+  assert.equal((await app.remove({ recordId: saved.data.recordId })).success, true);
+  assert.deepEqual(app.tombstones.map(row => row.identity), [['recordId', target._id], ['legacy', target.date, timestamp, 25]]);
+  const writes = app.writes.length;
+  for (const localId of ['recovery-key', 'different-recovery-key']) {
+    const replay = await app.record({ ...recovery, localId });
+    assert.equal(replay.success, false); assert.equal(replay.code, 'RECORD_DELETED');
+    assert.equal(replay.data, undefined); assert.equal(app.records.length, 0);
+  }
+  assert.equal(app.writes.length, writes);
+  const newSession = await app.record({ ...recovery, localId: 'distinct-new-session', recoverLegacy: false });
+  assert.equal(newSession.success, true); assert.equal(app.records.length, 1);
+  assert.equal(app.records[0].localId, 'distinct-new-session'); assert.equal(app.stats[0].totalDuration, 25);
 });

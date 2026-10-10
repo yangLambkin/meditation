@@ -51,6 +51,7 @@ Page({
     deletingCheckinId: '',
     checkinRecords: [],
     checkinGroups: [],
+    bijingDeletionTasks: [],
     checkinTotal: 0,
     hiddenCheckinCount: 0
   },
@@ -218,7 +219,8 @@ Page({
   decorateBijingSync(record) {
     const owner = this.getCheckinDisplayOptions().openid;
     const date = record.dayDate || record.date;
-    const task = owner && record._id && date < homeCheckin.getCheckinDay() ? bijingRecordSync.getDayState(date, owner) : null;
+    const dayTask = owner && record._id && date < homeCheckin.getCheckinDay() ? bijingRecordSync.getDayState(date, owner) : null;
+    const task = dayTask && !dayTask.deletionId ? dayTask : null;
     const labels = { pending: '等待同步必经', syncing: '正在同步必经', synced: '已同步必经',
       failed: '必经同步未完成', unbound: '未绑定必经账号，绑定后可重试', deferred: '必经同步暂缓' };
     return { ...record, bijingSyncText: task ? task.message || `云端已保存 · ${labels[task.status] || '必经同步待处理'}` : '',
@@ -256,7 +258,8 @@ Page({
   async retryBijingSync(event) {
     const date = event.currentTarget.dataset.date, owner = this._bijingPageAccount, generation = this._bijingPageGeneration;
     if (!this._bijingPageVisible || !owner || owner !== this.getCheckinDisplayOptions().openid ||
-        !this.data.checkinRecords.some(record => record._id && record.dayDate === date && record.bijingCanRetry)) return;
+        !(this.data.checkinRecords.some(record => record._id && record.dayDate === date && record.bijingCanRetry) ||
+          this.data.bijingDeletionTasks.some(task => task.date === date && task.canRetry))) return;
     try { await bijingRecordSync.retryDate(date); }
     catch (_) { /* The service persists its failure state; cloud records stay saved. */ }
     if (this._bijingPageVisible && generation === this._bijingPageGeneration && owner === this.getCheckinDisplayOptions().openid) this.refreshCheckinRecords();
@@ -394,9 +397,15 @@ Page({
     const now = Date.now();
     const { groups, hiddenCount } = homeCheckin.buildCheckinGroups(records, { now });
     this._checkinDay = homeCheckin.getCheckinDay(now);
+    const owner = this.getCheckinDisplayOptions().openid;
+    const earliest = homeCheckin.shiftCheckinDate(this._checkinDay, -2);
+    const bijingDeletionTasks = owner && typeof bijingRecordSync.getTasks === 'function'
+      ? bijingRecordSync.getTasks(owner).filter(task => task.deletionId && task.date < this._checkinDay &&
+        (task.date >= earliest || task.status !== 'synced')) : [];
     this.setData({
       checkinRecords: groups.reduce((visible, group) => visible.concat(group.records), []),
       checkinGroups: groups,
+      bijingDeletionTasks,
       checkinTotal: records.length,
       hiddenCheckinCount: hiddenCount
     });

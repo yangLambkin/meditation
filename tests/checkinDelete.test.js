@@ -113,6 +113,7 @@ test('deleting one same-time record uses its cloud ID and recalculates both stor
     const app = harness(stored);
     assert.equal((await app.manager.deleteCheckin('2026-09-17', { recordId: 'second', timestamp: NOW })).success, true);
     assert.equal(app.calls[0].recordId, 'second');
+    assert.equal(app.calls[0].expectedOpenid, 'oz-test');
     const result = app.storage.get(KEY);
     const checkins = result.checkinRecords || result;
     assert.deepEqual(checkins.dailyRecords['2026-09-17'], day([{ ...record('first'), date: '2026-09-17' }]));
@@ -173,6 +174,30 @@ test('deletion waits for an in-flight backup, captures its cloud ID, and cannot 
   await app.manager.syncLocalToCloud('local-test', 'oz-test');
   assert.equal(app.backups.length, 1);
   assert.deepEqual(app.storage.get(KEY).dailyRecords, {});
+});
+
+test('switching accounts while deletion waits for upload cannot delete under the new account', async () => {
+  const backup = deferred();
+  const app = harness({}, { backup: () => backup.promise });
+  const saved = app.manager.recordCheckin(10, [], [], NOW);
+  await new Promise(resolve => setImmediate(resolve));
+  const deletion = app.manager.deleteCheckin('2026-09-17', { localId: saved.localId });
+  app.storage.set('userOpenId', 'oz-other');
+  backup.resolve({ success: true, data: { recordId: 'new-cloud-id' } });
+  assert.equal((await deletion).success, false);
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.storage.get(KEY).dailyRecords['2026-09-17'].records.length, 1);
+});
+
+test('a deleted cloud identity blocks stale uploads without retrying or recreating the record', async () => {
+  const app = harness({}, { backup: () => ({ success: false, code: 'RECORD_DELETED', error: '该记录已删除，请勿重复上传' }) });
+  const saved = app.manager.recordCheckin(10, [], [], NOW);
+  await app.advance(500);
+  assert.equal(app.backups.length, 1);
+  const cached = app.storage.get(KEY).dailyRecords['2026-09-17'].records.find(record => record.localId === saved.localId);
+  assert.equal(cached.syncBlocked, true); assert.equal(cached.syncErrorCode, 'RECORD_DELETED');
+  await app.manager.retryPendingBackups();
+  assert.equal(app.backups.length, 1);
 });
 
 test('new local IDs disambiguate same-time records and backed-up IDs prevent duplicate sync uploads', async () => {

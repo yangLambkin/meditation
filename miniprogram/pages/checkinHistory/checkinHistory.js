@@ -83,8 +83,10 @@ Page({
   decorateBijingSync(record) {
     const owner = wx.getStorageSync('userOpenId') || '';
     const date = record.dayDate || record.date;
-    const task = !this.data.isMemberHistory && owner.startsWith('oz') && record._id && date < homeCheckin.getCheckinDay()
+    let task = !this.data.isMemberHistory && owner.startsWith('oz') && record._id && date < homeCheckin.getCheckinDay()
       ? bijingRecordSync.getDayState(date, owner) : null;
+    // 删除影响整日总量，在日期下统一展示，避免剩余记录重复显示。
+    if (task && task.deletionId) task = null;
     const labels = { pending: '等待同步必经', syncing: '正在同步必经', synced: '已同步必经',
       failed: '必经同步未完成', unbound: '未绑定必经账号，绑定后可重试', deferred: '必经同步暂缓' };
     return { ...record, bijingSyncText: task ? task.message || `云端已保存 · ${labels[task.status] || '必经同步待处理'}` : '',
@@ -114,7 +116,9 @@ Page({
   async retryBijingSync(event) {
     const date = event.currentTarget.dataset.date, owner = this._bijingPageAccount, generation = this._bijingPageGeneration;
     if (this.data.isMemberHistory || !this._bijingPageVisible || !owner || owner !== wx.getStorageSync('userOpenId') ||
-        !(this._allCheckinRecords || []).some(record => record._id && record.dayDate === date && record.bijingCanRetry)) return;
+        typeof date !== 'string' || date.slice(0, 7) !== this.data.selectedMonth) return;
+    const deletionDay = this.data.monthDays.find(day => day.date === date && day.bijingDeletionId && day.bijingCanRetry);
+    if (!deletionDay && !(this._allCheckinRecords || []).some(record => record._id && record.dayDate === date && record.bijingCanRetry)) return;
     try { await bijingRecordSync.retryDate(date); }
     catch (_) { /* The service persists its failure state; cloud records stay saved. */ }
     if (!this.data.isMemberHistory && this._bijingPageVisible && generation === this._bijingPageGeneration && owner === wx.getStorageSync('userOpenId')) this.refreshCheckinRecords();
@@ -128,6 +132,21 @@ Page({
     const startMonth = this.data.memberStartDate ? this.data.memberStartDate.slice(0, 7) : '';
     if (startMonth && selectedMonth < startMonth) selectedMonth = startMonth;
     const month = (this._allCheckinMonths || []).find(item => item.month === selectedMonth);
+    const days = month ? month.days.map(day => ({ ...day })) : [];
+    const owner = wx.getStorageSync('userOpenId') || '';
+    if (!this.data.isMemberHistory && owner.startsWith('oz')) {
+      bijingRecordSync.getTasks(owner).filter(task => task.deletionId && task.date < currentDate &&
+        task.date.slice(0, 7) === selectedMonth).forEach(task => {
+        let day = days.find(item => item.date === task.date);
+        if (!day) {
+          day = { date: task.date, count: 0, totalDuration: 0, records: [] };
+          days.push(day);
+        }
+        Object.assign(day, { bijingDeletionId: task.deletionId, bijingSyncText: task.message || '记录已删除，等待同步必经',
+          bijingSyncStatus: task.status, bijingCanRetry: !!task.canRetry });
+      });
+    }
+    days.sort((a, b) => b.date.localeCompare(a.date));
     const [year, monthNumber] = selectedMonth.split('-');
     this.setData({
       checkinTotal: (this._allCheckinRecords || []).length,
@@ -135,7 +154,7 @@ Page({
       selectedMonthLabel: `${year}年${Number(monthNumber)}月`,
       currentDate,
       currentMonth,
-      monthDays: month ? month.days : [],
+      monthDays: days,
       monthCount: month ? month.count : 0,
       monthDuration: month ? month.totalDuration : 0,
       monthDayCount: month ? month.days.length : 0,
