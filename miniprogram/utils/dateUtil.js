@@ -43,7 +43,7 @@ function getRecordBusinessDate(record, fallbackDate) {
 }
 function isRecentBusinessDate(date, now) {
   const today = getBusinessDate(now);
-  return isDateLabel(date) && date >= addBusinessDays(today, -2) && date <= today;
+  return isDateLabel(date) && date >= addBusinessDays(today, -1) && date <= today;
 }
 // 页面显示时订阅，在北京时间 02:00 精确刷新；隐藏/卸载时调用返回的 stop。
 function watchBusinessDate(onChange) {

@@ -239,7 +239,7 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
     if (!record._id) record._id = stableDocumentId('med_', openid, require('crypto').randomBytes(16).toString('hex'));
     const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
       const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
-      // 成功后的重试即使跨过三天窗口，仍返回原结果；不再次写心得或累计统计。
+      // 成功后的重试即使超出今天和昨天的窗口，仍返回原结果；不再次写心得或累计统计。
       if (existing) {
         if ((isBackfill || existing.backfillRequestId) && (existing.backfillRequestId !== backfillRequestId ||
             getRecordBusinessDate(existing) !== dateStr || Number(existing.duration) !== duration ||
@@ -281,8 +281,8 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       }
       if (source === 'manual' && !isBackfill) {
         const today = getBusinessDate(now);
-        const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 2 * 86400000).toISOString().slice(0, 10);
-        if (dateStr < earliest || dateStr > today) throw deletionError('DATE_OUT_OF_RANGE', '只能记录最近三天（含今天）的静坐');
+        const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+        if (dateStr < earliest || dateStr > today) throw deletionError('DATE_OUT_OF_RANGE', '只能记录今天和昨天的静坐');
       }
       const { _id, ...document } = record;
       await transaction.collection('meditation_records').doc(_id).set({ data: document });

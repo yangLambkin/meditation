@@ -446,7 +446,7 @@ test('approved applications open the shared home recorder with an account-bound 
   assert.equal(requests(calls, 'recordMeditation').length, 0);
   assert.equal(page.saveRecord, undefined);
   const template = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/backfill/backfill.wxml'), 'utf8');
-  assert.match(template, /bindtap="goHomeRecord">去首页补录/);
+  assert.doesNotMatch(template, /bindtap="goHomeRecord"|bindtap="openDayRecords"|去首页补录|查看补录记录与同步/);
   assert.doesNotMatch(template, /bindtap="saveRecord"|bindinput="onDurationInput"|bindchange="onTimeChange"/);
 });
 

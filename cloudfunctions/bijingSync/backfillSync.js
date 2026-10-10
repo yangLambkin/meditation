@@ -1,6 +1,26 @@
 const crypto = require('crypto');
 const COLLECTION = 'backfill_requests';
 const LEASE_MS = 90000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function isRequestId(value) {
+  return typeof value === 'string' && /^br_[a-f0-9]{64}$/.test(value);
+}
+
+function dateNumber(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value ? timestamp : NaN;
+}
+
+// 与申请规则一致：含首尾最多 30 天，且整个区间的北京时间 02:00 业务日已结束。
+// expiresAt 只限制新增补录，不影响已保存记录的重试与删除后的总量修正。
+function isApprovedSyncRange(grant, openid, timestamp) {
+  if (!grant || grant.kind !== 'request' || grant.ownerOpenid !== openid || grant.status !== 'approved') return false;
+  const start = dateNumber(grant.startDate), end = dateNumber(grant.endDate);
+  return Number.isFinite(start) && Number.isFinite(end) && start <= end && end - start < 30 * DAY_MS &&
+    end + DAY_MS - 6 * 3600000 <= timestamp;
+}
 
 function syncError(code, message) {
   const error = new Error(message);
@@ -37,6 +57,46 @@ async function optionalDocument(database, id) {
   } catch (error) {
     if (!isMissingCollection(error) && /\bDATABASE_DOCUMENT_NOT_EXIST\b|\bdocument\b(?!\.)[^\n]*(?:not exist|not found)|文档不存在/i.test(errorText(error))) return null;
     throw error;
+  }
+}
+
+async function validateBackfillSyncGrant({ db, openid, requestId, recordDate, timestamp = Date.now() }) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录' };
+  if (!isRequestId(requestId) || !Number.isFinite(dateNumber(recordDate))) {
+    return { success: false, code: 'INVALID_ARGUMENT', error: '补录同步日期或申请无效' };
+  }
+  const grant = await optionalDocument(db, requestId);
+  if (!isApprovedSyncRange(grant, openid, timestamp) || recordDate < grant.startDate || recordDate > grant.endDate) {
+    return { success: false, code: 'BACKFILL_INVALID_GRANT', error: '只能同步本人已获批范围内的补录记录' };
+  }
+  return { success: true, grant };
+}
+
+async function getBackfillSyncRanges({ db, openid, now = Date.now }) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录' };
+  const ranges = [], timestamp = now(), limit = 100;
+  let cursor = '';
+  try {
+    while (true) {
+      const result = await db.collection(COLLECTION).where({ kind: 'request', ownerOpenid: openid, status: 'approved',
+        ...(cursor ? { _id: db.command.gt(cursor) } : {}) })
+        .field({ _id: true, kind: true, ownerOpenid: true, status: true, startDate: true, endDate: true })
+        .orderBy('_id', 'asc').limit(limit).get();
+      if (!result || !Array.isArray(result.data)) throw new Error('Invalid backfill ranges response');
+      for (const grant of result.data) {
+        if (isRequestId(grant._id) && isApprovedSyncRange(grant, openid, timestamp)) {
+          ranges.push({ requestId: grant._id, startDate: grant.startDate, endDate: grant.endDate });
+        }
+      }
+      if (result.data.length < limit) break;
+      const next = result.data[result.data.length - 1]._id;
+      if (typeof next !== 'string' || next <= cursor) throw new Error('Invalid backfill ranges pagination');
+      cursor = next;
+    }
+    return { success: true, data: { ranges } };
+  } catch (error) {
+    if (isMissingCollection(error)) return { success: true, data: { ranges: [] } };
+    return { success: false, code: 'BACKFILL_RANGES_READ_FAILED', error: '补录区间暂时无法读取，请稍后重试' };
   }
 }
 
@@ -97,18 +157,10 @@ async function syncBackfillDate({ db, openid, requestId, recordDate, expectedOpe
   if (expectedOpenid !== undefined && expectedOpenid !== openid) {
     return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变化，请重新进入申请补录' };
   }
-  if (typeof requestId !== 'string' || !/^br_[a-f0-9]{64}$/.test(requestId) ||
-      typeof recordDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(recordDate) ||
-      !Number.isFinite(Date.parse(`${recordDate}T00:00:00Z`)) ||
-      new Date(`${recordDate}T00:00:00Z`).toISOString().slice(0, 10) !== recordDate) {
-    return { success: false, code: 'INVALID_ARGUMENT', error: '补录同步日期或申请无效' };
-  }
   try {
-    const grant = await optionalDocument(db, requestId);
-    if (!grant || grant.kind !== 'request' || grant.ownerOpenid !== openid || grant.status !== 'approved' ||
-        recordDate < grant.startDate || recordDate > grant.endDate) {
-      return { success: false, code: 'BACKFILL_INVALID_GRANT', error: '只能同步本人已获批范围内的补录记录' };
-    }
+    const authorization = await validateBackfillSyncGrant({ db, openid, requestId, recordDate, timestamp: now() });
+    if (!authorization.success) return authorization;
+    const { grant } = authorization;
     const wasRecorded = Array.isArray(grant.recordedDates) && grant.recordedDates.includes(recordDate);
     if (!wasRecorded) {
       // 已有申请尚无历史凭据时，仍支持现存的旧补录记录。
@@ -122,6 +174,21 @@ async function syncBackfillDate({ db, openid, requestId, recordDate, expectedOpe
   } catch (error) {
     return { success: false, code: 'BACKFILL_SYNC_FAILED', error: '补录已保存，同步暂未完成，请稍后重试' };
   }
+}
+
+// 手动日期列表合并了重叠区间；所选申请获批后，可使用同一天另一份本人
+// 已获批申请的录入凭据，避免日期去重恰好选中了尚未录入的申请。
+async function syncSelectedBackfillDate(options) {
+  const result = await syncBackfillDate(options);
+  if (result.code !== 'BACKFILL_RECORD_REQUIRED') return result;
+  const listed = await getBackfillSyncRanges(options);
+  if (!listed.success) return listed;
+  for (const range of listed.data.ranges) {
+    if (range.requestId === options.requestId || options.recordDate < range.startDate || options.recordDate > range.endDate) continue;
+    const synced = await syncBackfillDate({ ...options, requestId: range.requestId });
+    if (synced.code !== 'BACKFILL_RECORD_REQUIRED') return synced;
+  }
+  return result;
 }
 
 // 已保存普通记录和获批补录共用账户/日期租约及总量复核，避免各自上报旧总量。
@@ -161,4 +228,4 @@ async function syncDayWithLease({ db, openid, recordDate, syncDate, getDayDurati
   }
 }
 
-module.exports = { syncBackfillDate, syncDayWithLease };
+module.exports = { syncBackfillDate, syncSelectedBackfillDate, syncDayWithLease, validateBackfillSyncGrant, getBackfillSyncRanges };

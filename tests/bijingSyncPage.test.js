@@ -4,6 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const dateUtil = require('../miniprogram/utils/dateUtil');
+const { createHash } = require('node:crypto');
+
+function backfillRequestId(label) {
+  return `br_${createHash('sha256').update(label).digest('hex')}`;
+}
 
 const pageSource = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/me/me.js'), 'utf8');
 const pageTemplate = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/me/me.wxml'), 'utf8');
@@ -24,11 +29,11 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, bind, check, unbind, modal, cloud, pending = 0, retry, pendingByDate, uploadingByDate = {}, sharedStorage } = {}) {
+function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound = true, sync, preview, ranges, bind, check, unbind, modal, cloud, pending = 0, retry, pendingByDate, uploadingByDate = {}, sharedStorage } = {}) {
   let currentTime = Date.parse(now);
   let isLoggedIn = loggedIn;
   let definition;
-  const calls = { check: [], bind: [], unbind: [], modal: [], alerts: [], sync: [], preview: [], retry: [], summaries: [], cloud: [], toast: [], loading: [], changes: [], hideLoading: 0 };
+  const calls = { check: [], bind: [], unbind: [], modal: [], alerts: [], sync: [], preview: [], ranges: [], retry: [], summaries: [], cloud: [], toast: [], loading: [], changes: [], hideLoading: 0 };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -83,6 +88,10 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
       getBijingSyncDateDetails: async (...args) => {
         calls.preview.push(args);
         return preview ? preview(...args) : previewResult(args[0]);
+      },
+      getBijingBackfillSyncRanges: async (...args) => {
+        calls.ranges.push(args);
+        return ranges ? ranges(...args) : { success: true, data: { ranges: [] } };
       },
       syncBijingDate: async (...args) => {
         calls.sync.push(args);
@@ -350,6 +359,224 @@ test('each of the seven completed dates can be previewed and synced, including t
       assert.deepEqual(calls.sync, [[date]]);
     }
   }
+});
+
+test('approved backfill dates extend manual sync without duplicates or unauthorized gaps', async () => {
+  const ranges = [
+    { requestId: backfillRequestId('approved-older'), startDate: '2026-09-01', endDate: '2026-09-03' },
+    { requestId: backfillRequestId('approved-overlap'), startDate: '2026-09-08', endDate: '2026-09-12' },
+    { requestId: backfillRequestId('approved-nested'), startDate: '2026-09-02', endDate: '2026-09-03' }
+  ];
+  const { page, calls } = createPage({ ranges: () => ({ success: true, data: { ranges } }) });
+  await page.syncBijingNow();
+  assert.deepEqual(calls.ranges, [[]]);
+  assert.equal(page.data.bijingSyncDate, '2026-09-16');
+  assert.deepEqual(Array.from(page.data.bijingSyncDateOptions, option => option.date), [
+    '2026-09-16', '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10',
+    '2026-09-09', '2026-09-08', '2026-09-03', '2026-09-02', '2026-09-01'
+  ]);
+  assert.deepEqual(Array.from(page.data.bijingSyncDateOptions.slice(7), option => option.label),
+    ['补录', '补录', '补录', '补录', '补录']);
+  for (const invalid of ['2026-09-04', '2026-09-07', '2026-08-31']) {
+    const previewCount = calls.preview.length;
+    await page.onBijingSyncDateChange({ detail: { value: invalid } });
+    assert.equal(page.data.bijingSyncDate, '2026-09-16', invalid);
+    assert.equal(calls.preview.length, previewCount, invalid);
+    page.data.bijingSyncDate = invalid;
+    await page.confirmBijingSyncDate();
+    assert.equal(calls.sync.length, 0, invalid);
+    assert.equal(page.data.bijingSyncDate, '2026-09-16', invalid);
+  }
+});
+
+test('malformed, future and oversized backfill ranges cannot expand manual sync dates', async () => {
+  const validRange = { requestId: backfillRequestId('valid-range'), startDate: '2026-08-01', endDate: '2026-08-02' };
+  const invalidRanges = [
+    null,
+    { ...validRange, requestId: 'not-an-approved-request', startDate: '2026-09-01', endDate: '2026-09-02' },
+    { ...validRange, startDate: '2026-02-29', endDate: '2026-03-01' },
+    { ...validRange, startDate: 'not-a-date' },
+    { ...validRange, startDate: '2026-08-31', endDate: '2026-08-30' },
+    { ...validRange, startDate: '2026-09-17', endDate: '2026-09-18' },
+    { ...validRange, startDate: '2026-09-01', endDate: '2026-09-17' },
+    { ...validRange, startDate: '2026-07-01', endDate: '2026-07-31' }
+  ];
+  const { page, calls } = createPage({ ranges: () => ({ success: true, data: { ranges: [...invalidRanges, validRange] } }) });
+  await page.syncBijingNow();
+  assert.deepEqual(Array.from(page.data.bijingSyncDateOptions, option => option.date), [
+    '2026-09-16', '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10',
+    '2026-08-02', '2026-08-01'
+  ]);
+  assert.equal(page.data.bijingSyncDetailsError, '');
+  await page.onBijingSyncDateChange({ detail: { value: '2026-08-01' } });
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-08-01', validRange.requestId]]);
+});
+
+test('historical backfill preview and sync carry the approved request while recent overlapping dates stay ordinary', async () => {
+  const ranges = [{ requestId: backfillRequestId('approved-history'), startDate: '2026-09-08', endDate: '2026-09-12' }];
+  for (const [date, expectedArgs] of [
+    ['2026-09-08', ['2026-09-08', backfillRequestId('approved-history')]],
+    ['2026-09-09', ['2026-09-09', backfillRequestId('approved-history')]],
+    ['2026-09-10', ['2026-09-10']],
+    ['2026-09-12', ['2026-09-12']]
+  ]) {
+    const { page, calls } = createPage({ ranges: () => ({ success: true, data: { ranges } }) });
+    await page.syncBijingNow();
+    await page.onBijingSyncDateChange({ detail: { value: date } });
+    assert.equal(page.data.bijingSyncDetailsDate, date);
+    assert.deepEqual(calls.preview.at(-1), expectedArgs);
+    await page.confirmBijingSyncDate();
+    assert.deepEqual(calls.sync, [expectedArgs]);
+  }
+});
+
+test('an expired approved recording window remains available for manual sync including leap-day boundaries', async () => {
+  const { page, calls } = createPage({ ranges: () => ({ success: true, data: { ranges: [
+    { requestId: backfillRequestId('expired-approved'), startDate: '2024-02-28', endDate: '2024-03-01' }
+  ] } }) });
+  await page.syncBijingNow();
+  assert.deepEqual(Array.from(page.data.bijingSyncDateOptions.slice(7), option => option.date),
+    ['2024-03-01', '2024-02-29', '2024-02-28']);
+  await page.onBijingSyncDateChange({ detail: { value: '2024-02-29' } });
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2024-02-29', backfillRequestId('expired-approved')]]);
+});
+
+test('a pending backfill range lookup does not delay ordinary preview or manual sync', async () => {
+  const pending = deferred();
+  const { page, calls } = createPage({ ranges: () => pending.promise });
+  const opening = page.syncBijingNow();
+  assert.deepEqual(calls.preview, [['2026-09-16']]);
+  assert.deepEqual(calls.ranges, [[]]);
+  for (let attempt = 0; attempt < 10 && page.data.bijingSyncDetailsLoading; attempt++) await Promise.resolve();
+  assert.equal(page.data.bijingSyncDetailsDate, '2026-09-16');
+  assert.equal(page.data.bijingSyncDateOptions.length, 7);
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-09-16']]);
+  const before = JSON.stringify(page.data);
+  pending.resolve({ success: true, data: { ranges: [
+    { requestId: backfillRequestId('late-approved'), startDate: '2026-09-01', endDate: '2026-09-02' }
+  ] } });
+  await opening;
+  assert.equal(JSON.stringify(page.data), before, 'closing the picker to sync invalidates its pending range read');
+});
+
+test('loading backfill ranges preserves a date the user selected while that lookup was pending', async () => {
+  const pending = deferred();
+  const { page, calls } = createPage({ ranges: () => pending.promise });
+  const opening = page.syncBijingNow();
+  await page.onBijingSyncDateChange({ detail: { value: '2026-09-14' } });
+  assert.equal(page.data.bijingSyncDetailsDate, '2026-09-14');
+  pending.resolve({ success: true, data: { ranges: [
+    { requestId: backfillRequestId('approved-later'), startDate: '2026-09-01', endDate: '2026-09-01' }
+  ] } });
+  await opening;
+  assert.equal(page.data.bijingSyncDate, '2026-09-14');
+  assert.equal(page.data.bijingSyncDetailsDate, '2026-09-14');
+  assert.equal(page.data.bijingSyncDateOptions.length, 8);
+  assert.deepEqual(calls.preview, [['2026-09-16'], ['2026-09-14']]);
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-09-14']]);
+});
+
+test('backfill range failures preserve ordinary sync and can retry without rereading its preview', async () => {
+  for (const failure of [{ success: false, error: '补录范围读取失败' }, new Error('网络断开')]) {
+    let shouldFail = true;
+    const { page, calls } = createPage({ ranges: () => {
+      if (!shouldFail) return { success: true, data: { ranges: [
+        { requestId: backfillRequestId('approved-retry'), startDate: '2026-09-01', endDate: '2026-09-02' }
+      ] } };
+      if (failure instanceof Error) throw failure;
+      return failure;
+    } });
+    await page.syncBijingNow();
+    assert.equal(typeof page.data.bijingSyncRangesError, 'string');
+    assert.ok(page.data.bijingSyncRangesError.trim(), 'a range lookup failure shows a retryable error');
+    assert.equal(page.data.bijingSyncDetailsError, '');
+    assert.equal(page.data.bijingSyncDetailsDate, '2026-09-16');
+    assert.equal(page.data.bijingSyncDateOptions.length, 7);
+    await page.confirmBijingSyncDate();
+    assert.deepEqual(calls.sync, [['2026-09-16']]);
+    await page.syncBijingNow();
+    const previewCount = calls.preview.length;
+    shouldFail = false;
+    await page.loadBijingBackfillSyncRanges();
+    assert.equal(page.data.bijingSyncRangesError, '');
+    assert.equal(page.data.bijingSyncDateOptions.length, 9);
+    assert.equal(page.data.bijingSyncDate, '2026-09-16');
+    assert.equal(calls.preview.length, previewCount);
+    await page.onBijingSyncDateChange({ detail: { value: '2026-09-01' } });
+    await page.confirmBijingSyncDate();
+    assert.deepEqual(calls.sync.at(-1), ['2026-09-01', backfillRequestId('approved-retry')]);
+  }
+});
+
+test('closing, hiding, unloading and account changes discard late backfill range successes and failures', async () => {
+  for (const action of ['cancelBijingSyncDate', 'onHide', 'onUnload', 'change account']) {
+    for (const failure of [false, true]) {
+      const pending = deferred();
+      const { page, calls, storage } = createPage({ ranges: () => pending.promise });
+      const opening = page.syncBijingNow();
+      assert.equal(calls.ranges.length, 1);
+      for (let attempt = 0; attempt < 10 && page.data.bijingSyncDetailsLoading; attempt++) await Promise.resolve();
+      if (action === 'change account') storage.userOpenId = 'oz-other';
+      else page[action]();
+      const before = JSON.stringify(page.data);
+      if (failure) pending.reject(new Error('过期请求失败'));
+      else pending.resolve({ success: true, data: { ranges: [
+        { requestId: backfillRequestId('stale-approved'), startDate: '2026-09-01', endDate: '2026-09-02' }
+      ] } });
+      await opening;
+      assert.equal(JSON.stringify(page.data), before, `${action}/${failure ? 'failure' : 'success'}`);
+    }
+  }
+});
+
+test('a reopened picker ignores an older range response after its latest dates have loaded', async () => {
+  const old = deferred();
+  let request = 0;
+  const { page, calls } = createPage({ ranges: () => ++request === 1 ? old.promise : {
+    success: true, data: { ranges: [{ requestId: backfillRequestId('new-approved'), startDate: '2026-08-01', endDate: '2026-08-01' }] }
+  } });
+  const opening = page.syncBijingNow();
+  page.cancelBijingSyncDate();
+  await page.syncBijingNow();
+  assert.equal(calls.ranges.length, 2);
+  await page.onBijingSyncDateChange({ detail: { value: '2026-08-01' } });
+  const before = JSON.stringify(page.data);
+  old.resolve({ success: true, data: { ranges: [
+    { requestId: backfillRequestId('old-approved'), startDate: '2026-09-01', endDate: '2026-09-02' }
+  ] } });
+  await opening;
+  assert.equal(JSON.stringify(page.data), before);
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-08-01', backfillRequestId('new-approved')]]);
+});
+
+test('switching accounts clears loaded backfill dates before the next lookup completes', async () => {
+  const pending = deferred();
+  let request = 0;
+  const { page, calls, storage } = createPage({ ranges: () => ++request === 1 ? {
+    success: true, data: { ranges: [{ requestId: backfillRequestId('first-account'), startDate: '2026-09-01', endDate: '2026-09-01' }] }
+  } : pending.promise });
+  await page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDateOptions.length, 8);
+  page.cancelBijingSyncDate();
+  storage.userOpenId = 'oz-other';
+  const reopening = page.syncBijingNow();
+  assert.equal(page.data.bijingSyncDateOptions.length, 7);
+  assert.equal(page.data.bijingBackfillSyncRanges.length, 0);
+  await page.onBijingSyncDateChange({ detail: { value: '2026-09-01' } });
+  assert.equal(page.data.bijingSyncDate, '2026-09-16');
+  pending.resolve({ success: true, data: { ranges: [
+    { requestId: backfillRequestId('second-account'), startDate: '2026-08-01', endDate: '2026-08-01' }
+  ] } });
+  await reopening;
+  assert.deepEqual(Array.from(page.data.bijingSyncDateOptions.slice(7), option => option.date), ['2026-08-01']);
+  await page.onBijingSyncDateChange({ detail: { value: '2026-08-01' } });
+  await page.confirmBijingSyncDate();
+  assert.deepEqual(calls.sync, [['2026-08-01', backfillRequestId('second-account')]]);
 });
 
 test('opening and confirmation require both login and a bound student number', async () => {
@@ -734,6 +961,26 @@ test('API wrappers distinguish read-only getSyncDateDetails from syncSelectedDat
   assert.equal(response.data.duration, 5);
 });
 
+test('backfill range API and historical sync wrappers preserve authorization request IDs', async () => {
+  const calls = [];
+  const ranges = [{ requestId: backfillRequestId('approved-request'), startDate: '2026-08-01', endDate: '2026-08-02' }];
+  const module = { exports: {} };
+  vm.runInNewContext(apiSource, { module, require: () => ({ callCloudFunction: async (name, data) => {
+    calls.push({ name, data: { ...data } });
+    return { result: { success: true, data: data.type === 'getBackfillSyncRanges' ? { ranges } : {} } };
+  } }) });
+  const response = await module.exports.getBijingBackfillSyncRanges();
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data.ranges, ranges);
+  await module.exports.getBijingSyncDateDetails('2026-08-01', backfillRequestId('approved-request'));
+  await module.exports.syncBijingDate('2026-08-01', backfillRequestId('approved-request'));
+  assert.deepEqual(calls, [
+    { name: 'bijingSync', data: { type: 'getBackfillSyncRanges' } },
+    { name: 'bijingSync', data: { type: 'getSyncDateDetails', recordDate: '2026-08-01', backfillRequestId: backfillRequestId('approved-request') } },
+    { name: 'bijingSync', data: { type: 'syncSelectedDate', recordDate: '2026-08-01', backfillRequestId: backfillRequestId('approved-request') } }
+  ]);
+});
+
 test('bound accounts must unbind before opening or submitting a different binding', async () => {
   const { page, calls } = createPage();
   page.toggleBindInput();
@@ -746,7 +993,7 @@ test('bound accounts must unbind before opening or submitting a different bindin
   assert.equal(calls.bind.length, 0);
   assert.ok(calls.toast.every(item => /先解绑/.test(item.title)));
   assert.doesNotMatch(pageTemplate, /重新绑定|输入新学号/);
-  assert.match(pageTemplate, /bindtap="unbindBijing"/);
+  assert.match(pageTemplate, /catchtap="unbindBijing"/);
 });
 
 test('canceling unbind keeps the binding and never invokes the cloud operation', async () => {

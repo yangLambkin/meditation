@@ -1,7 +1,7 @@
 const cloudApi = require('../../utils/cloudApi.js');
 const dateUtil = require('../../utils/dateUtil.js');
 
-const STATUS_LABELS = { pending: '待核对', running: '同步中', success: '已完成', partial: '部分失败', failed: '失败', interrupted: '已中断', skipped: '已跳过' };
+const STATUS_LABELS = { pending: '待核对', uploaded: '上传完成，待核对', waiting: '等待定期核对', running: '同步中', success: '已完成', partial: '部分失败', failed: '失败', interrupted: '已中断', skipped: '已跳过' };
 const PHASE_LABELS = { upload: '批量上传', verify: '核对必经数据', retry: '重试缺失记录', reverify: '复核修复结果' };
 const FEEDBACK_STATUSES = ['pending', 'processing', 'resolved'];
 const FEEDBACK_LABELS = { pending: '待处理', processing: '处理中', resolved: '已处理' };
@@ -44,14 +44,23 @@ function durationText(value) {
   const seconds = Math.round(value / 1000);
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
+function isScheduledUpload(run) {
+  return run.trigger === 'timer' && run.mode !== 'errors' && (!run.phase || run.phase === 'upload');
+}
+function canContinueRun(run) {
+  return ['running', 'interrupted'].includes(run.status) && !run.finishedAt && !isScheduledUpload(run);
+}
 function presentRun(run) {
-  const elapsed = ['running', 'interrupted'].includes(run.status) && timestamp(run.startedAt)
+  const elapsed = ['running', 'interrupted', 'waiting'].includes(run.status) && timestamp(run.startedAt)
     ? Date.now() - timestamp(run.startedAt) : run.durationMs;
   const legacySuccess = run.status === 'success' && (!run.phase || run.phase === 'upload');
   return { ...run, statusText: legacySuccess ? '历史完成 · 未核对' : run.status === 'success' ? '核对完成' : STATUS_LABELS[run.status] || run.status,
     verifiedCountLabel: legacySuccess ? '历史上报成功' : '核对通过',
-    phaseText: PHASE_LABELS[run.phase] || '',
-    triggerText: ({ timer: '自动同步', 'timer-errors': '自动修复', 'manual-errors': '手动修复' })[run.trigger] || '手动同步',
+    detailsEmptyText: isScheduledUpload(run) && run.sourceCheck
+      ? '上传阶段仅保存汇总，请查看该日期的自动核对记录了解逐人结果。' : '暂无明细，任务执行后将陆续显示。',
+    interruptionHint: isScheduledUpload(run) ? '自动上传已中断，当日 03:00–10:00 每小时整点核对和修复。' : run.finishedAt ? '本次执行已结束。' : '执行曾中断，正在等待恢复，可点击一键继续同步。',
+    phaseText: ['uploaded', 'waiting'].includes(run.status) ? '上传完成，当日 03:00–10:00 每小时整点核对和修复' : PHASE_LABELS[run.phase] || '',
+    triggerText: ({ timer: '自动同步', 'timer-check': '自动核对', 'timer-errors': '自动修复', 'manual-errors': '手动修复' })[run.trigger] || '手动同步',
     startedText: timeText(run.startedAt), finishedText: timeText(run.finishedAt), interruptionText: timeText(run.lastInterruptionAt), durationText: durationText(elapsed) };
 }
 function clearedRecordQuery() {
@@ -75,7 +84,7 @@ function presentFeedback(feedback) {
 }
 function clearedPrivateData() {
   return { ...clearedRecordQuery(), ...clearedFeedback(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
-    runs: [], runsLoading: false, showAllRuns: true, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
+    runs: [], runsLoading: false, runsCursor: '', runsPageCount: 1, showAllRuns: true, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
     syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
     teams: [], teamsLoading: false, teamsError: '', teamsCursor: '', teamIndex: -1, selectedTeam: null,
@@ -90,7 +99,7 @@ Page({
     entryVerifying: true, entryAuthorized: false, entryError: '',
     verifying: true, authorized: false, accessError: '', tab: 'sync',
     dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
-    runs: [], runsLoading: false, showAllRuns: true, syncBusy: false, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
+    runs: [], runsLoading: false, runsCursor: '', runsPageCount: 1, showAllRuns: true, syncBusy: false, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
     syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
     teams: [], teamsLoading: false, teamsError: '', teamsCursor: '', teamIndex: -1, selectedTeam: null,
@@ -430,7 +439,7 @@ Page({
     if (this._syncBusy || !this.data.dates[index] || index === this.data.dateIndex) return;
     this._continuePaused = false;
     this._itemsRequest = (this._itemsRequest || 0) + 1;
-    this.setData({ dateIndex: index, recordDate: this.data.dates[index], showAllRuns: false, runs: [], runningRunId: '', runningRecordDate: '',
+    this.setData({ dateIndex: index, recordDate: this.data.dates[index], showAllRuns: false, runs: [], runsCursor: '', runsPageCount: 1, runningRunId: '', runningRecordDate: '',
       selectedRunId: '', items: [], itemsError: '', itemsCursor: '', itemsLoading: false, syncError: '', syncMessage: '' });
     await this.loadRuns();
   },
@@ -438,30 +447,54 @@ Page({
   async onHistoryScopeChange(event) {
     const showAllRuns = event.currentTarget.dataset.scope === 'all';
     if (showAllRuns === this.data.showAllRuns) return;
-    this.setData({ showAllRuns, runs: [], selectedRunId: '', items: [], itemsCursor: '' });
+    this.setData({ showAllRuns, runs: [], runsCursor: '', runsPageCount: 1, selectedRunId: '', items: [], itemsCursor: '' });
     this._itemsRequest = (this._itemsRequest || 0) + 1;
     await this.loadRuns();
   },
 
-  async loadRuns() {
-    if (!this.data.authorized || this.data.tab !== 'sync' || !this.data.recordDate || !this._visible) return;
+  loadMoreRuns() { return this.loadRuns(true); },
+  async loadRuns(append = false) {
+    append = append === true;
+    if (!this.data.authorized || this.data.tab !== 'sync' || !this.data.recordDate || !this._visible ||
+      (append && (!this.data.runsCursor || this.data.runsLoading))) return;
+    this.clearPoll();
     const generation = this._generation;
     const request = this._runsRequest = (this._runsRequest || 0) + 1;
     const recordDate = this.data.recordDate;
+    const showAllRuns = this.data.showAllRuns;
+    const previousPages = this.data.runsPageCount || 1;
+    const pageLimit = append ? 1 : previousPages;
+    let cursor = append ? this.data.runsCursor : '';
+    let activeRun = null, fetchedPages = 0;
+    const fetched = [];
     this.setData({ runsLoading: true });
     try {
-      const result = await this.callAdmin('bijingSync', 'adminListSyncRuns', this.data.showAllRuns ? {} : { recordDate });
-      if (!this.isCurrent(generation) || request !== this._runsRequest || !this.data.authorized) return;
-      const runs = (result.runs || []).map(presentRun);
-      const candidates = result.activeRun ? runs.concat(result.activeRun) : runs;
-      const activeRuns = candidates.filter(run => ['running', 'interrupted'].includes(run.status));
-      // A task just started for an older date (or beyond the first 50 rows) must
-      // keep polling even though it is absent from the recent history.
+      // Refresh all pages already opened so automatic polling does not remove
+      // older execution records while an administrator is reading them.
+      for (let page = 0; page < pageLimit; page++) {
+        const result = await this.callAdmin('bijingSync', 'adminListSyncRuns', {
+          ...(showAllRuns ? {} : { recordDate }), ...(cursor ? { cursor } : {}),
+        });
+        if (!this.isCurrent(generation) || request !== this._runsRequest || !this.data.authorized) return;
+        fetched.push(...(result.runs || []));
+        activeRun = result.activeRun || null;
+        cursor = result.nextCursor || '';
+        fetchedPages++;
+        if (!cursor) break;
+      }
+      const byId = new Map((append ? this.data.runs : []).map(run => [run._id, run]));
+      for (const run of fetched) byId.set(run._id, presentRun(run));
+      const runs = Array.from(byId.values());
+      const candidates = activeRun ? runs.concat(activeRun) : runs;
+      const activeRuns = candidates.filter(canContinueRun);
+      // A task just started beyond the loaded history must keep polling even
+      // while it is absent from the currently displayed pages.
       const tracked = this.data.runningRunId && !candidates.some(run => run._id === this.data.runningRunId)
         ? { _id: this.data.runningRunId, recordDate: this.data.runningRecordDate } : null;
       const active = activeRuns.find(run => run._id === this.data.runningRunId) || tracked || activeRuns.find(run => run.recordDate === recordDate)
-        || (this.data.showAllRuns && activeRuns.find(run => run.mode === 'errors'));
-      this.setData({ runs, runningRunId: active && active._id || '', runningRecordDate: active && active.recordDate || '' });
+        || (showAllRuns && activeRuns.find(run => run.mode === 'errors'));
+      this.setData({ runs, runsCursor: cursor, runsPageCount: (append ? previousPages : 0) + fetchedPages,
+        runningRunId: active && active._id || '', runningRecordDate: active && active.recordDate || '' });
       if (!this._continuePaused) this.setData({ syncError: '' });
     } catch (error) {
       if (this.isCurrent(generation) && request === this._runsRequest) this.setData({ syncError: errorText(error) });
@@ -492,7 +525,7 @@ Page({
       return;
     }
     this._continuePaused = false;
-    if (this.data.runningRunId) return this.continueSync(this.data.runningRunId);
+    if (this.data.runningRunId && this.data.runningRecordDate === this.data.recordDate) return this.continueSync(this.data.runningRunId);
     await this.runSyncAction('adminStartSync', { recordDate: this.data.recordDate });
   },
   continueSync(runId) {
@@ -518,9 +551,14 @@ Page({
       }
       if (!runId) throw new Error('未返回执行记录，请刷新后重试');
       this._workerBusy = run.busy === true;
-      const continuing = ['running', 'interrupted'].includes(run.status);
+      const continuing = canContinueRun(run);
+      const waitingForScheduledCheck = isScheduledUpload(run) && !run.finishedAt && ['running', 'interrupted'].includes(run.status);
       this.setData({ runningRunId: continuing ? runId : '', runningRecordDate: continuing ? run.recordDate || '' : '',
-        syncMessage: continuing ? '正在同步并核对必经数据。离开页面后由后台继续处理。'
+        syncMessage: continuing ? '正在同步并核对必经数据。未完成的任务可返回此页继续处理。'
+          : waitingForScheduledCheck ? (run.status === 'interrupted'
+            ? '自动上传已中断，当日北京时间 03:00–10:00 每小时整点根据当日记录核对和修复。'
+            : '自动上传正在后台执行，当日北京时间 03:00–10:00 每小时整点核对和修复。')
+          : ['uploaded', 'waiting'].includes(run.status) ? '上传已完成，当日北京时间 03:00–10:00 每小时整点核对和修复。'
           : run.status === 'success' ? '同步核对完成，已恢复的记录已从待处理错误中移除。' : '本次执行已结束，请查看待处理错误及执行记录。' });
       await this.loadSyncErrors();
       await this.loadRuns();
@@ -549,9 +587,10 @@ Page({
       const result = await this.callAdmin('bijingSync', 'adminListSyncErrors', append ? { cursor: this.data.syncErrorsCursor } : {});
       if (!this.isCurrent(generation) || request !== this._syncErrorsRequest || !this.data.authorized) return;
       const errors = (result.errors || []).map(item => ({ ...item, updatedText: timeText(item.updatedAt),
-        actualText: item.reason !== 'missing' && Number.isFinite(item.actualDurationMinutes) ? `${item.actualDurationMinutes} 分钟` : '未查到',
+        expectedText: item.reason === 'source_read_failed' ? '待读取' : `${item.expectedDurationMinutes} 分钟`,
+        actualText: item.reason === 'source_read_failed' ? '尚未核对' : item.reason !== 'missing' && Number.isFinite(item.actualDurationMinutes) ? `${item.actualDurationMinutes} 分钟` : '未查到',
         reasonText: item.error || ({ missing: '必经侧缺少记录', duration_mismatch: '必经侧时长与预期不一致',
-          student_not_found: '必经侧未找到该学号' })[item.reason] || item.reason || '尚未通过最终核对' }));
+          student_not_found: '必经侧未找到该学号', source_read_failed: '本地记录读取失败，等待重新读取后核对' })[item.reason] || item.reason || '尚未通过最终核对' }));
       this.setData({ syncErrors: append ? this.data.syncErrors.concat(errors) : errors, syncErrorsCursor: result.nextCursor || '' });
     } catch (error) {
       if (this.isCurrent(generation) && request === this._syncErrorsRequest) this.setData({ syncErrorsError: errorText(error) });
@@ -568,7 +607,7 @@ Page({
     this._continuePaused = false;
     if (this.data.runningRunId) return this.continueSync(this.data.runningRunId);
     // 修复可能属于另一个日期；任务续跑状态独立于最近七天的历史列表。
-    this.setData({ showAllRuns: true });
+    this.setData({ showAllRuns: true, runs: [], runsCursor: '', runsPageCount: 1 });
     await this.runSyncAction('adminRetrySyncErrors', {});
   },
 

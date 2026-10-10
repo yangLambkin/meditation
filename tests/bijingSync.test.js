@@ -37,7 +37,7 @@ function createHarness(options = {}) {
   const records = clone(options.records || []);
   const bindingRows = clone(options.bindings || []);
   const backfillRequests = clone(options.requests || []);
-  const calls = { reads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], gets: [], now: 0 };
+  const calls = { reads: [], documentReads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], gets: [], now: 0 };
 
   class FixedDate extends Date {
     constructor(...args) {
@@ -77,8 +77,9 @@ function createHarness(options = {}) {
               if (options.onRead) options.onRead({ name, filter }, records);
               if (options.readError) throw new Error(options.readError);
               if (name === 'meditation_records' && options.detailReadError) throw new Error(options.detailReadError);
-              assert.ok(['users', 'meditation_records', 'bijing_bindings'].includes(name));
-              const rows = (name === 'users' ? users : name === 'bijing_bindings' ? bindingRows : records).filter(row => matches(row, filter));
+              if (name === 'backfill_requests' && options.backfillReadError) throw options.backfillReadError;
+              assert.ok(['users', 'meditation_records', 'bijing_bindings', 'backfill_requests'].includes(name));
+              const rows = (name === 'users' ? users : name === 'bijing_bindings' ? bindingRows : name === 'backfill_requests' ? backfillRequests : records).filter(row => matches(row, filter));
               if (order) rows.sort((a, b) => String(a[order.key]).localeCompare(String(b[order.key])) * (order.direction === 'asc' ? 1 : -1));
               const page = rows.slice(offset, offset + maximum);
               return { data: clone(fields ? page.map(row => Object.fromEntries(Object.keys(fields).filter(key => fields[key] && Object.hasOwn(row, key)).map(key => [key, row[key]]))) : page) };
@@ -118,6 +119,8 @@ function createHarness(options = {}) {
         doc(id) {
           return {
             async get() {
+              calls.documentReads.push({ name, id });
+              if (name === 'backfill_requests' && options.backfillReadError) throw options.backfillReadError;
               const rows = name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
               const row = rows.find(row => row._id === id);
               return { data: row ? clone(row) : null };
@@ -798,4 +801,171 @@ test('record cursor does not lose the next page when an earlier historical recor
   const result = await app.details('2026-09-16');
   assert.equal(result.data.totalDuration, 200);
   assert.equal(result.data.count, 200);
+});
+
+const manualBackfillId = 'br_' + 'f'.repeat(64);
+const manualBackfillGrant = (extra = {}) => ({ _id: manualBackfillId, kind: 'request', ownerOpenid: 'user-a',
+  status: 'approved', startDate: '2026-08-18', endDate: '2026-09-16', expiresAt: '2026-09-17T18:00:00.000Z', ...extra });
+
+test('manual sync lists every owned approved historical range across cursor pages, including expired grants', async () => {
+  const requests = Array.from({ length: 205 }, (_, index) => manualBackfillGrant({
+    _id: 'br_' + index.toString(16).padStart(64, '0'), reason: 'private application reason', recordedDates: ['2026-08-18'],
+  }));
+  const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [
+    ...requests.slice().reverse(),
+    manualBackfillGrant({ _id: 'foreign', ownerOpenid: 'another-user' }),
+    manualBackfillGrant({ _id: 'pending', status: 'pending' }),
+    manualBackfillGrant({ _id: 'rejected', status: 'rejected' }),
+    manualBackfillGrant({ _id: 'lease', kind: 'sync_lock' }),
+    manualBackfillGrant({ _id: 'invalid-id' }),
+    manualBackfillGrant({ _id: 'br_' + 'a'.repeat(64), startDate: '2026-08-17' }),
+    manualBackfillGrant({ _id: 'br_' + 'b'.repeat(64), startDate: '2026-09-31' }),
+    manualBackfillGrant({ _id: 'br_' + 'c'.repeat(64), endDate: '2026-08-17' }),
+    manualBackfillGrant({ _id: 'br_' + 'd'.repeat(64), startDate: '2026-10-01', endDate: '2026-10-06' }),
+    manualBackfillGrant({ _id: 'br_' + 'e'.repeat(64), startDate: '2026-10-07', endDate: '2026-10-08' }),
+  ] });
+  const result = await app.run({ type: 'getBackfillSyncRanges', openid: 'another-user', ownerOpenid: 'another-user' });
+  assert.deepEqual(result, { success: true, data: { ranges: requests.map(({ _id, startDate, endDate }) => ({ requestId: _id, startDate, endDate })) } });
+  const pages = app.calls.reads;
+  assert.equal(pages.length, 3);
+  for (const page of pages) {
+    assert.equal(page.name, 'backfill_requests');
+    assert.equal(page.filter.ownerOpenid, 'user-a');
+    assert.equal(page.filter.status, 'approved');
+    assert.equal(page.filter.kind, 'request');
+    assert.equal(page.maximum, 100);
+    assert.deepEqual(page.order, { key: '_id', direction: 'asc' });
+    assert.equal(page.fields.reason, undefined); assert.equal(page.fields.recordedDates, undefined);
+  }
+  assert.equal(pages[1].filter._id.op, 'gt');
+  assert.ok(pages[2].filter._id.value > pages[1].filter._id.value);
+  assert.equal(app.calls.now, 1); assert.equal(app.calls.posts.length, 0); assert.equal(app.calls.updates.length, 0);
+});
+
+test('backfill range listing requires login and distinguishes an absent collection from unavailable permissions', async () => {
+  const loggedOut = createHarness({ openid: '' });
+  assert.equal((await loggedOut.run({ type: 'getBackfillSyncRanges', openid: 'user-a' })).code, 'AUTH_REQUIRED');
+  assert.equal(loggedOut.calls.reads.length, 0);
+  for (const options of [{}, { backfillReadError: Object.assign(new Error('collection does not exist'), { errCode: -502005 }) }]) {
+    assert.deepEqual(await createHarness(options).run({ type: 'getBackfillSyncRanges' }), { success: true, data: { ranges: [] } });
+  }
+  const unavailable = createHarness({ backfillReadError: new Error('permission denied') });
+  const result = await unavailable.run({ type: 'getBackfillSyncRanges' });
+  assert.equal(result.success, false); assert.equal(result.code, 'BACKFILL_RANGES_READ_FAILED');
+});
+
+test('backfill range listing treats a day as complete only at the Beijing 02:00 boundary', async () => {
+  const requests = [manualBackfillGrant({ startDate: '2026-09-16', endDate: '2026-09-16' })];
+  const before = createHarness({ now: '2026-09-17T01:59:59.999+08:00', requests });
+  assert.deepEqual((await before.run({ type: 'getBackfillSyncRanges' })).data.ranges, []);
+  const after = createHarness({ now: '2026-09-17T02:00:00.000+08:00', requests });
+  assert.equal((await after.run({ type: 'getBackfillSyncRanges' })).data.ranges.length, 1);
+});
+
+test('approved older dates can be previewed before recording, without granting permission to post unrelated records', async () => {
+  for (const records of [[], [{ _id: 'ordinary', _openid: 'user-a', source: 'manual', date: '2026-08-18', duration: 25 }]]) {
+    const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [manualBackfillGrant()], records });
+    const event = { recordDate: '2026-08-18', backfillRequestId: manualBackfillId };
+    const preview = await app.run({ type: 'getSyncDateDetails', ...event });
+    assert.equal(preview.success, true); assert.equal(preview.data.count, records.length);
+    assert.equal(preview.data.totalDuration, records.length ? 25 : 0);
+    assert.equal(app.calls.bindingWrites.length, 0); assert.equal(app.calls.posts.length, 0);
+    const sync = await app.run({ type: 'syncSelectedDate', ...event });
+    assert.equal(sync.success, false); assert.equal(sync.code, 'BACKFILL_RECORD_REQUIRED');
+    assert.equal(app.calls.bindingWrites.length, 0); assert.equal(app.calls.posts.length, 0);
+  }
+});
+
+test('selected older backfill dates retry after grant expiry and aggregate all owned daily records under a lease', async () => {
+  const recordDate = '2026-08-18';
+  const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [manualBackfillGrant()], records: [
+    { _id: 'backfill', _openid: 'user-a', source: 'manual', date: recordDate, backfillRequestId: manualBackfillId, duration: 30 },
+    { _id: 'ordinary', _openid: 'user-a', source: 'manual', date: recordDate, duration: 15 },
+    { _id: 'foreign', _openid: 'other', source: 'manual', date: recordDate, duration: 90 },
+  ] });
+  const event = { recordDate, backfillRequestId: manualBackfillId };
+  assert.equal((await app.run({ type: 'getSyncDateDetails', ...event })).data.totalDuration, 45);
+  for (let retry = 0; retry < 2; retry++) {
+    const result = await app.run({ type: 'syncSelectedDate', ...event, openid: 'forged', studentNumber: 'forged' });
+    assert.equal(result.success, true); assert.equal(result.data.duration, 45);
+    assert.deepEqual(app.calls.posts[retry].body, { studentNumber: '123456', recordDate, durationMinutes: 45 });
+  }
+  const leaseWrites = app.calls.bindingWrites.filter(write => write.data.kind === 'sync_lock');
+  assert.equal(leaseWrites.length, 4); assert.equal(leaseWrites[0].data.ownerOpenid, 'user-a');
+  assert.ok(leaseWrites[0].data.token); assert.equal(leaseWrites[1].data.token, '');
+});
+
+test('selected backfill date receipts permit zero-total correction after the records have been deleted', async () => {
+  const recordDate = '2026-08-18';
+  const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [manualBackfillGrant({ recordedDates: [recordDate] })] });
+  const result = await app.run({ type: 'syncSelectedDate', recordDate, backfillRequestId: manualBackfillId });
+  assert.equal(result.success, true); assert.equal(result.data.duration, 0);
+  assert.equal(app.calls.posts[0].body.durationMinutes, 0);
+  assert.equal(app.users[0].bijingSyncedDates[recordDate], true);
+});
+
+test('overlapping approved ranges use recorded evidence from another owned approved application', async () => {
+  const recordDate = '2026-08-18', otherId = 'br_' + 'e'.repeat(64);
+  const selected = manualBackfillGrant(), other = manualBackfillGrant({ _id: otherId, recordedDates: [recordDate] });
+  for (const scenario of [
+    { requests: [selected, other], records: [] },
+    { requests: [selected, { ...other, recordedDates: [] }], records: [
+      { _id: 'saved', _openid: 'user-a', source: 'manual', date: recordDate, backfillRequestId: otherId, duration: 30 },
+    ] },
+  ]) {
+    const app = createHarness({ now: '2026-10-06T02:00:00Z', ...scenario });
+    const direct = await app.run({ type: 'syncBackfillDate', requestId: manualBackfillId, recordDate });
+    assert.equal(direct.code, 'BACKFILL_RECORD_REQUIRED', 'single-application sync keeps its existing authorization scope');
+    const result = await app.run({ type: 'syncSelectedDate', recordDate, backfillRequestId: manualBackfillId });
+    assert.equal(result.success, true); assert.equal(result.data.duration, scenario.records.length ? 30 : 0);
+    assert.equal(app.calls.posts.length, 1);
+  }
+  for (const change of [{ ownerOpenid: 'other' }, { status: 'pending' }, { status: 'rejected' },
+    { startDate: '2026-08-19' }, { recordedDates: [] }]) {
+    const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [selected, { ...other, ...change }] });
+    const result = await app.run({ type: 'syncSelectedDate', recordDate, backfillRequestId: manualBackfillId });
+    assert.equal(result.code, 'BACKFILL_RECORD_REQUIRED'); assert.equal(app.calls.posts.length, 0);
+  }
+});
+
+test('older manual previews and sync fail closed for missing, pending, rejected, foreign, malformed or out-of-range grants', async () => {
+  const request = manualBackfillGrant({ recordedDates: ['2026-08-18'] });
+  for (const requests of [[], [{ ...request, ownerOpenid: 'other' }], [{ ...request, status: 'pending' }],
+    [{ ...request, status: 'rejected' }], [{ ...request, kind: 'sync_lock' }], [{ ...request, startDate: '2026-08-19' }],
+    [{ ...request, startDate: undefined }], [{ ...request, endDate: '2026-09-31' }], [{ ...request, startDate: '2026-08-17' }]]) {
+    for (const type of ['getSyncDateDetails', 'syncSelectedDate']) {
+      const app = createHarness({ now: '2026-10-06T02:00:00Z', requests });
+      const result = await app.run({ type, recordDate: '2026-08-18', backfillRequestId: manualBackfillId, openid: 'other' });
+      assert.equal(result.success, false); assert.equal(result.code, 'BACKFILL_INVALID_GRANT');
+      assert.equal(app.calls.reads.length, 0); assert.equal(app.calls.posts.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
+    }
+  }
+  for (const type of ['getSyncDateDetails', 'syncSelectedDate']) {
+    const app = createHarness({ now: '2026-10-06T02:00:00Z', requests: [request] });
+    for (const backfillRequestId of [undefined, 'forged', { requestId: manualBackfillId }]) {
+      assert.equal((await app.run({ type, recordDate: '2026-08-18', backfillRequestId })).success, false);
+    }
+    for (const recordDate of ['2026-10-06', '2026-10-07', '2026-09-31']) {
+      assert.equal((await app.run({ type, recordDate, backfillRequestId: manualBackfillId })).success, false);
+    }
+    assert.equal(app.calls.documentReads.length, 0); assert.equal(app.calls.posts.length, 0);
+    const unavailable = createHarness({ requests: [request], backfillReadError: new Error('permission denied') });
+    assert.equal((await unavailable.run({ type, recordDate: '2026-08-18', backfillRequestId: manualBackfillId })).code, 'BACKFILL_RANGES_READ_FAILED');
+    assert.equal(unavailable.calls.posts.length, 0);
+  }
+});
+
+test('the seven completed dates keep ordinary preview and sync semantics even with a stale backfill selection', async () => {
+  for (const type of ['getSyncDateDetails', 'syncSelectedDate']) {
+    for (const backfillRequestId of [undefined, manualBackfillId, 'invalid', { requestId: manualBackfillId }]) {
+      const app = createHarness({ backfillReadError: new Error('no grant lookup should be needed'), records: [
+        { _id: 'ordinary', _openid: 'user-a', source: 'manual', date: '2026-09-10', duration: 25 },
+      ] });
+      const result = await app.run({ type, recordDate: '2026-09-10', backfillRequestId });
+      assert.equal(result.success, true);
+      assert.equal(result.data[type === 'getSyncDateDetails' ? 'totalDuration' : 'duration'], 25);
+      assert.equal(app.calls.documentReads.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
+      assert.equal(app.calls.now, 1);
+    }
+  }
 });

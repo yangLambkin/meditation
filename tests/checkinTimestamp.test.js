@@ -366,11 +366,11 @@ test('legacy sync entry points and manual queues never implicitly upload unversi
   assert.equal(app.backups.length, 0);
 });
 
-test('manual backfill validates the three business dates but returns a previously saved identity after the window', () => {
+test('manual backfill validates today and yesterday but returns a previously saved identity after the window', () => {
   const app = createLocalHarness();
-  assert.throws(() => app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'new', source: 'manual', date: '2026-09-14' }), /最近三天/);
-  const result = app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'saved', source: 'manual', date: '2026-09-15' });
-  assert.equal(result.date, '2026-09-15');
+  assert.throws(() => app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'new', source: 'manual', date: '2026-09-15' }), /今天和昨天/);
+  const result = app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'saved', source: 'manual', date: '2026-09-16' });
+  assert.equal(result.date, '2026-09-16');
   assert.equal(app.manager.recordCheckin(10, [], [], NOW, { idempotencyKey: 'saved', source: 'manual', date: '2026-09-14' }).duplicate, true);
   assert.equal(app.manager.getUserStats().totalCount, 1);
 });

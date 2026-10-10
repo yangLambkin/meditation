@@ -40,7 +40,7 @@ page { background: #f8fafc; color: #354152; }
 .run-date { font-size: 32rpx; font-weight: 600; color: #36424e; }
 .status { flex-shrink: 0; padding: 7rpx 15rpx; border-radius: 100rpx; color: #7b8591; background: #f0f2f5; font-size: 21rpx; }
 .status-success { background: #eef6f1; color: #527c69; }
-.status-running { background: #f8f0df; color: #a17d39; }
+.status-running, .status-waiting, .status-uploaded { background: #f8f0df; color: #a17d39; }
 .status-failed, .status-partial, .status-interrupted { background: #fff0ec; color: #b85b4f; }
 .run-meta { display: flex; justify-content: space-between; margin-top: 16rpx; color: #939ba5; font-size: 22rpx; }
 .counts { display: flex; padding: 26rpx 0; margin: 24rpx 0 18rpx; background: #f8fafc; border-radius: 12rpx; }

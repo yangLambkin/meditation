@@ -32,7 +32,7 @@
     </view>
     <view class="checkin-record" wx:for="{{day.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{day.date}}" hover-class="checkin-record-active">
       <view class="checkin-record-heading">
-        <view class="checkin-record-main"><text class="checkin-record-duration">{{record.duration}} 分钟</text><text class="checkin-record-time">{{record.timeLabel}}{{record.isBackfill ? ' · 闭关补录' : ''}}</text></view>
+        <view class="checkin-record-main"><text class="checkin-record-duration">{{record.duration}} 分钟</text><text class="checkin-record-time">{{record.timeLabel}}</text></view>
       </view>
       <text wx:if="{{record.syncStatusText && !isMemberHistory}}" class="record-sync-error">{{record.syncStatusText}}</text>
       <text wx:elif="{{record.syncError}}" class="record-sync-error">上传失败，已存本机，请手动上传</text>

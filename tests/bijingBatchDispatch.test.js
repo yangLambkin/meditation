@@ -21,7 +21,7 @@ function harness(options = {}) {
     }
     if(name==='axios') return {post: async (...args)=>{calls.push({name:'post',args}); return {data:{success:true}};}};
     if(name==='./maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
-    if(name==='./batchJobs') return {BATCH_SIZE:20,createBatchJobs: deps=>{captured.deps=deps;return jobs;}};
+    if(name==='./batchJobs') return {BATCH_SIZE:100,createBatchJobs: deps=>{captured.deps=deps;return jobs;}};
     if(name==='./setup') return {initialize:async()=>{calls.push({name:'initialize'});return {};}};
     throw new Error(name);
   }});
@@ -32,7 +32,31 @@ test('timer dispatch selects only completed days at the precise Beijing 02:00 bo
   for(const [now,date] of [['2026-09-23T01:59:59.999+08:00','2026-09-21'],['2026-09-23T02:00:00+08:00','2026-09-22'],['2027-01-01T02:00:00+08:00','2026-12-31']]) {
     const app=harness({now}); assert.equal((await app.run({})).success,true);
     assert.equal(app.captured.deps.recentDates(1)[0],date);
-    assert.deepEqual(app.calls,[{name:'timer',args:[]}]);
+    assert.deepEqual(app.calls,[{name:'timer',args:[undefined]}]);
+  }
+});
+
+test('authorized timer dispatch forwards the platform trigger name and leaves missing names undefined',async()=>{
+  for(const TriggerName of ['dailySyncBijing','checkBijingSync','resumeBijingBatches','unknownTrigger',undefined]) {
+    const app=harness();
+    assert.equal((await app.run({TriggerName})).success,true);
+    assert.deepEqual(app.calls,[{name:'timer',args:[TriggerName]}]);
+    assert.deepEqual(app.authRequests,[]);
+  }
+});
+
+test('forged trigger names and event source cannot bypass SDK timer authorization',async()=>{
+  for(const TriggerName of ['dailySyncBijing','checkBijingSync','resumeBijingBatches','unknownTrigger']) {
+    for(const context of [{OPENID:'ordinary',SOURCE:'wx_client'},{OPENID:'ordinary',SOURCE:'wx_trigger'},
+      {SOURCE:'wx_client'},{SOURCE:'wx_http'},{}]) {
+      const app=harness({context});
+      const result=await app.run({TriggerName,source:'wx_trigger',SOURCE:'wx_trigger',OPENID:'maintenance'});
+      assert.equal(result.code,'FORBIDDEN');
+      assert.deepEqual(app.calls,[]);assert.equal(app.captured.deps,undefined);
+    }
+    const disabled=harness({env:{BIJING_TIMER_ENABLED:'false'}});
+    assert.equal((await disabled.run({type:'cronSyncAll',TriggerName})).code,'FORBIDDEN');
+    assert.deepEqual(disabled.calls,[]);assert.equal(disabled.captured.deps,undefined);
   }
 });
 
@@ -181,6 +205,7 @@ test('administrator status exposes configuration health without exposing API sec
   const app=harness({context:{OPENID:'admin'},env:{BIJING_TIMER_ENABLED:'false'}});
   const result=await app.run({type:'adminStatus'});
   assert.equal(result.success,true); assert.equal(result.data.timerEnabled,false);assert.equal(result.data.apiConfigured,true);
+  assert.equal(result.data.batchSize,100);
   assert.equal(result.data.dates.length,30);assert.equal(result.data.latestDate,'2026-09-22');
   assert.equal(JSON.stringify(result).includes('server-token'),false);assert.equal(JSON.stringify(result).includes('example.test'),false);
 });
@@ -196,9 +221,12 @@ test('administrator routing forwards only intended action fields and platform op
   assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','admin']},{name:'processChunk',args:['run']},{name:'listRuns',args:[undefined,undefined]},{name:'details',args:['run','after']},{name:'listErrors',args:['after']},{name:'retryErrors',args:['admin']}]);
 });
 
-test('deployment keeps the daily 02:00 trigger and independent five-minute continuation',()=>{
+test('deployment schedules daily 02:00 upload and hourly 03:00–10:00 reconciliation',()=>{
   const config=require('../cloudfunctions/bijingSync/config.json');
-  assert.deepEqual(config.triggers,[{name:'dailySyncBijing',type:'timer',config:'0 0 2 * * * *'},{name:'resumeBijingBatches',type:'timer',config:'0 */5 * * * * *'}]);
+  assert.deepEqual(config.triggers,[
+    {name:'dailySyncBijing',type:'timer',config:'0 0 2 * * * *'},
+    {name:'checkBijingSync',type:'timer',config:'0 0 3-10 * * * *'},
+  ]);
 });
 
 test('setup creates binding ownership and operational collections including unresolved errors and surfaces real failures',async()=>{

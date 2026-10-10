@@ -275,14 +275,14 @@ page {
 .bijing-account-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-wrap: wrap;
   column-gap: 16rpx;
   margin-top: 8rpx;
 }
 .bijing-bound-tip {
   display: block;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 22rpx;
   line-height: 1.6;
@@ -295,28 +295,12 @@ page {
   gap: 20rpx;
   margin-top: 12rpx;
 }
-.bijing-auto-note {
-  margin-top: 12rpx;
-}
-.bijing-auto-note-title {
-  display: block;
-  font-size: 24rpx;
-  font-weight: 500;
-  line-height: 1.6;
-  color: #62594a;
-}
-.bijing-auto-note-detail,
 .bijing-bind-description {
   display: block;
+  margin-top: 12rpx;
   font-size: 22rpx;
   line-height: 1.7;
   color: #857d70;
-}
-.bijing-auto-note-detail {
-  margin-top: 4rpx;
-}
-.bijing-bind-description {
-  margin-top: 12rpx;
 }
 .bijing-last {
   display: block;
@@ -360,6 +344,18 @@ page {
 .bijing-btn-sm:active {
   background-color: #8c7345;
 }
+.bijing-actions .bijing-manual-btn,
+.bijing-actions .bijing-heatmap-btn {
+  box-sizing: border-box;
+  flex: 0 0 192rpx;
+  width: 192rpx;
+  height: 72rpx;
+  margin: 0;
+  padding: 0 20rpx;
+}
+.bijing-heatmap-btn::after {
+  border: none;
+}
 .bijing-manual-btn {
   border: 2rpx solid #c9b68f;
   background-color: #ffffff;
@@ -381,7 +377,10 @@ page {
   color: #8c7345;
 }
 .bijing-unbind {
-  color: #a14b3c;
+  color: #999999;
+}
+.bijing-unbind:active {
+  color: #666666;
 }
 .bijing-btn-sm.is-busy,
 .bijing-text-action.is-busy {

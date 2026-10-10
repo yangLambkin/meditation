@@ -77,8 +77,6 @@
         </button>
       </view>
 
-      <button wx:if="{{homeBackfillGrant}}" class="home-backfill-entry" bindtap="openApprovedBackfill" disabled="{{checkinSubmitting}}" hover-class="checkin-record-active">已获批补录 · {{homeBackfillGrant.startDate}} 至 {{homeBackfillGrant.endDate}} ›</button>
-
       <!-- 每日金句随首屏自适应布局落在操作按钮下方 -->
       <view class="flex-col items-start section_11">
         <text class="font_6 text_29">每日金句</text>
@@ -109,7 +107,7 @@
           </view>
           <view class="checkin-record {{!record.emotion.length && !record.experienceTexts.length && !record.syncError && !record.syncStatusText && !record.bijingSyncText ? 'checkin-record-brief' : ''}}" wx:for="{{group.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{record.dayDate}}" hover-class="checkin-record-active">
             <view class="checkin-record-heading">
-              <text class="checkin-record-time">{{record.timeLabel}}{{record.isBackfill ? ' · 闭关补录' : ''}}</text>
+              <text class="checkin-record-time">{{record.timeLabel}}</text>
               <view class="checkin-record-actions">
                 <text class="checkin-record-duration">{{record.duration}} 分钟</text>
               </view>
@@ -201,10 +199,10 @@
       </view>
       <scroll-view class="checkin-dialog-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
         <view class="checkin-dialog-body">
-          <text class="checkin-subtitle">{{hasBackfillDates ? '可选获批补录日期 + 最近三天（含今天），北京时间凌晨 2 点换日' : '最近三天（含今天）无需申请即可记录，北京时间凌晨 2 点换日'}}</text>
-          <text wx:if="{{homeBackfillGrant}}" class="checkin-subtitle">获批区间：{{homeBackfillGrant.startDate}} 至 {{homeBackfillGrant.endDate}}。请在 {{homeBackfillGrant.expiresText}}（北京时间）前完成补录；最近三天和获批区间以外的日期不可选。</text>
-          <text wx:else class="checkin-subtitle">需要补录更早的闭关记录，请到「我 → 申请补录」选择日期区间、填写原因，管理员审批通过后再回首页补录。</text>
-          <text wx:if="{{backfillLoading}}" class="checkin-subtitle">正在读取补录权限…</text>
+          <view wx:if="{{homeBackfillGrant}}" class="checkin-backfill-range">
+            <text class="checkin-backfill-range-label">补录区间</text>
+            <text class="checkin-backfill-range-value">{{homeBackfillGrant.startDate}} 至 {{homeBackfillGrant.endDate}}</text>
+          </view>
           <view wx:if="{{backfillError}}" class="checkin-backfill-notice">
             <text>{{backfillError}}</text>
             <button class="checkin-retry-button" bindtap="initHomeBackfill" disabled="{{backfillLoading || checkinSubmitting}}">重试读取</button>
@@ -232,9 +230,6 @@
             </view>
           </view>
           <view wx:if="{{checkinBackfillGrant}}" class="checkin-backfill-notice">
-            <text>闭关补录 · 每次填写一段静坐的实际时间和时长，一天多次请分次保存，勿重复补录。</text>
-            <text class="checkin-subtitle">获批 {{checkinBackfillGrant.startDate}} 至 {{checkinBackfillGrant.endDate}}</text>
-            <text class="checkin-subtitle">请在 {{checkinBackfillGrant.expiresText}}（北京时间）前联网保存；00:00–01:59 的静坐归入前一天。</text>
             <view class="checkin-backfill-heading">
               <text>当天已有记录</text>
               <button class="checkin-retry-button" bindtap="loadBackfillDayRecords" disabled="{{backfillDayLoading || checkinSubmitting}}">刷新</button>
@@ -257,7 +252,6 @@
             <text class="checkin-label">静坐体验 <text class="checkin-optional">（选填）</text></text>
             <textarea class="checkin-experience" value="{{checkinExperience}}" bindinput="onCheckinExperienceInput" maxlength="500" disabled="{{checkinSubmitting}}" cursor-spacing="20" placeholder="记录此刻的感受（选填）" placeholder-class="checkin-placeholder" />
           </view>
-          <text class="checkin-subtitle">今天之前的记录保存到云端后，会立即发起必经同步；今天的记录于次日自动同步。同步结果请查看页面提示。</text>
           <text wx:if="{{checkinBackfillError}}" class="record-sync-error" selectable>{{checkinBackfillError}}</text>
           <text wx:if="{{checkinBackfillMessage}}" class="checkin-backfill-success" selectable>{{checkinBackfillMessage}}</text>
           <view wx:if="{{backfillSyncState}}" class="checkin-backfill-notice">

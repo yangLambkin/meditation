@@ -300,16 +300,22 @@ test('a stats or transaction failure rolls back the record and retry can succeed
   }
 });
 
-test('02:00 crosses the day/month, manual backfill accepts only three days, old timer retries still upload', async () => {
+test('02:00 crosses the day/month, manual recording accepts only today and yesterday, old timer retries still upload', async () => {
   const app = harness({ now: '2026-10-01T01:59:59+08:00' });
   assert.equal((await app.record({ localId: 'before', duration: 10 })).data.date, '2026-09-30');
-  assert.equal((await app.record({ localId: 'manual-ok', source: 'manual', date: '2026-09-28', duration: 10 })).success, true);
-  assert.equal((await app.record({ localId: 'manual-old', source: 'manual', date: '2026-09-27', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
+  assert.equal((await app.record({ localId: 'manual-today', source: 'manual', date: '2026-09-30', duration: 10 })).success, true);
+  assert.equal((await app.record({ localId: 'manual-ok', source: 'manual', date: '2026-09-29', duration: 10 })).success, true);
+  const tooOld = await app.record({ localId: 'manual-old', source: 'manual', date: '2026-09-28', duration: 10 });
+  assert.equal(tooOld.code, 'DATE_OUT_OF_RANGE');
+  assert.equal(tooOld.error, '只能记录今天和昨天的静坐');
   assert.equal((await app.record({ localId: 'manual-future', source: 'manual', date: '2026-10-01', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
   app.setNow('2026-10-01T02:00:00+08:00');
   assert.equal((await app.record({ localId: 'after', duration: 10 })).data.date, '2026-10-01');
+  assert.equal((await app.record({ localId: 'manual-next-today', source: 'manual', date: '2026-10-01', duration: 10 })).success, true);
+  assert.equal((await app.record({ localId: 'manual-next-yesterday', source: 'manual', date: '2026-09-30', duration: 10 })).success, true);
+  assert.equal((await app.record({ localId: 'manual-next-old', source: 'manual', date: '2026-09-29', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
   // A successful manual operation may be retried after it falls outside the backfill window.
-  assert.equal((await app.record({ localId: 'manual-ok', source: 'manual', date: '2026-09-28', duration: 10 })).data.duplicate, true);
+  assert.equal((await app.record({ localId: 'manual-ok', source: 'manual', date: '2026-09-29', duration: 10 })).data.duplicate, true);
   assert.equal((await app.record({ localId: 'offline', source: 'timer', timestamp: Date.parse('2026-08-01T01:30:00+08:00'), duration: 20 })).data.date, '2026-07-31');
 });
 
@@ -613,10 +619,11 @@ test('legacy statistics are read correctly before migration without mutating rec
 
 test('manual dateSource survives old pending uploads and respects the business-day backfill window', async () => {
   const app = harness({ now: '2027-01-01T01:59:59+08:00' });
-  const result = await app.record({ localId: 'legacy-manual', dateSource: 'manual', date: '2026-12-29', duration: 10 });
+  const result = await app.record({ localId: 'legacy-manual', dateSource: 'manual', date: '2026-12-30', duration: 10 });
   assert.equal(result.success, true);
-  assert.equal(result.data.date, '2026-12-29');
+  assert.equal(result.data.date, '2026-12-30');
   assert.equal(app.records[0].source, 'manual');
+  assert.equal((await app.record({ localId: 'day-before-yesterday', dateSource: 'manual', date: '2026-12-29', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
   assert.equal((await app.record({ localId: 'tomorrow', dateSource: 'manual', date: '2027-01-01', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
 });
 

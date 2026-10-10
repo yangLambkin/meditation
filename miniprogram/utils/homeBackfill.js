@@ -108,12 +108,12 @@ const methods = {
   refreshBackfillSelection() {
     const owner = account();
     const grants = owner === this._homeBackfillAccount ? (this._homeBackfillGrants || []).filter(usable) : [];
-    const today = dates.getBusinessDate(), allowed = new Set([today, dates.addBusinessDays(today, -1), dates.addBusinessDays(today, -2)]);
+    const today = dates.getBusinessDate(), allowed = new Set([today, dates.addBusinessDays(today, -1)]);
     for (const row of grants) {
       for (let date = row.startDate; date <= row.endDate; date = dates.addBusinessDays(date, 1)) allowed.add(date);
     }
     const find = date => grants.find(row => date >= row.startDate && date <= row.endDate);
-    const options = [...allowed].sort().reverse().map(date => ({ date, label: `${date}${find(date) ? ' · 闭关补录' : ''}` }));
+    const options = [...allowed].sort().reverse().map(date => ({ date, label: `${date}${find(date) ? ' · 补录' : ''}` }));
     const grant = find(this.data.checkinDate) || null;
     this.setData({ homeBackfillGrant: grants[0] || null, hasBackfillDates: grants.length > 0,
       checkinDateOptions: options, checkinDateOptionIndex: Math.max(0, options.findIndex(row => row.date === this.data.checkinDate)),
@@ -136,8 +136,8 @@ const methods = {
         timestamp: homeCheckin.parseDateTime(this.data.checkinDate, this.data.checkinTime),
         text: this.data.checkinExperience.trim() });
       if (retry) hint = '原提交尚未确认，请保持内容不变后重试核对；新增补录需有效权限。';
-      else if (this.data.backfillError) hint = '所选日期暂不在当前可录范围。请重试读取补录权限，或重新选择最近三天的日期；已填写内容已保留。';
-      else hint = '所选日期不在当前可录范围。请查看申请状态，或重新选择最近三天或有效获批日期；已填写内容已保留。';
+      else if (this.data.backfillError) hint = '所选日期暂不在当前可录范围。请重试读取补录权限，或重新选择今天、昨天；已填写内容已保留。';
+      else hint = '所选日期不在当前可录范围。请查看申请状态，或重新选择今天、昨天或有效获批日期；已填写内容已保留。';
     }
     this.setData({ checkinDateAccessHint: hint });
   },

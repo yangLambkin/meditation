@@ -803,17 +803,18 @@
   line-height: 1.5;
 }
 
-.home-backfill-entry {
-  margin: 20rpx 28rpx 0;
-  padding: 16rpx;
-  color: #806735;
-  background: #f6f1e7;
-  border-radius: 12rpx;
-  font-size: 23rpx;
-  line-height: 1.6;
+.checkin-backfill-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6rpx 14rpx;
+  margin-top: 10rpx;
+  color: #9a712e;
+  line-height: 1.5;
 }
 
-.home-backfill-entry::after { border: none; }
+.checkin-backfill-range-label { font-size: 24rpx; }
+.checkin-backfill-range-value { font-size: 26rpx; font-weight: 600; }
 
 .checkin-backfill-notice {
   margin-top: 20rpx;
@@ -835,6 +836,7 @@
 }
 
 .checkin-backfill-day-row { color: #596273; font-size: 22rpx; }
+.checkin-backfill-heading { margin-top: 0; }
 .checkin-backfill-success { display: block; margin-top: 20rpx; color: #4f785e; font-size: 24rpx; line-height: 1.6; }
 
 .checkin-fields-row {

@@ -462,6 +462,126 @@ test('error retry continues its returned run even for another date without refre
   assert.deepEqual(calls.alerts, []);
 });
 
+test('scheduled uploads awaiting hourly checks refresh status without repeatedly continuing the job', async () => {
+  for (const status of ['waiting', 'uploaded']) {
+    const waiting = run({ trigger: 'timer', phase: status === 'uploaded' ? 'upload' : 'verify', status });
+    const { page, calls, runTimer } = harness({ api: (name, request) => {
+      if (request.type === 'adminStatus') return success(STATUS);
+      if (request.type === 'adminStartSync') return success(waiting);
+      if (request.type === 'adminListSyncErrors') return success({ errors: [{
+        _id: 'source-error', reason: 'source_read_failed', expectedDurationMinutes: 0,
+        exists: null, actualDurationMinutes: null,
+      }] });
+      return success({ runs: [waiting], activeRun: waiting });
+    } });
+    await page.onShow();
+    assert.equal(page.data.runs[0].statusText, status === 'uploaded' ? '上传完成，待核对' : '等待定期核对');
+    assert.match(page.data.runs[0].phaseText, /上传完成/);
+    assert.match(page.data.runs[0].phaseText, /03:00–10:00 每小时整点/);
+    assert.equal(page.data.runningRunId, '');
+    assert.equal(page.data.syncErrors[0].actualText, '尚未核对');
+    assert.equal(page.data.syncErrors[0].expectedText, '待读取');
+    await page.startSync();
+    assert.match(page.data.syncMessage, /03:00–10:00 每小时整点/);
+    await runTimer();
+    assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 0);
+  }
+});
+
+test('live and expired automatic uploads are monitored without page-driven continuation', async () => {
+  for (const status of ['running', 'interrupted']) {
+    for (const phase of ['upload', undefined]) {
+      for (const mode of ['full', undefined]) {
+        const upload = run({ trigger: 'timer', mode, phase, status });
+        const { page, calls, timers, runTimer } = harness({ api: (name, request) => {
+          if (request.type === 'adminStatus') return success(STATUS);
+          if (request.type === 'adminStartSync') return success(upload);
+          if (request.type === 'adminListSyncErrors') return success({ errors: [] });
+          return success({ runs: [upload], activeRun: upload });
+        } });
+        await page.onShow();
+        assert.equal(page.data.runningRunId, '');
+        assert.equal([...timers.values()][0].delay, 15000);
+        await runTimer();
+        assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 0);
+        // A manual start may return the existing day lock. That response still
+        // must not enroll the automatic upload in the page's continue loop.
+        await page.startSync();
+        assert.equal(page.data.runningRunId, '');
+        assert.match(page.data.syncMessage, /03:00–10:00 每小时整点/);
+        assert.match(page.data.syncMessage, status === 'interrupted' ? /已中断/ : /后台执行/);
+        await runTimer();
+        assert.equal(calls.cloud.filter(call => call.data.type === 'adminStartSync').length, 1);
+        assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 0);
+      }
+    }
+  }
+});
+
+test('manual uploads, scheduled checks and error repairs remain eligible for page continuation', async () => {
+  for (const attributes of [
+    { trigger: 'manual', mode: 'full', phase: 'upload' },
+    { trigger: 'timer-check', mode: 'full', phase: 'verify' },
+    { trigger: 'timer-errors', mode: 'errors', phase: 'upload' },
+    { trigger: 'timer', mode: 'errors', phase: 'upload' },
+  ]) {
+    let current = run({ ...attributes, status: 'interrupted' });
+    const { page, calls, runTimer } = harness({ api: (name, request) => {
+      if (request.type === 'adminStatus') return success(STATUS);
+      if (request.type === 'adminContinueSync') {
+        current = { ...current, status: 'success', finishedAt: '2026-09-22T21:01:00.000Z' };
+        return success(current);
+      }
+      return success({ runs: [current], activeRun: current.status === 'success' ? null : current });
+    } });
+    await page.onShow();
+    assert.equal(page.data.runningRunId, 'run-1');
+    if (attributes.trigger === 'timer-check') assert.equal(page.data.runs[0].triggerText, '自动核对');
+    await runTimer();
+    assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 1);
+    assert.equal(page.data.runningRunId, '');
+  }
+});
+
+test('completed source checks are not followed by continuation of superseded automatic uploads', async () => {
+  for (const oldStatus of ['failed', 'interrupted']) {
+    const oldUpload = run({ _id: 'upload', runId: 'upload', trigger: 'timer', mode: 'full', phase: 'upload',
+      status: oldStatus, finishedAt: '2026-09-22T21:00:00.000Z' });
+    let check = run({ _id: 'check', runId: 'check', trigger: 'timer-check', mode: 'full', phase: 'verify' });
+    const { page, calls, runTimer } = harness({ api: (name, request) => {
+      if (request.type === 'adminStatus') return success(STATUS);
+      if (request.type === 'adminContinueSync') {
+        assert.equal(request.runId, 'check');
+        check = { ...check, status: 'success', finishedAt: '2026-09-22T21:01:00.000Z' };
+        return success(check);
+      }
+      return success({ runs: [oldUpload, check], activeRun: check.status === 'success' ? oldUpload : check });
+    } });
+    await page.onShow();
+    assert.equal(page.data.runningRunId, 'check');
+    await runTimer();
+    assert.equal(page.data.runningRunId, '');
+    await runTimer();
+    assert.deepEqual(calls.cloud.filter(call => call.data.type === 'adminContinueSync').map(call => call.data.runId), ['check']);
+  }
+});
+
+test('a finished run with a legacy active status is not resumed from history or an action result', async () => {
+  const finished = run({ trigger: 'manual', mode: 'full', phase: 'verify', status: 'interrupted',
+    finishedAt: '2026-09-22T21:00:00.000Z' });
+  const { page, calls, runTimer } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminStartSync') return success(finished);
+    return success({ runs: [finished], activeRun: finished });
+  } });
+  await page.onShow();
+  assert.equal(page.data.runningRunId, '');
+  await page.startSync();
+  assert.equal(page.data.runningRunId, '');
+  await runTimer();
+  assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 0);
+});
+
 test('sync error access revocation clears sensitive errors and the reminder without allowing retry', async () => {
   let deny = false;
   const { page, calls, timers } = harness({ api: (name, request) => {
@@ -593,4 +713,252 @@ test('legacy successful uploads never claim remote verification in history', asy
   }
   assert.equal(page.data.runs[2].statusText, '核对完成');
   assert.equal(page.data.runs[2].verifiedCountLabel, '核对通过');
+});
+
+test('an active error repair for another date cannot hijack a manual sync of the selected date', async () => {
+  const older = run({ _id: 'older-repair', runId: 'older-repair', recordDate: '2026-09-21',
+    mode: 'errors', phase: 'retry', trigger: 'manual-errors' });
+  let selected;
+  const { page, calls, runTimer } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncErrors') return success({ errors: [{ _id: 'old-error', recordDate: older.recordDate }] });
+    if (request.type === 'adminStartSync') {
+      selected = run({ _id: 'selected-date', runId: 'selected-date', recordDate: request.recordDate, mode: 'full', phase: 'upload' });
+      return success(selected);
+    }
+    if (request.type === 'adminContinueSync') {
+      assert.equal(request.runId, 'selected-date');
+      selected = { ...selected, status: 'success', phase: 'verify', finishedAt: '2026-09-22T18:02:00.000Z' };
+      return success(selected);
+    }
+    return success({ runs: selected ? [selected] : [], activeRun: older });
+  } });
+  await page.onShow();
+  assert.equal(page.data.recordDate, DATE);
+  assert.equal(page.data.runningRunId, 'older-repair');
+  await page.startSync();
+  assert.deepEqual(calls.cloud.filter(call => call.data.type === 'adminStartSync').map(call => call.data.recordDate), [DATE]);
+  assert.equal(calls.cloud.filter(call => call.data.type === 'adminContinueSync').length, 0);
+  assert.equal(page.data.runningRunId, 'selected-date');
+  assert.equal(page.data.runningRecordDate, DATE);
+  await runTimer();
+  assert.deepEqual(calls.cloud.filter(call => call.data.type === 'adminContinueSync').map(call => call.data.runId), ['selected-date']);
+  assert.equal(page.data.runs[0].statusText, '核对完成');
+});
+
+test('sync history loads all 63 runs across 50 and 13 row pages and stops at the last cursor', async () => {
+  const history = Array.from({ length: 63 }, (_, index) => run({ _id: `history-${index}`, runId: `history-${index}`,
+    status: 'success', phase: 'verify', finishedAt: '2026-09-22T18:01:00.000Z' }));
+  const { page, calls } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncRuns') return success({
+      runs: request.cursor ? history.slice(50) : history.slice(0, 50), nextCursor: request.cursor ? null : 'history-50'
+    });
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  assert.equal(page.data.runs.length, 50);
+  assert.equal(page.data.runsCursor, 'history-50');
+  assert.equal(page.data.runsPageCount, 1);
+  await page.loadMoreRuns();
+  assert.equal(calls.cloud.at(-1).data.cursor, 'history-50');
+  assert.equal(calls.cloud.at(-1).data.recordDate, undefined);
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), history.map(row => row._id));
+  assert.equal(page.data.runsCursor, '');
+  assert.equal(page.data.runsPageCount, 2);
+  const count = calls.cloud.length;
+  await page.loadMoreRuns();
+  assert.equal(calls.cloud.length, count, 'the exhausted history makes no further requests');
+});
+
+test('overlapping history pages append unique runs and deduplicate concurrent load-more clicks', async () => {
+  const pending = deferred();
+  const first = run({ _id: 'first', status: 'success', phase: 'verify' });
+  const second = run({ _id: 'second', status: 'partial', phase: 'reverify' });
+  const { page, calls } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncRuns') return request.cursor ? pending.promise : success({ runs: [first], nextCursor: 'next' });
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  const loading = page.loadMoreRuns();
+  await page.loadMoreRuns();
+  assert.equal(calls.cloud.filter(call => call.data.type === 'adminListSyncRuns' && call.data.cursor).length, 1);
+  pending.resolve(success({ runs: [first, second], nextCursor: null }));
+  await loading;
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), ['first', 'second']);
+  assert.equal(page.data.runs[1].statusText, '部分失败');
+  assert.equal(page.data.runsPageCount, 2);
+  assert.equal(page.data.runsLoading, false);
+});
+
+test('pull-down and scheduled history refresh keep loaded pages and the expanded run using fresh cursors', async () => {
+  let revision = 0;
+  const history = Array.from({ length: 63 }, (_, index) => run({ _id: `history-${index}`, runId: `history-${index}`,
+    status: 'success', phase: 'verify', finishedAt: '2026-09-22T18:01:00.000Z' }));
+  const { page, calls, runTimer } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminSyncDetails') return success({ items: [{ _id: 'expanded-item', status: 'success' }] });
+    if (request.type === 'adminListSyncRuns') {
+      if (request.cursor) assert.equal(request.cursor, `revision-${revision}-50`, 'a refresh must follow its own first-page cursor');
+      return success({ runs: (request.cursor ? history.slice(50) : history.slice(0, 50)).map(row => ({ ...row, successCount: revision })),
+        nextCursor: request.cursor ? null : `revision-${revision}-50` });
+    }
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  await page.loadMoreRuns();
+  await page.selectRun({ currentTarget: { dataset: { id: 'history-62' } } });
+  for (const refresh of [() => page.onPullDownRefresh(), () => runTimer()]) {
+    revision++;
+    const before = calls.cloud.length;
+    await refresh();
+    const requests = calls.cloud.slice(before).filter(call => call.data.type === 'adminListSyncRuns');
+    assert.deepEqual(requests.map(call => call.data.cursor), [undefined, `revision-${revision}-50`]);
+    assert.equal(page.data.runs.length, 63);
+    assert.equal(page.data.runs[62].successCount, revision);
+    assert.equal(page.data.runsPageCount, 2);
+    assert.equal(page.data.selectedRunId, 'history-62');
+    assert.equal(page.data.items[0]._id, 'expanded-item');
+    assert.equal(page.data.runsCursor, '');
+  }
+});
+
+test('switching dates resets history pagination and ignores the previous date late page', async () => {
+  const pending = deferred();
+  const selectedDate = STATUS.dates[1];
+  const { page, calls } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncRuns') {
+      if (request.cursor === 'old-next') return pending.promise;
+      if (request.recordDate === selectedDate) return success({ runs: [run({ _id: 'selected-history', recordDate: selectedDate, status: 'success' })], nextCursor: 'selected-next' });
+      return success({ runs: [run({ _id: 'old-first', status: 'success' })], nextCursor: 'old-next' });
+    }
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  const loading = page.loadMoreRuns();
+  await page.onDateChange({ detail: { value: '1' } });
+  assert.equal(calls.cloud.at(-1).data.recordDate, selectedDate);
+  assert.equal(calls.cloud.at(-1).data.cursor, undefined);
+  const selectedState = JSON.stringify(page.data);
+  pending.resolve(success({ runs: [run({ _id: 'old-late', status: 'success' })], nextCursor: 'old-later' }));
+  await loading;
+  assert.equal(JSON.stringify(page.data), selectedState);
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), ['selected-history']);
+  assert.equal(page.data.runsCursor, 'selected-next');
+  assert.equal(page.data.runsPageCount, 1);
+  assert.equal(page.data.runsLoading, false);
+});
+
+test('changing history scope resets loaded pages and isolates an in-flight refresh from the prior scope', async () => {
+  const pending = deferred();
+  let refreshPending = false;
+  const { page, calls } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncRuns') {
+      if (request.recordDate) return success({ runs: [run({ _id: 'selected-only', status: 'success' })], nextCursor: null });
+      if (refreshPending && !request.cursor) return pending.promise;
+      return success({ runs: [run({ _id: request.cursor ? 'all-second' : 'all-first', status: 'success' })],
+        nextCursor: request.cursor ? null : 'all-next' });
+    }
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  await page.loadMoreRuns();
+  assert.equal(page.data.runsPageCount, 2);
+  refreshPending = true;
+  const refreshing = page.loadRuns();
+  await page.onHistoryScopeChange({ currentTarget: { dataset: { scope: 'date' } } });
+  assert.equal(calls.cloud.at(-1).data.recordDate, DATE);
+  assert.equal(calls.cloud.at(-1).data.cursor, undefined);
+  const count = calls.cloud.length;
+  pending.resolve(success({ runs: [run({ _id: 'late-all', status: 'success' })], nextCursor: 'late-next' }));
+  await refreshing;
+  assert.equal(calls.cloud.length, count, 'stale refresh does not request another page');
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), ['selected-only']);
+  assert.equal(page.data.runsPageCount, 1);
+  assert.equal(page.data.runsCursor, '');
+  assert.equal(page.data.runsLoading, false);
+  refreshPending = false;
+  await page.onHistoryScopeChange({ currentTarget: { dataset: { scope: 'all' } } });
+  assert.equal(calls.cloud.at(-1).data.recordDate, undefined);
+  assert.equal(calls.cloud.at(-1).data.cursor, undefined);
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), ['all-first']);
+  assert.equal(page.data.runsPageCount, 1);
+  assert.equal(page.data.runsCursor, 'all-next');
+});
+
+test('a refresh whose history shrank stops early and corrects its loaded page count', async () => {
+  let shrank = false;
+  const { page, calls } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success(STATUS);
+    if (request.type === 'adminListSyncRuns') return success({
+      runs: [run({ _id: request.cursor ? 'second' : 'first', status: 'success' })],
+      nextCursor: shrank || request.cursor ? null : 'next'
+    });
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  await page.loadMoreRuns();
+  assert.equal(page.data.runsPageCount, 2);
+  shrank = true;
+  const before = calls.cloud.length;
+  await page.loadRuns();
+  assert.equal(calls.cloud.slice(before).filter(call => call.data.type === 'adminListSyncRuns').length, 1);
+  assert.deepEqual(Array.from(page.data.runs, row => row._id), ['first']);
+  assert.equal(page.data.runsPageCount, 1);
+  assert.equal(page.data.runsCursor, '');
+});
+
+test('the eighth selectable day shows its manual sync and finishes verification before any hourly check', async () => {
+  const dates = Array.from({ length: 30 }, (_, index) => new Date(Date.parse(`${DATE}T00:00:00.000Z`) - index * 86400000).toISOString().slice(0, 10));
+  const selectedDate = dates[7];
+  let current;
+  let chunks = 0;
+  const { page, calls, runTimer, timers } = harness({ api: (name, request) => {
+    if (request.type === 'adminStatus') return success({ ...STATUS, dates });
+    if (request.type === 'adminStartSync') {
+      assert.equal(request.recordDate, selectedDate);
+      current = run({ _id: 'eighth-day-manual', runId: 'eighth-day-manual', recordDate: selectedDate, trigger: 'manual', mode: 'full', phase: 'upload' });
+      return success(current);
+    }
+    if (request.type === 'adminContinueSync') {
+      assert.equal(request.runId, 'eighth-day-manual');
+      chunks++;
+      current = { ...current, phase: chunks === 1 ? 'verify' : 'reverify', status: chunks === 1 ? 'running' : 'success',
+        ...(chunks > 1 ? { finishedAt: '2026-09-22T18:02:00.000Z' } : {}) };
+      return success(current);
+    }
+    if (request.type === 'adminListSyncRuns') return success({
+      runs: current && (request.recordDate ? request.recordDate === current.recordDate : dates.slice(0, 7).includes(current.recordDate)) ? [current] : [],
+      activeRun: current && current.status === 'running' ? current : null
+    });
+    return success({ errors: [] });
+  } });
+  await page.onShow();
+  assert.equal(page.data.dates.length, 30);
+  assert.equal(calls.cloud.at(-1).data.recordDate, undefined, 'default history uses the server seven-day view');
+  await page.onDateChange({ detail: { value: '7' } });
+  assert.equal(page.data.recordDate, selectedDate);
+  assert.equal(page.data.showAllRuns, false);
+  assert.equal(calls.cloud.at(-1).data.recordDate, selectedDate);
+  await page.startSync();
+  assert.equal(page.data.runs[0]._id, 'eighth-day-manual');
+  assert.equal(page.data.runningRunId, 'eighth-day-manual');
+  assert.doesNotMatch(page.data.syncMessage, /等待|03:00|每小时/);
+  assert.equal([...timers.values()][0].delay, 1500);
+  await runTimer();
+  assert.equal(page.data.runs[0].phase, 'verify');
+  await runTimer();
+  assert.equal(chunks, 2);
+  assert.equal(page.data.runningRunId, '');
+  assert.equal(page.data.runs[0].recordDate, selectedDate);
+  assert.equal(page.data.runs[0].statusText, '核对完成');
+  assert.match(page.data.syncMessage, /同步核对完成/);
+  await page.onHistoryScopeChange({ currentTarget: { dataset: { scope: 'all' } } });
+  assert.equal(page.data.runs.length, 0, 'a date outside the default seven-day range stays out of that view');
+  await page.onHistoryScopeChange({ currentTarget: { dataset: { scope: 'date' } } });
+  assert.equal(page.data.runs[0]._id, 'eighth-day-manual');
+  assert.equal(page.data.runs[0].statusText, '核对完成');
 });

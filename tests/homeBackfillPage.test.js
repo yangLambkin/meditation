@@ -111,7 +111,7 @@ function selectDate(page, date) {
   page.onAllowedCheckinDateChange(input(String(index)));
 }
 
-test('home offers approved dates together with the usual three days and fetches the selected day total', async () => {
+test('home offers approved dates together with today and yesterday and fetches the selected day total', async () => {
   const { page, calls } = await recorder({ api: (name, data) => data.type === 'getUserRecords'
     ? success([{ _id: 'existing', duration: 45 }]) : undefined });
   const dates = page.data.checkinDateOptions.map(option => option.date);
@@ -125,7 +125,7 @@ test('home offers approved dates together with the usual three days and fetches 
   assert.ok(requests(calls, 'getUserRecords').some(call => call.data.date === '2026-09-20'));
 });
 
-test('a 72-hour approval keeps the submitted 30-day range until its exact expiry and always offers the latest three days', async () => {
+test('a 72-hour approval keeps the submitted 30-day range until its exact expiry and always offers today and yesterday', async () => {
   const expiresAt = '2026-10-08T04:00:00.000Z';
   const grant = approved({ ruleVersion: 2, startDate: '2026-09-05', endDate: '2026-10-04',
     handledAt: '2026-10-05T04:00:00.000Z', expiresAt });
@@ -136,13 +136,14 @@ test('a 72-hour approval keeps the submitted 30-day range until its exact expiry
   const dates = Array.from(page.data.checkinDateOptions, option => option.date);
   assert.ok(dates.includes('2026-09-05'), 'the submitted range stays fixed after a business-day rollover');
   assert.ok(dates.includes('2026-10-04'));
-  assert.deepEqual(dates.slice(0, 3), ['2026-10-08', '2026-10-07', '2026-10-06']);
+  assert.deepEqual(dates.slice(0, 2), ['2026-10-08', '2026-10-07']);
+  assert.ok(!dates.includes('2026-10-06'), 'the day before yesterday requires an approval');
   assert.ok(!dates.includes('2026-10-05'), 'unapproved dates between the two ranges remain unavailable');
   assert.equal(page.data.checkinBackfillGrant._id, 'request-1');
   clock.now = Date.parse(expiresAt);
   page.refreshCheckinDefaults();
   assert.equal(page.data.checkinBackfillGrant, null);
-  assert.deepEqual(Array.from(page.data.checkinDateOptions, option => option.date), ['2026-10-08', '2026-10-07', '2026-10-06']);
+  assert.deepEqual(Array.from(page.data.checkinDateOptions, option => option.date), ['2026-10-08', '2026-10-07']);
   assert.equal(page.data.checkinDate, '2026-09-05');
   assert.equal(page.data.checkinDuration, '30');
   assert.match(page.data.checkinDateAccessHint, /不在当前可录范围/);
@@ -160,14 +161,14 @@ test('home discovers an approved application on later pages and ignores pending 
   assert.ok(requests(calls, 'getMyBackfillRequests').some(call => call.data.cursor === 'later'));
   const noGrant = harness({ grants: [approved({ status: 'pending', canRecord: false }), approved({ expired: true })] });
   await noGrant.page.onShow(); await flush();
-  assert.deepEqual(Array.from(noGrant.page.data.checkinDateOptions, item => item.date).sort(), ['2026-10-03', '2026-10-04', '2026-10-05']);
+  assert.deepEqual(Array.from(noGrant.page.data.checkinDateOptions, item => item.date).sort(), ['2026-10-04', '2026-10-05']);
 });
 
 test('rejected applications never unlock historical dates even when canRecord is stale', async () => {
   const { page, calls } = harness({ grants: [approved({ status: 'rejected', canRecord: true })] });
   await page.onShow(); await flush();
   page.openCheckinModal(); await flush();
-  assert.deepEqual(Array.from(page.data.checkinDateOptions, item => item.date), ['2026-10-05', '2026-10-04', '2026-10-03']);
+  assert.deepEqual(Array.from(page.data.checkinDateOptions, item => item.date), ['2026-10-05', '2026-10-04']);
   assert.equal(page.data.homeBackfillGrant, null);
   page.onCheckinDateChange(input('2026-09-20'));
   page.onCheckinDurationInput(input('30'));
@@ -189,7 +190,7 @@ test('expiration explains an unavailable selected date without moving or clearin
   assert.equal(page.data.checkinTime, '08:30');
   assert.equal(page.data.checkinDuration, '30');
   assert.equal(page.data.checkinExperience, '未完成的补录草稿');
-  assert.match(page.data.checkinDateAccessHint, /不在当前可录范围.*重新选择最近三天或有效获批日期/);
+  assert.match(page.data.checkinDateAccessHint, /不在当前可录范围.*重新选择今天、昨天或有效获批日期/);
   assert.equal(page.data.checkinBackfillError, '原保存错误');
   assert.equal(page.data.checkinBackfillMessage, '原保存提示');
   await page.submitCheckin();
@@ -482,18 +483,19 @@ test('an uncertain request can be confirmed after expiry with the same key even 
   assert.equal(calls.local.length, 0);
 });
 
-test('the gap between an approved range and the recent three days cannot be selected or saved', async () => {
+test('the gap between an approved range and the recent two days cannot be selected or saved', async () => {
   const { page, calls } = await recorder({ grants: [approved({ endDate: '2026-09-25' })] });
   const dates = Array.from(page.data.checkinDateOptions, option => option.date);
   assert.ok(dates.includes('2026-09-25'));
-  assert.ok(dates.includes('2026-10-03'));
+  assert.ok(dates.includes('2026-10-04'));
+  assert.equal(dates.includes('2026-10-03'), false);
   assert.equal(dates.includes('2026-09-30'), false);
-  assert.equal(dates.length, 9);
+  assert.equal(dates.length, 8);
   page.onCheckinDateChange(input('2026-09-30'));
   await page.submitCheckin();
   assert.equal(requests(calls, 'recordMeditation').length, 0);
   assert.equal(calls.local.length, 0);
-  assert.match(calls.toast.at(-1).title, /最近三天或获批/);
+  assert.match(calls.toast.at(-1).title, /今天、昨天或获批/);
 });
 
 test('switching account without showing the page again cannot save a recent approved draft as an ordinary local record', async () => {

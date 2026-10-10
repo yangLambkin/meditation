@@ -73,7 +73,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
   };
 }
 
-test('home advances the current calendar month and three-day form exactly at Beijing 02:00', async () => {
+test('home advances the current calendar month and two-day form exactly at Beijing 02:00', async () => {
   const { page, advance, timers } = createPage('index');
   page.setData({ currentYear: 2025, currentMonth: 12 });
   await page.onShow();
@@ -81,7 +81,7 @@ test('home advances the current calendar month and three-day form exactly at Bei
   assert.equal(page.data.maxCheckinDate, '2025-12-31');
   advance('2026-01-01T02:00:00+08:00');
   assert.equal(page.data.todayDate, '2026-01-01');
-  assert.equal(page.data.minCheckinDate, '2025-12-30');
+  assert.equal(page.data.minCheckinDate, '2025-12-31');
   assert.equal(page.data.maxCheckinDate, '2026-01-01');
   assert.equal(page.data.currentYear, 2026);
   assert.equal(page.data.currentMonth, 1);

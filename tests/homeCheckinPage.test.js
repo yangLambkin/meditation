@@ -574,7 +574,7 @@ test('unedited date and time submit the actual current instant even after Beijin
 test('manual date/time and experience are submitted together after text approval', async () => {
   const { page, calls } = createPage();
   page.refreshCheckinDefaults();
-  change(page, 'Date', '2026-09-15');
+  change(page, 'Date', '2026-09-16');
   change(page, 'Time', '06:32');
   page.onCheckinDurationInput({ detail: { value: '35' } });
   page.onCheckinExperienceInput({ detail: { value: '今天更能觉察呼吸。' } });
@@ -586,7 +586,7 @@ test('manual date/time and experience are submitted together after text approval
   assert.deepEqual(Array.from(emotion), []);
   assert.equal(experience.length, 1);
   assert.equal(experience[0].text, '今天更能觉察呼吸。');
-  assert.equal(timestamp, Date.parse('2026-09-15T06:32:00+08:00'));
+  assert.equal(timestamp, Date.parse('2026-09-16T06:32:00+08:00'));
   assert.equal(page.data.checkinExperience, '');
   assert.equal(page.data.checkinDate, '2026-09-17');
   assert.equal(page.data.checkinTime, '08:25');
@@ -677,14 +677,14 @@ test('storage and moderation errors preserve inputs, report failure and release 
   ]) {
     const { page, calls } = createPage(settings);
     page.refreshCheckinDefaults();
-    change(page, 'Date', '2026-09-15');
+    change(page, 'Date', '2026-09-16');
     change(page, 'Time', '06:32');
     page.onCheckinDurationInput({ detail: { value: '35' } });
     page.onCheckinExperienceInput({ detail: { value: '保存失败后保留体验' } });
     await page.submitCheckin();
     assert.equal(page.data.checkinExperience, '保存失败后保留体验');
     assert.equal(page.data.checkinDuration, '35');
-    assert.equal(page.data.checkinDate, '2026-09-15');
+    assert.equal(page.data.checkinDate, '2026-09-16');
     assert.equal(page.data.checkinTime, '06:32');
     assert.equal(page.data.checkinSubmitting, false);
     assert.equal(calls.refresh, 0);
@@ -1008,32 +1008,32 @@ test('details resolve inline experiences and IDs from both local storage formats
   assert.deepEqual(Array.from(page.data.checkinRecords[2].experienceTexts), ['直接存储的体验']);
 });
 
-test('manual entries accept only the last three business dates and preserve one retry identity', async () => {
+test('manual entries accept only today and yesterday and preserve one retry identity', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-10-01T01:30:00+08:00' });
   page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   assert.equal(page.data.checkinDate, '2026-09-30');
-  assert.equal(page.data.minCheckinDate, '2026-09-28');
+  assert.equal(page.data.minCheckinDate, '2026-09-29');
   assert.equal(page.data.maxCheckinDate, '2026-09-30');
-  change(page, 'Date', '2026-09-27');
+  change(page, 'Date', '2026-09-28');
   change(page, 'Time', '23:00');
   await page.submitCheckin();
   assert.equal(calls.record.length, 0);
-  assert.match(calls.toast.at(-1).title, /最近三天/);
-  change(page, 'Date', '2026-09-28');
+  assert.match(calls.toast.at(-1).title, /今天和昨天/);
+  change(page, 'Date', '2026-09-29');
   change(page, 'Time', '01:15');
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
-  assert.equal(calls.record[0][3], Date.parse('2026-09-29T01:15:00+08:00'));
+  assert.equal(calls.record[0][3], Date.parse('2026-09-30T01:15:00+08:00'));
   assert.equal(calls.record[0][4].source, 'manual');
-  assert.equal(calls.record[0][4].date, '2026-09-28');
+  assert.equal(calls.record[0][4].date, '2026-09-29');
   assert.ok(calls.record[0][4].idempotencyKey);
   setNow('2026-10-01T02:00:00+08:00');
   page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
-  change(page, 'Date', '2026-09-28');
+  change(page, 'Date', '2026-09-29');
   await page.submitCheckin();
-  assert.equal(calls.record.length, 1, 'the third previous business date expires at 02:00');
+  assert.equal(calls.record.length, 1, 'yesterday expires at 02:00 when it becomes the day before yesterday');
 });
 
 test('failed manual saves retry with the same identity while a fresh modal creates a new identity', async () => {

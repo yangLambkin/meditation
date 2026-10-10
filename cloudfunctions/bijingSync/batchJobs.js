@@ -4,8 +4,11 @@ const RUNS = 'bijing_sync_runs';
 const DAYS = 'bijing_sync_days';
 const ITEMS = 'bijing_sync_items';
 const ERRORS = 'bijing_sync_errors';
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 100;
+const CHUNK_SIZE = 20;
+const REQUEST_LEASE_MARGIN_MS = 20000;
 const LEASE_MS = 120000;
+const RENEW_LEASE_MARGIN_MS = 60000;
 const MAX_TIMER_ATTEMPTS = 4;
 const PAGE_SIZE = 50;
 const REPAIR_CURSOR_ID = '__error_retry_cursor__';
@@ -15,8 +18,9 @@ const validStudentNumber = value => /^[A-Z0-9_-]{1,64}$/.test(value);
 const errorId = (studentNumber, recordDate) => `${recordDate}_${crypto.createHash('sha256').update(normalizeStudentNumber(studentNumber)).digest('hex').slice(0, 40)}`;
 const errorMessage = (error, fallback) => error.response && error.response.data && error.response.data.message || error.message || fallback;
 
-// A lease executes at most one HTTP request. Durable phase/cursor checkpoints
-// keep all uploads ahead of verification and allow the timer to resume any phase.
+// Upload uses an in-memory cursor and sends 100 records per request. The later
+// source reconciliation is independent of upload logs and commits its results
+// in 20-row transactions under a renewable lease.
 function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch, recentDates, now = Date.now }) {
   async function optional(database, collection, id) {
     try { return (await database.collection(collection).doc(id).get()).data || null; }
@@ -31,37 +35,77 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   function publicRun(run) {
     if (!run) return run;
     const { leaseToken, leaseUntil, ...value } = run;
-    return { ...value, phase: run.phase || 'upload', runId: run._id, status: run.status === 'running' &&
-      ((leaseUntil && leaseUntil < now()) || (!leaseUntil && now() - run.updatedAt > 10 * 60000)) ? 'interrupted' : run.status };
+    const waiting = waitsForCheck(run);
+    return { ...value, phase: run.phase || 'upload', runId: run._id, status: waiting ? 'waiting' : run.status === 'running' &&
+      ((leaseUntil && leaseUntil < now()) || (!leaseUntil && now() - Math.max(run.updatedAt, verificationTime(run)) > 10 * 60000)) ? 'interrupted' : run.status };
   }
-  async function startRun(recordDate, trigger, operator, mode = 'full') {
+  function verificationTime(run) {
+    // Legacy automatic runs wait for the first scheduled check at 03:00.
+    return run.trigger === 'timer' && run.mode !== 'errors'
+      ? Date.parse(`${run.recordDate}T03:00:00+08:00`) + 86400000 : 0;
+  }
+  function waitsForCheck(run) {
+    return run.status === 'running' && run.phase && run.phase !== 'upload' && verificationTime(run) > now();
+  }
+  async function startRun(recordDate, trigger, operator, mode = 'full', schedule = {}) {
     const timestamp = now();
     const id = `${String(timestamp).padStart(13, '0')}_${crypto.randomBytes(8).toString('hex')}`;
     const automatic = trigger === 'timer' || trigger === 'timer-errors';
     const result = await db.runTransaction(async tx => {
+      if (schedule.authorizedCycle) {
+        const { CHECK_CYCLE_ID, getCycleKey } = require('./dailySchedule');
+        const cycle = await optional(tx, DAYS, CHECK_CYCLE_ID);
+        if (!cycle || cycle.status !== 'running' || getCycleKey(cycle) !== schedule.authorizedCycle ||
+          cycle.cycleDate !== schedule.cycleDate || recordDate !== recentDates(1)[0]) return null;
+      }
       const day = await optional(tx, DAYS, recordDate);
       if (day && day.activeRunId) {
         const active = await optional(tx, RUNS, day.activeRunId);
-        if (active && active.status === 'running') return active;
+        if (active && active.status === 'running') {
+          const expiredUploadLease = active.leaseUntil ? active.leaseUntil <= now() :
+            now() - (active.updatedAt || active.startedAt || 0) > 10 * 60000;
+          const abandonedUpload = trigger === 'manual' && mode === 'full' && active.trigger === 'timer' &&
+            (active.mode || 'full') === 'full' && (active.phase || 'upload') === 'upload' && expiredUploadLease;
+          if (!abandonedUpload) return active;
+          // The UI deliberately never auto-resumes scheduled uploads. An
+          // explicit manual request may replace an abandoned upload under the
+          // same day lock; a live lease or any other task keeps its ownership.
+          const interruptedAt = now();
+          await tx.collection(RUNS).doc(active._id).update({ data: {
+            status: 'failed', error: '自动上传已中断，已由管理员手动全量同步接管',
+            finishedAt: interruptedAt, durationMs: interruptedAt - active.startedAt, updatedAt: interruptedAt,
+            leaseToken: '', leaseUntil: 0,
+          } });
+        }
       }
       const latest = day && day.latestRunId ? await optional(tx, RUNS, day.latestRunId) : null;
       // A successful errors-only repair says nothing about users whose source
       // data failed to load in the full run. Track full completion independently.
       const latestFullRunId = day && day.latestFullRunId || (latest && latest.mode !== 'errors' ? latest._id : '');
       const latestFull = latestFullRunId === (latest && latest._id) ? latest : latestFullRunId ? await optional(tx, RUNS, latestFullRunId) : null;
+      // Repeated daily triggers reuse their run even when it has failed. Only
+      // each authorized hourly cycle may create another automatic repair.
+      if (schedule.upload && latestFull) return latestFull;
+      if (schedule.repairCycle && day && day.repairCycle >= schedule.repairCycle && latest) return latest;
       if (automatic && mode === 'full' && latestFull && latestFull.status === 'success') return latestFull;
-      if (automatic && latest && (day.timerAttempts || 0) >= MAX_TIMER_ATTEMPTS) return latest;
+      if (automatic && !schedule.upload && !schedule.repairCycle && latest && (day.timerAttempts || 0) >= MAX_TIMER_ATTEMPTS) return latest;
       const run = {
         _id: id, recordDate, trigger, operator: operator || '', mode, phase: 'upload', status: 'running', startedAt: timestamp,
         finishedAt: null, durationMs: 0, updatedAt: timestamp, cursor: '', total: 0,
         successCount: 0, failedCount: 0, skippedCount: 0, discrepancyCount: 0, error: '', interruptions: 0, consecutiveInterruptions: 0,
         queryFailures: 0, attempt: (day && day.attempts || 0) + 1, leaseToken: '', leaseUntil: 0,
+        ...(mode === 'full' ? { sourceCheck: true } : {}),
+        ...(automatic && mode === 'full' ? { verifyAfter: Date.parse(`${recordDate}T03:00:00+08:00`) + 86400000 } : {}),
+        ...(schedule.repairCycle ? { repairCycle: schedule.repairCycle } : {}),
       };
       const { _id, ...data } = run;
       await tx.collection(RUNS).doc(id).set({ data });
+      const { _id: dayId, ...previousDay } = day || {};
       await tx.collection(DAYS).doc(recordDate).set({ data: {
+        ...previousDay,
         recordDate, activeRunId: id, latestRunId: id, latestFullRunId: mode === 'full' ? id : latestFullRunId, attempts: run.attempt,
         timerAttempts: (day && day.timerAttempts || 0) + (automatic ? 1 : 0),
+        ...(schedule.repairCycle ? { repairCycle: schedule.repairCycle } : {}),
         status: 'running', updatedAt: timestamp,
       } });
       return run;
@@ -72,12 +116,14 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     validateDate(recordDate);
     return startRun(recordDate, trigger, operator);
   }
-  async function acquire(runId) {
+  async function acquire(runId, { expectedPhase, automatic = false } = {}) {
     const token = crypto.randomBytes(16).toString('hex');
     return db.runTransaction(async tx => {
       const run = await optional(tx, RUNS, runId);
       if (!run) throw new Error('同步任务不存在');
-      if (run.status !== 'running' || run.leaseUntil > now()) return { run, acquired: false };
+      if ((expectedPhase && (run.phase || 'upload') !== expectedPhase) ||
+        (automatic && run.recordDate !== recentDates(1)[0])) return { run, acquired: false };
+      if (run.status !== 'running' || run.leaseUntil > now() || waitsForCheck(run)) return { run, acquired: false };
       if (run.leaseUntil && (run.consecutiveInterruptions || 0) >= 2) {
         const patch = { status: 'failed', error: '连续三次执行中断或超时，请查看云函数日志后手动重试', finishedAt: now(), durationMs: now() - run.startedAt, updatedAt: now(), leaseToken: '', leaseUntil: 0 };
         await tx.collection(RUNS).doc(runId).update({ data: patch });
@@ -85,6 +131,12 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         return { run: { ...run, ...patch }, acquired: false };
       }
       const patch = { phase: run.phase || 'upload', leaseToken: token, leaseUntil: now() + LEASE_MS, updatedAt: now() };
+      if (['timer', 'timer-check'].includes(run.trigger) && run.mode !== 'errors' && patch.phase !== 'upload') {
+        const { CHECK_CYCLE_ID, getCycleKey } = require('./dailySchedule');
+        const cycle = await optional(tx, DAYS, CHECK_CYCLE_ID);
+        patch.recoveryCycle = run.checkCycle || (cycle && cycle.status === 'running' && getCycleKey(cycle)) ||
+          new Date(now() + 8 * 3600000).toISOString().slice(0, 10);
+      }
       if (run.leaseUntil) {
         patch.interruptions = (run.interruptions || 0) + 1;
         patch.consecutiveInterruptions = (run.consecutiveInterruptions || 0) + 1;
@@ -98,10 +150,18 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   function itemId(run, item) {
     return item._id || `${run._id}_${crypto.createHash('sha256').update(item.userId || item.studentNumber).digest('hex').slice(0, 24)}`;
   }
-  async function checkpoint(run, { items = [], errorChanges = [], cursor = run.cursor, phase = run.phase, complete = false, error = '', queryFailure = false } = {}) {
+  function onlySourceFailure(row) {
+    return row.reason === 'source_read_failed' && row.expectedDurationMinutes === 0 &&
+      row.exists === null && row.actualDurationMinutes === null;
+  }
+  async function checkpoint(run, { items = [], errorChanges = [], sourceFailures = [], sourceResolved = [], cursor, phase, complete = false, error = '', queryFailure = false, releaseLease = true } = {}) {
     return db.runTransaction(async tx => {
       const current = await optional(tx, RUNS, run._id);
-      if (!current || current.leaseToken !== run.leaseToken) throw new Error('执行锁已过期，请刷新任务状态');
+      if (!current || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
+      // Error handling after a partial commit must preserve the committed
+      // cursor, never the snapshot from before the 100-record request.
+      if (cursor === undefined) cursor = current.cursor;
+      if (phase === undefined) phase = current.phase;
       const counts = { total: current.total || 0, successCount: current.successCount || 0, failedCount: current.failedCount || 0, skippedCount: current.skippedCount || 0, discrepancyCount: current.discrepancyCount || 0 };
       const timestamp = now();
       for (const item of items) {
@@ -134,71 +194,211 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
           } });
         }
       }
+      // Source read failures are repair work too, but are not evidence that a
+      // remote record is missing. Preserve that distinction and any old value.
+      for (const item of sourceFailures) {
+        const id = errorId(item.studentNumber, run.recordDate);
+        const previous = await optional(tx, ERRORS, id);
+        await tx.collection(ERRORS).doc(id).set({ data: {
+          studentNumber: item.studentNumber, recordDate: run.recordDate, userId: item.userId, openid: item.openid,
+          bindingStudentNumber: item.bindingStudentNumber, nickname: item.nickname || '',
+          expectedDurationMinutes: previous && previous.expectedDurationMinutes || 0,
+          actualDurationMinutes: previous ? previous.actualDurationMinutes : null,
+          exists: previous ? previous.exists : null, reason: 'source_read_failed', error: item.error,
+          runId: run._id, retryCount: previous && previous.retryCount || 0,
+          createdAt: previous && previous.createdAt || timestamp, updatedAt: timestamp,
+        } });
+      }
+      for (const item of sourceResolved) {
+        const id = errorId(item.studentNumber, run.recordDate);
+        const previous = await optional(tx, ERRORS, id);
+        if (previous && onlySourceFailure(previous) && previous.userId === item.userId && previous.openid === item.openid) {
+          await tx.collection(ERRORS).doc(id).remove();
+        }
+      }
       const queryFailures = queryFailure ? (current.queryFailures || 0) + 1 : 0;
       const fatal = error && (!queryFailure || queryFailures >= 3);
       const verifiedWithoutDifferences = run.phase === 'verify' && phase === 'retry' && counts.discrepancyCount === 0;
       const status = fatal ? 'failed' : !(complete || verifiedWithoutDifferences) ? 'running' : counts.failedCount ? (counts.successCount ? 'partial' : 'failed') : 'success';
       const patch = { ...counts, cursor, phase, status, error, queryFailures, updatedAt: timestamp,
         finishedAt: status === 'running' ? null : timestamp, durationMs: timestamp - run.startedAt,
-        leaseToken: '', leaseUntil: 0, consecutiveInterruptions: 0 };
+        leaseToken: status === 'running' && !releaseLease ? run.leaseToken : '',
+        leaseUntil: status === 'running' && !releaseLease ? timestamp + LEASE_MS : 0, consecutiveInterruptions: 0 };
       await tx.collection(RUNS).doc(run._id).update({ data: patch });
       await tx.collection(DAYS).doc(run.recordDate).update({ data: { status, activeRunId: status === 'running' ? run._id : '', updatedAt: timestamp } });
       return publicRun({ ...current, ...patch });
     });
   }
+  function leaseUnavailable() {
+    const error = new Error('当前批次执行锁已到期或目标日期已切换，等待从已保存进度续跑');
+    error.code = 'SYNC_LEASE_UNAVAILABLE';
+    return error;
+  }
+  async function renewLeaseIfNeeded(run) {
+    if (run.leaseUntil > now() + RENEW_LEASE_MARGIN_MS) return;
+    const leaseUntil = await db.runTransaction(async tx => {
+      const current = await optional(tx, RUNS, run._id);
+      if (!current || current.status !== 'running' || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
+      const until = now() + LEASE_MS;
+      await tx.collection(RUNS).doc(run._id).update({ data: { leaseUntil: until } });
+      return until;
+    });
+    run.leaseUntil = leaseUntil;
+  }
+  async function commitRows(run, entries, final) {
+    if (!entries.length) return checkpoint(run, final);
+    let result;
+    for (let offset = 0; offset < entries.length; offset += CHUNK_SIZE) {
+      const page = entries.slice(offset, offset + CHUNK_SIZE);
+      const last = offset + page.length === entries.length;
+      await renewLeaseIfNeeded(run);
+      for (const entry of page) {
+        if (!entry.errorChange || !entry.errorChange.recovered) continue;
+        await renewLeaseIfNeeded(run);
+        const item = entry.item;
+        try { await markSynced(item.openid, run.recordDate, item.bindingStudentNumber); item.markError = ''; }
+        catch (error) { item.markError = error.message || '写入本地同步标记失败'; }
+      }
+      await renewLeaseIfNeeded(run);
+      result = await checkpoint(run, {
+        items: page.flatMap(entry => entry.item ? [entry.item] : []),
+        errorChanges: page.flatMap(entry => entry.errorChange ? [entry.errorChange] : []),
+        sourceFailures: page.flatMap(entry => entry.sourceFailure ? [entry.item] : []),
+        sourceResolved: page.flatMap(entry => entry.sourceResolved ? [entry.item] : []),
+        cursor: last ? final.cursor : page[page.length - 1].cursor,
+        phase: last ? final.phase : run.phase,
+        complete: last && !!final.complete,
+        releaseLease: last,
+      });
+      // Keep the private token; the public checkpoint result deliberately omits it.
+      run.cursor = result.cursor; run.phase = result.phase;
+      run.leaseUntil = last ? 0 : result.updatedAt + LEASE_MS;
+    }
+    return result;
+  }
   async function ownersOf(studentNumber) {
     return (await db.collection('users').where({ bijingBound: true, bijingStudentNumber: db.RegExp({ regexp: `^\\s*${studentNumber}\\s*$`, options: 'i' }) }).limit(2).get()).data;
   }
-  async function upload(run) {
-    const readDeadline = now() + 20000;
-    const filter = run.mode === 'errors' ? { recordDate: run.recordDate } : { bijingBound: true };
-    if (run.cursor) filter._id = db.command.gt(run.cursor);
-    const rows = (await db.collection(run.mode === 'errors' ? ERRORS : 'users').where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
-    const items = [], pending = [];
+  async function sourcePage(run, cursor) {
+    const filter = { bijingBound: true, ...(cursor ? { _id: db.command.gt(cursor) } : {}) };
+    const rows = (await db.collection('users').where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
+    const entries = [], pending = [];
     for (const row of rows) {
-      if (items.length && now() >= readDeadline) break;
-      if (run.mode === 'errors') {
-        const studentNumber = normalizeStudentNumber(row.studentNumber);
-        const item = { _id: `${run._id}_${crypto.createHash('sha256').update(`error:${row._id}`).digest('hex').slice(0, 24)}`,
-          userId: row.userId || '', openid: row.openid || '', studentNumber,
-          bindingStudentNumber: row.bindingStudentNumber || studentNumber, nickname: row.nickname || '',
-          durationMinutes: row.expectedDurationMinutes, status: 'failed', error: '', attempts: run.attempt, verifyEligible: false };
-        items.push(item);
-        try {
-          if (!validStudentNumber(studentNumber)) throw new Error('错误记录的学号无效，请人工检查');
-          const owners = await ownersOf(studentNumber);
-          if (owners.length !== 1 || owners[0]._id !== item.userId || owners[0]._openid !== item.openid) throw new Error('学号绑定已变更或存在冲突，保留错误待人工检查');
-          // Old error snapshots are not a current source of truth: comparing an
-          // old expected 20 with remote 20 must not clear an error if local is 45.
-          // A source read failure likewise cannot authorize deletion of an error.
-          const duration = await getDayDuration(item.openid, run.recordDate, readDeadline);
-          if (!Number.isInteger(duration) || duration <= 0) throw new Error('本地当日静坐数据已变更，保留错误待人工检查');
-          item.durationMinutes = duration;
-          item.bindingStudentNumber = owners[0].bijingStudentNumber;
-          item.verifyEligible = true; item.status = 'pending';
-        } catch (error) { item.error = error.message || '读取当前静坐数据失败，保留原错误'; }
-        continue;
-      }
+      await renewLeaseIfNeeded(run);
+      const readDeadline = now() + 20000;
       const item = { userId: row._id, openid: row._openid || '', studentNumber: normalizeStudentNumber(row.bijingStudentNumber),
         bindingStudentNumber: row.bijingStudentNumber || '', nickname: row.nickName || '', durationMinutes: 0,
-        status: 'failed', error: '', attempts: run.attempt, verifyEligible: false };
-      items.push(item);
+        status: 'failed', error: '', attempts: run.attempt, verifyEligible: false, retryEligible: false };
+      item._id = itemId(run, item);
+      const entry = { cursor: row._id, item };
+      entries.push(entry);
+      let readingSource = false;
       try {
         if (!row._openid || typeof row.bijingStudentNumber !== 'string') throw new Error('绑定资料不完整，请重新绑定学号');
         if (!validStudentNumber(item.studentNumber)) throw new Error('绑定学号格式错误，请重新绑定');
-        if ((await ownersOf(item.studentNumber)).length > 1) throw new Error('同一学号绑定了多个用户，请核对绑定后重试');
+        readingSource = true;
+        if ((await ownersOf(item.studentNumber)).length > 1) {
+          readingSource = false;
+          throw new Error('同一学号绑定了多个用户，请核对绑定后重试');
+        }
         item.durationMinutes = await getDayDuration(row._openid, run.recordDate, readDeadline);
         if (!Number.isInteger(item.durationMinutes) || item.durationMinutes < 0) throw new Error('本地静坐时长无效');
-        if (item.durationMinutes === 0) { item.status = 'skipped'; item.error = '当日无静坐数据'; continue; }
+        if (item.durationMinutes === 0) {
+          item.status = 'skipped'; item.error = '当日无静坐数据'; entry.sourceResolved = true;
+          continue;
+        }
         item.status = 'pending'; item.verifyEligible = true;
         pending.push(item);
-      } catch (error) { item.error = error.message || '读取静坐记录失败'; }
+      } catch (error) {
+        item.error = error.message || '读取静坐记录失败';
+        entry.sourceFailure = readingSource;
+      }
     }
+    return { rows, entries, pending };
+  }
+  async function uploadAll(run) {
+    let cursor = '';
+    const summary = { total: 0, acknowledged: 0, failed: 0, skipped: 0 };
+    while (true) {
+      await renewLeaseIfNeeded(run);
+      if (run.automatic && run.recordDate !== recentDates(1)[0]) throw leaseUnavailable();
+      const { rows, entries, pending } = await sourcePage(run, cursor);
+      if (pending.length) await post(run, pending);
+      summary.total += entries.length;
+      summary.skipped += entries.filter(entry => entry.item.status === 'skipped').length;
+      summary.failed += entries.filter(entry => entry.item.status === 'failed').length + pending.filter(item => item.uploadError).length;
+      summary.acknowledged += pending.filter(item => !item.uploadError).length;
+      if (rows.length < BATCH_SIZE) break;
+      cursor = rows[rows.length - 1]._id;
+    }
+    await renewLeaseIfNeeded(run);
+    return db.runTransaction(async tx => {
+      const current = await optional(tx, RUNS, run._id);
+      if (!current || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
+      const automaticUpload = run.trigger === 'timer';
+      const timestamp = now();
+      const patch = { phase: automaticUpload ? 'upload' : 'verify', status: automaticUpload ? 'uploaded' : 'running',
+        cursor: '', sourceCheck: true, uploadSummary: summary, uploadedAt: timestamp,
+        total: automaticUpload ? summary.total : 0, successCount: 0,
+        failedCount: automaticUpload ? summary.failed : 0, skippedCount: automaticUpload ? summary.skipped : 0,
+        discrepancyCount: 0, error: '', queryFailures: 0, leaseToken: '', leaseUntil: 0,
+        finishedAt: automaticUpload ? timestamp : null, durationMs: timestamp - run.startedAt, updatedAt: timestamp };
+      await tx.collection(RUNS).doc(run._id).update({ data: patch });
+      await tx.collection(DAYS).doc(run.recordDate).update({ data: {
+        status: patch.status, activeRunId: automaticUpload ? '' : run._id, updatedAt: timestamp,
+      } });
+      return publicRun({ ...current, ...patch });
+    });
+  }
+  async function uploadLegacy(run) {
+    // Runs already in progress before source reconciliation retain their item
+    // counters and cursor. Resetting counters while keeping those items would
+    // double-count later status deltas. New full runs always use uploadAll.
+    const { rows, entries, pending } = await sourcePage(run, run.cursor);
     if (pending.length) await post(run, pending);
-    const complete = items.length === rows.length && rows.length < BATCH_SIZE;
-    return checkpoint(run, { items, cursor: complete ? '' : items.length ? rows[items.length - 1]._id : run.cursor, phase: complete ? 'verify' : 'upload' });
+    const complete = rows.length < BATCH_SIZE;
+    return commitRows(run, entries,
+    { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'verify' : 'upload' });
+  }
+  async function upload(run) {
+    if (run.mode !== 'errors') return run.sourceCheck ? uploadAll(run) : uploadLegacy(run);
+    const filter = { recordDate: run.recordDate, ...(run.cursor ? { _id: db.command.gt(run.cursor) } : {}) };
+    const rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
+    const entries = [];
+    for (const row of rows) {
+      await renewLeaseIfNeeded(run);
+      const readDeadline = now() + 20000;
+      const studentNumber = normalizeStudentNumber(row.studentNumber);
+      const item = { _id: `${run._id}_${crypto.createHash('sha256').update(`error:${row._id}`).digest('hex').slice(0, 24)}`,
+        userId: row.userId || '', openid: row.openid || '', studentNumber,
+        bindingStudentNumber: row.bindingStudentNumber || studentNumber, nickname: row.nickname || '',
+        durationMinutes: row.expectedDurationMinutes, status: 'failed', error: '', attempts: run.attempt, verifyEligible: false };
+      const entry = { cursor: row._id, item };
+      entries.push(entry);
+      try {
+        if (!validStudentNumber(studentNumber)) throw new Error('错误记录的学号无效，请人工检查');
+        const owners = await ownersOf(studentNumber);
+        if (owners.length !== 1 || owners[0]._id !== item.userId || owners[0]._openid !== item.openid) throw new Error('学号绑定已变更或存在冲突，保留错误待人工检查');
+        // Re-read the source before comparing; old error snapshots cannot
+        // establish the current expected value or authorize clearing errors.
+        const duration = await getDayDuration(item.openid, run.recordDate, readDeadline);
+        if (duration === 0 && onlySourceFailure(row)) {
+          item.durationMinutes = 0; item.status = 'skipped'; item.error = '当日无静坐数据';
+          entry.sourceResolved = true;
+          continue;
+        }
+        if (!Number.isInteger(duration) || duration <= 0) throw new Error('本地当日静坐数据已变更，保留错误待人工检查');
+        item.durationMinutes = duration;
+        item.bindingStudentNumber = owners[0].bijingStudentNumber;
+        item.verifyEligible = true; item.status = 'pending';
+      } catch (error) { item.error = error.message || '读取当前静坐数据失败，保留原错误'; }
+    }
+    const complete = rows.length < BATCH_SIZE;
+    return commitRows(run, entries,
+    { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'verify' : 'upload' });
   }
   async function post(run, items) {
+    await assertRequestLease(run);
     try {
       const response = await postBatch(run.recordDate, items.map(item => ({ studentNumber: item.studentNumber, durationMinutes: item.durationMinutes })));
       // A timeout may happen after the remote commit, and a success acknowledgement
@@ -213,8 +413,18 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       });
     } catch (error) { items.forEach(item => { item.uploadError = errorMessage(error, '请求必经批量接口失败'); }); }
   }
+  async function assertRequestLease(run) {
+    if (run.automatic && run.recordDate !== recentDates(1)[0]) throw leaseUnavailable();
+    await renewLeaseIfNeeded(run);
+    const current = await optional(db, RUNS, run._id);
+    if (!current || current.status !== 'running' || current.leaseToken !== run.leaseToken ||
+      current.leaseUntil < now() + REQUEST_LEASE_MARGIN_MS) {
+      throw leaseUnavailable();
+    }
+  }
   async function phaseRows(run) {
     const filter = { runId: run._id };
+    if (run.phase === 'retry' || run.phase === 'reverify') filter.retryEligible = true;
     if (run.cursor) filter._id = db.command.gt(run.cursor);
     return (await db.collection(ITEMS).where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
   }
@@ -223,54 +433,75 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     // their formerly acknowledged successes before considering them complete.
     return item.verifyEligible !== false && validStudentNumber(item.studentNumber) && Number.isInteger(item.durationMinutes) && item.durationMinutes > 0;
   }
+  async function queryExpected(run, pending) {
+    const records = pending.map(item => ({ studentNumber: item.studentNumber, recordDate: run.recordDate }));
+    await assertRequestLease(run);
+    const response = await queryBatch(records);
+    if (!response || response.success !== true || !response.data || response.data.total !== pending.length ||
+      !Array.isArray(response.data.results) || response.data.results.length !== pending.length) throw new Error('批量核对接口返回无效响应');
+    return pending.map((item, index) => {
+      const matches = response.data.results.filter(result => result && result.index === index);
+      const result = matches.length === 1 ? matches[0] : null;
+      if (!result || result.studentNumber !== records[index].studentNumber || result.recordDate !== run.recordDate ||
+        typeof result.exists !== 'boolean' || !Number.isInteger(result.durationMinutes) || result.durationMinutes < 0 ||
+        (!result.exists && result.durationMinutes !== 0)) throw new Error('批量核对接口返回不完整或不匹配的记录');
+      return result;
+    });
+  }
+  function compare(item, result) {
+    const recovered = result.exists && result.durationMinutes === item.durationMinutes;
+    item.verifiedAt = now(); item.actualDurationMinutes = result.durationMinutes; item.remoteExists = result.exists;
+    item.status = recovered ? 'success' : 'failed'; item.retryEligible = !recovered;
+    item.error = recovered ? '' : `${result.exists ? `远端时长为${result.durationMinutes}分钟，期望${item.durationMinutes}分钟` : '远端缺少该学号当日记录'}${item.retryBlocked ? `；${item.retryBlocked}` : ''}`;
+    return { item, result, recovered };
+  }
+  async function verifySource(run) {
+    // Users and current local totals are authoritative. The 02:00 upload may
+    // have never run or stopped mid-request; its logs are deliberately unused.
+    const { rows, entries, pending } = await sourcePage(run, run.cursor);
+    if (pending.length) {
+      let results;
+      try { results = await queryExpected(run, pending); }
+      catch (error) {
+        if (error.code === 'SYNC_LEASE_UNAVAILABLE') throw error;
+        return checkpoint(run, { error: errorMessage(error, '远端核对失败，未修改错误表'), queryFailure: true });
+      }
+      const changes = new Map(pending.map((item, index) => [item._id, compare(item, results[index])]));
+      for (const entry of entries) entry.errorChange = changes.get(entry.item._id);
+    }
+    const complete = rows.length < BATCH_SIZE;
+    return commitRows(run, entries, { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'retry' : 'verify' });
+  }
   async function verify(run) {
+    if (run.phase === 'verify' && run.mode !== 'errors' && run.sourceCheck) return verifySource(run);
     const rows = await phaseRows(run);
     const pending = rows.filter(item => eligible(item) && (run.phase === 'verify' || item.retryEligible));
-    const errorChanges = [];
+    const changes = new Map();
     if (pending.length) {
-      const records = pending.map(item => ({ studentNumber: item.studentNumber, recordDate: run.recordDate }));
-      let response;
+      let results;
       try {
-        response = await queryBatch(records);
-        if (!response || response.success !== true || !response.data || response.data.total !== pending.length ||
-          !Array.isArray(response.data.results) || response.data.results.length !== pending.length) throw new Error('批量核对接口返回无效响应');
-        for (let index = 0; index < pending.length; index++) {
-          const matches = response.data.results.filter(result => result && result.index === index);
-          const result = matches.length === 1 ? matches[0] : null;
-          if (!result || result.studentNumber !== records[index].studentNumber || result.recordDate !== run.recordDate ||
-            typeof result.exists !== 'boolean' || !Number.isInteger(result.durationMinutes) || result.durationMinutes < 0 ||
-            (!result.exists && result.durationMinutes !== 0)) throw new Error('批量核对接口返回不完整或不匹配的记录');
-        }
+        results = await queryExpected(run, pending);
       } catch (error) {
+        if (error.code === 'SYNC_LEASE_UNAVAILABLE') throw error;
         return checkpoint(run, { error: errorMessage(error, '远端核对失败，未修改错误表'), queryFailure: true });
       }
       for (let index = 0; index < pending.length; index++) {
         const item = pending[index];
-        const result = response.data.results.find(value => value.index === index);
-        const recovered = result.exists && result.durationMinutes === item.durationMinutes;
-        item.verifiedAt = now(); item.actualDurationMinutes = result.durationMinutes; item.remoteExists = result.exists;
-        item.status = recovered ? 'success' : 'failed'; item.retryEligible = !recovered;
-        item.error = recovered ? '' : `${result.exists ? `远端时长为${result.durationMinutes}分钟，期望${item.durationMinutes}分钟` : '远端缺少该学号当日记录'}${item.retryBlocked ? `；${item.retryBlocked}` : ''}`;
-        if (recovered) {
-          try { await markSynced(item.openid, run.recordDate, item.bindingStudentNumber); item.markError = ''; }
-          catch (error) { item.markError = error.message || '写入本地同步标记失败'; }
-        }
-        errorChanges.push({ item, result, recovered });
+        changes.set(item._id, compare(item, results[index]));
       }
     }
     const complete = rows.length < BATCH_SIZE;
     const nextPhase = run.phase === 'verify' ? 'retry' : 'reverify';
-    return checkpoint(run, { items: pending, errorChanges, cursor: complete ? '' : rows[rows.length - 1]._id,
+    return commitRows(run, rows.map(row => ({ cursor: row._id, item: changes.has(row._id) ? row : null, errorChange: changes.get(row._id) })),
+    { cursor: complete ? '' : rows[rows.length - 1]._id,
       phase: complete ? nextPhase : run.phase, complete: complete && run.phase === 'reverify' });
   }
   async function retry(run) {
     const rows = await phaseRows(run);
-    const readDeadline = now() + 20000;
     const items = [], pending = [];
-    let processed = 0;
     for (const item of rows) {
-      if (processed && now() >= readDeadline) break;
-      processed++;
+      await renewLeaseIfNeeded(run);
+      const readDeadline = now() + 20000;
       if (!item.retryEligible || !eligible(item)) continue;
       items.push(item);
       try {
@@ -287,23 +518,38 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       } catch (error) { item.retryBlocked = error.message || '重试前检查失败'; }
     }
     if (pending.length) await post(run, pending);
-    const complete = processed === rows.length && rows.length < BATCH_SIZE;
-    return checkpoint(run, { items, cursor: complete ? '' : processed ? rows[processed - 1]._id : run.cursor, phase: complete ? 'reverify' : 'retry' });
+    const complete = rows.length < BATCH_SIZE;
+    return commitRows(run, rows.map(row => ({ cursor: row._id, item: items.includes(row) ? row : null })),
+    { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'reverify' : 'retry' });
   }
-  async function processChunk(runId) {
+  async function processChunk(runId, options = {}) {
     if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');
-    const { run, acquired } = await acquire(runId);
-    if (!acquired) return { ...publicRun(run), busy: run.status === 'running' };
+    const { run, acquired } = await acquire(runId, options);
+    if (!acquired) return { ...publicRun(run), busy: run.status === 'running' && !waitsForCheck(run) };
+    run.automatic = !!options.automatic;
     try {
       if (run.phase === 'upload') return await upload(run);
       if (run.phase === 'verify' || run.phase === 'reverify') return await verify(run);
       if (run.phase === 'retry') return await retry(run);
       throw new Error('未知同步阶段，请重新发起任务');
     } catch (error) {
-      // Failed checkpoint transactions roll back both items and error changes.
-      // If this write also fails, the expired lease safely replays the same cursor.
+      if (error.code === 'SYNC_LEASE_UNAVAILABLE') {
+        // Do not write through a stale token or classify a slow read as a
+        // permanent failure. The next worker replays this uncommitted chunk.
+        const current = await optional(db, RUNS, runId);
+        return { ...publicRun(current || run), busy: true };
+      }
+      // Earlier 20-row checkpoints remain committed; record an error without
+      // moving their cursor backward. If this write also fails, the lease expires.
       return checkpoint(run, { error: error.message || '同步任务执行失败' });
     }
+  }
+  async function processBatch(runId, { automatic = false, expectedPhase } = {}) {
+    if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');
+    const initial = await optional(db, RUNS, runId);
+    if (!initial) throw new Error('同步任务不存在');
+    const phase = expectedPhase || initial.phase || 'upload';
+    return processChunk(runId, { expectedPhase: phase, automatic });
   }
   async function retryErrors(operator = '', automatic = false) {
     // A persistent scan cursor keeps one permanently broken date (or >20 errors
@@ -311,9 +557,9 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     const scheduler = await optional(db, DAYS, REPAIR_CURSOR_ID);
     const filter = {};
     if (scheduler && scheduler.cursor) filter._id = db.command.gt(scheduler.cursor);
-    let rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
-    if (!rows.length && scheduler && scheduler.cursor) rows = (await db.collection(ERRORS).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
-    await db.collection(DAYS).doc(REPAIR_CURSOR_ID).set({ data: { cursor: rows.length === BATCH_SIZE ? rows[rows.length - 1]._id : '', updatedAt: now() } });
+    let rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(CHUNK_SIZE).get()).data;
+    if (!rows.length && scheduler && scheduler.cursor) rows = (await db.collection(ERRORS).orderBy('_id', 'asc').limit(CHUNK_SIZE).get()).data;
+    await db.collection(DAYS).doc(REPAIR_CURSOR_ID).set({ data: { cursor: rows.length === CHUNK_SIZE ? rows[rows.length - 1]._id : '', updatedAt: now() } });
     for (const recordDate of [...new Set(rows.map(row => row.recordDate))]) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) continue;
       const day = await optional(db, DAYS, recordDate);
@@ -323,26 +569,135 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     }
     return null;
   }
-  async function timer() {
-    const latest = await start(recentDates(1)[0], 'timer');
-    const active = (await db.collection(RUNS).where({ status: 'running' }).orderBy('startedAt', 'asc').limit(1).get()).data[0];
-    if (active) return processChunk(active._id);
-    if (latest.status === 'running' || latest.status === 'interrupted') return processChunk(latest.runId);
-    for (const date of recentDates(7)) {
-      const run = await start(date, 'timer');
-      if (run.status === 'running' || run.status === 'interrupted') return processChunk(run.runId);
+  async function startDailyUpload() {
+    return startRun(recentDates(1)[0], 'timer', '', 'full', { upload: true });
+  }
+  async function startScheduledRepair(recordDate, cycleDate, cycleKey) {
+    for (const date of [recordDate, cycleDate]) {
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+        !Number.isFinite(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+        throw new Error('修复日期无效');
+      }
     }
-    const repair = await retryErrors('', true);
-    if (repair && (repair.status === 'running' || repair.status === 'interrupted')) return processChunk(repair.runId);
-    return latest;
+    if (recordDate !== new Date(Date.parse(`${cycleDate}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)) {
+      throw new Error('自动修复仅处理核对日期前一天的静坐日');
+    }
+    return startRun(recordDate, 'timer-errors', '', 'errors', { repairCycle: cycleKey || cycleDate,
+      ...(cycleKey ? { authorizedCycle: cycleKey, cycleDate } : {}) });
+  }
+  async function resumeActive({ batch = false, recordDate = recentDates(1)[0] } = {}) {
+    const processRun = runId => batch ? processBatch(runId, { automatic: true }) : processChunk(runId, { automatic: true });
+    let cursor = '', candidate = null, busy = null;
+    // Automatic continuation only touches the latest completed meditation day.
+    // Historical work remains available through explicit runId/manual actions.
+    while (true) {
+      const filter = { status: 'running', recordDate, ...(cursor ? { _id: db.command.gt(cursor) } : {}) };
+      const rows = (await db.collection(RUNS).where(filter).orderBy('_id', 'asc').limit(PAGE_SIZE).get()).data;
+      for (const run of rows) {
+        // Upload has no durable cursor. An interrupted automatic upload waits
+        // for the next scheduled source check instead of starting over.
+        if (run.trigger === 'timer' && run.mode !== 'errors' && (!run.phase || run.phase === 'upload')) continue;
+        if (waitsForCheck(run)) continue;
+        if (run.leaseUntil > now()) { busy = busy || run; continue; }
+        if (run.mode !== 'errors' && (!run.phase || run.phase === 'upload')) return processRun(run._id);
+        candidate = candidate || run;
+      }
+      if (rows.length < PAGE_SIZE) break;
+      cursor = rows[rows.length - 1]._id;
+    }
+    if (candidate) return processRun(candidate._id);
+    if (busy) return { ...publicRun(busy), busy: true };
+    return resumeFailedRun({ batch, recordDate });
+  }
+  async function resumeFailedRun({ batch = false, recordDate = recentDates(1)[0] } = {}) {
+    const { CHECK_CYCLE_ID, getCycleKey } = require('./dailySchedule');
+    const cycle = await optional(db, DAYS, CHECK_CYCLE_ID);
+    if (!cycle || cycle.status !== 'running' ||
+      recordDate !== new Date(Date.parse(`${cycle.cycleDate}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)) return null;
+    let cursor = '';
+    while (true) {
+      const filter = { status: 'failed', recordDate, ...(cursor ? { _id: db.command.gt(cursor) } : {}) };
+      const rows = (await db.collection(RUNS).where(filter).orderBy('_id', 'asc').limit(PAGE_SIZE).get()).data;
+      for (const failed of rows) {
+        // A scan/query/worker failure may occur before any discrepancy exists.
+        // Resume its checkpoint once per check cycle instead of losing the job.
+        // Per-item source failures already have entries in the repair queue.
+        if (failed.mode === 'errors' || (failed.trigger === 'timer' && (!failed.phase || failed.phase === 'upload')) ||
+          !failed.error || failed.recoveryCycle >= getCycleKey(cycle)) continue;
+        const resumed = await db.runTransaction(async tx => {
+          const currentCycle = await optional(tx, DAYS, CHECK_CYCLE_ID);
+          const run = await optional(tx, RUNS, failed._id);
+          const day = await optional(tx, DAYS, failed.recordDate);
+          if (!currentCycle || currentCycle.status !== 'running' || getCycleKey(currentCycle) !== getCycleKey(cycle) ||
+            !run || run.recordDate !== recordDate || run.status !== 'failed' || !run.error || run.recoveryCycle >= getCycleKey(cycle) || !day ||
+            (day.latestFullRunId || day.latestRunId) !== run._id || day.activeRunId) return false;
+          await tx.collection(RUNS).doc(run._id).update({ data: {
+            status: 'running', finishedAt: null, error: '', queryFailures: 0,
+            consecutiveInterruptions: 0, leaseToken: '', leaseUntil: 0,
+            recoveryCycle: getCycleKey(cycle), updatedAt: now(),
+          } });
+          await tx.collection(DAYS).doc(run.recordDate).update({ data: {
+            status: 'running', activeRunId: run._id, updatedAt: now(),
+          } });
+          return true;
+        });
+        if (resumed) return batch ? processBatch(failed._id, { automatic: true }) : processChunk(failed._id, { automatic: true });
+      }
+      if (rows.length < PAGE_SIZE) return null;
+      cursor = rows[rows.length - 1]._id;
+    }
+  }
+  async function timer(triggerName) {
+    const { createDailySchedule, CHECK_CYCLE_ID, getCycleKey } = require('./dailySchedule');
+    const uploadOnly = triggerName === 'dailySyncBijing';
+    const schedule = createDailySchedule({
+      db, now, jobs: { startDailyUpload, startScheduledRepair,
+        ensureDailyCheck: require('./sourceCheck').createSourceCheck({ db, now }).ensureDailyCheck,
+        resumeActive: options => resumeActive({ ...options, batch: true }),
+        processChunk: runId => processBatch(runId, { automatic: true, ...(uploadOnly ? { expectedPhase: 'upload' } : {}) }) },
+    });
+    const recordDate = recentDates(1)[0];
+    const cycleProgress = cycle => JSON.stringify(cycle && [getCycleKey(cycle), cycle.cursor, cycle.status]);
+    const seen = new Set();
+    let nextTrigger = triggerName, last = null;
+    // The 100-record limit bounds an API batch, not the whole invocation.
+    // There is no wall-clock cutoff: ordinary progress continues in this call.
+    while (recentDates(1)[0] === recordDate) {
+      const cycleBefore = uploadOnly ? null : await optional(db, DAYS, CHECK_CYCLE_ID);
+      // Continue the same upload run directly. A concurrent check worker must
+      // not turn this upload-only invocation into reconciliation or repair.
+      const result = uploadOnly && last
+        ? await processBatch(last.runId, { automatic: true, expectedPhase: 'upload' })
+        : await schedule.timer(nextTrigger);
+      nextTrigger = 'resumeBijingBatches';
+      if (result != null) last = result;
+      if (recentDates(1)[0] !== recordDate) break;
+      if (result == null) {
+        // null may also mean a malformed error row was skipped. Continue only
+        // if the authorized repair cycle actually advanced and is still open.
+        const cycleAfter = await optional(db, DAYS, CHECK_CYCLE_ID);
+        if (cycleAfter && cycleAfter.status === 'running' && cycleProgress(cycleAfter) !== cycleProgress(cycleBefore)) continue;
+        break;
+      }
+      if (result.busy || result.status === 'waiting' || result.status === 'uploaded' || result.error) break;
+      // Even a slow 02:00 upload that lasts past 03:00 stops after upload; the
+      // check trigger (or its continuation) owns reconciliation and repair.
+      if (triggerName === 'dailySyncBijing' && result.phase !== 'upload') break;
+      const progress = JSON.stringify([result.runId, result.recordDate, result.phase, result.cursor, result.status,
+        result.total, result.successCount, result.failedCount, result.skippedCount, result.discrepancyCount, result.queryFailures]);
+      if (seen.has(progress)) break;
+      seen.add(progress);
+    }
+    return last;
   }
   async function listRuns(recordDate, cursor) {
     if (recordDate) validateDate(recordDate);
-    const dates = recentDates(7);
+    // The overview stays compact; an explicitly selected date uses the same
+    // thirty-day range offered for manual synchronization.
+    const dates = recordDate ? [recordDate] : recentDates(7);
     // Active repairs can target older dates; keep their continuation independent
     // of the bounded history, using the same indexed lookup as the timer.
     const activeRun = (await db.collection(RUNS).where({ status: 'running' }).orderBy('startedAt', 'asc').limit(1).get()).data[0];
-    if (recordDate && !dates.includes(recordDate)) return { runs: [], nextCursor: null, activeRun: publicRun(activeRun) || null };
     let filter = { recordDate: recordDate || db.command.in(dates) };
     if (cursor) {
       if (typeof cursor !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(cursor)) throw new Error('执行记录分页游标无效');
@@ -371,6 +726,6 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     const rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(PAGE_SIZE).get()).data;
     return { errors: rows, nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1]._id : null };
   }
-  return { start, processChunk, timer, listRuns, details, listErrors, retryErrors };
+  return { start, processChunk, processBatch, timer, listRuns, details, listErrors, retryErrors, startDailyUpload, startScheduledRepair, resumeActive };
 }
-module.exports = { createBatchJobs, BATCH_SIZE, errorId };
+module.exports = { createBatchJobs, BATCH_SIZE, CHUNK_SIZE, errorId };

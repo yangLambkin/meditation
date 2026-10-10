@@ -1450,7 +1450,7 @@ const checkinManager = {
       throw new Error('静坐时长须为 1–1440 分钟的整数');
     }
     if (metadata.source === 'manual' && !dateUtil.isRecentBusinessDate(dateStr)) {
-      throw new Error('只能记录最近三天（含今天）的静坐');
+      throw new Error('只能记录今天和昨天的静坐');
     }
     // 更新每日记录
     if (!userData.dailyRecords[dateStr]) {

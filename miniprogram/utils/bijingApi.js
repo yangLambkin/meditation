@@ -35,15 +35,22 @@ async function checkBijing(studentNumber) {
   return callBijingSync({ type: 'checkStudentNumber', studentNumber });
 }
 
-// 同步选中的一天；云端限制为北京时间 02:00 切日后的最近七个已结束同步日
+// 本人已获批的补录区间；过期仅限制新增记录，不限制已有记录重试同步。
+async function getBijingBackfillSyncRanges() {
+  return callBijingSync({ type: 'getBackfillSyncRanges' });
+}
+
+// 同步选中的一天；最近七个已结束同步日之外须由云端核实补录申请。
 // 使用独立操作名，避免旧版云函数忽略日期参数后执行批量同步
-async function syncBijingDate(recordDate) {
-  return callBijingSync({ type: 'syncSelectedDate', recordDate });
+async function syncBijingDate(recordDate, backfillRequestId) {
+  return callBijingSync({ type: 'syncSelectedDate', recordDate,
+    ...(backfillRequestId ? { backfillRequestId } : {}) });
 }
 
 // 只读取所选日期的同步明细与合计，不上报、不写入同步标记
-async function getBijingSyncDateDetails(recordDate) {
-  return callBijingSync({ type: 'getSyncDateDetails', recordDate });
+async function getBijingSyncDateDetails(recordDate, backfillRequestId) {
+  return callBijingSync({ type: 'getSyncDateDetails', recordDate,
+    ...(backfillRequestId ? { backfillRequestId } : {}) });
 }
 
 async function getBijingHeatmap() {
@@ -57,4 +64,5 @@ module.exports = {
   checkBijing,
   syncBijingDate,
   getBijingSyncDateDetails,
+  getBijingBackfillSyncRanges,
 };

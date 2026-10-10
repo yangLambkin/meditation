@@ -42,9 +42,13 @@ Page({
     bijingShowBindInput: false, // 是否展示绑定输入框
     bijingInputValue: '', // 绑定输入框当前值
     bijingSyncing: false, // 同步中状态（防重复点击）
+    bijingShowManualSync: false,
     bijingShowSyncDatePicker: false,
     bijingSyncDateOptions: [],
     bijingSyncDate: '',
+    bijingBackfillSyncRanges: [],
+    bijingSyncRangesLoading: false,
+    bijingSyncRangesError: '',
     bijingSyncDetailsLoading: false,
     bijingSyncDetailsError: '',
     bijingSyncDetailsDate: '',
@@ -535,6 +539,15 @@ Page({
 
   // ===== 必经之路绑定与同步 =====
 
+  onBijingCardTap() {
+    if (this._bijingHidden || !this.data.bijingBound || !checkinManager.isUserLoggedIn() ||
+        this._bijingOperation) return;
+    this._bijingCardTapCount = (this._bijingCardTapCount || 0) + 1;
+    if (this._bijingCardTapCount < 7) return;
+    this._bijingCardTapCount = 0;
+    this.setData({ bijingShowManualSync: !this.data.bijingShowManualSync });
+  },
+
   // 隐藏入口只负责发现管控页；权限每次由云函数根据调用者身份校验。
   async onVersionTap() {
     if (this._adminOpening || this._bijingOperation) return;
@@ -620,12 +633,17 @@ Page({
   },
 
   clearBijingBindingView(binding = {}) {
+    this._bijingCardTapCount = 0;
     this._bijingSyncDetailsRequestId++;
+    this._bijingSyncRangesRequestId = (this._bijingSyncRangesRequestId || 0) + 1;
+    this._bijingBackfillSyncContext = null;
     this.setData({
       bijingBound: false, bijingStudentNumber: '', bijingBindingVersion: null,
       bijingShowBindInput: false, bijingInputValue: '', bijingShowConfirm: false,
       bijingPendingSn: '', bijingConfirmSn: '', bijingConfirmNickname: '',
+      bijingShowManualSync: false,
       bijingShowSyncDatePicker: false, bijingSyncDateOptions: [], bijingSyncDate: '',
+      bijingBackfillSyncRanges: [], bijingSyncRangesLoading: false, bijingSyncRangesError: '',
       bijingSyncDetailsLoading: false, bijingSyncDetailsError: '', bijingSyncDetailsDate: '',
       bijingSyncRecords: [], bijingSyncRecordCount: 0, bijingSyncTotalDuration: 0,
       bijingSyncDuration: 0, bijingSyncAlreadySynced: false, bijingLastSync: '', bijingIsAdmin: false,
@@ -805,19 +823,24 @@ Page({
 
   invalidateBijingRequests() {
     this._bijingHidden = true;
+    this._bijingCardTapCount = 0;
     this._bijingGeneration = (this._bijingGeneration || 0) + 1;
     this._bijingStatusRequestId = (this._bijingStatusRequestId || 0) + 1;
+    this._bijingSyncRangesRequestId = (this._bijingSyncRangesRequestId || 0) + 1;
+    this._bijingBackfillSyncContext = null;
     if (this._bijingOperation || this.data.bijingSyncing) wx.hideLoading();
     this.setData({ bijingShowConfirm: false, bijingPendingSn: '', bijingBinding: false,
-      bijingUnbinding: false, bijingSyncing: false });
+      bijingShowManualSync: false,
+      bijingUnbinding: false, bijingSyncing: false, bijingBackfillSyncRanges: [],
+      bijingSyncRangesLoading: false, bijingSyncRangesError: '' });
   },
 
-  // 同步日按北京时间 02:00 至次日 02:00 划分，只提供最近七个已结束的同步日
+  // 最近七个已结束同步日与本人获批区间合并；中间未获批日期仍不可选。
   getBijingSyncDateOptions() {
     const now = Date.now();
     const beforeCutoff = dateUtil.getBusinessDate(now) !== new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const labels = ['昨天', '前天', '大前天'];
-    return Array.from({ length: 7 }, (_, index) => {
+    const options = Array.from({ length: 7 }, (_, index) => {
       const daysAgo = index + 1;
       const calendarDaysAgo = daysAgo + (beforeCutoff ? 1 : 0);
       return {
@@ -825,6 +848,20 @@ Page({
         date: dateUtil.getBusinessDate(new Date(now - daysAgo * 24 * 3600 * 1000))
       };
     });
+    const allowed = new Map(options.map(option => [option.date, option]));
+    const today = dateUtil.getBusinessDate(now);
+    const ranges = this._bijingBackfillSyncContext && this.isBijingContextCurrent(this._bijingBackfillSyncContext)
+      ? this.data.bijingBackfillSyncRanges : [];
+    for (const range of ranges) {
+      if (!range || typeof range.requestId !== 'string' || !/^br_[a-f0-9]{64}$/.test(range.requestId) ||
+          !dateUtil.isDateLabel(range.startDate) || !dateUtil.isDateLabel(range.endDate) ||
+          range.startDate > range.endDate || range.endDate >= today ||
+          range.startDate < dateUtil.addBusinessDays(range.endDate, -29)) continue;
+      for (let date = range.startDate; date <= range.endDate; date = dateUtil.addBusinessDays(date, 1)) {
+        if (!allowed.has(date)) allowed.set(date, { date, label: '补录', backfillRequestId: range.requestId });
+      }
+    }
+    return [...allowed.values()].sort((a, b) => b.date.localeCompare(a.date));
   },
 
   // 先选择日期，确认后才发起同步
@@ -838,13 +875,38 @@ Page({
       wx.showToast({ title: '请先绑定学号', icon: 'none' });
       return;
     }
+    this._bijingBackfillSyncContext = null;
+    this.setData({ bijingBackfillSyncRanges: [], bijingSyncRangesError: '' });
     const options = this.getBijingSyncDateOptions();
     this.setData({
       bijingShowSyncDatePicker: true,
       bijingSyncDateOptions: options,
       bijingSyncDate: options[0].date
     });
-    return this.loadBijingSyncDetails(options[0].date);
+    return Promise.all([this.loadBijingSyncDetails(options[0].date), this.loadBijingBackfillSyncRanges()]);
+  },
+
+  async loadBijingBackfillSyncRanges() {
+    if (!this.data.bijingShowSyncDatePicker || this._bijingHidden || !this.data.bijingBound || !checkinManager.isUserLoggedIn()) return;
+    const requestId = this._bijingSyncRangesRequestId = (this._bijingSyncRangesRequestId || 0) + 1;
+    const context = this.bijingContext();
+    const isCurrent = () => requestId === this._bijingSyncRangesRequestId &&
+      this.isBijingContextCurrent(context) && this.data.bijingShowSyncDatePicker;
+    this.setData({ bijingSyncRangesLoading: true, bijingSyncRangesError: '' });
+    try {
+      const res = await bijingApi.getBijingBackfillSyncRanges();
+      if (!isCurrent()) return;
+      if (!res || !res.success || !res.data || !Array.isArray(res.data.ranges)) {
+        throw new Error(res && res.error || '补录日期读取失败');
+      }
+      this._bijingBackfillSyncContext = context;
+      this.setData({ bijingBackfillSyncRanges: res.data.ranges });
+      this.setData({ bijingSyncDateOptions: this.getBijingSyncDateOptions() });
+    } catch (error) {
+      if (isCurrent()) this.setData({ bijingSyncRangesError: '补录日期暂未读取，可重试；最近七天仍可同步。' });
+    } finally {
+      if (isCurrent()) this.setData({ bijingSyncRangesLoading: false });
+    }
   },
 
   onBijingSyncDateChange(e) {
@@ -857,7 +919,10 @@ Page({
 
   cancelBijingSyncDate() {
     this._bijingSyncDetailsRequestId++;
-    this.setData({ bijingShowSyncDatePicker: false, bijingSyncDetailsLoading: false });
+    this._bijingSyncRangesRequestId = (this._bijingSyncRangesRequestId || 0) + 1;
+    this._bijingBackfillSyncContext = null;
+    this.setData({ bijingShowSyncDatePicker: false, bijingSyncDetailsLoading: false,
+      bijingBackfillSyncRanges: [], bijingSyncRangesLoading: false, bijingSyncRangesError: '' });
   },
 
   formatBijingSyncTime(timestamp, recordDate) {
@@ -891,7 +956,9 @@ Page({
           ? `仍有 ${uploadSummary.pending} 条记录仅保存在本机，请到首页点击“手动上传”，再同步必经`
           : '当天记录正在上传，请稍后重试');
       }
-      const res = await bijingApi.getBijingSyncDateDetails(recordDate);
+      const option = this.getBijingSyncDateOptions().find(option => option.date === recordDate);
+      if (!option) throw new Error('可选日期已更新，请重新选择');
+      const res = await bijingApi.getBijingSyncDateDetails(recordDate, ...(option.backfillRequestId ? [option.backfillRequestId] : []));
       if (!isCurrent()) return;
       const latestUploadSummary = checkinManager.getPendingSyncSummary({ date: recordDate });
       if (latestUploadSummary.total > 0) {
@@ -939,9 +1006,10 @@ Page({
       return;
     }
     const recordDate = this.data.bijingSyncDate;
-    // 弹窗跨过北京时间 02:00 时重新校验，不能提交已经超出最近七个同步日的日期
+    // 跨过北京时间 02:00 时重新核对最近七天与获批区间。
     const options = this.getBijingSyncDateOptions();
-    if (!options.some(option => option.date === recordDate)) {
+    const option = options.find(option => option.date === recordDate);
+    if (!option) {
       this.setData({ bijingSyncDateOptions: options, bijingSyncDate: options[0].date });
       this.loadBijingSyncDetails(options[0].date);
       wx.showToast({ title: '可选日期已更新，请重新选择', icon: 'none' });
@@ -974,7 +1042,7 @@ Page({
     wx.showLoading({ title: '同步中...', mask: true });
     let message;
     try {
-      const res = await bijingApi.syncBijingDate(recordDate);
+      const res = await bijingApi.syncBijingDate(recordDate, ...(option.backfillRequestId ? [option.backfillRequestId] : []));
       if (!res.success) {
         throw new Error(res.error || '请稍后重试');
       }

@@ -27,11 +27,16 @@
               <text class="font text">{{userNickname}}</text>
               <text class="edit-hint">点击修改</text>
             </view>
-            <!-- 同步日为北京时间 02:00 至次日 02:00，只提供最近七个已结束的同步日 -->
+            <!-- 最近七个已结束同步日与获批补录区间共用日期选择与明细预览 -->
             <view wx:if="{{bijingShowSyncDatePicker}}" class="bijing-modal-mask" bindtap="cancelBijingSyncDate" catchtouchmove="noop">
               <view class="bijing-modal bijing-sync-modal" catchtap="noop">
                 <view class="bijing-modal-title">选择同步日期</view>
-                <view class="bijing-sync-hint">每天按北京时间 02:00 至次日 02:00 统计，可同步最近 7 个已结束的同步日，滑动选择日期</view>
+                <view class="bijing-sync-hint">{{bijingBackfillSyncRanges.length ? '可同步最近七天及获批补录日期' : '可同步最近七个已结束的同步日'}}，滑动选择日期</view>
+                <view wx:if="{{bijingSyncRangesLoading}}" class="bijing-sync-hint">正在读取补录日期…</view>
+                <view wx:elif="{{bijingSyncRangesError}}" class="bijing-sync-hint">
+                  <text>{{bijingSyncRangesError}}</text>
+                  <view class="bijing-details-retry" bindtap="loadBijingBackfillSyncRanges">重试</view>
+                </view>
                 <scroll-view class="bijing-sync-dates" scroll-y="{{true}}" scroll-into-view="bijing-date-{{bijingSyncDate}}">
                   <radio-group bindchange="onBijingSyncDateChange">
                     <label wx:for="{{bijingSyncDateOptions}}" wx:key="date" id="bijing-date-{{item.date}}" class="bijing-date-option {{bijingSyncDate === item.date ? 'selected' : ''}}">
@@ -87,7 +92,7 @@
       </view>
 
       <!-- 当天记录次日同步，历史记录保存后同步，手动入口用于重试 -->
-      <view class="bijing-sync-card">
+      <view class="bijing-sync-card" bindtap="onBijingCardTap">
         <view class="bijing-card-header">
           <text class="bijing-card-title">必经之路同步</text>
           <text wx:if="{{bijingBound}}" class="bijing-auto-badge">自动同步</text>
@@ -111,15 +116,11 @@
         <block wx:elif="{{bijingBound}}">
           <view class="bijing-account-row">
             <text class="bijing-bound-tip">已绑定学号：{{bijingStudentNumber}}</text>
-            <view class="bijing-text-action bijing-unbind {{bijingUnbinding || bijingSyncing ? 'is-busy' : ''}}" bindtap="unbindBijing">{{bijingUnbinding ? '解绑中…' : '解绑'}}</view>
+            <view class="bijing-text-action bijing-unbind {{bijingUnbinding || bijingSyncing ? 'is-busy' : ''}}" catchtap="unbindBijing">{{bijingUnbinding ? '解绑中…' : '解绑'}}</view>
           </view>
           <view class="bijing-actions">
-            <view class="bijing-btn-sm bijing-manual-btn {{bijingSyncing || bijingUnbinding ? 'is-syncing' : ''}}" bindtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
-            <view wx:if="{{bijingStudentNumber}}" class="bijing-text-action" bindtap="openBijingHeatmap">查看热力图</view>
-          </view>
-          <view class="bijing-auto-note">
-            <text class="bijing-auto-note-title">日常无需手动同步</text>
-            <text class="bijing-auto-note-detail">今天的记录在次日北京时间 02:00 自动同步；今天之前的补录和记录，保存到云端后立即发起同步。未完成时可按记录旁的提示重试。</text>
+            <view wx:if="{{bijingShowManualSync}}" class="bijing-btn-sm bijing-manual-btn {{bijingSyncing || bijingUnbinding ? 'is-syncing' : ''}}" catchtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
+            <button wx:if="{{bijingStudentNumber}}" class="bijing-btn-sm bijing-heatmap-btn" catchtap="openBijingHeatmap">查看热力图</button>
           </view>
           <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
         </block>
@@ -199,7 +200,7 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V2.10.7</text>
+        <text class="me-menu-note me-menu-version">V2.10.8</text>
       </view>
     </view>
     <text class="me-design-credit">Designed By Genxin</text>

@@ -240,7 +240,7 @@ async function markSynced(openid, dateStr, studentNumber) {
   }
 }
 
-// 全员同步由持久化分批任务执行；个人学号同步仍沿用上面的单条接口。
+// 全员上传每个请求最多 100 条，核对独立读取源数据；个人同步使用单条接口。
 function batchJobs() {
   return require('./batchJobs').createBatchJobs({
     db, getDayDuration, markSynced, now: () => Date.now(),
@@ -282,7 +282,7 @@ async function administration(event, openid) {
       case 'adminSyncDetails': data = await jobs.details(event.runId, event.cursor); break;
       case 'adminListSyncErrors': data = await jobs.listErrors(event.cursor); break;
       case 'adminRetrySyncErrors': data = await jobs.retryErrors(openid); break;
-      default: data = await jobs.timer();
+      default: data = await jobs.timer(event.TriggerName);
     }
     return { success: true, data };
   } catch (error) {
@@ -291,25 +291,33 @@ async function administration(event, openid) {
   }
 }
 
-// 手动同步仅允许最近七个已在次日 02:00 结束的同步日。
+// 普通手动同步允许最近七个已在次日 02:00 结束的同步日。
 // 每次请求只取一次当前时间，避免跨 02:00 时生成不一致的日期范围。
 function getRecentSyncDates(now = Date.now()) {
   return Array.from({ length: 7 }, (_, index) => getSyncBusinessDate(now - (index + 1) * DAY_MS));
 }
 
-function validateManualSyncDate(openid, recordDate) {
-  if (!openid) return '用户未登录';
-  const allowedDates = getRecentSyncDates();
-  if (typeof recordDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || !allowedDates.includes(recordDate)) {
-    return '仅支持同步最近七天已结束的数据（北京时间次日凌晨2点结束）';
+async function validateManualSyncDate(openid, recordDate, backfillRequestId) {
+  if (!openid) return { success: false, error: '用户未登录' };
+  const timestamp = Date.now();
+  const allowedDates = getRecentSyncDates(timestamp);
+  if (allowedDates.includes(recordDate)) return { success: true };
+  if (!isDateLabel(recordDate) || recordDate >= getSyncBusinessDate(timestamp) || !backfillRequestId) {
+    return { success: false, error: '仅支持同步最近七天或已获批补录区间内已结束的数据（北京时间次日凌晨2点结束）' };
   }
-  return null;
+  try {
+    const result = await require('./backfillSync').validateBackfillSyncGrant({ db, openid,
+      requestId: backfillRequestId, recordDate, timestamp });
+    return result.success ? { success: true, backfillRequestId } : result;
+  } catch (error) {
+    return { success: false, code: 'BACKFILL_RANGES_READ_FAILED', error: '补录区间暂时无法读取，请稍后重试' };
+  }
 }
 
 // ===== 同步预览：读取所选日期的明细与按天合计，不上报、不修改数据 =====
-async function getSyncDateDetails(openid, recordDate) {
-  const validationError = validateManualSyncDate(openid, recordDate);
-  if (validationError) return { success: false, error: validationError };
+async function getSyncDateDetails(openid, recordDate, backfillRequestId) {
+  const validation = await validateManualSyncDate(openid, recordDate, backfillRequestId);
+  if (!validation.success) return validation;
 
   try {
     const userDoc = await getUserDoc(openid);
@@ -338,14 +346,19 @@ async function getSyncDateDetails(openid, recordDate) {
 }
 
 // ===== 手动同步：只同步用户选择的一天 =====
-async function manualSyncSelectedDate(openid, recordDate) {
-  const validationError = validateManualSyncDate(openid, recordDate);
-  if (validationError) return { success: false, error: validationError };
+async function manualSyncSelectedDate(openid, recordDate, backfillRequestId) {
+  const validation = await validateManualSyncDate(openid, recordDate, backfillRequestId);
+  if (!validation.success) return validation;
 
   try {
     const userDoc = await getUserDoc(openid);
     if (!userDoc || !userDoc.bijingBound || !userDoc.bijingStudentNumber) {
       return { success: false, error: '尚未绑定学号' };
+    }
+
+    if (validation.backfillRequestId) {
+      return await require('./backfillSync').syncSelectedBackfillDate({ db, openid,
+        requestId: validation.backfillRequestId, recordDate, syncDate, getDayDuration, now: () => Date.now() });
     }
 
     // 不受绑定时间限制，刚绑定的用户也可以补同步最近七天。
@@ -428,10 +441,12 @@ exports.main = async (event = {}, context) => {
       return await bindings().unbind(openid, event.studentNumber, event.bindingVersion);
     case 'checkStudentNumber':
       return await checkStudentNumber(event.studentNumber);
+    case 'getBackfillSyncRanges':
+      return await require('./backfillSync').getBackfillSyncRanges({ db, openid, now: () => Date.now() });
     case 'getSyncDateDetails':
-      return await getSyncDateDetails(openid, event.recordDate);
+      return await getSyncDateDetails(openid, event.recordDate, event.backfillRequestId);
     case 'syncSelectedDate':
-      return await manualSyncSelectedDate(openid, event.recordDate);
+      return await manualSyncSelectedDate(openid, event.recordDate, event.backfillRequestId);
     case 'syncBackfillDate':
       return await require('./backfillSync').syncBackfillDate({ db, openid,
         requestId: event.requestId, recordDate: event.recordDate, expectedOpenid: event.expectedOpenid,

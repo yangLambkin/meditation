@@ -85,7 +85,7 @@ Page({
     const current = homeCheckin.getDateTime();
     const today = homeCheckin.getCheckinDay();
     this.setData({
-      minCheckinDate: homeCheckin.shiftCheckinDate(today, -2),
+      minCheckinDate: homeCheckin.shiftCheckinDate(today, -1),
       maxCheckinDate: today,
       checkinDate: this._checkinDateEdited ? this.data.checkinDate : today,
       checkinTime: this._checkinTimeEdited || this.data.showCheckinTimePicker ? this.data.checkinTime : current.time
@@ -159,7 +159,7 @@ Page({
       return this.submitApprovedBackfill(backfillInput);
     }
     if (this.data.checkinDate < this.data.minCheckinDate || this.data.checkinDate > this.data.maxCheckinDate) {
-      wx.showToast({ title: this.data.hasBackfillDates ? '请选择最近三天或获批范围内的日期' : '只能记录最近三天的静坐（含今天）', icon: 'none' });
+      wx.showToast({ title: this.data.hasBackfillDates ? '请选择今天、昨天或获批范围内的日期' : '只能记录今天和昨天的静坐', icon: 'none' });
       return;
     }
     // 未修改日期时间时保留实际秒数，避免同一分钟内的正常打卡被同步去重。
