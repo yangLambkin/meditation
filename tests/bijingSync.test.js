@@ -38,6 +38,7 @@ function createHarness(options = {}) {
   const bindingRows = clone(options.bindings || []);
   const backfillRequests = clone(options.requests || []);
   const deletionReceipts = clone(options.receipts || []);
+  const syncErrors = clone(options.syncErrors || []);
   const calls = { reads: [], documentReads: [], aggregates: [], updates: [], bindingWrites: [], posts: [], queries: [], gets: [], sleeps: [], now: 0 };
 
   class FixedDate extends Date {
@@ -122,21 +123,27 @@ function createHarness(options = {}) {
             async get() {
               calls.documentReads.push({ name, id });
               if (name === 'backfill_requests' && options.backfillReadError) throw options.backfillReadError;
-              const rows = name === 'meditation_locks' ? deletionReceipts : name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
+              const rows = name === 'bijing_sync_errors' ? syncErrors : name === 'meditation_locks' ? deletionReceipts : name === 'backfill_requests' ? backfillRequests : name === 'meditation_records' ? records : name === 'users' ? users : bindingRows;
               const row = rows.find(row => row._id === id);
               return { data: row ? clone(row) : null };
             },
             async set({ data }) {
-              const rows = name === 'backfill_requests' ? backfillRequests : name === 'users' ? users : bindingRows;
+              const rows = name === 'bijing_sync_errors' ? syncErrors : name === 'backfill_requests' ? backfillRequests : name === 'users' ? users : bindingRows;
               const previous = rows.find(row => row._id === id);
               if (previous) rows.splice(rows.indexOf(previous), 1);
               rows.push({ _id: id, ...clone(data) });
-              (name === 'users' ? calls.updates : calls.bindingWrites).push({ name, id, data: clone(data) });
+              if (name !== 'bijing_sync_errors') (name === 'users' ? calls.updates : calls.bindingWrites).push({ name, id, data: clone(data) });
             },
             async update({ data }) {
+              if (name === 'bijing_sync_errors') { Object.assign(syncErrors.find(row => row._id === id), clone(data)); return; }
               calls.updates.push({ name, id, data: clone(data) });
               assert.equal(name, 'users');
               Object.assign(users.find(user => user._id === id), clone(data));
+            },
+            async remove() {
+              assert.equal(name, 'bijing_sync_errors');
+              const index = syncErrors.findIndex(row => row._id === id);
+              if (index >= 0) syncErrors.splice(index, 1);
             },
           };
         },
@@ -175,6 +182,7 @@ function createHarness(options = {}) {
       if (name === './heatmap') return require('../cloudfunctions/bijingSync/heatmap');
       if (['./backfillSync', './recordedSync', './deletedSync'].includes(name)) return historicalModule(name);
       if (name === './verifyRecord') return require('../cloudfunctions/bijingSync/verifyRecord');
+      if (name === './syncFailures') return require('../cloudfunctions/bijingSync/syncFailures');
       if (name === './bindings') return require('../cloudfunctions/bijingSync/bindings');
       if (name === 'wx-server-sdk') {
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
@@ -212,6 +220,7 @@ function createHarness(options = {}) {
     calls,
     users,
     records,
+    syncErrors,
     async run(event, context = {}) { return clone(await exports.main(event, context)); },
     async timer(event = {}, context = {}) {
       const previous = wxContext;
@@ -656,7 +665,7 @@ test('selected sync includes legacy records for only the chosen date and current
   assert.deepEqual(app.calls.posts[0].config, { headers: { 'X-Access-Token': 'test-token' }, timeout: 10000 });
   assert.deepEqual(app.calls.posts[0].body, { studentNumber: '123456', recordDate: '2026-09-15', durationMinutes: 40 });
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-15': true });
-  assert.equal(app.calls.now, 1);
+  assert.equal(app.syncErrors.length, 1, 'upload-only acknowledgement stays queued until remote verification');
 });
 
 test('single-user sync retains its synchronous single-record API with a batch flag present', async t => {
@@ -699,7 +708,8 @@ test('only the seven completed sync dates can be previewed and uploaded across 0
           assert.equal(result.data.date, date);
           assert.equal(result.data[method === 'select' ? 'duration' : 'totalDuration'], 20);
           assert.equal(app.calls.posts.length, method === 'select' ? 1 : 0);
-          assert.equal(app.calls.now, 1);
+          if (method === 'details') assert.equal(app.calls.now, 1);
+          else assert.equal(app.syncErrors[0].recordDate, date);
         }
         for (const date of [expired, unfinished]) {
           const app = createHarness({ now });
@@ -819,9 +829,68 @@ test('legacy syncPending repeats all seven completed dates with or without force
   assert.deepEqual(app.calls.posts.map(value => value.body.recordDate), dates);
   assert.equal(app.calls.updates.length, 7);
   assert.deepEqual(app.users[0].bijingSyncedDates, { '2026-09-01': true, ...Object.fromEntries(dates.map(date => [date, true])) });
-  assert.equal(app.calls.now, 1);
+  assert.equal(app.syncErrors.length, 7);
   assert.deepEqual(await app.run({ type: 'syncPending' }), result);
   assert.deepEqual(app.calls.posts.slice(7).map(value => value.body.recordDate), dates);
+});
+
+test('failed historical upload remains in the server repair table until a verified retry succeeds', async () => {
+  let offline = true;
+  const app = createHarness({ records: [{ _id: 'history', _openid: 'user-a', date: '2026-08-18', source: 'manual', duration: 20 }],
+    onPost: () => { if (offline) throw new Error('temporarily unavailable'); return { success: true }; } });
+  const failed = await app.run({ type: 'syncRecordedDate', recordId: 'history' });
+  assert.equal(failed.success, false);
+  assert.equal(app.syncErrors.length, 1);
+  assert.equal(app.syncErrors[0].recordDate, '2026-08-18');
+  assert.equal(app.syncErrors[0].reason, 'sync_failed');
+  assert.match(app.syncErrors[0].error, /temporarily unavailable/);
+  assert.match(app.syncErrors[0].queueVersion, /^[a-f0-9]{32}$/);
+  assert.equal(app.syncErrors[0].retryCount, 4);
+  offline = false;
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'history' })).success, true);
+  assert.equal(app.syncErrors.length, 0);
+});
+
+test('a successful response cannot clear a newer recording transaction repair intent', async () => {
+  let app;
+  app = createHarness({ records: [{ _id: 'history', _openid: 'user-a', date: '2026-08-18', source: 'manual', duration: 20 }],
+    onQuery: ({ body }) => {
+      app.syncErrors[0].queueVersion = 'new-mutation';
+      return { success: true, data: { total: 1, results: [{ index: 0, ...body.records[0], exists: true, durationMinutes: 20 }] } };
+    } });
+  assert.equal((await app.run({ type: 'syncRecordedDate', recordId: 'history' })).success, true);
+  assert.equal(app.syncErrors.length, 1);
+  assert.equal(app.syncErrors[0].queueVersion, 'new-mutation');
+});
+
+test('a late successful manual upload restores pending verification after a newer repair removed its row', async () => {
+  let app, initialVersion, remoteDuration = 0;
+  app = createHarness({ records: [{ _id: 'history', _openid: 'user-a', date: '2026-09-16', source: 'manual', duration: 10 }],
+    onPost: ({ body }, records) => {
+      initialVersion = app.syncErrors[0].queueVersion;
+      // While the original request is in flight, a recording transaction adds
+      // new source data and a scheduled worker repairs and clears that intent.
+      records[0].duration = 20;
+      Object.assign(app.syncErrors[0], { queueVersion: 'new-mutation', expectedDurationMinutes: 20 });
+      remoteDuration = 20;
+      app.syncErrors.splice(0);
+      // The old request reaches the remote API last and succeeds with 10.
+      remoteDuration = body.durationMinutes;
+      return { success: true };
+    } });
+  const result = await app.run({ type: 'syncSelectedDate', recordDate: '2026-09-16' });
+  assert.equal(result.success, true);
+  assert.equal(app.calls.posts.length, 1, 'The manual entry point retains its one-request behavior');
+  assert.equal(remoteDuration, 10);
+  assert.equal(app.records[0].duration, 20);
+  assert.equal(app.syncErrors.length, 1, 'The stale remote overwrite must remain discoverable by scheduled repair');
+  const pending = app.syncErrors[0];
+  assert.notEqual(pending.queueVersion, initialVersion);
+  assert.notEqual(pending.queueVersion, 'new-mutation');
+  assert.equal(pending.reason, 'sync_pending');
+  assert.equal(pending.retryCount, 0);
+  assert.equal(pending.actualDurationMinutes, null);
+  assert.equal(pending.exists, null);
 });
 
 test('legacy syncPending can backfill all seven recent dates for a newly bound user', async () => {
@@ -1197,9 +1266,11 @@ test('the seven completed dates keep ordinary preview and sync semantics even wi
       const result = await app.run({ type, recordDate: '2026-09-10', backfillRequestId });
       assert.equal(result.success, true);
       assert.equal(result.data[type === 'getSyncDateDetails' ? 'totalDuration' : 'duration'], 25);
-      assert.equal(app.calls.documentReads.length, 0); assert.equal(app.calls.bindingWrites.length, 0);
+      assert.equal(app.calls.documentReads.filter(call => call.name === 'backfill_requests').length, 0);
+      assert.equal(app.calls.bindingWrites.length, 0);
       assert.equal(app.calls.queries.length, 0);
-      assert.equal(app.calls.now, 1);
+      if (type === 'getSyncDateDetails') assert.equal(app.calls.now, 1);
+      else assert.equal(app.syncErrors[0].recordDate, '2026-09-10');
     }
   }
 });

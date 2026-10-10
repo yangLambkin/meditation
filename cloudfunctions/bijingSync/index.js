@@ -193,9 +193,29 @@ async function syncDate(openid, dateStr, options = {}) {
   if (!userDoc || !userDoc.bijingBound) {
     return { openid, date: dateStr, skipped: true, reason: '未绑定' };
   }
+  if (getSyncDateWindow(dateStr).end > Date.now()) {
+    return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨2点后同步' };
+  }
+  const failures = require('./syncFailures').createSyncFailures({ db, now: () => Date.now() });
+  let attempt;
+  const failed = async result => {
+    // The pending row is written before any HTTP request. If recording this
+    // diagnostic fails, it still remains available to the scheduled repair.
+    if (attempt) {
+      try { await failures.fail(attempt, result.error); }
+      catch (error) { console.error('保存必经同步失败原因异常:', error.message); }
+    }
+    return result;
+  };
   // 同号同日由对端幂等覆盖；自动、手动同步都重新汇总最新记录。
   // bijingSyncedDates 仅表示曾同步成功，不用于拦截再次上报。
-  const duration = await getDayDuration(openid, dateStr, options.deadlineAt);
+  let duration;
+  try { duration = await getDayDuration(openid, dateStr, options.deadlineAt); }
+  catch (error) {
+    try { attempt = await failures.begin(userDoc, dateStr, 0, 'source_read_failed'); }
+    catch (queueError) { console.error('登记必经同步待修复记录失败:', queueError.message); }
+    return failed({ openid, date: dateStr, success: false, error: error.message });
+  }
   if (duration <= 0 && !options.allowZero) {
     // 当天云端查不到打卡数据：不标记 synced。
     // 可能是备份异步未完成（暂时性），留待下次同步复查，
@@ -203,12 +223,8 @@ async function syncDate(openid, dateStr, options = {}) {
     return { openid, date: dateStr, skipped: true, reason: '无打卡数据(未标记待复查)', duration: 0 };
   }
 
-  // 必须等次日 02:00 窗口结束后上报，保证同步日已完整结束。
-  if (getSyncDateWindow(dateStr).end > new Date().getTime()) {
-    return { openid, date: dateStr, success: false, error: '该日记录尚未结束，请在次日凌晨2点后同步', duration };
-  }
-
   try {
+    attempt = await failures.begin(userDoc, dateStr, duration);
     // 获批补录同步持有按用户/日期的租约，外部请求前再次检查避免迟到覆盖。
     if (options.beforePost) await options.beforePost();
     const resp = await postMeditationRecord(userDoc.bijingStudentNumber, dateStr, duration, requestTimeout());
@@ -225,22 +241,26 @@ async function syncDate(openid, dateStr, options = {}) {
         const latestDuration = await getDayDuration(openid, dateStr, options.deadlineAt);
         await options.beforePost();
         if (latestDuration !== duration) {
-          return { openid, date: dateStr, success: false, code: 'BACKFILL_SYNC_RETRY',
-            error: '同步期间这一天的记录有变动，请稍后重新同步', duration };
+          return failed({ openid, date: dateStr, success: false, code: 'BACKFILL_SYNC_RETRY',
+            error: '同步期间这一天的记录有变动，等待重新同步', duration });
         }
       }
       await markSynced(openid, dateStr, userDoc.bijingStudentNumber);
+      // Older manual APIs only acknowledge the upload. Restore missing work if
+      // a newer worker cleared it before this late HTTP response arrived.
+      if (options.verifyRemote) await failures.confirm(attempt);
+      else await failures.retain(attempt);
       return { openid, date: dateStr, success: true, duration };
     }
     // 对端返回失败；若为 400（通常因尝试上报当天数据）统一提示
     console.error(`❌ 上报失败 date=${dateStr}:`, resp && resp.message);
     const is400 = !options.allowZero && (resp && resp.message && String(resp.message).indexOf('400') >= 0);
-    return { openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : ((resp && resp.message) || '未知错误'), duration };
+    return failed({ openid, date: dateStr, success: false, error: is400 ? '不支持同步当天数据' : ((resp && resp.message) || '未知错误'), duration });
   } catch (e) {
     console.error(`❌ 上报异常 date=${dateStr}:`, e.message);
     // 请求异常且为 400（如手动同步恰为当天触发对端拦截）统一提示
     const is400 = !options.allowZero && e.message && String(e.message).indexOf('400') >= 0;
-    return { openid, date: dateStr, success: false, ...(e.code ? { code: e.code } : {}), error: is400 ? '不支持同步当天数据' : e.message, duration };
+    return failed({ openid, date: dateStr, success: false, ...(e.code ? { code: e.code } : {}), error: is400 ? '不支持同步当天数据' : e.message, duration });
   }
 }
 
@@ -278,6 +298,9 @@ function batchJobs() {
         { recordDate, records }, { headers: { 'X-Access-Token': getAccessToken() }, timeout: 15000 });
       return response.data;
     },
+    // Batch validation still requires positive minutes. The existing single
+    // record API owns the zero-duration deletion contract.
+    postZero: (recordDate, studentNumber) => postMeditationRecord(studentNumber, recordDate, 0, 15000),
     queryBatch: async (records) => {
       const response = await axios.post(`${getApiBase()}/api/openapi/meditation/records/query`,
         { records }, { headers: { 'X-Access-Token': getAccessToken() }, timeout: 15000 });

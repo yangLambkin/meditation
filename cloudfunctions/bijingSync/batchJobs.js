@@ -9,7 +9,8 @@ const CHUNK_SIZE = 20;
 const REQUEST_LEASE_MARGIN_MS = 20000;
 const LEASE_MS = 120000;
 const RENEW_LEASE_MARGIN_MS = 60000;
-const MAX_TIMER_ATTEMPTS = 4;
+const SOURCE_SLICE_MS = 5000;
+const MARK_SLICE_MS = 5000;
 const PAGE_SIZE = 50;
 const REPAIR_CURSOR_ID = '__error_retry_cursor__';
 
@@ -21,7 +22,7 @@ const errorMessage = (error, fallback) => error.response && error.response.data 
 // Upload uses an in-memory cursor and sends 100 records per request. The later
 // source reconciliation is independent of upload logs and commits its results
 // in 20-row transactions under a renewable lease.
-function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch, recentDates, now = Date.now }) {
+function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, queryBatch, recentDates, now = Date.now }) {
   async function optional(database, collection, id) {
     try { return (await database.collection(collection).doc(id).get()).data || null; }
     catch (error) {
@@ -88,7 +89,6 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       if (schedule.upload && latestFull) return latestFull;
       if (schedule.repairCycle && day && day.repairCycle >= schedule.repairCycle && latest) return latest;
       if (automatic && mode === 'full' && latestFull && latestFull.status === 'success') return latestFull;
-      if (automatic && !schedule.upload && !schedule.repairCycle && latest && (day.timerAttempts || 0) >= MAX_TIMER_ATTEMPTS) return latest;
       const run = {
         _id: id, recordDate, trigger, operator: operator || '', mode, phase: 'upload', status: 'running', startedAt: timestamp,
         finishedAt: null, durationMs: 0, updatedAt: timestamp, cursor: '', total: 0,
@@ -96,7 +96,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         queryFailures: 0, attempt: (day && day.attempts || 0) + 1, leaseToken: '', leaseUntil: 0,
         ...(mode === 'full' ? { sourceCheck: true } : {}),
         ...(automatic && mode === 'full' ? { verifyAfter: Date.parse(`${recordDate}T03:00:00+08:00`) + 86400000 } : {}),
-        ...(schedule.repairCycle ? { repairCycle: schedule.repairCycle } : {}),
+        ...(schedule.repairCycle ? { repairCycle: schedule.repairCycle, queueAttemptCycle: schedule.repairCycle } : {}),
       };
       const { _id, ...data } = run;
       await tx.collection(RUNS).doc(id).set({ data });
@@ -116,16 +116,16 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     validateDate(recordDate);
     return startRun(recordDate, trigger, operator);
   }
-  async function acquire(runId, { expectedPhase, automatic = false } = {}) {
+  async function acquire(runId, { expectedPhase, automatic = false, allowHistorical = false } = {}) {
     const token = crypto.randomBytes(16).toString('hex');
     return db.runTransaction(async tx => {
       const run = await optional(tx, RUNS, runId);
       if (!run) throw new Error('同步任务不存在');
       if ((expectedPhase && (run.phase || 'upload') !== expectedPhase) ||
-        (automatic && run.recordDate !== recentDates(1)[0])) return { run, acquired: false };
+        (automatic && !allowHistorical && run.recordDate !== recentDates(1)[0])) return { run, acquired: false };
       if (run.status !== 'running' || run.leaseUntil > now() || waitsForCheck(run)) return { run, acquired: false };
       if (run.leaseUntil && (run.consecutiveInterruptions || 0) >= 2) {
-        const patch = { status: 'failed', error: '连续三次执行中断或超时，请查看云函数日志后手动重试', finishedAt: now(), durationMs: now() - run.startedAt, updatedAt: now(), leaseToken: '', leaseUntil: 0 };
+        const patch = { status: 'failed', error: '连续三次执行中断或超时，等待下次定时修复；管理员可检查云函数日志', finishedAt: now(), durationMs: now() - run.startedAt, updatedAt: now(), leaseToken: '', leaseUntil: 0 };
         await tx.collection(RUNS).doc(runId).update({ data: patch });
         await tx.collection(DAYS).doc(run.recordDate).update({ data: { status: 'failed', activeRunId: '', updatedAt: now() } });
         return { run: { ...run, ...patch }, acquired: false };
@@ -151,11 +151,57 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     return item._id || `${run._id}_${crypto.createHash('sha256').update(item.userId || item.studentNumber).digest('hex').slice(0, 24)}`;
   }
   function onlySourceFailure(row) {
-    return row.reason === 'source_read_failed' && row.expectedDurationMinutes === 0 &&
+    return row.zeroEligible !== true && row.reason === 'source_read_failed' && row.expectedDurationMinutes === 0 &&
       row.exists === null && row.actualDurationMinutes === null;
   }
+  const sameQueueVersion = (row, item) => (row && row.queueVersion || '') === (item.queueVersion || '') &&
+    (!row || row.userId === item.userId && row.openid === item.openid);
+  const permitsZero = (row, user, recordDate) => !!(user.bijingSyncedDates && user.bijingSyncedDates[recordDate]) ||
+    !!(row && row.userId === user._id && row.openid === user._openid &&
+      (row.zeroEligible === true || row.expectedDurationMinutes > 0));
+  async function writeFailure(database, run, item, reason, knownPrevious) {
+    const id = errorId(item.studentNumber, run.recordDate);
+    const previous = knownPrevious === undefined ? await optional(database, ERRORS, id) : knownPrevious;
+    if (!sameQueueVersion(previous, item)) {
+      if (previous) return false;
+      // A newer successful personal sync may already have removed its version.
+      // The late request still needs reconciliation, even though the queue is
+      // now empty. Do not reinstate its old expected total as authoritative.
+      reason = 'source_changed';
+    }
+    const timestamp = now();
+    const queueVersion = previous && previous.queueVersion || crypto.randomBytes(16).toString('hex');
+    await database.collection(ERRORS).doc(id).set({ data: {
+      studentNumber: item.studentNumber, recordDate: run.recordDate, userId: item.userId, openid: item.openid || '',
+      bindingStudentNumber: item.bindingStudentNumber || item.studentNumber, nickname: item.nickname || '',
+      expectedDurationMinutes: ['source_read_failed', 'source_changed'].includes(reason) ? previous && previous.expectedDurationMinutes || 0 : item.durationMinutes,
+      actualDurationMinutes: previous ? previous.actualDurationMinutes : null,
+      exists: previous ? previous.exists : null, reason, error: item.uploadError || item.error || '同步未完成，等待自动重试',
+      zeroEligible: !!(item.zeroEligible || previous && previous.zeroEligible || item.durationMinutes > 0),
+      runId: run._id, retryCount: previous && previous.retryCount || 0, queueVersion,
+      createdAt: previous && previous.createdAt || timestamp, updatedAt: timestamp,
+    } });
+    item.queueVersion = queueVersion;
+    return true;
+  }
+  async function persistFailures(run, items, reason) {
+    for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
+      await renewLeaseIfNeeded(run);
+      const page = items.slice(offset, offset + CHUNK_SIZE);
+      const versions = page.map(item => item.queueVersion || '');
+      await db.runTransaction(async tx => {
+        page.forEach((item, index) => { item.queueVersion = versions[index]; });
+        const current = await optional(tx, RUNS, run._id);
+        if (!current || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
+        for (const item of page) await writeFailure(tx, run, item, reason || item.failureReason || 'source_read_failed');
+      });
+    }
+  }
   async function checkpoint(run, { items = [], errorChanges = [], sourceFailures = [], sourceResolved = [], cursor, phase, complete = false, error = '', queryFailure = false, releaseLease = true } = {}) {
+    const versions = new Map([...items, ...errorChanges.map(change => change.item), ...sourceFailures, ...sourceResolved]
+      .map(item => [item, item.queueVersion || '']));
     return db.runTransaction(async tx => {
+      for (const [item, version] of versions) item.queueVersion = version;
       const current = await optional(tx, RUNS, run._id);
       if (!current || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
       // Error handling after a partial commit must preserve the committed
@@ -164,6 +210,46 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       if (phase === undefined) phase = current.phase;
       const counts = { total: current.total || 0, successCount: current.successCount || 0, failedCount: current.failedCount || 0, skippedCount: current.skippedCount || 0, discrepancyCount: current.discrepancyCount || 0 };
       const timestamp = now();
+      // Queue versions are captured before reading source data. A later record
+      // mutation owns a new version, which an older request must never erase.
+      for (const change of errorChanges) {
+        const item = change.item;
+        const id = errorId(item.studentNumber, run.recordDate);
+        const previous = await optional(tx, ERRORS, id);
+        if (!sameQueueVersion(previous, item)) {
+          item.status = 'failed'; item.retryEligible = false;
+          item.error = '源记录在同步期间已变化，保留新待办等待再次核对';
+          if (!previous) await writeFailure(tx, run, item, 'source_changed', previous);
+          continue;
+        }
+        if (change.recovered) {
+          if (previous) await tx.collection(ERRORS).doc(id).remove();
+          item.queueVersion = '';
+        } else {
+          const queueVersion = previous && previous.queueVersion || crypto.randomBytes(16).toString('hex');
+          await tx.collection(ERRORS).doc(id).set({ data: {
+            studentNumber: item.studentNumber, recordDate: run.recordDate, userId: item.userId, openid: item.openid || '',
+            bindingStudentNumber: item.bindingStudentNumber || item.studentNumber, nickname: item.nickname || '',
+            expectedDurationMinutes: item.durationMinutes, actualDurationMinutes: change.result.durationMinutes,
+            exists: change.result.exists, reason: change.result.exists ? 'duration_mismatch' : 'missing', error: item.error,
+            zeroEligible: !!(item.zeroEligible || previous && previous.zeroEligible),
+            runId: run._id, retryCount: (previous && previous.retryCount || 0) + (phase === 'reverify' && item.retryAttempted ? 1 : 0),
+            queueVersion, createdAt: previous && previous.createdAt || timestamp, updatedAt: timestamp,
+          } });
+          item.queueVersion = queueVersion;
+        }
+      }
+      // Transport/source failures are durable pending work, not proof that the
+      // remote record is missing. Keep any previously observed remote value.
+      for (const item of sourceFailures) await writeFailure(tx, run, item, item.failureReason || 'source_read_failed');
+      for (const item of sourceResolved) {
+        const id = errorId(item.studentNumber, run.recordDate);
+        const previous = await optional(tx, ERRORS, id);
+        if (previous && sameQueueVersion(previous, item) && onlySourceFailure(previous) && previous.userId === item.userId && previous.openid === item.openid) {
+          await tx.collection(ERRORS).doc(id).remove();
+          item.queueVersion = '';
+        }
+      }
       for (const item of items) {
         const id = itemId(run, item);
         const old = await optional(tx, ITEMS, id);
@@ -174,47 +260,6 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         }
         const { _id, ...data } = item;
         await tx.collection(ITEMS).doc(id).set({ data: { ...data, runId: run._id, recordDate: run.recordDate, updatedAt: timestamp } });
-      }
-      // Only a fully validated query response can supply these mutations. They
-      // commit with the cursor, so a killed worker cannot lose an error or clear it.
-      for (const change of errorChanges) {
-        const id = errorId(change.item.studentNumber, run.recordDate);
-        const previous = await optional(tx, ERRORS, id);
-        if (change.recovered) {
-          if (previous) await tx.collection(ERRORS).doc(id).remove();
-        } else {
-          const item = change.item;
-          await tx.collection(ERRORS).doc(id).set({ data: {
-            studentNumber: item.studentNumber, recordDate: run.recordDate, userId: item.userId, openid: item.openid || '',
-            bindingStudentNumber: item.bindingStudentNumber || item.studentNumber, nickname: item.nickname || '',
-            expectedDurationMinutes: item.durationMinutes, actualDurationMinutes: change.result.durationMinutes,
-            exists: change.result.exists, reason: change.result.exists ? 'duration_mismatch' : 'missing', error: item.error,
-            runId: run._id, retryCount: (previous && previous.retryCount || 0) + (phase === 'reverify' && item.retryAttempted ? 1 : 0),
-            createdAt: previous && previous.createdAt || timestamp, updatedAt: timestamp,
-          } });
-        }
-      }
-      // Source read failures are repair work too, but are not evidence that a
-      // remote record is missing. Preserve that distinction and any old value.
-      for (const item of sourceFailures) {
-        const id = errorId(item.studentNumber, run.recordDate);
-        const previous = await optional(tx, ERRORS, id);
-        await tx.collection(ERRORS).doc(id).set({ data: {
-          studentNumber: item.studentNumber, recordDate: run.recordDate, userId: item.userId, openid: item.openid,
-          bindingStudentNumber: item.bindingStudentNumber, nickname: item.nickname || '',
-          expectedDurationMinutes: previous && previous.expectedDurationMinutes || 0,
-          actualDurationMinutes: previous ? previous.actualDurationMinutes : null,
-          exists: previous ? previous.exists : null, reason: 'source_read_failed', error: item.error,
-          runId: run._id, retryCount: previous && previous.retryCount || 0,
-          createdAt: previous && previous.createdAt || timestamp, updatedAt: timestamp,
-        } });
-      }
-      for (const item of sourceResolved) {
-        const id = errorId(item.studentNumber, run.recordDate);
-        const previous = await optional(tx, ERRORS, id);
-        if (previous && onlySourceFailure(previous) && previous.userId === item.userId && previous.openid === item.openid) {
-          await tx.collection(ERRORS).doc(id).remove();
-        }
       }
       const queryFailures = queryFailure ? (current.queryFailures || 0) + 1 : 0;
       const fatal = error && (!queryFailure || queryFailures >= 3);
@@ -248,17 +293,37 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   async function commitRows(run, entries, final) {
     if (!entries.length) return checkpoint(run, final);
     let result;
-    for (let offset = 0; offset < entries.length; offset += CHUNK_SIZE) {
-      const page = entries.slice(offset, offset + CHUNK_SIZE);
-      const last = offset + page.length === entries.length;
+    for (let offset = 0; offset < entries.length;) {
+      const candidates = entries.slice(offset, offset + CHUNK_SIZE), page = [];
+      const markDeadline = now() + MARK_SLICE_MS;
       await renewLeaseIfNeeded(run);
-      for (const entry of page) {
+      for (const entry of candidates) {
+        if (page.length && now() >= markDeadline) break;
+        page.push(entry);
         if (!entry.errorChange || !entry.errorChange.recovered) continue;
         await renewLeaseIfNeeded(run);
         const item = entry.item;
+        try {
+          const duration = await getDayDuration(item.openid, run.recordDate, now() + 20000);
+          if (!Number.isInteger(duration) || duration < 0) throw new Error('确认同步时读取到无效本地总量');
+          if (duration !== item.durationMinutes) {
+            item.zeroEligible = item.zeroEligible || item.durationMinutes > 0;
+            item.durationMinutes = duration;
+            entry.errorChange = compare(item, entry.errorChange.result);
+            item.error = '源记录在同步期间已变化，等待按最新总量重试';
+            continue;
+          }
+        } catch (error) {
+          item.status = 'failed'; item.retryEligible = false;
+          item.error = error.message || '确认同步时读取源记录失败';
+          item.failureReason = 'source_read_failed';
+          entry.errorChange = null; entry.sourceFailure = true;
+          continue;
+        }
         try { await markSynced(item.openid, run.recordDate, item.bindingStudentNumber); item.markError = ''; }
         catch (error) { item.markError = error.message || '写入本地同步标记失败'; }
       }
+      const last = offset + page.length === entries.length;
       await renewLeaseIfNeeded(run);
       result = await checkpoint(run, {
         items: page.flatMap(entry => entry.item ? [entry.item] : []),
@@ -273,6 +338,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       // Keep the private token; the public checkpoint result deliberately omits it.
       run.cursor = result.cursor; run.phase = result.phase;
       run.leaseUntil = last ? 0 : result.updatedAt + LEASE_MS;
+      offset += page.length;
     }
     return result;
   }
@@ -283,7 +349,11 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     const filter = { bijingBound: true, ...(cursor ? { _id: db.command.gt(cursor) } : {}) };
     const rows = (await db.collection('users').where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
     const entries = [], pending = [];
+    const sourceDeadline = now() + SOURCE_SLICE_MS;
     for (const row of rows) {
+      // Preserve progress before slow source reads can consume a whole worker.
+      // The HTTP capacity stays 100; slow pages are allowed to be smaller.
+      if (entries.length && now() >= sourceDeadline) break;
       await renewLeaseIfNeeded(run);
       const readDeadline = now() + 20000;
       const item = { userId: row._id, openid: row._openid || '', studentNumber: normalizeStudentNumber(row.bijingStudentNumber),
@@ -297,13 +367,17 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         if (!row._openid || typeof row.bijingStudentNumber !== 'string') throw new Error('绑定资料不完整，请重新绑定学号');
         if (!validStudentNumber(item.studentNumber)) throw new Error('绑定学号格式错误，请重新绑定');
         readingSource = true;
-        if ((await ownersOf(item.studentNumber)).length > 1) {
-          readingSource = false;
-          throw new Error('同一学号绑定了多个用户，请核对绑定后重试');
+        const queued = await optional(db, ERRORS, errorId(item.studentNumber, run.recordDate));
+        item.queueVersion = queued && queued.queueVersion || '';
+        item.zeroEligible = permitsZero(queued, row, run.recordDate);
+        const owners = await ownersOf(item.studentNumber);
+        if (owners.length !== 1 || owners[0]._id !== row._id || owners[0]._openid !== row._openid) {
+          item.failureReason = 'binding_conflict';
+          throw new Error('学号绑定已变更或存在冲突，请核对绑定后重试');
         }
         item.durationMinutes = await getDayDuration(row._openid, run.recordDate, readDeadline);
         if (!Number.isInteger(item.durationMinutes) || item.durationMinutes < 0) throw new Error('本地静坐时长无效');
-        if (item.durationMinutes === 0) {
+        if (item.durationMinutes === 0 && !item.zeroEligible) {
           item.status = 'skipped'; item.error = '当日无静坐数据'; entry.sourceResolved = true;
           continue;
         }
@@ -314,7 +388,8 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         entry.sourceFailure = readingSource;
       }
     }
-    return { rows, entries, pending };
+    return { rows: rows.slice(0, entries.length), entries, pending,
+      hasMore: entries.length < rows.length || rows.length === BATCH_SIZE };
   }
   async function uploadAll(run) {
     let cursor = '';
@@ -322,13 +397,17 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     while (true) {
       await renewLeaseIfNeeded(run);
       if (run.automatic && run.recordDate !== recentDates(1)[0]) throw leaseUnavailable();
-      const { rows, entries, pending } = await sourcePage(run, cursor);
+      const { rows, entries, pending, hasMore } = await sourcePage(run, cursor);
       if (pending.length) await post(run, pending);
+      await persistFailures(run, entries.filter(entry => entry.sourceFailure || entry.item.uploadError).map(entry => {
+        if (entry.item.uploadError) entry.item.failureReason = 'upload_failed';
+        return entry.item;
+      }));
       summary.total += entries.length;
       summary.skipped += entries.filter(entry => entry.item.status === 'skipped').length;
       summary.failed += entries.filter(entry => entry.item.status === 'failed').length + pending.filter(item => item.uploadError).length;
       summary.acknowledged += pending.filter(item => !item.uploadError).length;
-      if (rows.length < BATCH_SIZE) break;
+      if (!hasMore) break;
       cursor = rows[rows.length - 1]._id;
     }
     await renewLeaseIfNeeded(run);
@@ -354,9 +433,9 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     // Runs already in progress before source reconciliation retain their item
     // counters and cursor. Resetting counters while keeping those items would
     // double-count later status deltas. New full runs always use uploadAll.
-    const { rows, entries, pending } = await sourcePage(run, run.cursor);
+    const { rows, entries, pending, hasMore } = await sourcePage(run, run.cursor);
     if (pending.length) await post(run, pending);
-    const complete = rows.length < BATCH_SIZE;
+    const complete = !hasMore;
     return commitRows(run, entries,
     { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'verify' : 'upload' });
   }
@@ -365,14 +444,17 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     const filter = { recordDate: run.recordDate, ...(run.cursor ? { _id: db.command.gt(run.cursor) } : {}) };
     const rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(BATCH_SIZE).get()).data;
     const entries = [];
+    const sourceDeadline = now() + SOURCE_SLICE_MS;
     for (const row of rows) {
+      if (entries.length && now() >= sourceDeadline) break;
       await renewLeaseIfNeeded(run);
       const readDeadline = now() + 20000;
       const studentNumber = normalizeStudentNumber(row.studentNumber);
       const item = { _id: `${run._id}_${crypto.createHash('sha256').update(`error:${row._id}`).digest('hex').slice(0, 24)}`,
         userId: row.userId || '', openid: row.openid || '', studentNumber,
         bindingStudentNumber: row.bindingStudentNumber || studentNumber, nickname: row.nickname || '',
-        durationMinutes: row.expectedDurationMinutes, status: 'failed', error: '', attempts: run.attempt, verifyEligible: false };
+        durationMinutes: row.expectedDurationMinutes, status: 'failed', error: '', attempts: run.attempt, verifyEligible: false,
+        zeroEligible: true, queueVersion: row.queueVersion || '' };
       const entry = { cursor: row._id, item };
       entries.push(entry);
       try {
@@ -382,22 +464,34 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         // Re-read the source before comparing; old error snapshots cannot
         // establish the current expected value or authorize clearing errors.
         const duration = await getDayDuration(item.openid, run.recordDate, readDeadline);
-        if (duration === 0 && onlySourceFailure(row)) {
+        if (duration === 0 && !permitsZero(row, owners[0], run.recordDate)) {
           item.durationMinutes = 0; item.status = 'skipped'; item.error = '当日无静坐数据';
           entry.sourceResolved = true;
           continue;
         }
-        if (!Number.isInteger(duration) || duration <= 0) throw new Error('本地当日静坐数据已变更，保留错误待人工检查');
+        if (!Number.isInteger(duration) || duration < 0) throw new Error('本地当日静坐数据无效，保留错误待重试');
         item.durationMinutes = duration;
         item.bindingStudentNumber = owners[0].bijingStudentNumber;
         item.verifyEligible = true; item.status = 'pending';
       } catch (error) { item.error = error.message || '读取当前静坐数据失败，保留原错误'; }
     }
-    const complete = rows.length < BATCH_SIZE;
+    const complete = entries.length === rows.length && rows.length < BATCH_SIZE;
     return commitRows(run, entries,
-    { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'verify' : 'upload' });
+    { cursor: complete ? '' : entries[entries.length - 1].cursor, phase: complete ? 'verify' : 'upload' });
   }
   async function post(run, items) {
+    await assertRequestLease(run);
+    const zeroItems = items.filter(item => item.durationMinutes === 0);
+    for (const item of zeroItems) {
+      await assertRequestLease(run);
+      try {
+        if (!postZero) throw new Error('单条清零接口尚未配置');
+        const response = await postZero(run.recordDate, item.studentNumber);
+        item.uploadError = response && response.success === true ? '' : response && response.message || '清零接口未确认成功，等待核对';
+      } catch (error) { item.uploadError = errorMessage(error, '请求必经清零接口失败'); }
+    }
+    items = items.filter(item => item.durationMinutes > 0);
+    if (!items.length) return;
     await assertRequestLease(run);
     try {
       const response = await postBatch(run.recordDate, items.map(item => ({ studentNumber: item.studentNumber, durationMinutes: item.durationMinutes })));
@@ -414,7 +508,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     } catch (error) { items.forEach(item => { item.uploadError = errorMessage(error, '请求必经批量接口失败'); }); }
   }
   async function assertRequestLease(run) {
-    if (run.automatic && run.recordDate !== recentDates(1)[0]) throw leaseUnavailable();
+    if (run.automatic && !run.allowHistorical && run.recordDate !== recentDates(1)[0]) throw leaseUnavailable();
     await renewLeaseIfNeeded(run);
     const current = await optional(db, RUNS, run._id);
     if (!current || current.status !== 'running' || current.leaseToken !== run.leaseToken ||
@@ -431,7 +525,8 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   function eligible(item) {
     // Existing pre-reconciliation jobs have no verifyEligible field. Recheck
     // their formerly acknowledged successes before considering them complete.
-    return item.verifyEligible !== false && validStudentNumber(item.studentNumber) && Number.isInteger(item.durationMinutes) && item.durationMinutes > 0;
+    return item.verifyEligible !== false && validStudentNumber(item.studentNumber) && Number.isInteger(item.durationMinutes) &&
+      (item.durationMinutes > 0 || item.durationMinutes === 0 && item.zeroEligible);
   }
   async function queryExpected(run, pending) {
     const records = pending.map(item => ({ studentNumber: item.studentNumber, recordDate: run.recordDate }));
@@ -449,7 +544,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     });
   }
   function compare(item, result) {
-    const recovered = result.exists && result.durationMinutes === item.durationMinutes;
+    const recovered = result.durationMinutes === item.durationMinutes && (result.exists || item.durationMinutes === 0);
     item.verifiedAt = now(); item.actualDurationMinutes = result.durationMinutes; item.remoteExists = result.exists;
     item.status = recovered ? 'success' : 'failed'; item.retryEligible = !recovered;
     item.error = recovered ? '' : `${result.exists ? `远端时长为${result.durationMinutes}分钟，期望${item.durationMinutes}分钟` : '远端缺少该学号当日记录'}${item.retryBlocked ? `；${item.retryBlocked}` : ''}`;
@@ -458,18 +553,21 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   async function verifySource(run) {
     // Users and current local totals are authoritative. The 02:00 upload may
     // have never run or stopped mid-request; its logs are deliberately unused.
-    const { rows, entries, pending } = await sourcePage(run, run.cursor);
+    const { rows, entries, pending, hasMore } = await sourcePage(run, run.cursor);
     if (pending.length) {
       let results;
       try { results = await queryExpected(run, pending); }
       catch (error) {
         if (error.code === 'SYNC_LEASE_UNAVAILABLE') throw error;
-        return checkpoint(run, { error: errorMessage(error, '远端核对失败，未修改错误表'), queryFailure: true });
+        for (const item of pending) item.error = errorMessage(error, '远端核对失败');
+        await persistFailures(run, entries.filter(entry => entry.sourceFailure).map(entry => entry.item));
+        await persistFailures(run, pending, 'query_failed');
+        return checkpoint(run, { error: errorMessage(error, '远端核对失败，已记录待重试'), queryFailure: true });
       }
       const changes = new Map(pending.map((item, index) => [item._id, compare(item, results[index])]));
       for (const entry of entries) entry.errorChange = changes.get(entry.item._id);
     }
-    const complete = rows.length < BATCH_SIZE;
+    const complete = !hasMore;
     return commitRows(run, entries, { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'retry' : 'verify' });
   }
   async function verify(run) {
@@ -483,7 +581,9 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
         results = await queryExpected(run, pending);
       } catch (error) {
         if (error.code === 'SYNC_LEASE_UNAVAILABLE') throw error;
-        return checkpoint(run, { error: errorMessage(error, '远端核对失败，未修改错误表'), queryFailure: true });
+        for (const item of pending) item.error = errorMessage(error, '远端核对失败');
+        await persistFailures(run, pending, 'query_failed');
+        return checkpoint(run, { error: errorMessage(error, '远端核对失败，已记录待重试'), queryFailure: true });
       }
       for (let index = 0; index < pending.length; index++) {
         const item = pending[index];
@@ -498,35 +598,47 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
   }
   async function retry(run) {
     const rows = await phaseRows(run);
-    const items = [], pending = [];
+    const items = [], pending = [], processed = [];
+    const sourceDeadline = now() + SOURCE_SLICE_MS;
     for (const item of rows) {
+      if (processed.length && now() >= sourceDeadline) break;
       await renewLeaseIfNeeded(run);
       const readDeadline = now() + 20000;
-      if (!item.retryEligible || !eligible(item)) continue;
+      if (!item.retryEligible || !eligible(item)) { processed.push(item); continue; }
       items.push(item);
       try {
+        const queued = await optional(db, ERRORS, errorId(item.studentNumber, run.recordDate));
+        item.queueVersion = queued && queued.queueVersion || '';
         const owners = await ownersOf(item.studentNumber);
         if (owners.length !== 1 || owners[0]._id !== item.userId || owners[0]._openid !== item.openid) throw new Error('学号绑定已变更或存在冲突，未自动覆盖');
         const duration = await getDayDuration(item.openid, run.recordDate, readDeadline);
-        if (!Number.isInteger(duration) || duration <= 0) throw new Error('本地当日静坐数据已变更，需人工检查');
+        if (!Number.isInteger(duration) || duration < 0) throw new Error('本地当日静坐数据无效，等待重试');
         // Refresh the source under the same day lock before retrying so a stale
         // expected snapshot cannot replace a newer local daily total.
         item.durationMinutes = duration;
+        item.zeroEligible = item.zeroEligible || duration === 0 && !!queued;
         item.bindingStudentNumber = owners[0].bijingStudentNumber;
         item.retryAttempted = true; item.retryBlocked = '';
+        // Zero uses a single-record endpoint. Commit each zero request before
+        // starting another so a worker timeout cannot replay the same prefix.
+        if (duration === 0 && pending.length) { items.pop(); break; }
         pending.push(item);
       } catch (error) { item.retryBlocked = error.message || '重试前检查失败'; }
+      processed.push(item);
+      if (pending.some(row => row.durationMinutes === 0)) break;
     }
     if (pending.length) await post(run, pending);
-    const complete = rows.length < BATCH_SIZE;
-    return commitRows(run, rows.map(row => ({ cursor: row._id, item: items.includes(row) ? row : null })),
-    { cursor: complete ? '' : rows[rows.length - 1]._id, phase: complete ? 'reverify' : 'retry' });
+    await persistFailures(run, pending.filter(item => item.uploadError), 'upload_failed');
+    const complete = processed.length === rows.length && rows.length < BATCH_SIZE;
+    return commitRows(run, processed.map(row => ({ cursor: row._id, item: items.includes(row) ? row : null })),
+    { cursor: complete ? '' : processed[processed.length - 1]._id, phase: complete ? 'reverify' : 'retry' });
   }
   async function processChunk(runId, options = {}) {
     if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');
     const { run, acquired } = await acquire(runId, options);
     if (!acquired) return { ...publicRun(run), busy: run.status === 'running' && !waitsForCheck(run) };
     run.automatic = !!options.automatic;
+    run.allowHistorical = !!options.allowHistorical;
     try {
       if (run.phase === 'upload') return await upload(run);
       if (run.phase === 'verify' || run.phase === 'reverify') return await verify(run);
@@ -544,12 +656,12 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
       return checkpoint(run, { error: error.message || '同步任务执行失败' });
     }
   }
-  async function processBatch(runId, { automatic = false, expectedPhase } = {}) {
+  async function processBatch(runId, { automatic = false, allowHistorical = false, expectedPhase } = {}) {
     if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');
     const initial = await optional(db, RUNS, runId);
     if (!initial) throw new Error('同步任务不存在');
     const phase = expectedPhase || initial.phase || 'upload';
-    return processChunk(runId, { expectedPhase: phase, automatic });
+    return processChunk(runId, { expectedPhase: phase, automatic, allowHistorical });
   }
   async function retryErrors(operator = '', automatic = false) {
     // A persistent scan cursor keeps one permanently broken date (or >20 errors
@@ -562,8 +674,6 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     await db.collection(DAYS).doc(REPAIR_CURSOR_ID).set({ data: { cursor: rows.length === CHUNK_SIZE ? rows[rows.length - 1]._id : '', updatedAt: now() } });
     for (const recordDate of [...new Set(rows.map(row => row.recordDate))]) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) continue;
-      const day = await optional(db, DAYS, recordDate);
-      if (automatic && day && (day.timerAttempts || 0) >= MAX_TIMER_ATTEMPTS) continue;
       await db.collection(DAYS).doc(REPAIR_CURSOR_ID).set({ data: { cursor: `${recordDate}~`, updatedAt: now() } });
       return startRun(recordDate, automatic ? 'timer-errors' : 'manual-errors', operator, 'errors');
     }
@@ -652,6 +762,10 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, queryBatch
     const uploadOnly = triggerName === 'dailySyncBijing';
     const schedule = createDailySchedule({
       db, now, jobs: { startDailyUpload, startScheduledRepair,
+        repairPending: (cycleKey, processCurrent) => require('./pendingRepairs').createPendingRepairs({
+          db, now, latestDate: () => recentDates(1)[0], processBatch, processCurrent,
+          startRepair: (recordDate, repairCycle) => startRun(recordDate, 'timer-errors', '', 'errors', { repairCycle }),
+        }).run(cycleKey),
         ensureDailyCheck: require('./sourceCheck').createSourceCheck({ db, now }).ensureDailyCheck,
         resumeActive: options => resumeActive({ ...options, batch: true }),
         processChunk: runId => processBatch(runId, { automatic: true, ...(uploadOnly ? { expectedPhase: 'upload' } : {}) }) },

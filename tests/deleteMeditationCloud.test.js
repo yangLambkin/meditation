@@ -17,7 +17,13 @@ function record(id, date, duration = 10, extra = {}) {
 }
 
 function createHarness(records, stats = [], options = {}) {
-  let stored = clone({ meditation_records: records, user_stats: stats, meditation_locks: options.receipts || [] });
+  let now = NOW;
+  class Clock extends FixedDate {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
+  let stored = clone({ meditation_records: records, user_stats: stats, meditation_locks: options.receipts || [],
+    users: options.users || [], bijing_bindings: options.bindings || [], bijing_sync_errors: options.syncErrors || [] });
   const queries = [];
   const writes = [];
   let transactionCount = 0;
@@ -56,6 +62,7 @@ function createHarness(records, stats = [], options = {}) {
                 },
                 async set({ data }) {
                   writes.push({ name, id, action: 'set' });
+                  if (name === 'bijing_sync_errors' && options.fail === 'sync-queue') throw new Error('sync queue unavailable');
                   if (options.fail === 'add') throw new Error('stats insert unavailable');
                   if (options.fail === 'receipt-write' && id.startsWith('md_')) throw new Error('receipt write unavailable');
                   if (options.fail === 'tombstone-write' && id.startsWith('mt_')) throw new Error('tombstone write unavailable');
@@ -101,8 +108,9 @@ function createHarness(records, stats = [], options = {}) {
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../cloudfunctions/meditationManager/index.js'), 'utf8'), {
-    module, exports: module.exports, Date: FixedDate, console: { log() {}, warn() {}, error() {} },
+    module, exports: module.exports, Date: Clock, console: { log() {}, warn() {}, error() {} },
     require(name) {
+      if (name === './syncQueue') return require('../cloudfunctions/meditationManager/syncQueue');
       if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database,
@@ -113,6 +121,9 @@ function createHarness(records, stats = [], options = {}) {
     queries, writes,
     get records() { return clone(stored.meditation_records); },
     get stats() { return clone(stored.user_stats); },
+    get syncErrors() { return clone(stored.bijing_sync_errors); },
+    clearSyncErrors() { stored.bijing_sync_errors = []; },
+    setNow(value) { now = Date.parse(value); },
     get receipts() { return clone(stored.meditation_locks.filter(row => row.kind === 'deletion_receipt')); },
     get tombstones() { return clone(stored.meditation_locks.filter(row => row.kind === 'record_tombstone')); },
     get transactionCount() { return transactionCount; },
@@ -468,4 +479,92 @@ test('explicit recovery cannot recreate an acknowledged unkeyed legacy record af
   const newSession = await app.record({ ...recovery, localId: 'distinct-new-session', recoverLegacy: false });
   assert.equal(newSession.success, true); assert.equal(app.records.length, 1);
   assert.equal(app.records[0].localId, 'distinct-new-session'); assert.equal(app.stats[0].totalDuration, 25);
+});
+
+const QUEUED_PROFILE = { _id: 'bound-profile', _openid: OPENID, bijingBound: true,
+  bijingStudentNumber: 'BJ123', nickName: '静坐者' };
+
+test('deleting the last historical record commits a durable zero-duration correction before returning', async () => {
+  const target = record('last-historical', '2026-09-16', 25);
+  const app = createHarness([target], [], { users: [QUEUED_PROFILE] });
+  // Discard the response to model an exited client or a lost acknowledgement.
+  await app.remove({ recordId: target._id });
+  assert.deepEqual(app.records, []);
+  assert.equal(app.stats[0].totalDuration, 0);
+  assert.equal(app.receipts.length, 1);
+  assert.equal(app.syncErrors.length, 1);
+  const pending = app.syncErrors[0];
+  assert.equal(pending.recordDate, target.date);
+  assert.equal(pending.expectedDurationMinutes, 0);
+  assert.equal(pending.actualDurationMinutes, null);
+  assert.equal(pending.exists, null);
+  assert.equal(pending.reason, 'sync_pending');
+  assert.equal(pending.userId, QUEUED_PROFILE._id);
+  assert.match(pending.queueVersion, /^[a-f0-9]{32}$/);
+  const duplicate = await app.remove({ recordId: target._id });
+  assert.equal(duplicate.data.duplicate, true);
+  assert.equal(duplicate.data.autoSyncBijing, true);
+  assert.deepEqual(app.syncErrors, [pending], 'Receipt replay must not create a fresh repair revision');
+});
+
+test('historical deletion recalculates the remaining total and advances an existing repair revision', async () => {
+  const first = record('first', '2026-09-16', 25);
+  const second = record('second', '2026-09-16', 15);
+  const app = createHarness([first, second], [], { users: [QUEUED_PROFILE] });
+  const initial = await app.remove({ recordId: first._id });
+  assert.equal(initial.data.bijingSyncQueued, true);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 15);
+  const version = app.syncErrors[0].queueVersion;
+  assert.equal((await app.remove({ recordId: second._id })).success, true);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 0);
+  assert.notEqual(app.syncErrors[0].queueVersion, version);
+});
+
+test('a failed repair queue write or final commit restores the record, statistics and deletion receipt', async () => {
+  const target = record('rollback-historical', '2026-09-16', 25);
+  const stats = [{ _id: 'existing-stats', _openid: OPENID, totalDuration: 25, totalCount: 1 }];
+  for (const fail of ['sync-queue', 'commit']) {
+    const app = createHarness([target], stats, { users: [QUEUED_PROFILE], fail });
+    const result = await app.remove({ recordId: target._id });
+    assert.equal(result.success, false);
+    assert.deepEqual(app.records, [target]);
+    assert.deepEqual(app.stats, stats);
+    assert.deepEqual(app.receipts, []);
+    assert.deepEqual(app.tombstones, []);
+    assert.deepEqual(app.syncErrors, []);
+  }
+});
+
+test('current-day deletion and unbound historical deletion do not queue external work', async () => {
+  for (const [date, users] of [['2026-09-17', [QUEUED_PROFILE]], ['2026-09-16', []]]) {
+    const target = record('no-external-work', date, 25);
+    const app = createHarness([target], [], { users });
+    assert.equal((await app.remove({ recordId: target._id })).success, true);
+    assert.deepEqual(app.syncErrors, []);
+  }
+});
+
+test('the first historical receipt replay persists a zero correction once after a current-day deletion', async () => {
+  const target = record('receipt-cross-day', '2026-09-17', 25);
+  const app = createHarness([target], [], { users: [QUEUED_PROFILE] });
+  const first = await app.remove({ recordId: target._id });
+  assert.equal(first.success, true);
+  assert.deepEqual(app.records, []);
+  assert.deepEqual(app.syncErrors, []);
+  assert.equal(app.receipts[0].bijingSyncQueued, undefined);
+  const stats = app.stats;
+  app.setNow('2026-09-18T12:00:00+08:00');
+  // The cloud receipt is sufficient even though the original record is gone and the response is discarded.
+  await app.remove({ recordId: target._id });
+  assert.equal(app.syncErrors.length, 1);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 0);
+  assert.equal(app.syncErrors[0].recordDate, target.date);
+  assert.equal(app.receipts[0].bijingSyncQueued, true);
+  assert.deepEqual(app.stats, stats);
+  const pending = app.syncErrors;
+  await app.remove({ recordId: target._id });
+  assert.deepEqual(app.syncErrors, pending);
+  app.clearSyncErrors();
+  await app.remove({ recordId: target._id });
+  assert.deepEqual(app.syncErrors, [], 'Replaying a completed deletion cannot recreate a resolved repair');
 });

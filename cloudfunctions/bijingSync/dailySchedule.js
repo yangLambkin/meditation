@@ -151,6 +151,11 @@ function createDailySchedule({ db, jobs, now = Date.now }) {
     if (triggerName === 'checkBijingSync') {
       if (!inCheckHours(now())) return null;
       await openCheckCycle();
+      if (jobs.repairPending) {
+        const cycleKey = new Date(now() + BEIJING_OFFSET_MS).toISOString().slice(0, 13);
+        const pending = await jobs.repairPending(cycleKey, resume);
+        if (pending && pending.processedCurrent) return pending.currentResult;
+      }
     }
     return resume();
   }

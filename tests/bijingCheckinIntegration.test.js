@@ -16,6 +16,8 @@ function createHarness() {
     meditation_records: [],
     meditation_locks: [],
     user_stats: [],
+    bijing_bindings: [],
+    bijing_sync_errors: [],
     users: [{ _id: 'bound-user', _openid: openid, bijingBound: true,
       bijingStudentNumber: '123456', bijingSyncedDates: {} }],
   };
@@ -110,6 +112,7 @@ function createHarness() {
     return module.exports;
   }
   function cloudRequire(name) {
+    if (name === './syncQueue') return require('../cloudfunctions/meditationManager/syncQueue');
     if (name === 'crypto') return require('node:crypto');
     if (name === 'wx-server-sdk') return sdk;
     if (name === 'axios') return {

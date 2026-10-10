@@ -189,7 +189,7 @@ async function readMeditationLock(lockId) {
 
 // 查询在事务外分页执行，事务内仅使用 doc API，兼容云开发各 SDK 版本。
 // 每次修改都推进用户 revision；快照读取期间发生任何写入时重读，避免丢累计统计。
-async function withMeditationSnapshot(openid, operation, dryRun = false) {
+async function withMeditationSnapshot(openid, operation, dryRun = false, queueBijingChanges = false) {
   // 预览无需锁，也不能因缺少集合而创建任何云端数据。
   if (dryRun) return operation(null,
     await getMeditationDeletionRows(db, 'meditation_records', openid),
@@ -200,14 +200,18 @@ async function withMeditationSnapshot(openid, operation, dryRun = false) {
     const revision = before ? Number(before.revision) || 0 : 0;
     const records = await getMeditationDeletionRows(db, 'meditation_records', openid);
     const stats = await getMeditationDeletionRows(db, 'user_stats', openid);
+    const includeBinding = typeof queueBijingChanges === 'function' ? await queueBijingChanges(records) : queueBijingChanges;
+    const bindingSnapshot = includeBinding ? await require('./syncQueue').readBindingSnapshot({
+      db, openid, readRows: getMeditationDeletionRows, readDocument: optionalDocument
+    }) : null;
     try {
       return await db.runTransaction(async transaction => {
         const current = await optionalDocument(transaction, 'meditation_locks', lockId);
         if ((current ? Number(current.revision) || 0 : 0) !== revision) {
           throw deletionError('STALE_SNAPSHOT', '记录已变更，重新读取');
         }
-        const result = await operation(transaction, records, stats);
-        if (!result || !result.duplicate) await transaction.collection('meditation_locks').doc(lockId).set({ data: {
+        const result = await operation(transaction, records, stats, bindingSnapshot);
+        if (!result || !result.duplicate || result.bijingSyncQueued === true) await transaction.collection('meditation_locks').doc(lockId).set({ data: {
           ownerOpenid: openid, revision: revision + 1, updatedAt: new Date()
         } });
         return result;
@@ -217,6 +221,17 @@ async function withMeditationSnapshot(openid, operation, dryRun = false) {
     }
   }
   throw deletionError('RETRY_REQUIRED', '同步繁忙，请稍后重试');
+}
+
+// 标记留在原记录/删除凭据上：首次历史确认补齐待办，后续回放不重建已经修复的任务。
+async function queueHistoricalMutation(transaction, snapshot, openid, recordDate, records, collection, mutation) {
+  if (mutation.bijingSyncQueued === true || !isDateLabel(recordDate) || recordDate >= getBusinessDate()) return false;
+  const queued = await require('./syncQueue').queueChangedDate({
+    transaction, snapshot, openid, recordDate, today: getBusinessDate(), records,
+    getRecordBusinessDate, readDocument: optionalDocument, timestamp: Date.now()
+  });
+  if (queued) await transaction.collection(collection).doc(mutation._id).update({ data: { bijingSyncQueued: true } });
+  return queued;
 }
 
 // 记录冥想打卡（支持本地用户标识）
@@ -263,7 +278,7 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       record._id = stableDocumentId('med_', openid, key);
     }
     if (!record._id) record._id = stableDocumentId('med_', openid, require('crypto').randomBytes(16).toString('hex'));
-    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows, bindingSnapshot) => {
       // 与删除事务共享锁：离线旧设备的迟到重传不能复活已经删除的记录。
       await assertMeditationNotDeleted(transaction, openid, record, data.recoverLegacy === true);
       const existing = key && records.find(row => row.localId === key || row.idempotencyKey === key || row._id === record._id);
@@ -275,7 +290,10 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
             meditationTimestamp(existing.timestamp) !== timestamp)) {
           throw deletionError('REQUEST_ID_REUSED', '本次记录已保存，请查看原记录后重新填写');
         }
-        return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true };
+        const bijingSyncQueued = await queueHistoricalMutation(transaction, bindingSnapshot, openid,
+          getRecordBusinessDate(existing), records, 'meditation_records', existing);
+        return { recordId: existing._id, date: getRecordBusinessDate(existing), timestamp: existing.timestamp, duplicate: true,
+          ...(bijingSyncQueued ? { bijingSyncQueued: true } : {}) };
       }
       if (isBackfill) {
         // 与写记录处于同一事务：手机开关、篡改日期或迟到请求不能扩大授权。
@@ -303,7 +321,10 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
         if (matches.length === 1) {
           const matched = matches[0];
           await assertMeditationNotDeleted(transaction, openid, matched);
-          return { recordId: matched._id, date: getRecordBusinessDate(matched), timestamp: matched.timestamp, duplicate: true };
+          const bijingSyncQueued = await queueHistoricalMutation(transaction, bindingSnapshot, openid,
+            getRecordBusinessDate(matched), records, 'meditation_records', matched);
+          return { recordId: matched._id, date: getRecordBusinessDate(matched), timestamp: matched.timestamp, duplicate: true,
+            ...(bijingSyncQueued ? { bijingSyncQueued: true } : {}) };
         }
         if (similar.some(row => !row.localId && !row.idempotencyKey)) {
           throw deletionError('AMBIGUOUS_RECORD', '云端存在同一天、时长相同的旧记录，请先核对，记录已保留在本机');
@@ -317,8 +338,13 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       const { _id, ...document } = record;
       await transaction.collection('meditation_records').doc(_id).set({ data: document });
       await writeRebuiltStats(transaction, openid, statsRows, rebuildMeditationStats([...records, record]));
-      return { recordId: record._id, date: dateStr, timestamp, duplicate: false };
-    });
+      const bijingSyncQueued = await queueHistoricalMutation(transaction, bindingSnapshot, openid,
+        dateStr, [...records, record], 'meditation_records', record);
+      return { recordId: record._id, date: dateStr, timestamp, duplicate: false,
+        ...(bijingSyncQueued ? { bijingSyncQueued: true } : {}) };
+    }, false, records => dateStr < getBusinessDate() || Boolean(key && records.some(row =>
+      (row.localId === key || row.idempotencyKey === key || row._id === record._id) &&
+      row.bijingSyncQueued !== true && getRecordBusinessDate(row) < getBusinessDate())));
     if (localUserId) await createUserMapping(openid, localUserId);
     return { success: true, data: { ...result,
       ...(result.date < getBusinessDate() ? { autoSyncBijing: true } : {}) } };
@@ -519,7 +545,7 @@ async function deleteMeditationRecord(openid, data = {}) {
     : localId ? ['localId', localId] : ['timestamp', data.date, timestamp];
   const deletionId = stableDocumentId('md_', openid, requestIdentity);
   try {
-    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows) => {
+    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows, bindingSnapshot) => {
       const receipt = await optionalDocument(transaction, 'meditation_locks', deletionId);
       if (receipt) {
         if (receipt.kind !== 'deletion_receipt' || receipt.ownerOpenid !== openid ||
@@ -527,8 +553,11 @@ async function deleteMeditationRecord(openid, data = {}) {
           throw deletionError('INVALID_DELETION_RECEIPT', '删除凭据无效，请刷新后重试');
         }
         // 先查凭据，即使旧时间位置出现了新记录，也只能重放原删除的结果。
+        const bijingSyncQueued = await queueHistoricalMutation(transaction, bindingSnapshot, openid,
+          receipt.date, records, 'meditation_locks', { ...receipt, _id: deletionId });
         return { recordId: receipt.recordId, date: receipt.date, timestamp: receipt.timestamp,
-          deletionId, stats: rebuildMeditationStats(records), duplicate: true };
+          deletionId, stats: rebuildMeditationStats(records), duplicate: true,
+          ...(bijingSyncQueued ? { bijingSyncQueued: true } : {}) };
       }
       // 新本地记录的备份可能失败，此时 localId 未命中不能降级为时间匹配，
       // 否则会误删云端恰好同一时间的另一条记录。仅旧缓存使用时间定位。
@@ -577,7 +606,19 @@ async function deleteMeditationRecord(openid, data = {}) {
         kind: 'deletion_receipt', ownerOpenid: openid, requestIdentity,
         recordId: target._id, date, timestamp: deletedTimestamp, createdAt: new Date()
       } });
-      return { recordId: target._id, date, timestamp: deletedTimestamp, stats, deletionId };
+      const bijingSyncQueued = await queueHistoricalMutation(transaction, bindingSnapshot, openid, date,
+        records.filter(record => record._id !== target._id), 'meditation_locks', { _id: deletionId });
+      return { recordId: target._id, date, timestamp: deletedTimestamp, stats, deletionId,
+        ...(bijingSyncQueued ? { bijingSyncQueued: true } : {}) };
+    }, false, async records => {
+      if (records.some(record => {
+        const matches = recordId ? record._id === recordId : localId
+          ? record.localId === localId || record.idempotencyKey === localId
+          : getRecordBusinessDate(record) === data.date && meditationTimestamp(record.timestamp) === timestamp;
+        return matches && getRecordBusinessDate(record) < getBusinessDate();
+      })) return true;
+      const receipt = await optionalDocument(db, 'meditation_locks', deletionId);
+      return receipt && receipt.bijingSyncQueued !== true && receipt.date < getBusinessDate();
     });
     return { success: true, data: { ...result,
       ...(isDateLabel(result.date) && result.date < getBusinessDate() ? { autoSyncBijing: true } : {}) } };

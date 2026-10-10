@@ -40,6 +40,7 @@ function harness(options = {}) {
   const state = {
     users: clone(options.users || [user(1)]),
     meditation_records: clone(options.records || [record(1)]),
+    bijing_sync_errors: [],
   };
   const calls = { reads: [], updates: [], posts: [], waits: [], logs: [], activeHttp: 0, maxHttp: 0 };
   const attempts = new Map();
@@ -50,6 +51,7 @@ function harness(options = {}) {
     MAINTENANCE_ADMIN_OPENIDS: '', ...options.env,
   };
   const database = {
+    async runTransaction(callback) { return callback(database); },
     collection(name) {
       assert.ok(Object.hasOwn(state, name), `Unexpected collection: ${name}`);
       function query(filter = {}) {
@@ -91,8 +93,14 @@ function harness(options = {}) {
       }
       return { ...query(), doc(id) {
         return {
-          async get() { return query({ _id: id }).get(); },
+          async get() { return { data: clone(state[name].find(row => row._id === id)) || null }; },
           async update({ data }) { return query({ _id: id }).update({ data }); },
+          async set({ data }) {
+            const old = state[name].findIndex(row => row._id === id);
+            if (old >= 0) state[name].splice(old, 1);
+            state[name].push({ _id: id, ...clone(data) });
+          },
+          async remove() { const index = state[name].findIndex(row => row._id === id); if (index >= 0) state[name].splice(index, 1); },
         };
       } };
     },
@@ -108,6 +116,7 @@ function harness(options = {}) {
     setTimeout(callback, duration) { calls.waits.push(duration); callback(); return 0; },
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
+      if (name === './syncFailures') return require('../cloudfunctions/bijingSync/syncFailures');
       if (name === 'wx-server-sdk') return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext };
       if (name === 'axios') return {
         async post(url, body, config) {

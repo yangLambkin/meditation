@@ -118,7 +118,7 @@ function createCloudHarness(initialStats, otherUsers = []) {
           return { _id: data._id || (name === 'meditation_records' ? `record-${records.length - 1}` : 'stats') };
         },
         doc(id) { return {
-          async get() { return { data: clone(name === 'meditation_locks' ? locks.get(id) : name === 'meditation_records' ? records.find(row => row._id === id) : stats) || null }; },
+          async get() { return { data: clone(name === 'bijing_bindings' ? null : name === 'meditation_locks' ? locks.get(id) : name === 'meditation_records' ? records.find(row => row._id === id) : stats) || null }; },
           async set({ data }) {
             if (name === 'meditation_locks') locks.set(id, { _id: id, ...clone(data) });
             else if (name === 'meditation_records') records.push({ _id: id, ...clone(data) });
@@ -133,7 +133,7 @@ function createCloudHarness(initialStats, otherUsers = []) {
             field(value) { projection = value; return this; },
             orderBy() { return this; }, skip(value) { offset = value; return this; }, limit(value) { limit = value; return this; },
             async get() {
-              let rows = (name === 'meditation_records' ? records : allStats()).filter(row => matches(row, filter)).slice(offset, offset + limit);
+              let rows = (name === 'users' ? [] : name === 'meditation_records' ? records : allStats()).filter(row => matches(row, filter)).slice(offset, offset + limit);
               if (projection) rows = rows.map(row => Object.fromEntries(
                 Object.keys(projection).filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])
               ));
@@ -148,6 +148,7 @@ function createCloudHarness(initialStats, otherUsers = []) {
   };
   const entry = loadModule('cloudfunctions/meditationManager/index.js', {
     require(name) {
+      if (name === './syncQueue') return require('../cloudfunctions/meditationManager/syncQueue');
       if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return {

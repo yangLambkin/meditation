@@ -9,7 +9,7 @@ const users = count => Array.from({ length: count }, (_, i) => ({
 function harness(options = {}) {
   const state = { bijing_sync_runs: [], bijing_sync_days: [], bijing_sync_items: [], bijing_sync_errors: [], users: options.users || users(2) };
   let clock = options.clock ?? 1790100000000, transaction = Promise.resolve();
-  const posts = [], queries = [], markers = [], requests = [], sourceReads = [], remote = new Map();
+  const posts = [], zeros = [], queries = [], markers = [], requests = [], sourceReads = [], remote = new Map();
   const transactionOperations = [], leaseAcquisitions = [], checkpoints = [];
   let currentTransactionOperations = null;
   function trackTransactionOperation() { if (currentTransactionOperations !== null) currentTransactionOperations++; }
@@ -39,10 +39,16 @@ function harness(options = {}) {
           if (options.ownerReadError && name === 'users' && filter.bijingStudentNumber) throw new Error('owner lookup unavailable');
           const rows = state[name].filter(row => matches(row, filter));
           rows.sort((a, b) => { for (const [key, direction] of order) { if (a[key] !== b[key]) return (a[key] > b[key] ? 1 : -1) * (direction === 'asc' ? 1 : -1); } return 0; });
-          return { data: clone(rows.slice(0, maximum)) };
+          const data = clone(rows.slice(0, maximum));
+          if (name === 'users' && options.afterUsersRead) options.afterUsersRead(clone(filter), state);
+          return { data };
         },
         doc(id) { return {
-          async get() { trackTransactionOperation(); return { data: clone(state[name].find(row => row._id === id) || null) }; },
+          async get() {
+            trackTransactionOperation();
+            if (options.beforeDocRead) options.beforeDocRead(name, id);
+            return { data: clone(state[name].find(row => row._id === id) || null) };
+          },
           async set({ data }) { trackTransactionOperation(); if (options.failErrorWrite && name === 'bijing_sync_errors') throw new Error('error write failed'); const i = state[name].findIndex(row => row._id === id); const row = { _id: id, ...clone(data) }; if (i < 0) state[name].push(row); else state[name][i] = row; },
           async update({ data }) {
             trackTransactionOperation();
@@ -85,13 +91,19 @@ function harness(options = {}) {
     getDayDuration: async (openid, recordDate, deadline) => { sourceReads.push({ openid, recordDate, deadline, at: clock }); return options.duration ? options.duration(openid, recordDate, deadline) : 20; },
     markSynced: async (...args) => { markers.push(args); if (options.markError) throw new Error('marker failed'); if (options.mark) return options.mark(...args); },
     postBatch: async (recordDate, records) => { posts.push({ recordDate, records: clone(records) }); requests.push('post'); if (options.post) return options.post(recordDate, records, { writeRemote, ack }); writeRemote(recordDate, records); return ack(recordDate, records); },
+    postZero: async (recordDate, studentNumber) => {
+      zeros.push({ recordDate, studentNumber }); requests.push('zero');
+      if (options.zero) return options.zero(recordDate, studentNumber, { writeRemote });
+      writeRemote(recordDate, [{ studentNumber, durationMinutes: 0 }]);
+      return { success: true };
+    },
     queryBatch: async records => { queries.push(clone(records)); requests.push('query'); return options.query ? options.query(records, result) : result(records); },
   });
   async function finish(run) {
     for (let i = 0; i < 1000 && ['running', 'interrupted'].includes(run.status); i++) {
       const before = requests.length;
       run = await jobs.processChunk(run.runId);
-      assert.ok(requests.length - before <= 1, 'one bounded network request per invocation');
+      assert.ok(requests.slice(before).filter(type => type !== 'zero').length <= 1, 'one bounded network request per invocation');
     }
     assert.ok(!['running', 'interrupted'].includes(run.status), 'job eventually finishes');
     assert.ok(transactionOperations.every(count => count <= 100), 'every transaction has at most 100 document operations');
@@ -104,7 +116,7 @@ function harness(options = {}) {
       exists: false, reason: 'missing', error: '远端缺少该学号当日记录', retryCount: 0, createdAt: clock, updatedAt: clock, ...extra };
     state.bijing_sync_errors.push(row); return row;
   }
-  return { jobs, state, posts, queries, markers, requests, sourceReads, remote, finish, seedError, transactionOperations, leaseAcquisitions, checkpoints, advance: ms => clock += ms, now: () => clock };
+  return { jobs, state, posts, zeros, queries, markers, requests, sourceReads, remote, finish, seedError, transactionOperations, leaseAcquisitions, checkpoints, advance: ms => clock += ms, now: () => clock };
 }
 
 const HOUR = 3600000;
@@ -157,7 +169,7 @@ test('02:00 uploads all 1000 users without progress items and 03:00 independentl
   assert.equal(checked.successCount, 1000);
   assert.equal(app.posts.length, 10);
   assert.equal(app.queries.length, 10);
-  assert.equal(app.sourceReads.length, 2000, '03:00 reads every current source total again');
+  assert.equal(app.sourceReads.length, 3000, '03:00 reads every source total and rechecks it before confirming success');
   assert.equal(app.state.bijing_sync_items.length, 1000);
   assert.ok(app.state.bijing_sync_items.every(item => item.runId === checked.runId));
   assert.equal(uploads(app)[0].status, 'uploaded');
@@ -371,15 +383,18 @@ test('zero-duration users are skipped and source-read failures remain repairable
   withinLimits(app);
 });
 
-test('a fresh zero-duration source does not erase an already confirmed positive-duration discrepancy', async () => {
+test('a fresh zero-duration source repairs a known positive remote record through the single-record endpoint', async () => {
   const app = harness({ users: users(1), duration: () => 0 });
-  const prior = clone(app.seedError('BJ0', date, { reason: 'duration_mismatch', expectedDurationMinutes: 20, actualDurationMinutes: 5, exists: true }));
+  app.seedError('BJ0', date, { reason: 'duration_mismatch', expectedDurationMinutes: 20, actualDurationMinutes: 5, exists: true });
+  app.remote.set(`BJ0/${date}`, 5);
   atCheckTime(app);
   await app.jobs.timer('checkBijingSync');
-  assert.equal(sourceChecks(app)[0].skippedCount, 1);
-  assert.deepEqual(app.state.bijing_sync_errors, [prior]);
+  assert.equal(sourceChecks(app)[0].successCount, 1);
+  assert.deepEqual(app.state.bijing_sync_errors, []);
+  assert.equal(app.remote.get(`BJ0/${date}`), 0);
   assert.equal(app.posts.length, 0);
-  assert.equal(app.queries.length, 0);
+  assert.deepEqual(app.zeros, [{ recordDate: date, studentNumber: 'BJ0' }]);
+  assert.equal(app.queries.length, 2);
 });
 
 test('a busy upload lease prevents duplicate work and its expiry permits an idempotent upload restart', async () => {
@@ -450,19 +465,15 @@ test('duplicate upload and check deliveries do not create runs or repeat complet
   assert.equal(sourceChecks(app).length, 1);
 });
 
-test('03:00 checks only its target day and leaves historical errors available for manual repair', async () => {
+test('03:00 repairs historical errors as well as independently checking the latest ended day', async () => {
   const app = harness({ users: users(1) });
-  const historical = clone(app.seedError('BJ0', '2026-01-01'));
+  app.seedError('BJ0', '2026-01-01');
   app.remote.set(`BJ0/${date}`, 20);
   atCheckTime(app);
   const checked = await app.jobs.timer('checkBijingSync');
   assert.equal(checked.recordDate, date);
   assert.equal(checked.status, 'success');
-  assert.ok(app.queries.flat().every(record => record.recordDate === date));
-  assert.deepEqual(app.state.bijing_sync_errors, [historical]);
-  const manual = await app.finish(await app.jobs.retryErrors('admin'));
-  assert.equal(manual.recordDate, '2026-01-01');
-  assert.equal(manual.status, 'success');
+  assert.deepEqual([...new Set(app.queries.flat().map(record => record.recordDate))].sort(), ['2026-01-01', date]);
   assert.equal(app.remote.get('BJ0/2026-01-01'), 20);
   assert.equal(app.state.bijing_sync_errors.length, 0);
 });
@@ -483,13 +494,14 @@ test('a query error exits each timer call and three failures terminate the indep
     assert.equal(failed.status, failures === 3 ? 'failed' : 'running');
   }
   await app.jobs.timer('resumeBijingBatches');
-  assert.equal(app.queries.length, 3);
+  assert.equal(app.queries.length, 4);
   assert.equal(sourceChecks(app).length, 1);
-  assert.equal(app.state.bijing_sync_errors.length, 0, 'an unavailable query cannot invent remote missing rows');
+  assert.equal(app.state.bijing_sync_errors.length, 2);
+  assert.ok(app.state.bijing_sync_errors.every(row => row.reason === 'query_failed' && row.exists === null), 'query failures are pending work, not a claim of missing remote rows');
   assert.equal(uploads(app)[0].status, 'uploaded');
 });
 
-test('slow success markers keep the check lease alive while committing every 20 results', async () => {
+test('slow success markers shorten checkpoints so a worker can save progress before its time limit', async () => {
   let app;
   app = harness({ users: users(125), mark: () => { app.advance(21000); } });
   await app.jobs.timer('dailySyncBijing');
@@ -500,9 +512,9 @@ test('slow success markers keep the check lease alive while committing every 20 
   assert.equal(checked.interruptions, 0);
   assert.deepEqual(app.queries.map(records => records.length), [100, 25]);
   const committed = app.checkpoints.filter(row => row._id === checked.runId && row.successCount > 0);
-  assert.deepEqual(committed.map(row => row.successCount), [20, 40, 60, 80, 100, 120, 125]);
-  assert.ok(committed.slice(0, 4).every(row => row.leaseToken));
-  assert.equal(committed[4].leaseToken, '');
+  assert.deepEqual(committed.map(row => row.successCount), Array.from({ length: 125 }, (_, i) => i + 1));
+  assert.ok(committed.slice(0, 99).every(row => row.leaseToken));
+  assert.equal(committed[99].leaseToken, '');
   assert.equal(committed.at(-1).leaseToken, '');
   assert.equal(app.markers.length, 125);
   assert.equal(new Set(app.markers.map(args => args[0])).size, 125);
@@ -643,7 +655,7 @@ test('the next hourly trigger resumes an active check and consumes that hour wit
   withinLimits(app);
 });
 
-test('the hourly trigger is inactive before 03:00 and after 10:00 and never scans historical errors', async () => {
+test('the hourly trigger repairs historical errors in the allowed window and is inactive outside it', async () => {
   let duration = 20;
   const app = harness({ users: users(1), duration: () => duration });
   const historical = clone(app.seedError('BJ0', '2026-01-01'));
@@ -659,8 +671,9 @@ test('the hourly trigger is inactive before 03:00 and after 10:00 and never scan
   assert.equal(last.status, 'success');
   assert.equal(last.recordDate, date);
   assert.equal(last.checkCycle, `${firstCycle}T10`);
-  assert.equal(app.queries.length, 1);
-  assert.deepEqual(app.state.bijing_sync_errors, [historical]);
+  assert.equal(app.queries.length, 3);
+  assert.deepEqual(app.state.bijing_sync_errors, []);
+  assert.equal(app.remote.get('BJ0/2026-01-01'), 20);
   const before = { requests: app.requests.length, cycle: clone(cycle(app)), checks: sourceChecks(app).length };
   duration = 35;
   atCheckTime(app, 11);
@@ -670,7 +683,7 @@ test('the hourly trigger is inactive before 03:00 and after 10:00 and never scan
   assert.equal(app.requests.length, before.requests);
   assert.equal(sourceChecks(app).length, before.checks);
   assert.deepEqual(cycle(app), before.cycle);
-  assert.deepEqual(app.state.bijing_sync_errors, [historical]);
+  assert.deepEqual(app.state.bijing_sync_errors, []);
   assert.equal(app.remote.get(`BJ0/${date}`), 20, 'out-of-hours calls do not apply a changed source total');
 });
 
@@ -696,4 +709,370 @@ test('an 11:00 check trigger does not advance an unfinished 10:00 check', async 
   assert.deepEqual(sourceChecks(app)[0], saved);
   assert.deepEqual(cycle(app), cycleBefore);
   assert.equal(app.requests.length, requestsBefore);
+});
+
+test('zero totals are reconciled only for a known synchronization or an owned pending record', async () => {
+  for (const known of [false, true]) {
+    const bound = users(1);
+    if (known) bound[0].bijingSyncedDates = { [date]: true };
+    const app = harness({ users: bound, duration: () => 0 });
+    app.remote.set(`BJ0/${date}`, 20);
+    atCheckTime(app);
+    await app.jobs.timer('checkBijingSync');
+    assert.equal(app.zeros.length, known ? 1 : 0);
+    assert.equal(app.remote.get(`BJ0/${date}`), known ? 0 : 20);
+    assert.equal(app.posts.length, 0, 'the batch endpoint never receives zero');
+  }
+});
+
+test('an old owner error cannot authorize zeroing records for a newly bound account', async () => {
+  const app = harness({ users: users(1), duration: () => 0 });
+  const previous = clone(app.seedError('BJ0', date, { userId: 'former-user', openid: 'former-openid', queueVersion: 'old-owner' }));
+  app.remote.set(`BJ0/${date}`, 20);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.deepEqual(app.state.bijing_sync_errors, [previous]);
+  assert.equal(app.zeros.length, 0);
+  assert.equal(app.queries.length, 0);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('a confirmed query cannot clear a newer source mutation queued while the request was in flight', async () => {
+  let app, current = 20;
+  app = harness({ users: users(1), duration: () => current, query: (records, result) => {
+    const response = result(records);
+    current = 30;
+    app.seedError('BJ0', date, { queueVersion: 'new-source-version', reason: 'sync_pending', expectedDurationMinutes: 30, exists: null, actualDurationMinutes: null });
+    return response;
+  } });
+  let run = await app.jobs.start(date, 'manual');
+  run = await app.jobs.processChunk(run.runId);
+  run = await app.jobs.processChunk(run.runId);
+  assert.equal(run.status, 'failed');
+  assert.equal(app.state.bijing_sync_errors.length, 1);
+  assert.equal(app.state.bijing_sync_errors[0].queueVersion, 'new-source-version');
+  assert.equal(app.state.bijing_sync_errors[0].expectedDurationMinutes, 30);
+});
+
+test('query failure diagnostics cannot overwrite a newer queued source version', async () => {
+  let app;
+  app = harness({ users: users(1), query: () => {
+    const queued = app.state.bijing_sync_errors[0];
+    Object.assign(queued, { queueVersion: 'new-version', reason: 'sync_pending', expectedDurationMinutes: 35, error: 'new change' });
+    throw new Error('old request timed out');
+  } });
+  app.seedError('BJ0', date, { queueVersion: 'old-version' });
+  let run = await app.jobs.start(date, 'manual');
+  run = await app.jobs.processChunk(run.runId);
+  await app.jobs.processChunk(run.runId);
+  assert.equal(app.state.bijing_sync_errors[0].queueVersion, 'new-version');
+  assert.equal(app.state.bijing_sync_errors[0].reason, 'sync_pending');
+  assert.equal(app.state.bijing_sync_errors[0].expectedDurationMinutes, 35);
+  assert.equal(app.state.bijing_sync_errors[0].error, 'new change');
+});
+
+test('historical repairs remain queued after more than four failed hourly attempts and recover later', async () => {
+  const historicalDate = '2026-01-01';
+  let healthy = false;
+  const app = harness({ users: users(1), post: (recordDate, records, { writeRemote, ack }) => {
+    if (recordDate === historicalDate && !healthy) throw new Error('remote temporarily unavailable');
+    writeRemote(recordDate, records);
+    return ack(recordDate, records);
+  } });
+  app.seedError('BJ0', historicalDate, { queueVersion: 'pending-history' });
+  for (let hour = 3; hour <= 8; hour++) {
+    atCheckTime(app, hour);
+    await app.jobs.timer('checkBijingSync');
+    assert.ok(app.state.bijing_sync_errors.some(row => row.recordDate === historicalDate));
+  }
+  assert.equal(app.posts.filter(post => post.recordDate === historicalDate).length, 6);
+  healthy = true;
+  atCheckTime(app, 9);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${historicalDate}`), 20);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  withinLimits(app);
+});
+
+test('a 10:00 query failure is durably queued and the next day repairs its original date', async () => {
+  let fail = true;
+  const app = harness({ users: users(1), query: (records, result) => {
+    if (fail) throw new Error('last check timed out');
+    return result(records);
+  } });
+  await app.jobs.timer('dailySyncBijing');
+  atCheckTime(app, 10);
+  const failed = await app.jobs.timer('checkBijingSync');
+  assert.equal(failed.status, 'running');
+  assert.equal(app.state.bijing_sync_errors[0].reason, 'query_failed');
+  assert.equal(app.state.bijing_sync_errors[0].exists, null);
+  fail = false;
+  app.advance(17 * HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_runs.find(run => run._id === failed.runId).status, 'success');
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('an interrupted historical upload with no per-person errors is recovered through source verification', async () => {
+  const app = harness({ users: users(2) });
+  const abandoned = await app.jobs.startDailyUpload();
+  Object.assign(app.state.bijing_sync_runs[0], { leaseToken: 'killed-upload', leaseUntil: app.now() + 120000 });
+  app.remote.set(`BJ0/${date}`, 20);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  app.advance(25 * HOUR);
+  await app.jobs.timer('checkBijingSync');
+  const recovered = app.state.bijing_sync_runs.find(run => run._id === abandoned.runId);
+  assert.equal(recovered.status, 'success');
+  assert.deepEqual(app.posts.filter(post => post.recordDate === date).flatMap(post => post.records), [{ studentNumber: 'BJ1', durationMinutes: 20 }]);
+  assert.equal(app.remote.get(`BJ1/${date}`), 20);
+});
+
+test('one failing historical date does not block another and duplicate hourly delivery does not retry it', async () => {
+  const brokenDate = '2026-01-01', healthyDate = '2026-01-02';
+  const app = harness({ users: users(1), query: (records, result) => {
+    if (records[0].recordDate === brokenDate) throw new Error('date-specific query failure');
+    return result(records);
+  } });
+  app.seedError('BJ0', brokenDate);
+  app.seedError('BJ0', healthyDate);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${healthyDate}`), 20);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.ok(app.state.bijing_sync_errors.some(row => row.recordDate === brokenDate));
+  const attempts = () => app.queries.filter(records => records[0].recordDate === brokenDate).length;
+  assert.equal(attempts(), 1);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(attempts(), 1);
+  atCheckTime(app, 4);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(attempts(), 2);
+});
+
+test('the durable date rotation gives the latest day a turn after a historical worker stalls', async () => {
+  const historicalDate = '2026-01-01';
+  let releaseSource, enteredSource, observedCurrent;
+  const heldSource = new Promise(resolve => { releaseSource = resolve; });
+  const entered = new Promise(resolve => { enteredSource = resolve; });
+  const current = new Promise(resolve => { observedCurrent = resolve; });
+  const app = harness({ users: users(1), duration: async (openid, recordDate) => {
+    if (recordDate === historicalDate) { enteredSource(); await heldSource; }
+    return 20;
+  }, query: (records, result) => {
+    if (records[0].recordDate === date) observedCurrent();
+    return result(records);
+  } });
+  app.seedError('BJ0', historicalDate);
+  atCheckTime(app);
+  const first = app.jobs.timer('checkBijingSync');
+  await entered;
+  assert.equal(app.state.bijing_sync_days.find(row => row._id === '__pending_repair_cursor__').cursor, historicalDate);
+  atCheckTime(app, 4);
+  const second = app.jobs.timer('checkBijingSync');
+  await current;
+  assert.equal(sourceChecks(app).length, 1, 'the newer invocation checks the latest day before returning to the stalled historical date');
+  releaseSource();
+  await Promise.all([first, second]);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('a shortened source page saves progress and does not mistake the soft time budget for end of data', async () => {
+  let app;
+  app = harness({ users: users(3), duration: () => { app.advance(7000); return 20; } });
+  for (const user of app.state.users) app.remote.set(`${user.bijingStudentNumber}/${date}`, 20);
+  atCheckTime(app);
+  const checked = await app.jobs.timer('checkBijingSync');
+  assert.equal(checked.status, 'success');
+  assert.equal(checked.successCount, 3);
+  assert.deepEqual(app.queries.map(rows => rows.length), [1, 1, 1]);
+  assert.deepEqual(app.checkpoints.filter(row => row._id === checked.runId).map(row => row.total), [1, 2, 3]);
+  assert.equal(app.posts.length, 0);
+});
+
+test('historical error-source reads also checkpoint short pages without losing later queued people', async () => {
+  const historicalDate = '2026-01-01';
+  let app;
+  app = harness({ users: users(3), duration: () => { app.advance(7000); return 20; } });
+  for (const user of app.state.users) app.seedError(user.bijingStudentNumber, historicalDate);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  for (const user of app.state.users) assert.equal(app.remote.get(`${user.bijingStudentNumber}/${historicalDate}`), 20);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  const run = app.state.bijing_sync_runs.find(row => row.recordDate === historicalDate);
+  assert.equal(run.status, 'success');
+  assert.deepEqual(app.checkpoints.filter(row => row._id === run._id && row.phase === 'upload').map(row => row.total), [1, 2]);
+  withinLimits(app);
+});
+
+test('multiple pending deletions use separate zero requests and commit their retry cursors individually', async () => {
+  const app = harness({ users: users(3), duration: () => 0 });
+  for (const user of app.state.users) {
+    app.seedError(user.bijingStudentNumber, date, { reason: 'sync_pending', queueVersion: `delete-${user._id}`, expectedDurationMinutes: 0, zeroEligible: true });
+    app.remote.set(`${user.bijingStudentNumber}/${date}`, 20);
+  }
+  atCheckTime(app);
+  const done = await app.jobs.timer('checkBijingSync');
+  assert.equal(done.status, 'success');
+  assert.equal(app.zeros.length, 3);
+  assert.equal(app.posts.length, 0);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  assert.equal(app.checkpoints.filter(row => row._id === done.runId && row.phase === 'retry').length, 3);
+  assert.ok(app.queries.at(-1).length === 3);
+  withinLimits(app);
+});
+
+test('a source-page ownership change cannot use the old account synchronization flag to clear the new owner', async () => {
+  const bound = users(1);
+  bound[0].bijingSyncedDates = { [date]: true };
+  let changed = false;
+  const app = harness({ users: bound, duration: () => 0, afterUsersRead: (filter, state) => {
+    if (!filter.bijingStudentNumber && !changed) {
+      changed = true;
+      state.users[0].bijingBound = false;
+      state.users.push({ _id: 'new-owner', _openid: 'new-openid', bijingBound: true, bijingStudentNumber: 'BJ0' });
+    }
+  } });
+  app.remote.set(`BJ0/${date}`, 20);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.sourceReads.length, 0);
+  assert.equal(app.zeros.length, 0);
+  assert.equal(app.posts.length, 0);
+  assert.equal(app.queries.length, 0);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.equal(app.state.bijing_sync_errors[0].reason, 'binding_conflict');
+});
+
+test('a historical acknowledged upload that never received its first source check is verified on a later day', async () => {
+  const app = harness({ users: users(1) });
+  const uploaded = await app.jobs.timer('dailySyncBijing');
+  assert.equal(uploaded.status, 'uploaded');
+  app.remote.delete(`BJ0/${date}`);
+  app.advance(25 * HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_runs.find(row => row._id === uploaded.runId).status, 'success');
+  assert.equal(app.state.bijing_sync_runs.find(row => row._id === uploaded.runId).total, 1);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.ok(app.queries.some(records => records[0].recordDate === date));
+});
+
+test('an upload already superseded by a completed source check is not rechecked historically', async () => {
+  const app = harness({ users: users(1) });
+  const uploaded = await app.jobs.timer('dailySyncBijing');
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  const priorQueries = app.queries.filter(records => records[0].recordDate === date).length;
+  app.advance(24 * HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_runs.find(row => row._id === uploaded.runId).status, 'uploaded');
+  assert.equal(app.queries.filter(records => records[0].recordDate === date).length, priorQueries);
+});
+
+test('resolving a binding conflict with no known source history never authorizes remote zeroing', async () => {
+  const app = harness({ users: users(1), duration: () => 0 });
+  app.seedError('BJ0', date, { reason: 'binding_conflict', expectedDurationMinutes: 0, actualDurationMinutes: null, exists: null, zeroEligible: false });
+  app.remote.set(`BJ0/${date}`, 20);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.equal(app.zeros.length, 0);
+  assert.equal(app.queries.length, 0);
+});
+
+test('a real deletion retains zero authorization even when an earlier source-failure diagnostic remains', async () => {
+  const app = harness({ users: users(1), duration: () => 0 });
+  app.seedError('BJ0', date, { reason: 'source_read_failed', queueVersion: 'new-delete', expectedDurationMinutes: 0, actualDurationMinutes: null, exists: null, zeroEligible: true });
+  app.remote.set(`BJ0/${date}`, 20);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${date}`), 0);
+  assert.equal(app.zeros.length, 1);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+});
+
+test('a transient queue-version read failure persists the person for repair instead of losing a partial source run', async () => {
+  let fail = true;
+  const app = harness({ users: users(1), beforeDocRead: name => {
+    if (name === 'bijing_sync_errors' && fail) { fail = false; throw new Error('queue version read unavailable'); }
+  } });
+  atCheckTime(app, 10);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(sourceChecks(app)[0].failedCount, 1);
+  const repair = app.state.bijing_sync_runs.find(row => row.mode === 'errors');
+  assert.equal(repair.status, 'success');
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+});
+
+test('a late batch rebuilds cleared newer work as unknown pending source instead of silently losing reconciliation', async () => {
+  let app, total = 20, posts = 0;
+  app = harness({ users: users(20), duration: () => total, post: (recordDate, records, { writeRemote, ack }) => {
+    if (++posts === 2) {
+      total = 30;
+      writeRemote(recordDate, records.map(row => ({ ...row, durationMinutes: 30 })));
+      app.state.bijing_sync_errors = []; // A newer personal synchronization confirmed and removed its versions.
+    }
+    writeRemote(recordDate, records); // The older batch request commits after that confirmation.
+    return ack(recordDate, records);
+  } });
+  for (const user of app.state.users) app.seedError(user.bijingStudentNumber, date, { queueVersion: `v1-${user._id}` });
+  let run = await app.jobs.start(date, 'manual');
+  run = await app.jobs.processChunk(run.runId);
+  for (const user of app.state.users) app.remote.set(`${user.bijingStudentNumber}/${date}`, 0);
+  run = await app.jobs.processChunk(run.runId);
+  run = await app.jobs.processChunk(run.runId);
+  run = await app.jobs.processChunk(run.runId);
+  assert.equal(run.status, 'failed');
+  assert.equal(app.state.bijing_sync_errors.length, 20);
+  assert.ok(app.state.bijing_sync_errors.every(row => row.reason === 'source_changed' && row.expectedDurationMinutes === 0 && row.queueVersion && !row.queueVersion.startsWith('v1-')));
+  withinLimits(app);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  for (const user of app.state.users) assert.equal(app.remote.get(`${user.bijingStudentNumber}/${date}`), 30);
+});
+
+test('success rechecks current source even when a newer pending version was created and removed between two empty queue reads', async () => {
+  let app, total = 20, changed = false;
+  app = harness({ users: users(1), duration: () => total, query: (records, result) => {
+    const response = result(records);
+    if (!changed) {
+      changed = true;
+      total = 30;
+      app.seedError('BJ0', date, { reason: 'sync_pending', queueVersion: 'new-personal-version', expectedDurationMinutes: 30, zeroEligible: true });
+      app.remote.set(`BJ0/${date}`, 30);
+      app.state.bijing_sync_errors = [];
+      app.remote.set(`BJ0/${date}`, 20); // Delayed older write after personal confirmation.
+    }
+    return response;
+  } });
+  let run = await app.jobs.start(date, 'manual');
+  run = await app.jobs.processChunk(run.runId);
+  run = await app.jobs.processChunk(run.runId);
+  assert.equal(run.status, 'running');
+  assert.equal(run.failedCount, 1);
+  assert.equal(app.state.bijing_sync_errors[0].expectedDurationMinutes, 30);
+  run = await app.finish(run);
+  assert.equal(run.status, 'success');
+  assert.equal(app.remote.get(`BJ0/${date}`), 30);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+});
+
+test('failure to re-read source before success keeps a durable error and does not mark the person synchronized', async () => {
+  let reads = 0;
+  const app = harness({ users: users(1), duration: () => {
+    if (++reads === 3) throw new Error('final source read unavailable');
+    return 20;
+  } });
+  let run = await app.jobs.start(date, 'manual');
+  run = await app.jobs.processChunk(run.runId);
+  run = await app.jobs.processChunk(run.runId);
+  assert.equal(run.status, 'failed');
+  assert.equal(app.markers.length, 0);
+  assert.equal(app.state.bijing_sync_errors[0].reason, 'source_read_failed');
+  assert.match(app.state.bijing_sync_errors[0].error, /final source read unavailable/);
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_errors.length, 0);
 });

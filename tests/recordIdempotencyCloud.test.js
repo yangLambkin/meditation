@@ -8,7 +8,8 @@ const clone = value => value === undefined ? value : JSON.parse(JSON.stringify(v
 function harness(options = {}) {
   let now = Date.parse(options.now || '2026-09-20T12:00:00+08:00');
   let openid = options.openid === undefined ? 'owner' : options.openid;
-  let state = { meditation_records: clone(options.records || []), user_stats: clone(options.stats || []), experience_records: [], meditation_locks: [], backfill_requests: clone(options.requests || []) };
+  let state = { meditation_records: clone(options.records || []), user_stats: clone(options.stats || []), experience_records: [], meditation_locks: [], backfill_requests: clone(options.requests || []),
+    users: clone(options.users || []), bijing_bindings: clone(options.bindings || []), bijing_sync_errors: clone(options.syncErrors || []) };
   let queue = Promise.resolve();
   let transactions = 0;
   class Clock extends Date {
@@ -23,6 +24,7 @@ function harness(options = {}) {
         where(value) { return query(value); }, orderBy() { return this; },
         skip(value) { offset = value; return this; }, limit(value) { limit = value; return this; },
         async get() {
+          if (name === 'users' && options.failUserRead) throw new Error('users unavailable');
           const rows = data[name].filter(row => Object.entries(filter).every(([key, value]) =>
             value && value.$gt !== undefined ? row[key] > value.$gt : value && value.$in ? value.$in.includes(row[key]) : row[key] === value))
             .sort((a, b) => a._id.localeCompare(b._id));
@@ -43,6 +45,7 @@ function harness(options = {}) {
         async get() { return { data: clone(data[name].find(row => row._id === id)) || null }; },
         async set({ data: record }) {
           assert.ok(inTransaction);
+          if (name === 'bijing_sync_errors' && options.failSyncQueue) throw new Error('sync queue unavailable');
           if (name === 'user_stats' && options.failStats) throw new Error('stats failed');
           const index = data[name].findIndex(row => row._id === id);
           const value = { ...clone(record), _id: id };
@@ -72,6 +75,7 @@ function harness(options = {}) {
     runTransaction(callback) {
       transactions++;
       const current = queue.then(async () => {
+        if (options.beforeTransaction) await options.beforeTransaction(state, transactions);
         const pending = clone(state);
         const result = await callback({ collection: name => {
           const ref = collection(name, pending, true);
@@ -91,6 +95,7 @@ function harness(options = {}) {
     require(name) {
       if (name === './maintenanceAuth') return require('../cloudfunctions/meditationManager/maintenanceAuth');
       if (name === './backfill') return require('../cloudfunctions/meditationManager/backfill');
+      if (name === './syncQueue') return require('../cloudfunctions/meditationManager/syncQueue');
       if (name === 'crypto') return require('node:crypto');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, database: () => database, getWXContext: () => ({ OPENID: openid, ENV: 'test-env' }) };
@@ -102,6 +107,9 @@ function harness(options = {}) {
     get experiences() { return clone(state.experience_records); },
     get requests() { return clone(state.backfill_requests); },
     get transactions() { return transactions; },
+    get syncErrors() { return clone(state.bijing_sync_errors); },
+    get users() { return clone(state.users); },
+    clearSyncErrors() { state.bijing_sync_errors = []; },
     setNow(value) { now = Date.parse(value); }, setOpenid(value) { openid = value; },
     async call(event) { return clone(await module.exports.main(event)); },
     async record(data) { return clone(await module.exports.main({ type: 'recordMeditation', data })); }
@@ -640,4 +648,230 @@ test('badge recomputation counts business days when two natural dates collapse i
   assert.equal(report.data.details[0].longestRun, 6);
   assert.deepEqual(report.data.details[0].removed, ['continuous-7']);
   assert.deepEqual({ records: app.records, stats: app.stats }, before);
+});
+
+const SYNC_DATE = '2026-09-18';
+const SYNC_PROFILE = { _id: 'real-profile-id', _openid: 'owner', bijingBound: true,
+  bijingStudentNumber: ' bj123 ', nickName: '静坐者' };
+const historicalUpload = localId => ({ localId, duration: 15,
+  timestamp: Date.parse(`${SYNC_DATE}T12:00:00+08:00`), expectedOpenid: 'owner' });
+
+test('a late offline timer upload atomically queues its historical total before any client acknowledgement', async () => {
+  const app = harness({ users: [SYNC_PROFILE] });
+  // The caller may exit immediately or lose this return value; no second client request is needed.
+  await app.record(historicalUpload('offline-session'));
+  assert.equal(app.records.length, 1);
+  assert.equal(app.syncErrors.length, 1);
+  const pending = app.syncErrors[0];
+  assert.equal(pending._id, require('../cloudfunctions/meditationManager/syncQueue').errorId('BJ123', SYNC_DATE));
+  assert.deepEqual({ ...pending, _id: undefined, queueVersion: undefined }, {
+    _id: undefined, queueVersion: undefined, studentNumber: 'BJ123', recordDate: SYNC_DATE,
+    userId: 'real-profile-id', openid: 'owner', bindingStudentNumber: ' bj123 ', nickname: '静坐者',
+    expectedDurationMinutes: 15, zeroEligible: true, actualDurationMinutes: null, exists: null,
+    reason: 'sync_pending', error: '记录变更待同步必经', retryCount: 0,
+    createdAt: Date.parse('2026-09-20T12:00:00+08:00'), updatedAt: Date.parse('2026-09-20T12:00:00+08:00')
+  });
+  assert.match(pending.queueVersion, /^[a-f0-9]{32}$/);
+  const duplicate = await app.record(historicalUpload('offline-session'));
+  assert.equal(duplicate.data.duplicate, true);
+  assert.equal(duplicate.data.autoSyncBijing, true, 'Keep the existing immediate client synchronization contract');
+  assert.deepEqual(app.syncErrors, [pending], 'Repeated acknowledgement cannot reset repair progress or advance queueVersion');
+  const next = await app.record(historicalUpload('second-session'));
+  assert.equal(next.data.bijingSyncQueued, true);
+  assert.equal(app.syncErrors.length, 1);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 30);
+  assert.notEqual(app.syncErrors[0].queueVersion, pending.queueVersion);
+});
+
+test('new history mutations preserve previous remote evidence and repair diagnostics', async () => {
+  const id = require('../cloudfunctions/meditationManager/syncQueue').errorId('BJ123', SYNC_DATE);
+  const previous = { _id: id, studentNumber: 'BJ123', recordDate: SYNC_DATE, userId: SYNC_PROFILE._id,
+    openid: 'owner', bindingStudentNumber: ' bj123 ', expectedDurationMinutes: 10, actualDurationMinutes: 5,
+    exists: true, reason: 'duration_mismatch', error: '必经时长仍为5分钟', retryCount: 3,
+    runId: 'previous-check', createdAt: 100, updatedAt: 200, queueVersion: 'old-version' };
+  const app = harness({ users: [SYNC_PROFILE], syncErrors: [previous] });
+  assert.equal((await app.record(historicalUpload('new-session'))).success, true);
+  const pending = app.syncErrors[0];
+  for (const key of ['actualDurationMinutes', 'exists', 'reason', 'error', 'retryCount', 'runId', 'createdAt']) {
+    assert.equal(pending[key], previous[key], key);
+  }
+  assert.equal(pending.expectedDurationMinutes, 15);
+  assert.notEqual(pending.queueVersion, previous.queueVersion);
+});
+
+test('queue or transaction failure rolls back a historical upload and its statistics together', async () => {
+  for (const failure of [{ failSyncQueue: true }, { failCommit: true }, { failStats: true }]) {
+    const app = harness({ users: [SYNC_PROFILE], ...failure });
+    const result = await app.record(historicalUpload('must-rollback'));
+    assert.equal(result.success, false);
+    assert.deepEqual(app.records, []);
+    assert.deepEqual(app.stats, []);
+    assert.deepEqual(app.syncErrors, []);
+  }
+});
+
+test('unbound history and current business-day uploads keep their normal save behavior', async () => {
+  const unbound = harness({ users: [{ ...SYNC_PROFILE, bijingBound: false, bijingStudentNumber: '' }] });
+  assert.equal((await unbound.record(historicalUpload('unbound-history'))).success, true);
+  assert.deepEqual(unbound.syncErrors, []);
+  const today = harness({ users: [SYNC_PROFILE], failUserRead: true });
+  assert.equal((await today.record({ localId: 'current-day', duration: 10 })).success, true,
+    'Current-day recording must not depend on historical repair infrastructure');
+  assert.deepEqual(today.syncErrors, []);
+});
+
+test('binding changes between the outside query and transaction retry with the latest bound profile', async () => {
+  for (const unbind of [false, true]) {
+    let changed = false;
+    const app = harness({ users: [SYNC_PROFILE], beforeTransaction(state) {
+      if (changed) return;
+      changed = true;
+      Object.assign(state.users[0], { bijingBound: !unbind, bijingStudentNumber: unbind ? '' : 'BJNEW' });
+    } });
+    assert.equal((await app.record(historicalUpload('binding-race'))).success, true);
+    assert.equal(app.transactions, 2, 'A changed binding invalidates the entire mutation snapshot');
+    assert.equal(app.records.length, 1);
+    assert.deepEqual(app.syncErrors.map(row => row.studentNumber), unbind ? [] : ['BJNEW']);
+  }
+});
+
+test('a first binding created after the user query is detected through the account registry', async () => {
+  const accountId = `account_${require('node:crypto').createHash('sha256').update('owner').digest('hex')}`;
+  let changed = false;
+  const app = harness({ beforeTransaction(state) {
+    if (changed) return;
+    changed = true;
+    state.users.push({ ...SYNC_PROFILE, bijingStudentNumber: 'BJNEW', bijingBindingVersion: 'new-binding' });
+    state.bijing_bindings.push({ _id: accountId, kind: 'account', openid: 'owner', userId: SYNC_PROFILE._id,
+      studentNumber: 'BJNEW', active: true, revision: 1, bindingVersion: 'new-binding' });
+  } });
+  assert.equal((await app.record(historicalUpload('first-bind-race'))).success, true);
+  assert.equal(app.transactions, 2);
+  assert.equal(app.syncErrors[0].studentNumber, 'BJNEW');
+  assert.equal(app.syncErrors[0].userId, SYNC_PROFILE._id);
+});
+
+test('a repair row owned by another account is preserved and cannot authorize a history mutation', async () => {
+  const previous = { _id: require('../cloudfunctions/meditationManager/syncQueue').errorId('BJ123', SYNC_DATE),
+    studentNumber: 'BJ123', recordDate: SYNC_DATE, userId: 'another-profile', openid: 'another-owner',
+    expectedDurationMinutes: 30, actualDurationMinutes: 10, exists: true, queueVersion: 'other-intent' };
+  const app = harness({ users: [SYNC_PROFILE, { _id: 'another-profile', _openid: 'another-owner',
+    bijingBound: true, bijingStudentNumber: 'BJ123' }], syncErrors: [previous] });
+  const result = await app.record(historicalUpload('cannot-steal-work'));
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'BIJING_SYNC_BINDING_CONFLICT');
+  assert.deepEqual(app.records, []);
+  assert.deepEqual(app.syncErrors, [previous]);
+});
+
+test('a new binding takes over retained errors only after the previous profile releases the student number', async () => {
+  const previous = { _id: require('../cloudfunctions/meditationManager/syncQueue').errorId('BJ123', SYNC_DATE),
+    studentNumber: 'BJ123', recordDate: SYNC_DATE, userId: 'retired-profile', openid: 'retired-owner',
+    bindingStudentNumber: 'BJ123', expectedDurationMinutes: 30, actualDurationMinutes: 10, exists: true,
+    queueVersion: 'retired-intent', retryCount: 3, reason: 'duration_mismatch', error: '旧账号差异',
+    runId: 'old-worker', createdAt: 100, updatedAt: 200 };
+  for (const priorUser of [null, { _id: 'retired-profile', _openid: 'retired-owner', bijingBound: false,
+    bijingStudentNumber: '' }, { _id: 'retired-profile', _openid: 'retired-owner', bijingBound: true,
+    bijingStudentNumber: 'BJOTHER' }]) {
+    const app = harness({ users: [SYNC_PROFILE, ...(priorUser ? [priorUser] : [])], syncErrors: [previous] });
+    assert.equal((await app.record(historicalUpload('transfer-session'))).success, true);
+    const queued = app.syncErrors[0];
+    assert.equal(queued.userId, SYNC_PROFILE._id);
+    assert.equal(queued.openid, 'owner');
+    assert.equal(queued.expectedDurationMinutes, 15);
+    assert.equal(queued.actualDurationMinutes, null);
+    assert.equal(queued.exists, null);
+    assert.equal(queued.retryCount, 0);
+    assert.equal(queued.reason, 'sync_pending');
+    assert.equal(queued.runId, undefined, 'The old worker cannot supply authority for the new owner');
+    assert.notEqual(queued.queueVersion, previous.queueVersion);
+    assert.equal(queued.previousBindingFailure.userId, 'retired-profile');
+    assert.equal(queued.previousBindingFailure.actualDurationMinutes, 10);
+    assert.equal(queued.previousBindingFailure.error, '旧账号差异');
+  }
+});
+
+test('the first historical replay of a current-day upload queues once even if its replay response is lost', async () => {
+  const app = harness({ users: [SYNC_PROFILE] });
+  const first = await app.record({ localId: 'cross-day-replay', duration: 15 });
+  assert.equal(first.success, true);
+  assert.equal(app.records[0].bijingSyncQueued, undefined);
+  assert.deepEqual(app.syncErrors, []);
+  const original = app.records[0];
+  const stats = app.stats;
+  app.setNow('2026-09-21T12:00:00+08:00');
+  // The original selected timestamp need not be retransmitted for an already accepted identity.
+  const retries = await Promise.all(Array.from({ length: 5 }, () => app.record({ localId: 'cross-day-replay', duration: 15 })));
+  assert.ok(retries.every(result => result.success && result.data.duplicate));
+  assert.equal(retries.filter(result => result.data.bijingSyncQueued).length, 1,
+    'Concurrent first replays share one persistent queue-registration marker');
+  assert.equal(app.syncErrors.length, 1);
+  assert.equal(app.syncErrors[0].recordDate, '2026-09-20');
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 15);
+  assert.deepEqual(app.records, [{ ...original, bijingSyncQueued: true }]);
+  assert.deepEqual(app.stats, stats, 'Queue metadata cannot increment statistics or replace the saved content');
+  app.clearSyncErrors();
+  await app.record({ localId: 'cross-day-replay', duration: 15 });
+  assert.deepEqual(app.syncErrors, [], 'An acknowledged repair must not be recreated by later upload responses');
+});
+
+test('matching a legacy history record registers repair metadata without changing its content or statistics', async () => {
+  const timestamp = Date.parse(`${SYNC_DATE}T12:00:00+08:00`);
+  const original = { _id: 'legacy-cloud', _openid: 'owner', date: SYNC_DATE, timestamp, duration: 15,
+    experience: [{ text: '云端原始心得' }] };
+  const stats = [{ _id: 'stats', _openid: 'owner', totalCount: 1, totalDuration: 15 }];
+  const app = harness({ users: [SYNC_PROFILE], records: [original], stats });
+  const replay = { ...historicalUpload('legacy-recovery'), recoverLegacy: true, experience: [{ text: '本机心得' }] };
+  const result = await app.record(replay);
+  assert.equal(result.success, true);
+  assert.equal(result.data.duplicate, true);
+  assert.equal(result.data.bijingSyncQueued, true);
+  assert.deepEqual(app.records, [{ ...original, bijingSyncQueued: true }]);
+  assert.deepEqual(app.stats, stats);
+  const pending = app.syncErrors;
+  await app.record(replay);
+  assert.deepEqual(app.syncErrors, pending);
+});
+
+test('an unbound history upload can register its first repair after binding without rewriting the record', async () => {
+  let bindOnNextTransaction = false;
+  const app = harness({ users: [{ ...SYNC_PROFILE, bijingBound: false }], beforeTransaction(state) {
+    if (bindOnNextTransaction) {
+      bindOnNextTransaction = false;
+      state.users[0].bijingBound = true;
+    }
+  } });
+  await app.record(historicalUpload('saved-before-binding'));
+  assert.deepEqual(app.syncErrors, []);
+  assert.equal(app.records[0].bijingSyncQueued, undefined);
+  const stats = app.stats;
+  bindOnNextTransaction = true;
+  const result = await app.record(historicalUpload('saved-before-binding'));
+  assert.equal(result.success, true);
+  assert.equal(result.data.duplicate, true);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 15);
+  assert.equal(app.records[0].bijingSyncQueued, true);
+  assert.deepEqual(app.stats, stats);
+});
+
+test('a real historical deletion authorizes zero even when an older source-read diagnosis is preserved', async () => {
+  const previous = { _id: require('../cloudfunctions/meditationManager/syncQueue').errorId('BJ123', SYNC_DATE),
+    studentNumber: 'BJ123', recordDate: SYNC_DATE, userId: SYNC_PROFILE._id, openid: 'owner',
+    expectedDurationMinutes: 0, actualDurationMinutes: null, exists: null, reason: 'source_read_failed',
+    error: '之前读取源失败', queueVersion: 'no-source-evidence' };
+  const app = harness({ users: [SYNC_PROFILE], syncErrors: [previous] });
+  const saved = await app.record(historicalUpload('real-history-after-read-failure'));
+  assert.equal(saved.success, true);
+  assert.equal(app.syncErrors[0].zeroEligible, true);
+  const savedVersion = app.syncErrors[0].queueVersion;
+  const deleted = await app.call({ type: 'deleteMeditationRecord', data: { recordId: saved.data.recordId } });
+  assert.equal(deleted.success, true);
+  const pending = app.syncErrors[0];
+  assert.equal(pending.expectedDurationMinutes, 0);
+  assert.equal(pending.zeroEligible, true, 'The durable mutation intent remains authorized independently of the old diagnostic');
+  assert.equal(pending.reason, 'source_read_failed');
+  assert.equal(pending.actualDurationMinutes, null);
+  assert.equal(pending.exists, null);
+  assert.notEqual(pending.queueVersion, savedVersion);
+  assert.deepEqual(app.records, []);
 });

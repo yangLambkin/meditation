@@ -5,7 +5,7 @@
 
 `bijingSync` 的所有 `admin*` 操作和 `teamManager` 的管理操作每次调用 `adminManager.getAccess`，业务函数用 SDK 真实 OpenID 写入仅服务端可读写的一次性凭据（30 秒有效），由中央事务消费后查唯一有效绑定。凭据不返回客户端；直接请求仍使用 SDK 身份，原始身份或 SOURCE 参数不能替代凭据。客户端参数不授予权限，中央故障拒绝操作，不缓存结果。旧维护脚本的 OpenID 授权与定时器规则保持独立。
 
-升级前先创建 `bijing_bindings` 并设置 `{"read":false,"write":false}`，同时将 `users` 设为 `{"read":"doc._openid == auth.openid","write":false}`，保留本人读取、禁止客户端直接写入。必须先完成这一步再部署学号版 `adminManager`，否则中央校验失败，管理员也无法用 `adminInitialize` 创建缺失的绑定集合。完整部署三个必需云函数：`bijingSync`（含 `bindings.js`）、`meditationManager`（优先展示有效绑定资料）、`adminManager`（含 `studentAuth.js`、`delegation.js`）。逐个部署并等待 `Active`；处于 `Updating` 时先等待，避免同时再次上传。`teamManager` 同步更新 `maintenanceAuth.js`，支持平台嵌套调用丢失 OpenID 时的服务端一次性凭据。将 `adminManager` 执行超时设为 10 秒、`teamManager` 为 20 秒、`bijingSync` 保留 60 秒；内部中央校验调用上限 8 秒。最后发布带解绑入口的小程序。以后增删管理员只修改 `adminManager` 的学号名单。
+升级前先创建 `bijing_bindings` 并设置 `{"read":false,"write":false}`，同时将 `users` 设为 `{"read":"doc._openid == auth.openid","write":false}`，保留本人读取、禁止客户端直接写入。必须先完成这一步再部署学号版 `adminManager`，否则中央校验失败，管理员也无法用 `adminInitialize` 创建缺失的绑定集合。完整部署三个必需云函数：`bijingSync`（含 `bindings.js`）、`meditationManager`（优先展示有效绑定资料）、`adminManager`（含 `studentAuth.js`、`delegation.js`）。逐个部署并等待 `Active`；处于 `Updating` 时先等待，避免同时再次上传。`teamManager` 同步更新 `maintenanceAuth.js`，支持平台嵌套调用丢失 OpenID 时的服务端一次性凭据。`adminManager` 的既有执行超时要求为 10 秒、`teamManager` 为 20 秒，内部中央校验调用上限 8 秒；`bijingSync` 的实时平台时限须按当前同步耗时核实，不能把历史 60 秒配置当作本次已验证的值。最后发布带解绑入口的小程序。以后增删管理员只修改 `adminManager` 的学号名单。
 
 换微信账号：原账号在「我 → 必经之路」解绑，再由新账号绑定；已经绑定其他学号的账号也须先解绑。每个学号只能绑定一个微信账号，绑定和解绑使用账号/学号双锁事务。解绑撤销该学号带来的管理权限，静坐历史和同步归档保留在原账号，不迁移到新账号。历史多人重复绑定不获得管理员权限，不自动选定保留者；相关账号自行解绑到唯一有效绑定后可恢复授权，原有唯一绑定无需重新绑定。详细步骤见 [管控中心说明](./2026-09-23-admin-batch-sync.md)；实际部署状态见 [正式环境部署记录](./2026-09-23-production-rollout.md)。
 
@@ -31,17 +31,20 @@
 操作顺序：
 
 1. 在微信开发者工具打开项目，进入「云开发」，选择**测试环境**。进入「云函数 → bijingSync → 配置／版本与配置 → 环境变量」（控制台版本不同，页签名称可能不同）。检查既有 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN` 对应测试服务，添加 `BIJING_TIMER_SOURCE=wx_trigger`，先保持 `BIJING_TIMER_ENABLED=false`。
-2. 部署整个 `bijingSync` 目录，包含 `batchJobs.js`、`setup.js`、`maintenanceAuth.js`、`heatmap.js`、`bindings.js`。执行超时固定为 **60 秒**（必须小于 120 秒租约），不是按总人数无限调大；分块进度持久化后由后续调用续跑。
-3. 上传两条原生触发器并在控制台核对：`dailySyncBijing = 0 0 2 * * * *`（北京时间每日 02:00）；`resumeBijingBatches = 0 */5 * * * * *`（每 5 分钟续跑）。更新旧 04:00 或每分钟规则。上传代码与上传触发器是两个步骤；完整迁移/集合/索引要求见 [批量同步部署说明](2026-09-23-admin-batch-sync.md)。
-4. 用下面的只读探测方法先确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查部署侧调用权限：普通请求不能注入或重写平台上下文。「标准触发器」的名称和表达式正确不代表来源满足鉴权，必须核实实际上下文。恢复正常函数代码后，再把测试环境的 `BIJING_TIMER_ENABLED` 改为 `true` 并保存配置。测试时可临时使用控制台支持的短周期触发器，验证后删除临时规则，保留每日与每 5 分钟续跑两条触发器。
-5. 观察**真实定时触发器**建立 `trigger=timer` 的运行记录，业务日期为刚结束的静坐日；等待 `data.status=success` 且 `failedCount=0`，核对外部测试服务收到预期总分钟。`partial`、`failed`、`interrupted` 必须查看持久化错误；顶层 `success:true` 只说明调度请求执行成功，不代表该轮全员完成。普通客户端伪造 `source/admin` 必须仍被拒绝。
-6. 测试通过后，在生产环境设置同样的两个变量并上传已验证版本，保留生产环境自己的 `BIJING_API_BASE`、`BIJING_ACCESS_TOKEN`。确认生产触发器、变量和下一次真实运行日志。资料 PATCH 接口所需的 `meditationManager` 也应先部署，再发布小程序客户端。
+2. 在部署前确认 `bijing_sync_errors` 和其他同步集合已存在，客户端规则为 `{"read":false,"write":false}`，并补齐[批量同步部署说明](2026-09-23-admin-batch-sync.md#数据与部署顺序)中的索引。历史记录变更与待办同事务提交，错误集合缺失会使该记录事务失败，不能留到代码升级后再补集合。
+3. 本次完整部署 `meditationManager`（含新增 `syncQueue.js`）与 `bijingSync`（含新增 `syncFailures.js`、`pendingRepairs.js` 及更新的入口、`batchJobs.js`、`dailySchedule.js`，保留其他依赖）。逐个等待 `Active`。核实两个函数的实时执行时限，按测试环境完整记录事务、上传、核对及积压修复耗时配置。`meditationManager` 增加绑定资料/注册表读取与队列事务，需要实测历史保存、删除耗时；前端仍采用 3 秒上传确认，迟到回包与重放通过原幂等及服务端待办处理，不能把历史平台 3 秒配置当作当前实测。同步租约可按需续租，整次调用不要求短于 120 秒；平台执行时限仍独立生效。已完成中央鉴权升级的环境，本次不要求重新部署 `adminManager`、`teamManager` 或修改其名单。
+4. 云端只保留两条原生触发器：`dailySyncBijing = 0 0 2 * * * *`（每日 02:00 上传），`checkBijingSync = 0 0 3-10 * * * *`（03:00–10:00 每小时整点核对与修复）。删除旧 `resumeBijingBatches`、仅 05:00 核对以及其他重复规则。上传代码与更新触发器是不同步骤，必须读取云端实际清单确认。
+5. 用下面的只读探测方法确认真实触发器的 `SOURCE=wx_trigger`、`hasOpenid=false`，并检查调用权限：普通请求不能注入或重写平台上下文。恢复正常函数代码后再启用 `BIJING_TIMER_ENABLED=true`。若测试时添加临时短周期触发器，验收后删除，只保留上述两条正式规则。
+6. 观察真实定时上传及核对，检查 `bijing_sync_runs`、逐人待办和必经实际分钟数。02:00 的 `uploaded` 只表示上传阶段结束；顶层 `success:true` 只表示调度请求执行成功。核验上传响应丢失、回查故障、删除后零总量、同日新变更与旧确认并发，以及最后整点失败后的次日恢复。故障不能因跨日或达到累计重试次数被永久放弃。
+7. 测试通过后在生产环境部署已验证版本，保留生产自己的必经地址与令牌，核实触发器、开关、执行时限和下一次真实运行日志。本次尚未部署、未更新触发器或修改云端时限；历史上线记录不能代替实时核验。
 
 仅使用定时器不需要配置管理员 OPENID 白名单，也不需要设置清理操作的生产开关。`MAINTENANCE_ADMIN_OPENIDS` 只用于另行授权人工运维。要暂停自动同步，将 `BIJING_TIMER_ENABLED` 改为 `false`；个人绑定、预览和个人同步不受此定时开关影响。
 
-全员同步已改为有断点的分批任务：每次最多 20 人，失败日期最多自动执行 4 轮，最近 7 天缺失日期会自动补建；管控支持最近 30 日人工补跑。个人同步继续使用单条接口。对端同号同日幂等覆盖，避免中断后重放导致累加。
+全员上传和正数修复每个 HTTP 请求最多 100 条，核对修复按每组最多 20 行保存 checkpoint；慢源读取/同步标记达到 5 秒软预算后提前保存进度，单条清零逐人保存游标。`pendingRepairs.js` 在允许的整点继续历史错误、尚未完成的运行，以及仍为该日期最新全量运行且未被源核对接管的 `uploaded` 任务，历史日期和最新目标日共用持久化轮转游标。已知逐人失败进入 `bijing_sync_errors`，尚未枚举出用户的任务级故障由 `bijing_sync_runs` 恢复。01:00 等非允许时段不新建周期，也不增加额外 cron；最后整点未完成的工作保留到下一允许整点，包括次日继续。具体流程以[执行机制](2026-09-23-admin-batch-sync.md#执行机制)为准。
 
-批量上传结束后使用必经 `/api/openapi/meditation/records/query` 查询实际人、日期和总分钟。`bijing_sync_errors` 只保存查询确认的未恢复差异，重试后复查一致才删除；上传或查询请求失败不直接生成缺失错误。需先发布查询接口，再创建该集合并设置仅服务端访问规则，更新 `bijingSync` 与 `adminManager`。每次打开或从后台返回小程序时，仅调用一次 `adminManager.getSyncAlert` 获取底部“我”图标红点状态；前台停留、页面切换、刷新与修复完成不额外查询，失败或超时等下次打开再查询。普通用户不能读取错误表，只有指定管理员可看到红点；错误恢复后的红点状态在下次打开小程序时更新。红点也覆盖待处理和处理中的用户反馈；只有同步异常与未处理反馈均已清空，下一次检查才会关闭红点，详见[反馈说明](2026-09-29-feedback.md)。
+历史记录新增、离线补传及删除的待办由 `meditationManager/syncQueue.js` 与记录、统计同事务提交；个人同步由 `syncFailures.js` 在外部请求前登记待办。实际回查与当前源总量一致后，按 `queueVersion` 及归属比较再清除，旧确认不能清掉新变更。批量清错前还会再次读取当前源总量；即使较新的待办已被其他请求清除，迟到旧批请求也不能据此确认成功，仍可登记 `source_changed` 重新核对。正数走批量接口；带有 `zeroEligible: true` 或已确认本人源记录、变更、同步依据且当前归属匹配的日期归零时，复用既有单条 `records` 的数值零清除能力，并回查确认。`zeroEligible` 必须来自本人真实源或变更，单纯绑定冲突或源读取失败的错误不能授权清零。本次不要求修改 `bijing-data`，但须核实目标环境已支持清零与查询。
+
+`bijing_sync_errors` 同时保存待同步变更和已知失败；源读取或远端查询失败不能伪造“远端缺失”。修复时重新读取源总量与绑定，核对恢复才清除。每次打开或从后台返回小程序仅调用一次 `adminManager.getSyncAlert` 获取底部“我”图标红点状态，前台停留、页面切换和刷新不额外查询。普通用户不能读取错误表；同步待办与待处理/处理中的反馈均清空后，下一次检查关闭红点，详见[反馈说明](2026-09-29-feedback.md)。
 
 ### 只读确认调用来源
 

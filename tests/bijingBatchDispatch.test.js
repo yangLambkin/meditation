@@ -13,7 +13,7 @@ function harness(options = {}) {
   const environment = { BIJING_TIMER_ENABLED:'true',BIJING_TIMER_SOURCE:'wx_trigger',BIJING_API_BASE:'https://example.test',BIJING_ACCESS_TOKEN:'server-token',...options.env };
   const exports = {};
   const jobs = Object.fromEntries(['timer','start','processChunk','listRuns','details','listErrors','retryErrors'].map(name=>[name,async (...args)=> { calls.push({name,args}); return {status:'running',runId:'run'}; }]));
-  vm.runInNewContext(source, {exports,Date:FixedDate,console:{error(){}},process:{env:environment}, require(name) {
+  vm.runInNewContext(source, {exports,Date:FixedDate,console:{error(){},log(){}},process:{env:environment}, require(name) {
     if(name==='wx-server-sdk') {
       const wxContext=options.context || {SOURCE:'wx_trigger'};
       return {init(){},DYNAMIC_CURRENT_ENV:'test',database:()=>authorization.delegationDb,getWXContext:()=>wxContext,
@@ -74,6 +74,16 @@ test('reconciliation adapter queries actual person/date records with server-only
   await app.captured.deps.queryBatch(records);
   assert.deepEqual(JSON.parse(JSON.stringify(app.calls[1])),{name:'post',args:[
     'https://example.test/api/openapi/meditation/records/query',{records},
+    {headers:{'X-Access-Token':'server-token'},timeout:15000}
+  ]});
+});
+
+test('zero-duration repairs use the existing single-record deletion endpoint',async()=>{
+  const app=harness();await app.run({type:'cronSyncAll'});
+  await app.captured.deps.postZero('2026-09-22','BJ0001');
+  assert.deepEqual(JSON.parse(JSON.stringify(app.calls[1])),{name:'post',args:[
+    'https://example.test/api/openapi/meditation/records',
+    {studentNumber:'BJ0001',recordDate:'2026-09-22',durationMinutes:0},
     {headers:{'X-Access-Token':'server-token'},timeout:15000}
   ]});
 });

@@ -5,16 +5,20 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const OWNER = 'oz-historical-owner';
+const LOCAL_USER = 'local-historical-owner';
+const LOCAL_KEY = `meditation_checkin_${LOCAL_USER}`;
 const HISTORICAL_DATE = '2026-10-03';
 const DELETION_ID = 'md_' + 'a'.repeat(64);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const plain = value => value === undefined ? value : JSON.parse(JSON.stringify(value));
 
-// Run all three real CommonJS modules in one VM. Only the WeChat SDK boundary
-// is simulated: cloudApi's acceptance hook talks to the real persistent queue.
-function harness() {
+// Run the real upload, local record and Bijing queue modules in one VM. Only the
+// WeChat SDK boundary and unrelated badge notifications are simulated.
+function harness({ online = true } = {}) {
   const requests = [], timers = new Map(), storageWrites = [];
-  const storage = new Map([['userOpenId', OWNER]]);
+  const storage = new Map([['userOpenId', OWNER], ['localUserId', LOCAL_USER]]);
+  const networkHandlers = new Set();
+  let connected = online;
   let now = Date.parse('2026-10-05T04:00:00.000Z'), timerId = 0;
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
@@ -25,8 +29,8 @@ function harness() {
     setStorageSync(key, value) {
       storageWrites.push({ key, value: plain(value) }); storage.set(key, plain(value));
     },
-    onNetworkStatusChange() {},
-    getNetworkType({ success }) { success({ networkType: 'wifi' }); },
+    onNetworkStatusChange(callback) { networkHandlers.add(callback); },
+    getNetworkType({ success }) { success({ networkType: connected ? 'wifi' : 'none' }); },
     cloud: { callFunction(request) { requests.push(request); } }
   };
   const context = vm.createContext({ wx, Date: Clock, console: { log() {}, warn() {}, error() {} },
@@ -35,8 +39,9 @@ function harness() {
   });
   const loaded = new Map();
   function load(name) {
+    if (name === 'badgeManager.js') return { checkBadgeUnlock: () => ({ hasNewUnlock: false }) };
     if (loaded.has(name)) return loaded.get(name).exports;
-    assert.ok(['cloudApi.js', 'bijingRecordSync.js', 'uploadNetwork.js'].includes(name), name);
+    assert.ok(['cloudApi.js', 'bijingRecordSync.js', 'uploadNetwork.js', 'checkin.js', 'dateUtil.js'].includes(name), name);
     const filename = path.join(__dirname, '../miniprogram/utils', name);
     const module = { exports: {} }; loaded.set(name, module);
     const factory = vm.runInContext(`(function(require, module, exports) {\n${fs.readFileSync(filename, 'utf8')}\n})`, context, { filename });
@@ -51,8 +56,18 @@ function harness() {
   const syncRequests = () => requests.filter(request => request.name === 'bijingSync' && ['syncRecordedDate', 'syncDeletedDate'].includes(request.data.type));
   const deleteRequests = () => requests.filter(request => request.name === 'meditationManager' && request.data.type === 'deleteMeditationRecord');
   return { api, sync, requests, timers, storage, storageWrites,
+    get manager() { return load('checkin.js'); },
     get saves() { return saveRequests(); }, get syncs() { return syncRequests(); },
     get deletions() { return deleteRequests(); },
+    get reads() { return requests.filter(request => request.name === 'meditationManager' && request.data.type === 'getAllRecords'); },
+    rows() {
+      const saved = storage.get(LOCAL_KEY) || {};
+      return Object.values((saved.checkinRecords || saved).dailyRecords || {}).flatMap(day => day.records);
+    },
+    setConnected(value) {
+      connected = value;
+      for (const callback of networkHandlers) callback({ isConnected: value, networkType: value ? 'wifi' : 'none' });
+    },
     remove() {
       return api.deleteMeditationRecord({ recordId: 'med_first', expectedOpenid: OWNER });
     },
@@ -261,4 +276,88 @@ test('a late successful save confirmation still schedules history sync after the
   app.synced(); await flush();
   assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
   assert.equal(app.saves.length, 1); assert.equal(app.timers.size, 0);
+});
+
+test('an offline historical record enters Bijing sync after its selected local upload is confirmed', async () => {
+  const app = harness({ online: false });
+  const timestamp = Date.parse('2026-10-03T04:00:00.000Z');
+  const local = await app.manager.recordCheckinWithSync(30, [], '', timestamp, 'offline-history');
+  assert.equal(local.cloudSynced, false);
+  assert.equal(app.rows()[0].syncErrorCode, 'UPLOAD_PAUSED');
+  assert.equal(app.saves.length, 0); assert.equal(app.syncs.length, 0);
+  app.setConnected(true);
+  await app.manager.retryTodayBackups();
+  assert.equal(app.saves.length, 0, 'restoring connectivity must not silently upload historical records');
+
+  const upload = app.manager.syncWithCloud({ uploadPending: true, localIds: [local.localId] });
+  await flush();
+  assert.equal(app.saves.length, 1); assert.equal(app.syncs.length, 0);
+  assert.equal(app.saves[0].data.data.localId, local.localId);
+  assert.equal(app.saves[0].data.data.timestamp, timestamp);
+  app.confirm();
+  const confirmed = await upload; await flush();
+  assert.equal(confirmed.uploaded, 1); assert.equal(confirmed.pending, 0);
+  assert.equal(app.rows()[0]._id, 'med_first'); assert.equal(app.rows()[0].syncStatus, 'synced');
+  assert.equal(app.syncs.length, 1);
+  assert.deepEqual(plain(app.syncs[0].data), {
+    type: 'syncRecordedDate', recordId: 'med_first', expectedOpenid: OWNER
+  });
+  app.failed(); await flush();
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'failed');
+  assert.equal(app.rows()[0].syncStatus, 'synced', 'Bijing failure must not undo the confirmed local upload');
+  const retry = app.sync.retryDate(HISTORICAL_DATE); await flush();
+  app.synced(1); await retry;
+  assert.equal(app.saves.length, 1, 'a Bijing retry must not upload the offline record again');
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+});
+
+test('an offline current-day upload waits for the daily server schedule after cloud confirmation', async () => {
+  const app = harness({ online: false });
+  const local = await app.manager.recordCheckinWithSync(30, [], '', Date.parse('2026-10-05T03:00:00.000Z'), 'offline-today');
+  assert.equal(local.cloudSynced, false); assert.equal(app.saves.length, 0);
+  app.setConnected(true);
+  const upload = app.manager.retryTodayBackups(); await flush();
+  assert.equal(app.saves.length, 1);
+  app.confirm(0, { recordId: 'med_today', date: '2026-10-05', autoSyncBijing: false });
+  assert.equal((await upload).uploaded, 1); await flush();
+  assert.equal(app.rows()[0].syncStatus, 'synced');
+  assert.equal(app.syncs.length, 0); assert.deepEqual(plain(app.sync.getTasks()), []);
+});
+
+test('cloud recovery of an offline historical upload enters the real Bijing queue once without resaving', async () => {
+  const app = harness({ online: false });
+  await app.manager.recordCheckinWithSync(30, [], '', Date.parse('2026-10-03T04:00:00.000Z'), 'recovered-history');
+  const local = plain(app.rows()[0]);
+  app.setConnected(true);
+  const remote = { ...local, _id: 'med_recovered', _openid: OWNER };
+  const refresh = app.manager.refreshFromCloud(); await flush();
+  app.reads[0].success({ result: { success: true, data: [remote] } });
+  assert.equal(await refresh, true); await flush();
+  assert.equal(app.rows()[0]._id, remote._id); assert.equal(app.rows()[0].syncStatus, 'synced');
+  assert.equal(app.saves.length, 0); assert.equal(app.syncs.length, 1);
+  assert.equal(app.syncs[0].data.recordId, remote._id);
+  app.synced(); await flush();
+  const reread = app.manager.refreshFromCloud(); await flush();
+  app.reads[1].success({ result: { success: true, data: [remote] } });
+  assert.equal(await reread, true); await flush();
+  assert.equal(app.syncs.length, 1, 'ordinary cloud rereads must not resync all historical records');
+  assert.equal(app.saves.length, 0);
+});
+
+test('late offline-upload confirmation still syncs Bijing after all local upload attempts timed out', async () => {
+  const app = harness({ online: false });
+  const local = await app.manager.recordCheckinWithSync(30, [], '', Date.parse('2026-10-03T04:00:00.000Z'), 'late-offline');
+  app.setConnected(true);
+  const upload = app.manager.syncWithCloud({ uploadPending: true, localIds: [local.localId] });
+  await flush(); await app.advance(12300);
+  assert.equal((await upload).uploaded, 0);
+  assert.equal(app.saves.length, 4); assert.equal(app.syncs.length, 0);
+  assert.equal(new Set(app.saves.map(request => request.data.data.localId)).size, 1);
+  app.confirm(); await flush();
+  assert.equal(app.syncs.length, 1);
+  app.synced(); await flush();
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+  assert.equal(app.saves.length, 4, 'late acknowledgement must not start another local upload round');
+  app.confirm(1, { duplicate: true }); await flush();
+  assert.equal(app.syncs.length, 1, 'late duplicate attempts reuse the confirmed Bijing task');
 });

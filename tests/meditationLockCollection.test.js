@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const clone = value => value === undefined ? value : JSON.parse(JSON.stringify(value));
 
 function harness(options = {}) {
-  let state = { meditation_records: clone(options.records || []), user_stats: [] };
+  let state = { meditation_records: clone(options.records || []), user_stats: [], users: [], bijing_bindings: [] };
   if (!options.missingLockCollection) state.meditation_locks = [];
   let queue = Promise.resolve();
   const calls = { creates: [], writes: 0, transactions: 0, lockReads: 0 };
@@ -88,6 +88,7 @@ function harness(options = {}) {
     module, exports: module.exports, console: { log() {}, error() {}, warn() {} },
     process: { env: { MAINTENANCE_ADMIN_OPENIDS: 'maintenance-operator' } },
     require(name) {
+      if (name === './syncQueue') return require('../cloudfunctions/meditationManager/syncQueue');
       if (name === 'crypto') return require('node:crypto');
       if (name === './maintenanceAuth') return require('../cloudfunctions/meditationManager/maintenanceAuth');
       assert.equal(name, 'wx-server-sdk');

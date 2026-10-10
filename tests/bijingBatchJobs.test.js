@@ -9,7 +9,7 @@ const users = count => Array.from({ length: count }, (_, i) => ({
 function harness(options = {}) {
   const state = { bijing_sync_runs: [], bijing_sync_days: [], bijing_sync_items: [], bijing_sync_errors: [], users: options.users || users(2) };
   let clock = 1790110800000, transaction = Promise.resolve();
-  const posts = [], queries = [], markers = [], requests = [], transactions = [], remote = new Map();
+  const posts = [], zeros = [], queries = [], markers = [], requests = [], transactions = [], remote = new Map();
   function matches(row, filter) {
     if (filter.op === 'and') return filter.value.every(value => matches(row, value));
     if (filter.op === 'or') return filter.value.some(value => matches(row, value));
@@ -78,6 +78,12 @@ function harness(options = {}) {
     getDayDuration: async (openid, recordDate, deadline) => options.duration ? options.duration(openid, recordDate, deadline) : 20,
     markSynced: async (...args) => { markers.push(args); if (options.markError) throw new Error('marker failed'); if (options.mark) await options.mark(...args); },
     postBatch: async (recordDate, records) => { posts.push({ recordDate, records: clone(records) }); requests.push('post'); if (options.post) return options.post(recordDate, records, { writeRemote, ack }); writeRemote(recordDate, records); return ack(recordDate, records); },
+    postZero: async (recordDate, studentNumber) => {
+      zeros.push({ recordDate, studentNumber }); requests.push('zero');
+      if (options.zero) return options.zero(recordDate, studentNumber, { writeRemote });
+      writeRemote(recordDate, [{ studentNumber, durationMinutes: 0 }]);
+      return { success: true };
+    },
     queryBatch: async records => { queries.push(clone(records)); requests.push('query'); return options.query ? options.query(records, result) : result(records); },
   });
   async function finish(run) {
@@ -86,7 +92,7 @@ function harness(options = {}) {
       const fullUpload = run.mode !== 'errors' && (!run.phase || run.phase === 'upload');
       run = await jobs.processChunk(run.runId);
       if (!fullUpload) {
-        assert.ok(requests.length - before <= 1, 'verification and repair process one bounded request per invocation');
+        assert.ok(requests.slice(before).filter(type => type !== 'zero').length <= 1, 'verification and repair process one bounded request per invocation');
       }
     }
     assert.ok(!['running', 'interrupted'].includes(run.status), 'job eventually finishes');
@@ -99,7 +105,7 @@ function harness(options = {}) {
       exists: false, reason: 'missing', error: '远端缺少该学号当日记录', retryCount: 0, createdAt: clock, updatedAt: clock, ...extra };
     state.bijing_sync_errors.push(row); return row;
   }
-  return { jobs, state, posts, queries, markers, requests, transactions, remote, finish, seedError, now: () => clock, advance: ms => clock += ms };
+  return { jobs, state, posts, zeros, queries, markers, requests, transactions, remote, finish, seedError, now: () => clock, advance: ms => clock += ms };
 }
 
 test('upload stores no per-person progress before source verification confirms actual remote records', async () => {
@@ -265,14 +271,15 @@ test('expired leases resume source verification without repeating the completed 
   assert.match(resumed.lastInterruption, /中断/); assert.equal(app.posts.length, 1);
 });
 
-test('upload timeouts and malformed acknowledgements never create false error rows after remote commit', async () => {
+test('upload timeouts and malformed acknowledgements remain pending until a remote query confirms the commit', async () => {
   for (const post of [
     (recordDate, records, { writeRemote }) => { writeRemote(recordDate, records); throw new Error('network timeout'); },
     (recordDate, records, { writeRemote }) => { writeRemote(recordDate, records); return { success: false, message: 'ambiguous' }; },
     (recordDate, records, { writeRemote }) => { writeRemote(recordDate, records); return { success: true, data: { results: [] } }; },
   ]) {
     const app = harness({ post }); let run = await app.jobs.start(date, 'manual'); run = await app.jobs.processChunk(run.runId);
-    assert.equal(app.state.bijing_sync_errors.length, 0); assert.equal(app.markers.length, 0);
+    assert.equal(app.state.bijing_sync_errors.length, 2); assert.equal(app.markers.length, 0);
+    assert.ok(app.state.bijing_sync_errors.every(row => row.reason === 'upload_failed' && row.exists === null));
     const done = await app.finish(run);
     assert.equal(done.status, 'success'); assert.equal(done.successCount, 2); assert.equal(app.posts.length, 1); assert.equal(app.state.bijing_sync_errors.length, 0);
   }
@@ -326,7 +333,13 @@ test('query failures and malformed batches neither invent missing rows nor remov
     const app = harness({ query }); const existing = clone(app.seedError());
     const run = await app.finish(await app.jobs.start(date, 'manual'));
     assert.equal(run.status, 'failed'); assert.equal(run.queryFailures, 3); assert.equal(app.queries.length, 3); assert.equal(app.posts.length, 1);
-    assert.deepEqual(app.state.bijing_sync_errors, [existing]); assert.equal(app.markers.length, 0);
+    assert.equal(app.state.bijing_sync_errors.length, 2);
+    const preserved = app.state.bijing_sync_errors.find(row => row._id === existing._id);
+    assert.equal(preserved.actualDurationMinutes, existing.actualDurationMinutes);
+    assert.equal(preserved.exists, existing.exists);
+    assert.ok(app.state.bijing_sync_errors.every(row => row.reason === 'query_failed' && row.queueVersion));
+    assert.equal(app.state.bijing_sync_errors.find(row => row.studentNumber === 'BJ1').exists, null);
+    assert.equal(app.markers.length, 0);
   }
 });
 
@@ -413,11 +426,13 @@ test('the same daily upload is not recreated or resent while an explicit manual 
   assert.equal(recovered.status, 'success'); assert.equal(recovered.attempt, 2); assert.equal(app.state.bijing_sync_errors.length, 0);
 });
 
-test('zero records skip and duplicate bindings fail without uploading or inventing remote errors', async () => {
+test('zero records without history skip and duplicate bindings remain queued without remote claims', async () => {
   const app = harness({ users: [{ _id: 'u1', _openid: 'a', bijingBound: true, bijingStudentNumber: 'BJabc' }, { _id: 'u2', _openid: 'b', bijingBound: true, bijingStudentNumber: ' BJABC ' }, { _id: 'u3', _openid: 'c', bijingBound: true, bijingStudentNumber: 'BJ2' }], duration: () => 0 });
   const done = await app.finish(await app.jobs.start(date, 'manual'));
   assert.equal(done.failedCount, 2); assert.equal(done.skippedCount, 1); assert.equal(app.posts.length, 0); assert.equal(app.queries.length, 0);
-  assert.equal(app.state.bijing_sync_errors.length, 0);
+  assert.equal(app.state.bijing_sync_errors.length, 1);
+  assert.equal(app.state.bijing_sync_errors[0].reason, 'binding_conflict');
+  assert.equal(app.state.bijing_sync_errors[0].exists, null);
 });
 
 test('scan errors fail the run and preserve its cursor without writing error rows', async () => {
@@ -560,7 +575,7 @@ test('canonical requests preserve original binding spelling for conditional succ
   assert.equal(app.posts[0].records[0].studentNumber, 'BJABC-123'); assert.equal(app.queries[0][0].studentNumber, 'BJABC-123'); assert.equal(app.markers[0][2], 'BJabc-123');
 });
 
-test('slow source reads each retain a fresh 20-second budget and renew the lease across a long HTTP batch', async () => {
+test('slow source reads retain individual budgets and shorten API pages without losing users', async () => {
   let app, reads = 0;
   app = harness({ users: users(45), duration: async (openid, recordDate, deadline) => {
     assert.equal(deadline - app.now(), 20000, 'each person receives an independent source-read budget');
@@ -575,7 +590,7 @@ test('slow source reads each retain a fresh 20-second budget and renew the lease
   assert.equal(app.now() - run.startedAt, 450000);
   assert.equal(uploaded.total, 0); assert.equal(uploaded.uploadSummary.total, 45);
   assert.equal(uploaded.phase, 'verify'); assert.equal(uploaded.interruptions, 0);
-  assert.deepEqual(app.posts.map(post => post.records.length), [45]); assert.equal(app.queries.length, 0);
+  assert.deepEqual(app.posts.map(post => post.records.length), Array(45).fill(1)); assert.equal(app.queries.length, 0);
   assert.equal((await app.finish(uploaded)).status, 'success');
 });
 
