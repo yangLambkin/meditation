@@ -8,7 +8,7 @@ const PAGE_SIZE = 100;
 // for failures before a person could be read; errors hold all known people.
 // Advance the date cursor before executing work, so a killed or broken date
 // cannot monopolize every following hourly invocation.
-function createPendingRepairs({ db, now, latestDate, startRepair, processBatch, processCurrent }) {
+function createPendingRepairs({ db, now, latestDate, startRepair, processBatch, processCurrent, ensureSourceCheck }) {
   async function optional(database, collection, id) {
     try { return (await database.collection(collection).doc(id).get()).data || null; }
     catch (error) {
@@ -61,13 +61,14 @@ function createPendingRepairs({ db, now, latestDate, startRepair, processBatch, 
   }
   async function run(cycleKey) {
     const target = latestDate();
-    const [errors, running, failed, uploaded, scheduler] = await Promise.all([
+    const [errors, running, failed, uploaded, scheduler, missingChecks] = await Promise.all([
       scan(ERRORS, {}), scan(RUNS, { status: 'running' }), scan(RUNS, { status: 'failed' }), scan(RUNS, { status: 'uploaded' }),
       optional(db, DAYS, CURSOR_ID),
+      ensureSourceCheck ? scan(DAYS, { sourceCheckRequired: true }) : [],
     ]);
     const validHistorical = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
       Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value && value < target;
-    const dates = [...new Set([...errors, ...running, ...failed.filter(row => row.error), ...uploaded].map(row => row.recordDate).filter(validHistorical))].sort();
+    const dates = [...new Set([...errors, ...running, ...failed.filter(row => row.error), ...uploaded, ...missingChecks].map(row => row.recordDate).filter(validHistorical))].sort();
     // Include the normal latest-day pass in the rotation. Even one historical
     // date that repeatedly exhausts the platform timeout cannot starve it.
     if (dates.length && processCurrent) dates.push(target);
@@ -83,6 +84,7 @@ function createPendingRepairs({ db, now, latestDate, startRepair, processBatch, 
           currentResult = await processCurrent();
           continue;
         }
+        if (ensureSourceCheck && missingChecks.some(row => row.recordDate === recordDate)) await ensureSourceCheck(recordDate);
         let result = await restore(recordDate, cycleKey);
         if (result && result.skip) continue;
         if (!result && errors.some(row => row.recordDate === recordDate)) result = await startRepair(recordDate, cycleKey);

@@ -8,6 +8,7 @@ const pendingDeletions = new Set();
 const userStorageRevisions = new Map();
 const pendingRefreshes = new Map();
 const pendingUploadDrains = new Map();
+const automaticUploadDrains = new Map();
 const pendingCloudSyncs = new Map();
 const syncStateListeners = new Set();
 const UPLOAD_TIMEOUT_MS = 3000;
@@ -33,7 +34,7 @@ function uploadEntries(userId) {
     (data.dailyRecords[date].records || []).filter(Boolean).map(record => ({ date, record })));
 }
 
-// 请求只在当前进程有效；重开后恢复为待上传，再按当天自动/历史手动的规则处理。
+// 请求只在当前进程有效；重开后恢复为待上传，由下次自动补传继续。
 function restoreInterruptedUploads(stored, userId) {
   const data = stored.checkinRecords || stored;
   let changed = false;
@@ -59,7 +60,7 @@ function restoreInterruptedUploads(stored, userId) {
 
 function isPendingUpload(record, openid) {
   return record.syncVersion === 1 && !record._id && record.syncIgnored !== true &&
-    (!record.syncOpenid || record.syncOpenid === openid);
+    (!record.syncOpenid || record.syncOpenid === openid) && (!record._openid || record._openid === openid);
 }
 
 function notifySyncState() {
@@ -1252,22 +1253,85 @@ const checkinManager = {
       entry.record.syncStatus !== 'uploading');
   },
 
-  // 打开小程序只补传当前业务日的明确待上传记录，历史记录仍由首页手动确认。
-  retryTodayBackups: function() {
+  // 前台恢复与网络恢复共用一个工作者。恢复事件先登记下一轮，等待旧请求
+  // 结算后再捕获网络版本，不能复用已经被断网作废的队列或漏掉恢复通知。
+  retryAutomaticBackups: function() {
     const userId = this.getUserId();
     const openid = currentUploadOpenid();
     if (!openid) return Promise.resolve({ success: false, uploaded: 0, code: 'AUTH_REQUIRED' });
-    const today = dateUtil.getBusinessDate();
-    const localIds = uploadEntries(userId).filter(({ date, record }) =>
-      isPendingUpload(record, openid) && !record.syncBlocked && record.syncStatus !== 'uploading' &&
-      typeof record.localId === 'string' && record.localId &&
-      dateUtil.getRecordBusinessDate(record, date) === today &&
-      !pendingDeletions.has(backupKey(userId, record.timestamp, record.localId)))
-      .map(({ record }) => record.localId);
-    return this.syncWithCloud({ uploadPending: true, localIds });
+    const key = `${userId}:${openid}`;
+    const existing = automaticUploadDrains.get(key);
+    if (existing) {
+      existing.requested = true;
+      return existing.promise;
+    }
+    const state = { requested: true, promise: null };
+    const sameAccount = () => wx.getStorageSync('localUserId') === userId && currentUploadOpenid() === openid;
+    const work = Promise.resolve().then(async () => {
+      let result = { success: true, uploaded: 0, pending: 0 };
+      while (state.requested && sameAccount()) {
+        state.requested = false;
+        const active = uploadEntries(userId).filter(({ record }) => isPendingUpload(record, openid))
+          .map(({ record }) => pendingBackups.get(backupKey(userId, record.timestamp, record.localId))).filter(Boolean);
+        const drain = pendingUploadDrains.get(key);
+        if (drain) active.push(drain);
+        await Promise.all(active.map(request => Promise.resolve(request).catch(() => {})));
+        if (!sameAccount()) break;
+        // 已授权补传本机原有的普通手动记录；只解除旧日期窗口造成的阻断。
+        // 内容拒绝、删除墓碑、身份歧义等阻断仍需核对。
+        for (const { date, record } of uploadEntries(userId)) {
+          const expiredBackfill = record.syncErrorCode === 'BACKFILL_EXPIRED' &&
+            typeof record.backfillRequestId === 'string' && /^br_[a-f0-9]{64}$/.test(record.backfillRequestId);
+          const outdatedManual = record.syncErrorCode === 'DATE_OUT_OF_RANGE' && record.backfillRequestId === undefined;
+          if (isPendingUpload(record, openid) && record.syncBlocked && (outdatedManual || expiredBackfill) &&
+              typeof record.localId === 'string' && record.localId.trim() &&
+              (record.source === 'manual' || record.dateSource === 'manual') &&
+              dateUtil.isDateLabel(record.date || date) && (record.date || date) <= dateUtil.getBusinessDate()) {
+            updateStoredUpload(userId, record.localId, item => { delete item.syncBlocked; });
+          }
+        }
+        // 旧缓存只有明确归属于当前账号、能唯一识别的记录才自动转换。
+        // 固定身份先落盘，云端继续执行旧记录匹配、重复和删除墓碑核验。
+        for (const { date, record } of uploadEntries(userId)) {
+          if (record._id || record.syncVersion === 1 || record.syncIgnored || record.syncBlocked ||
+              !(record._openid === openid || record.syncOpenid === openid) ||
+              (record._openid && record._openid !== openid) || (record.syncOpenid && record.syncOpenid !== openid)) continue;
+          try {
+            prepareUnconfirmedUploads(userId, openid, [{
+              ...(record.localId ? { localId: record.localId } : {}),
+              date: dateUtil.getRecordBusinessDate(record, date), timestamp: record.timestamp, duration: record.duration
+            }]);
+          } catch (error) {
+            console.warn('旧记录需要核对后上传:', error.message);
+          }
+        }
+        if (!sameAccount()) break;
+        const localIds = uploadEntries(userId).filter(({ record }) =>
+          isPendingUpload(record, openid) && !record.syncBlocked &&
+          typeof record.localId === 'string' && record.localId &&
+          !pendingDeletions.has(backupKey(userId, record.timestamp, record.localId)))
+          .map(({ record }) => record.localId);
+        result = await this.retryPendingBackups({ localIds });
+      }
+      return sameAccount() ? result : { ...result, success: false, code: 'ACCOUNT_CHANGED', error: '账号已切换，已暂停上传' };
+    });
+    state.promise = work.then(result => {
+      if (automaticUploadDrains.get(key) === state) automaticUploadDrains.delete(key);
+      // 请求完成与 Promise 清理之间到达的恢复通知也必须被消费。
+      return state.requested && sameAccount() ? this.retryAutomaticBackups() : result;
+    }, error => {
+      if (automaticUploadDrains.get(key) === state) automaticUploadDrains.delete(key);
+      if (state.requested && sameAccount()) return this.retryAutomaticBackups();
+      throw error;
+    });
+    automaticUploadDrains.set(key, state);
+    return state.promise;
   },
 
-  // 默认只读云端；打开小程序的补传入口必须传入当天名单，手动入口使用用户预览的名单。
+  // 兼容已有调用方；自动补传不再按当天筛选。
+  retryTodayBackups: function() { return this.retryAutomaticBackups(); },
+
+  // 默认只读云端；自动入口和手动入口分别生成固定上传名单。
   // 读请求与手动上传分别去重，慢读请求不阻塞补传。
   syncWithCloud: function({ uploadPending = false, localIds, unconfirmedRecords } = {}) {
     const userId = this.getUserId();
@@ -1577,7 +1641,10 @@ const checkinManager = {
         emotion = record.emotion || [];
         experience = record.experience;
         timestamp = record.timestamp;
-        metadata = { source: record.source || 'timer', date: record.date || entry.date, expectedOpenid: openid,
+        metadata = { source: record.source === 'manual' || record.dateSource === 'manual' ? 'manual' : 'timer',
+          date: record.date || entry.date, expectedOpenid: openid,
+          offlineReplay: true,
+          ...(record.backfillRequestId !== undefined ? { backfillRequestId: record.backfillRequestId } : {}),
           ...(record.syncLegacyRecovery ? { recoverLegacy: true } : {}) };
         updateStoredUpload(userId, localId, item => {
           item.syncStatus = 'uploading';

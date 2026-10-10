@@ -5,14 +5,22 @@ const vm = require('node:vm');
 const { createStudentAuthDatabase } = require('./helpers/studentAuthDatabase');
 
 function cloudHarness({ openid, records = [], feedback = [], fail = false, syncError, feedbackError,
-  invalidSyncResponse = false, invalidFeedbackResponse = false, environment = {}, ...options } = {}) {
+  invalidSyncResponse = false, invalidFeedbackResponse = false, environment = {}, coverage = null, coverageError,
+  now = Date.parse('2026-09-23T10:00:00+08:00'), ...options } = {}) {
   const exports = {};
   const reads = [];
+  const coverageReads = [];
+  class Clock extends Date { static now() { return now; } }
   const authorization = createStudentAuthDatabase(options);
   const db = {
     ...authorization.db,
     command: { in: values => ({ in: values }) },
     collection(name) {
+      if (name === 'bijing_sync_days') return { doc(id) { return { async get() {
+        coverageReads.push(id);
+        if (coverageError) throw coverageError;
+        return { data: coverage };
+      } }; } };
       if (!['bijing_sync_errors', 'feedback'].includes(name)) return authorization.db.collection(name);
       reads.push('database', name);
       let limit, filter, fields;
@@ -32,20 +40,42 @@ function cloudHarness({ openid, records = [], feedback = [], fail = false, syncE
     }
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../cloudfunctions/adminManager/index.js'), 'utf8'), {
-    exports, process: { env: { ADMIN_STUDENT_NUMBERS: 'BJ0099', MAINTENANCE_ADMIN_OPENIDS: 'maintenance', ...environment } },
+    exports, Date: Clock, process: { env: { ADMIN_STUDENT_NUMBERS: 'BJ0099', MAINTENANCE_ADMIN_OPENIDS: 'maintenance', ...environment } },
     require(name) {
       if (name === './studentAuth') return require('../cloudfunctions/adminManager/studentAuth');
       if (name === './delegation') return require('../cloudfunctions/adminManager/delegation');
       if (name === './maintenanceAuth') return require('../cloudfunctions/adminManager/maintenanceAuth');
+      if (name === './syncCoverage') return require('../cloudfunctions/adminManager/syncCoverage');
       assert.equal(name, 'wx-server-sdk');
       return { init() {}, getWXContext() { return { OPENID: openid }; }, database() { return db; } };
     }
   });
-  return { reads, authReads: authorization.reads, authUsers: authorization.users,
+  return { reads, coverageReads, authReads: authorization.reads, authUsers: authorization.users,
     async read(event = {}) { return JSON.parse(JSON.stringify(await exports.main({ type: 'getSyncAlert', ...event }))); } };
 }
 
 const bothAlertReads = () => ['database', 'bijing_sync_errors', 1, 'database', 'feedback', { status: { in: ['pending', 'processing'] } }, 1];
+
+test('an administrator sees a missing-date reminder after the deadline even with no runs or person errors', async () => {
+  const now = Date.parse('2026-10-10T11:00:00+08:00');
+  const overdue = cloudHarness({ openid: 'admin', now });
+  assert.deepEqual(await overdue.read(), { success: true, data: { isAdmin: true, hasErrors: true, hasFeedback: false } });
+  assert.deepEqual(overdue.coverageReads, ['__source_check_coverage__']);
+  const recovered = cloudHarness({ openid: 'admin', now, coverage: { fromDate: '2026-09-22', nextDate: '2026-10-10' } });
+  assert.equal((await recovered.read()).data.hasErrors, false);
+  const denied = cloudHarness({ openid: 'ordinary', now });
+  assert.equal((await denied.read()).data.hasErrors, false);
+  assert.deepEqual(denied.coverageReads, []);
+});
+
+test('a coverage read failure cannot report all clear or erase another confirmed alert', async () => {
+  const options = { openid: 'admin', coverageError: new Error('private storage failure') };
+  const failed = await cloudHarness(options).read();
+  assert.equal(failed.success, false);
+  assert.equal(JSON.stringify(failed).includes('private'), false);
+  const otherAlert = await cloudHarness({ ...options, records: [{ _id: 'pending' }] }).read();
+  assert.equal(otherAlert.data.hasErrors, true);
+});
 
 test('ordinary and maintenance users never query sync errors or feedback by forging an administrator', async () => {
   for (const openid of ['ordinary', 'maintenance', '', undefined]) {
@@ -155,7 +185,7 @@ function appHarness({ manualFeedback = false, tabReady = true } = {}) {
   const timers = new Map();
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/app.js'), 'utf8'), {
     App(value) { definition = value; },
-    require() { return { async syncWithCloud() {}, async retryTodayBackups() {} }; },
+    require() { return { async syncWithCloud() {}, async retryAutomaticBackups() {} }; },
     wx: {
       cloud: { callFunction(request) {
         if (['getBackfillAlert', 'adminGetBackfillAlert'].includes(request.data.type)) {

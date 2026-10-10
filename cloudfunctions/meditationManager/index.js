@@ -297,7 +297,9 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       }
       if (isBackfill) {
         // 与写记录处于同一事务：手机开关、篡改日期或迟到请求不能扩大授权。
-        const grant = await require('./backfill').assertBackfillGrant(transaction, openid, backfillRequestId, dateStr, Date.now());
+        const grant = await require('./backfill').assertBackfillGrant(transaction, openid, backfillRequestId, dateStr, Date.now(), {
+          allowExpiredReplay: data.offlineReplay === true && Boolean(key)
+        });
         const dayRecords = mergeDuplicateRecords(records).records.filter(row => getRecordBusinessDate(row) === dateStr);
         if (dayRecords.some(row => meditationTimestamp(row.timestamp) === timestamp && Number(row.duration) === duration)) {
           throw deletionError('BACKFILL_DUPLICATE', '当天已有相同时间和时长的记录，请核对，勿重复补录');
@@ -333,7 +335,13 @@ async function recordMeditation(openid, data = {}, localUserId = null) {
       if (source === 'manual' && !isBackfill) {
         const today = getBusinessDate(now);
         const earliest = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
-        if (dateStr < earliest || dateStr > today) throw deletionError('DATE_OUT_OF_RANGE', '只能记录今天和昨天的静坐');
+        // 已落在本机的普通记录允许离线多日后首次上传，固定身份用于幂等重放。
+        // 这是普通离线补传的日期政策，不将客户端标记视为补录审批凭据。
+        // 带 backfillRequestId 的记录仍在上方逐次验证审批及额度。
+        const offlineReplay = data.offlineReplay === true && Boolean(key);
+        if (dateStr > today || (dateStr < earliest && !offlineReplay)) {
+          throw deletionError('DATE_OUT_OF_RANGE', '只能新建今天和昨天的静坐；原有本机记录请通过补传上传');
+        }
       }
       const { _id, ...document } = record;
       await transaction.collection('meditation_records').doc(_id).set({ data: document });

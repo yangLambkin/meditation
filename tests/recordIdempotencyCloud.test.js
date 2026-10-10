@@ -315,7 +315,7 @@ test('02:00 crosses the day/month, manual recording accepts only today and yeste
   assert.equal((await app.record({ localId: 'manual-ok', source: 'manual', date: '2026-09-29', duration: 10 })).success, true);
   const tooOld = await app.record({ localId: 'manual-old', source: 'manual', date: '2026-09-28', duration: 10 });
   assert.equal(tooOld.code, 'DATE_OUT_OF_RANGE');
-  assert.equal(tooOld.error, '只能记录今天和昨天的静坐');
+  assert.match(tooOld.error, /只能新建今天和昨天的静坐/);
   assert.equal((await app.record({ localId: 'manual-future', source: 'manual', date: '2026-10-01', duration: 10 })).code, 'DATE_OUT_OF_RANGE');
   app.setNow('2026-10-01T02:00:00+08:00');
   assert.equal((await app.record({ localId: 'after', duration: 10 })).data.date, '2026-10-01');
@@ -874,4 +874,97 @@ test('a real historical deletion authorizes zero even when an older source-read 
   assert.equal(pending.exists, null);
   assert.notEqual(pending.queueVersion, savedVersion);
   assert.deepEqual(app.records, []);
+});
+
+test('explicit fixed-identity offline manual replay accepts old dates and atomically queues Bijing work', async () => {
+  const app = harness({ users: [SYNC_PROFILE] });
+  const data = { localId: 'offline-manual', source: 'manual', date: '2026-09-01',
+    timestamp: Date.parse('2026-09-01T12:00:00+08:00'), duration: 18, expectedOpenid: 'owner', offlineReplay: true };
+  const saved = await app.record(data);
+  assert.equal(saved.success, true);
+  assert.equal(saved.data.autoSyncBijing, true);
+  assert.equal(saved.data.bijingSyncQueued, true);
+  assert.equal(app.records[0].localId, data.localId);
+  assert.equal(app.records[0].date, data.date);
+  assert.equal(app.records[0].timestamp, data.timestamp);
+  assert.equal(app.records[0].source, data.source);
+  assert.equal(app.syncErrors[0].recordDate, data.date);
+  assert.equal(app.syncErrors[0].expectedDurationMinutes, 18);
+  assert.equal((await app.record(data)).data.duplicate, true);
+  assert.equal(app.records.length, 1);
+  assert.equal(app.stats[0].totalDuration, 18);
+  assert.equal(app.syncErrors.length, 1);
+});
+
+test('offline replay does not relax future dates, invalid times, new unmarked old records or missing stable identity', async () => {
+  const data = { localId: 'offline-manual', source: 'manual', date: '2026-09-01',
+    timestamp: Date.parse('2026-09-01T12:00:00+08:00'), duration: 18, offlineReplay: true };
+  for (const change of [{ offlineReplay: undefined }, { localId: undefined }, { date: '2026-09-21' },
+    { timestamp: Date.parse('2026-09-21T12:00:00+08:00') }, { timestamp: 'invalid' },
+    { expectedOpenid: 'another-owner' }, { duration: 0 }]) {
+    const app = harness();
+    const response = await app.record({ ...data, ...change });
+    assert.equal(response.success, false, JSON.stringify(change));
+    assert.equal(app.records.length, 0);
+  }
+});
+
+test('offline replay preserves approved-backfill validation and cannot revive a deleted manual record', async () => {
+  const denied = harness();
+  const approval = await denied.record({ ...backfillRecord(), offlineReplay: true });
+  assert.equal(approval.success, false);
+  assert.equal(denied.records.length, 0);
+  const app = harness();
+  const data = { localId: 'deleted-offline-manual', source: 'manual', date: '2026-09-01',
+    timestamp: Date.parse('2026-09-01T12:00:00+08:00'), duration: 18, offlineReplay: true };
+  const saved = await app.record(data);
+  assert.equal(saved.success, true);
+  assert.equal((await app.call({ type: 'deleteMeditationRecord', data: { recordId: saved.data.recordId } })).success, true);
+  const repeated = await app.record(data);
+  assert.equal(repeated.code, 'RECORD_DELETED');
+  assert.equal(app.records.length, 0);
+});
+
+test('persisted approved backfill replays after grant expiry without reapplying and still queues immediate Bijing sync', async () => {
+  for (const grant of [backfillGrant(), backfillGrant({ ruleVersion: 2,
+    handledAt: '2026-09-19T04:00:00.123Z', expiresAt: '2026-09-22T04:00:00.123Z' })]) {
+    const app = harness({ requests: [grant], users: [SYNC_PROFILE], now: '2026-10-05T12:00:00+08:00' });
+    const data = backfillRecord({ offlineReplay: true });
+    const response = await app.record(data);
+    assert.equal(response.success, true, JSON.stringify(response));
+    assert.equal(response.data.autoSyncBijing, true);
+    assert.equal(response.data.bijingSyncQueued, true);
+    assert.equal(app.records[0].backfillRequestId, backfillId);
+    assert.equal(app.records[0].recordType, 'backfill');
+    assert.equal(app.records[0].date, data.date);
+    assert.equal(app.records[0].timestamp, data.timestamp);
+    assert.equal(app.records[0].idempotencyKey, data.idempotencyKey);
+    assert.deepEqual(app.requests[0].recordedDates, [data.date]);
+    assert.equal(app.requests[0].expiresAt, grant.expiresAt, 'replay does not extend the original approval');
+    assert.equal(app.syncErrors[0].recordDate, data.date);
+    assert.equal(app.syncErrors[0].expectedDurationMinutes, data.duration);
+    assert.equal((await app.record(data)).data.duplicate, true);
+    assert.equal(app.records.length, 1);
+    const fresh = await app.record(backfillRecord({ idempotencyKey: 'new-entry-after-expiry' }));
+    assert.equal(fresh.code, 'BACKFILL_EXPIRED', 'new backfill entries retain the original approval deadline');
+    assert.equal((await app.record({ ...data, duration: 31 })).code, 'REQUEST_ID_REUSED');
+  }
+});
+
+test('expired backfill replay still requires a real approved owned grant, original range and stable valid payload', async () => {
+  for (const grant of [null, backfillGrant({ ownerOpenid: 'other' }), backfillGrant({ status: 'pending' }),
+    backfillGrant({ status: 'rejected' }), backfillGrant({ startDate: '2026-08-21' }),
+    backfillGrant({ ruleVersion: 2, expiresAt: null }), backfillGrant({ ruleVersion: 2, expiresAt: 'invalid' })]) {
+    const app = harness({ requests: grant ? [grant] : [], now: '2026-10-05T12:00:00+08:00' });
+    const result = await app.record(backfillRecord({ offlineReplay: true }));
+    assert.equal(result.success, false, JSON.stringify(grant));
+    assert.equal(app.records.length, 0);
+    assert.equal(app.stats.length, 0);
+  }
+  for (const change of [{ idempotencyKey: undefined }, { source: 'timer' },
+    { timestamp: Date.parse('2026-08-21T08:00:00+08:00') }, { expectedOpenid: 'other' }]) {
+    const app = harness({ requests: [backfillGrant()], now: '2026-10-05T12:00:00+08:00' });
+    assert.equal((await app.record(backfillRecord({ offlineReplay: true, ...change }))).success, false);
+    assert.equal(app.records.length, 0);
+  }
 });

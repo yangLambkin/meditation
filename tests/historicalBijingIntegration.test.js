@@ -278,7 +278,7 @@ test('a late successful save confirmation still schedules history sync after the
   assert.equal(app.saves.length, 1); assert.equal(app.timers.size, 0);
 });
 
-test('an offline historical record enters Bijing sync after its selected local upload is confirmed', async () => {
+test('an offline historical record enters Bijing sync after its automatic upload is confirmed', async () => {
   const app = harness({ online: false });
   const timestamp = Date.parse('2026-10-03T04:00:00.000Z');
   const local = await app.manager.recordCheckinWithSync(30, [], '', timestamp, 'offline-history');
@@ -286,10 +286,7 @@ test('an offline historical record enters Bijing sync after its selected local u
   assert.equal(app.rows()[0].syncErrorCode, 'UPLOAD_PAUSED');
   assert.equal(app.saves.length, 0); assert.equal(app.syncs.length, 0);
   app.setConnected(true);
-  await app.manager.retryTodayBackups();
-  assert.equal(app.saves.length, 0, 'restoring connectivity must not silently upload historical records');
-
-  const upload = app.manager.syncWithCloud({ uploadPending: true, localIds: [local.localId] });
+  const upload = app.manager.retryAutomaticBackups();
   await flush();
   assert.equal(app.saves.length, 1); assert.equal(app.syncs.length, 0);
   assert.equal(app.saves[0].data.data.localId, local.localId);
@@ -360,4 +357,34 @@ test('late offline-upload confirmation still syncs Bijing after all local upload
   assert.equal(app.saves.length, 4, 'late acknowledgement must not start another local upload round');
   app.confirm(1, { duplicate: true }); await flush();
   assert.equal(app.syncs.length, 1, 'late duplicate attempts reuse the confirmed Bijing task');
+});
+
+test('a persisted backfill blocked only by expiry automatically replays its original grant and starts recorded-date sync', async () => {
+  const app = harness({ online: false });
+  const timestamp = Date.parse(`${HISTORICAL_DATE}T12:00:00+08:00`);
+  app.manager.recordToLocal(30, [], [], timestamp, { source: 'timer', idempotencyKey: 'approved-offline-session' });
+  Object.assign(app.rows()[0], { source: 'manual', backfillRequestId: 'br_' + 'a'.repeat(64),
+    recordType: 'backfill', syncStatus: 'failed', syncBlocked: true, syncErrorCode: 'BACKFILL_EXPIRED' });
+  await app.advance(5 * 86400000);
+  app.setConnected(true);
+  const retry = app.manager.retryAutomaticBackups();
+  await flush();
+  assert.equal(app.saves.length, 1);
+  const payload = app.saves[0].data.data;
+  assert.equal(payload.localId, 'approved-offline-session');
+  assert.equal(payload.backfillRequestId, 'br_' + 'a'.repeat(64));
+  assert.equal(payload.source, 'manual');
+  assert.equal(payload.date, HISTORICAL_DATE);
+  assert.equal(payload.timestamp, timestamp);
+  assert.equal(payload.offlineReplay, true);
+  app.confirm();
+  assert.equal((await retry).uploaded, 1);
+  await flush();
+  assert.equal(app.syncs.length, 1);
+  assert.equal(app.syncs[0].data.type, 'syncRecordedDate');
+  app.synced();
+  await flush();
+  assert.equal(app.sync.getDayState(HISTORICAL_DATE).status, 'synced');
+  assert.equal(app.rows()[0].backfillRequestId, payload.backfillRequestId);
+  assert.equal(app.rows()[0].syncBlocked, undefined);
 });

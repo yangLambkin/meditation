@@ -168,18 +168,18 @@ function harness({ now: initialTime = INITIAL_TIME, online = true, failures = 0,
   };
 }
 
-test('opening uploads today automatically and leaves yesterday for explicit manual upload', async () => {
+test('opening automatically uploads pending records from every date', async () => {
   const h = harness();
   h.seed('today');
   h.seed('yesterday', INITIAL_TIME - 86400000);
   await h.app.onShow();
-  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['today']);
+  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['today', 'yesterday']);
   assert.equal(h.rows().find(row => row.localId === 'today').syncStatus, 'synced');
-  assert.notEqual(h.rows().find(row => row.localId === 'yesterday').syncStatus, 'synced');
-  assert.equal(h.manager.getPendingSyncSummary().pending, 1);
+  assert.equal(h.rows().find(row => row.localId === 'yesterday').syncStatus, 'synced');
+  assert.equal(h.manager.getPendingSyncSummary().pending, 0);
   await h.app.onShow();
-  assert.equal(h.calls.uploads.length, 1, 'showing the app again cannot duplicate an already confirmed upload');
-  assert.equal((await h.manager.syncWithCloud({ uploadPending: true })).uploaded, 1);
+  assert.equal(h.calls.uploads.length, 2, 'showing the app again cannot duplicate an already confirmed upload');
+  assert.equal((await h.manager.syncWithCloud({ uploadPending: true })).uploaded, 0);
   assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['today', 'yesterday']);
   assert.equal(h.cloudRows.size, 2);
 });
@@ -206,24 +206,24 @@ test('opening retries a failed first upload with the bounded retry policy and or
   assert.equal(h.calls.uploads.length, 6);
 });
 
-test('a network recovery event only refreshes until opening starts the next automatic round', async () => {
+test('a network recovery event starts the next automatic upload round', async () => {
   const h = harness({ online: false });
   h.seed('today-after-offline');
   await h.setConnected(true);
   await h.advance(60000);
   assert.ok(h.calls.reads > 0);
-  assert.equal(h.calls.uploads.length, 0, 'connectivity recovery is not an automatic upload trigger');
+  assert.equal(h.calls.uploads.length, 1, 'connectivity recovery uploads pending records');
   await h.app.onShow();
   assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['today-after-offline']);
 });
 
-test('today selection follows the actual Beijing 02:00 business-day boundary and explicit manual dates', async () => {
+test('automatic upload includes both sides of the Beijing 02:00 boundary and preserves explicit manual dates', async () => {
   const before = harness({ now: Date.parse('2026-09-20T01:59:59+08:00') });
   assert.equal(before.dateUtil.getBusinessDate(), '2026-09-19');
   before.seed('current-business-day', Date.parse('2026-09-19T12:00:00+08:00'));
   before.seed('older-business-day', Date.parse('2026-09-18T12:00:00+08:00'));
   await before.manager.retryTodayBackups();
-  assert.deepEqual(before.calls.uploads.map(call => call.data.localId), ['current-business-day']);
+  assert.deepEqual(before.calls.uploads.map(call => call.data.localId), ['current-business-day', 'older-business-day']);
 
   const boundary = Date.parse('2026-09-20T02:00:00+08:00');
   const after = harness({ now: boundary });
@@ -232,23 +232,24 @@ test('today selection follows the actual Beijing 02:00 business-day boundary and
   after.seed('at-cutoff', boundary);
   after.seed('manual-yesterday', boundary, { source: 'manual', date: '2026-09-19' });
   await after.manager.retryTodayBackups();
-  assert.deepEqual(after.calls.uploads.map(call => call.data.localId), ['at-cutoff']);
+  assert.deepEqual(after.calls.uploads.map(call => call.data.localId), ['before-cutoff', 'manual-yesterday', 'at-cutoff']);
 });
 
-test('today automatic selection skips foreign accounts, blocked, ignored, legacy, confirmed and actively uploading records', async () => {
+test('automatic selection skips protected records and waits for active uploads without duplicating them', async () => {
   const h = harness({ holdUploads: true });
   h.seed('eligible');
   h.seed('other-account', undefined, {}, { syncOpenid: 'oz-other-account' });
+  h.seed('other-account-without-sync-owner', undefined, {}, { _openid: 'oz-other-account', syncOpenid: undefined });
   h.seed('blocked', undefined, {}, { syncBlocked: true, syncErrorCode: 'CONTENT_REJECTED' });
   h.seed('ignored', undefined, {}, { syncIgnored: true });
-  h.seed('legacy', undefined, {}, { syncVersion: undefined });
+  h.seed('legacy', undefined, {}, { syncVersion: undefined, syncOpenid: undefined });
   h.seed('confirmed', undefined, {}, { _id: 'existing-cloud-record', syncStatus: 'synced' });
   const active = h.record('in-flight');
   await flush();
   assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['in-flight']);
   const retry = h.manager.retryTodayBackups();
   await flush();
-  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['in-flight', 'eligible']);
+  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['in-flight']);
   await h.releaseUploads();
   await Promise.all([active, retry]);
   assert.equal(h.calls.uploads.length, 2);
@@ -271,7 +272,7 @@ test('overlapping onShow calls share the active upload and never send the same r
 });
 
 for (const entry of ['manual check-in', 'count-up timer', 'countdown timer']) {
-  for (const recovery of ['automatic today upload', 'manual historical upload']) {
+  for (const recovery of ['automatic today upload', 'automatic historical upload']) {
     test(`${entry} uses the same reviewed payload and retry policy for ${recovery}`, async () => {
       const h = harness({ failures: 4 });
       const text = '坐了十二分钟，呼吸逐渐平稳。';
@@ -312,13 +313,7 @@ for (const entry of ['manual check-in', 'count-up timer', 'countdown timer']) {
         retry = h.app.onShow();
       } else {
         await h.advance(86400000);
-        await h.app.onShow();
-        assert.equal(h.calls.uploads.length, 4, 'opening must leave the now historical record for manual upload');
-        const home = h.page('index');
-        home.openCheckinUploadPreview();
-        assert.equal(home.data.checkinUploadCount, 1);
-        assert.equal(h.calls.uploads.length, 4, 'preview does not authorize an upload');
-        retry = home.retryCheckinUploads();
+        retry = h.app.onShow();
       }
       await flush();
       assert.equal(h.calls.uploads.length, 5);
@@ -347,3 +342,101 @@ for (const entry of ['manual check-in', 'count-up timer', 'countdown timer']) {
     });
   }
 }
+
+test('recovery during an interrupted retry waits for that round and starts a fresh automatic round', async () => {
+  const h = harness({ failures: 1 });
+  const first = h.record('recover-before-finally');
+  await flush();
+  assert.equal(h.calls.uploads.length, 1);
+  await h.advance(50);
+  await h.setConnected(false);
+  await h.setConnected(true);
+  assert.equal(h.calls.uploads.length, 1, 'the old retry is still settling');
+  await h.advance(50);
+  await first;
+  await flush();
+  assert.equal(h.calls.uploads.length, 2, 'the recovery event survives the old request finally');
+  assert.equal(h.rows()[0].syncStatus, 'synced');
+  assert.equal(h.cloudRows.size, 1);
+  assert.deepEqual(h.calls.uploads[0].data, h.calls.uploads[1].data);
+  await h.advance(60000);
+  assert.equal(h.calls.uploads.length, 2);
+});
+
+test('recovery while an automatic batch is active restarts remaining work under a fresh network version', async () => {
+  const h = harness({ holdUploads: true });
+  h.seed('batch-first');
+  h.seed('batch-second', INITIAL_TIME - 5 * 86400000);
+  const showing = h.app.onShow();
+  await flush();
+  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['batch-first']);
+  await h.setConnected(false);
+  await h.setConnected(true);
+  await h.releaseUploads();
+  await showing;
+  await flush();
+  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['batch-first', 'batch-second']);
+  assert.ok(h.rows().every(row => row.syncStatus === 'synced'));
+  assert.equal(h.cloudRows.size, 2);
+});
+
+test('ordinary manual records saved offline replay unchanged after several days and only the old date error is unblocked', async () => {
+  const h = harness({ online: false });
+  const timestamp = INITIAL_TIME - 86400000;
+  h.seed('old-manual', timestamp, { source: 'manual', date: '2026-09-19' },
+    { syncStatus: 'failed', syncBlocked: true, syncErrorCode: 'DATE_OUT_OF_RANGE' });
+  h.seed('rejected-manual', timestamp, { source: 'manual', date: '2026-09-19' },
+    { syncStatus: 'failed', syncBlocked: true, syncErrorCode: 'CONTENT_REJECTED' });
+  await h.advance(4 * 86400000);
+  await h.setConnected(true);
+  await flush();
+  assert.equal(h.calls.uploads.length, 1);
+  const sent = h.calls.uploads[0].data;
+  assert.equal(sent.localId, 'old-manual');
+  assert.equal(sent.timestamp, timestamp);
+  assert.equal(sent.date, '2026-09-19');
+  assert.equal(sent.source, 'manual');
+  assert.equal(sent.offlineReplay, true);
+  assert.equal(h.rows().find(row => row.localId === 'old-manual').syncStatus, 'synced');
+  assert.equal(h.rows().find(row => row.localId === 'rejected-manual').syncBlocked, true);
+});
+
+test('automatic legacy conversion requires clear ownership and unique local identity', async () => {
+  const h = harness();
+  h.seed('owned-legacy', INITIAL_TIME - 5 * 86400000, {}, { syncVersion: undefined });
+  h.seed('owned-unkeyed-legacy', INITIAL_TIME - 8 * 86400000, {}, { localId: undefined, syncVersion: undefined });
+  h.seed('unowned-legacy', INITIAL_TIME - 6 * 86400000, {}, { syncVersion: undefined, syncOpenid: undefined });
+  h.seed('foreign-legacy', INITIAL_TIME - 7 * 86400000, {}, { syncVersion: undefined, syncOpenid: 'oz-other' });
+  const data = h.storage.get(STORAGE_KEY);
+  const ambiguousDay = '2026-09-10';
+  data.dailyRecords[ambiguousDay] = { records: [1, 2].map(() => ({
+    timestamp: Date.parse(`${ambiguousDay}T12:00:00+08:00`), duration: 12, _openid: OPENID
+  })) };
+  await h.app.onShow();
+  assert.equal(h.calls.uploads.length, 2);
+  assert.equal(h.calls.uploads[0].data.localId, 'owned-legacy');
+  assert.match(h.calls.uploads[1].data.localId, /^legacy_/);
+  assert.equal(h.calls.uploads[1].data.recoverLegacy, true);
+  assert.equal(h.calls.uploads[0].data.recoverLegacy, true);
+  assert.equal(h.calls.uploads[0].data.offlineReplay, true);
+  assert.equal(h.rows().find(row => row.localId === 'unowned-legacy').syncVersion, undefined);
+  assert.equal(h.rows().filter(row => row.timestamp === data.dailyRecords[ambiguousDay].records[0].timestamp)
+    .every(row => !row.localId && row.syncVersion === undefined), true);
+  await h.app.onShow();
+  assert.equal(h.calls.uploads.length, 2, 'newly assigned legacy identity remains stable after confirmation');
+});
+
+test('switching accounts while automatic recovery waits cannot upload the previous account records', async () => {
+  const h = harness({ holdUploads: true });
+  h.seed('waiting-first');
+  h.seed('waiting-second');
+  const showing = h.app.onShow();
+  await flush();
+  await h.setConnected(false);
+  await h.setConnected(true);
+  h.storage.set('userOpenId', 'oz-other');
+  await h.releaseUploads();
+  await showing;
+  assert.deepEqual(h.calls.uploads.map(call => call.data.localId), ['waiting-first']);
+  assert.equal(h.rows().find(row => row.localId === 'waiting-second')._id, undefined);
+});

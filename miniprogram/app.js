@@ -41,11 +41,9 @@ App({
         console.warn('历史记录必经同步待重试:', error && error.message);
       });
     }
-    // 打开/返回小程序补传当天记录，同时读取云端；历史记录仍需手动确认。
+    // 打开/返回小程序补传当前账号所有日期的待上传记录，同时读取云端。
     const refresh = this.refreshRecordBackups();
-    const upload = Promise.resolve().then(() => checkinManager.retryTodayBackups()).catch(error => {
-      console.warn('当天记录自动上传失败，保留本机记录:', error);
-    });
+    const upload = this.resumeRecordBackups();
     return Promise.all([refresh, upload]);
   },
 
@@ -186,13 +184,22 @@ App({
   setupRecordRefresh() {
     if (this._networkStatusHandler) return;
     this._networkStatusHandler = ({ isConnected }) => {
-      if (isConnected) this.refreshRecordBackups();
+      if (isConnected) {
+        this.refreshRecordBackups();
+        this.resumeRecordBackups();
+      }
     };
     wx.onNetworkStatusChange(this._networkStatusHandler);
   },
 
+  resumeRecordBackups() {
+    return Promise.resolve().then(() => checkinManager.retryAutomaticBackups()).catch(error => {
+      console.warn('本机记录自动上传失败，保留本机记录:', error);
+    });
+  },
+
   refreshRecordBackups() {
-    // 网络状态变化只刷新；当天补传由 onShow 单独触发，不弹全局加载框。
+    // 云端读取和本机补传独立运行，不弹全局加载框。
     return Promise.resolve().then(() => checkinManager.syncWithCloud({ uploadPending: false })).catch(error => {
       console.warn('读取云端静坐记录失败，保留本机记录:', error);
     });

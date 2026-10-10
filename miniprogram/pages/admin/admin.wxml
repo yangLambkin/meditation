@@ -48,6 +48,17 @@
         <text wx:if="{{syncError}}" class="error-message" selectable>{{syncError}}</text>
       </view>
 
+      <view wx:if="{{syncCoverage.hasOverdue || syncCoverageError}}" class="card">
+        <view class="row spread"><text class="card-title">逾期未完成核对</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
+        <block wx:if="{{syncCoverage.hasOverdue}}">
+          <text class="notice">最早待核对日期：{{syncCoverage.nextDate}}</text>
+          <text class="small-note">核对期限：{{syncCoverage.dueText}}（北京时间）</text>
+          <text class="description">每天 11:00 后，尚未完成的日期会保留在这里。自动调度恢复后会补齐遗漏日期，也可立即补核对。</text>
+          <button class="primary-button" loading="{{syncBusy}}" disabled="{{syncBusy || !apiConfigured}}" bindtap="repairSyncCoverage">立即补核对</button>
+        </block>
+        <text wx:if="{{syncCoverageError}}" class="error-message">{{syncCoverageError}}</text>
+      </view>
+
       <view class="card">
         <view class="row spread"><text class="card-title">待处理同步错误</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
         <text class="description">按学号和日期核对必经的数据。未恢复的记录会在此显示，重试后复核通过会自动移除。</text>

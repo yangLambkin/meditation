@@ -142,6 +142,8 @@ const cloudApi = {
           ...(options.date ? { date: options.date } : {}),
           ...(options.expectedOpenid ? { expectedOpenid: options.expectedOpenid } : {}),
           ...(options.recoverLegacy === true ? { recoverLegacy: true } : {}),
+          ...(options.offlineReplay === true ? { offlineReplay: true } : {}),
+          ...(options.backfillRequestId !== undefined ? { backfillRequestId: options.backfillRequestId } : {}),
           timestamp: recordTimestamp
         }
       }, { deadlineAt: uploadDeadlineAt, uploadNetworkVersion });

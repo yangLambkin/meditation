@@ -23,6 +23,7 @@ const errorMessage = (error, fallback) => error.response && error.response.data 
 // source reconciliation is independent of upload logs and commits its results
 // in 20-row transactions under a renewable lease.
 function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, queryBatch, recentDates, now = Date.now }) {
+  const coverage = () => require('./coverage').createCoverage({ db, now, latestDate: () => recentDates(1)[0] });
   async function optional(database, collection, id) {
     try { return (await database.collection(collection).doc(id).get()).data || null; }
     catch (error) {
@@ -270,7 +271,18 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
         leaseToken: status === 'running' && !releaseLease ? run.leaseToken : '',
         leaseUntil: status === 'running' && !releaseLease ? timestamp + LEASE_MS : 0, consecutiveInterruptions: 0 };
       await tx.collection(RUNS).doc(run._id).update({ data: patch });
-      await tx.collection(DAYS).doc(run.recordDate).update({ data: { status, activeRunId: status === 'running' ? run._id : '', updatedAt: timestamp } });
+      const sourceScanComplete = current.sourceCheck && current.mode !== 'errors' && current.phase === 'verify' && phase === 'retry';
+      await tx.collection(DAYS).doc(run.recordDate).update({ data: { status, activeRunId: status === 'running' ? run._id : '', updatedAt: timestamp,
+        ...(sourceScanComplete ? { sourceCheckedAt: timestamp, sourceCheckRunId: run._id, sourceCheckRequired: false } : {}) } });
+      if (sourceScanComplete) {
+        const { COVERAGE_ID, nextDate } = require('./syncCoverage');
+        const progress = await optional(tx, DAYS, COVERAGE_ID);
+        if (progress && progress.nextDate === run.recordDate) {
+          await tx.collection(DAYS).doc(COVERAGE_ID).update({ data: {
+            nextDate: nextDate(run.recordDate), scannedThrough: run.recordDate, updatedAt: timestamp,
+          } });
+        }
+      }
       return publicRun({ ...current, ...patch });
     });
   }
@@ -639,11 +651,13 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
     if (!acquired) return { ...publicRun(run), busy: run.status === 'running' && !waitsForCheck(run) };
     run.automatic = !!options.automatic;
     run.allowHistorical = !!options.allowHistorical;
+    const checkingSource = run.sourceCheck && run.mode !== 'errors' && run.phase === 'verify';
+    let result;
     try {
-      if (run.phase === 'upload') return await upload(run);
-      if (run.phase === 'verify' || run.phase === 'reverify') return await verify(run);
-      if (run.phase === 'retry') return await retry(run);
-      throw new Error('未知同步阶段，请重新发起任务');
+      if (run.phase === 'upload') result = await upload(run);
+      else if (run.phase === 'verify' || run.phase === 'reverify') result = await verify(run);
+      else if (run.phase === 'retry') result = await retry(run);
+      else throw new Error('未知同步阶段，请重新发起任务');
     } catch (error) {
       if (error.code === 'SYNC_LEASE_UNAVAILABLE') {
         // Do not write through a stale token or classify a slow read as a
@@ -655,6 +669,10 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
       // moving their cursor backward. If this write also fails, the lease expires.
       return checkpoint(run, { error: error.message || '同步任务执行失败' });
     }
+    // A completed old gap can have many already checked dates behind it. Finish
+    // their durable, bounded watermark pages so manual repair clears its alert.
+    if (checkingSource && result.phase === 'retry') await coverage().settle();
+    return result;
   }
   async function processBatch(runId, { automatic = false, allowHistorical = false, expectedPhase } = {}) {
     if (typeof runId !== 'string' || !/^\d{13}_[a-f0-9]{16}$/.test(runId)) throw new Error('同步任务ID无效');
@@ -762,10 +780,16 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
     const uploadOnly = triggerName === 'dailySyncBijing';
     const schedule = createDailySchedule({
       db, now, jobs: { startDailyUpload, startScheduledRepair,
-        repairPending: (cycleKey, processCurrent) => require('./pendingRepairs').createPendingRepairs({
-          db, now, latestDate: () => recentDates(1)[0], processBatch, processCurrent,
-          startRepair: (recordDate, repairCycle) => startRun(recordDate, 'timer-errors', '', 'errors', { repairCycle }),
-        }).run(cycleKey),
+        repairPending: async (cycleKey, processCurrent) => {
+          await coverage().plan();
+          const result = await require('./pendingRepairs').createPendingRepairs({
+            db, now, latestDate: () => recentDates(1)[0], processBatch, processCurrent,
+            ensureSourceCheck: recordDate => coverage().ensureDate(recordDate),
+            startRepair: (recordDate, repairCycle) => startRun(recordDate, 'timer-errors', '', 'errors', { repairCycle }),
+          }).run(cycleKey);
+          await coverage().advance();
+          return result;
+        },
         ensureDailyCheck: require('./sourceCheck').createSourceCheck({ db, now }).ensureDailyCheck,
         resumeActive: options => resumeActive({ ...options, batch: true }),
         processChunk: runId => processBatch(runId, { automatic: true, ...(uploadOnly ? { expectedPhase: 'upload' } : {}) }) },
@@ -840,6 +864,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
     const rows = (await db.collection(ERRORS).where(filter).orderBy('_id', 'asc').limit(PAGE_SIZE).get()).data;
     return { errors: rows, nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1]._id : null };
   }
-  return { start, processChunk, processBatch, timer, listRuns, details, listErrors, retryErrors, startDailyUpload, startScheduledRepair, resumeActive };
+  async function repairCoverage(operator = '') { return publicRun(await coverage().repair(operator)) || { runId: '' }; }
+  return { start, processChunk, processBatch, timer, listRuns, details, listErrors, retryErrors, startDailyUpload, startScheduledRepair, resumeActive, repairCoverage };
 }
 module.exports = { createBatchJobs, BATCH_SIZE, CHUNK_SIZE, errorId };

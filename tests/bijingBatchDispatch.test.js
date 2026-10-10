@@ -12,7 +12,7 @@ function harness(options = {}) {
   class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } }
   const environment = { BIJING_TIMER_ENABLED:'true',BIJING_TIMER_SOURCE:'wx_trigger',BIJING_API_BASE:'https://example.test',BIJING_ACCESS_TOKEN:'server-token',...options.env };
   const exports = {};
-  const jobs = Object.fromEntries(['timer','start','processChunk','listRuns','details','listErrors','retryErrors'].map(name=>[name,async (...args)=> { calls.push({name,args}); return {status:'running',runId:'run'}; }]));
+  const jobs = Object.fromEntries(['timer','start','processChunk','listRuns','details','listErrors','retryErrors','repairCoverage'].map(name=>[name,async (...args)=> { calls.push({name,args}); return {status:'running',runId:'run'}; }]));
   vm.runInNewContext(source, {exports,Date:FixedDate,console:{error(){},log(){}},process:{env:environment}, require(name) {
     if(name==='wx-server-sdk') {
       const wxContext=options.context || {SOURCE:'wx_trigger'};
@@ -22,6 +22,7 @@ function harness(options = {}) {
     if(name==='axios') return {post: async (...args)=>{calls.push({name:'post',args}); return {data:{success:true}};}};
     if(name==='./maintenanceAuth') return require('../cloudfunctions/bijingSync/maintenanceAuth');
     if(name==='./batchJobs') return {BATCH_SIZE:100,createBatchJobs: deps=>{captured.deps=deps;return jobs;}};
+    if(name==='./syncCoverage') return {getCoverageStatus:async()=>{if(options.coverageError)throw new Error(options.coverageError);return {fromDate:'2026-09-22',nextDate:'2026-09-22',scannedThrough:'2026-09-21',overdueThrough:'2026-09-21',hasOverdue:false};}};
     if(name==='./setup') return {initialize:async()=>{calls.push({name:'initialize'});return {};}};
     throw new Error(name);
   }});
@@ -88,7 +89,7 @@ test('zero-duration repairs use the existing single-record deletion endpoint',as
   ]});
 });
 
-for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
+for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors','adminRepairCoverage']) {
   test(`${type} rejects ordinary callers and timer identity before all business reads/writes`,async()=>{
     for(const context of [{OPENID:'ordinary',SOURCE:'wx_client'},{SOURCE:'wx_trigger'},{}]) {
       const app=harness({context});const result=await app.run({type,OPENID:'admin',admin:true});
@@ -122,11 +123,12 @@ test('sync start and retry preserve the second administrator SDK identity as the
   const app=harness({context:{OPENID:'second-admin'},centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'}});
   assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22',operator:'first-admin',OPENID:'first-admin'})).success,true);
   assert.equal((await app.run({type:'adminRetrySyncErrors',operator:'forged'})).success,true);
-  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']},{name:'retryErrors',args:['second-admin']}]);
+  await app.run({type:'adminRepairCoverage',operator:'forged',recordDate:'1900-01-01'});
+  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']},{name:'retryErrors',args:['second-admin']},{name:'repairCoverage',args:['second-admin']}]);
 });
 
 test('all sync administration fails closed when central authorization is unavailable or malformed',async()=>{
-  for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
+  for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors','adminRepairCoverage']) {
     for(const failure of [{authError:new Error('private endpoint failure')},
       {authDatabaseError:new Error('private authorization database failure')},
       {authResponse:{result:{success:true,data:{isAdmin:'true'}}}},
@@ -163,7 +165,7 @@ test('unbinding revokes synchronization administration before the next batch can
   const app=harness({context:{OPENID:'second-admin'},centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0002'}});
   assert.equal((await app.run({type:'adminStatus'})).success,true);
   app.authUsers.find(user=>user._openid==='second-admin').bijingBound=false;
-  for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors']) {
+  for(const type of ['adminInitialize','adminStatus','adminStartSync','adminContinueSync','adminListSyncRuns','adminSyncDetails','adminListSyncErrors','adminRetrySyncErrors','adminRepairCoverage']) {
     assert.equal((await app.run({type,studentNumber:'BJ0002',bijingBound:true})).code,'FORBIDDEN');
   }
   assert.deepEqual(app.calls,[]);
@@ -183,7 +185,8 @@ test('a one-time server proof authorizes synchronization when the nested SDK omi
     centralEnvironment:{ADMIN_STUDENT_NUMBERS:'BJ0001,BJ0002'}});
   assert.equal((await app.run({type:'adminStartSync',recordDate:'2026-09-22',
     expectedOpenid:'first-admin',delegationId:`auth_${'0'.repeat(64)}`,operator:'first-admin'})).success,true);
-  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']}]);
+  await app.run({type:'adminRepairCoverage',operator:'forged',recordDate:'1900-01-01'});
+  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','second-admin']},{name:'repairCoverage',args:['second-admin']}]);
   assert.equal(app.authRequests[0].data.expectedOpenid,'second-admin');
   assert.match(app.authRequests[0].data.delegationId,/^auth_[a-f0-9]{64}$/);
   assert.notEqual(app.authRequests[0].data.delegationId,`auth_${'0'.repeat(64)}`);
@@ -215,7 +218,7 @@ test('administrator status exposes configuration health without exposing API sec
   const app=harness({context:{OPENID:'admin'},env:{BIJING_TIMER_ENABLED:'false'}});
   const result=await app.run({type:'adminStatus'});
   assert.equal(result.success,true); assert.equal(result.data.timerEnabled,false);assert.equal(result.data.apiConfigured,true);
-  assert.equal(result.data.batchSize,100);
+  assert.equal(result.data.batchSize,100);assert.equal(result.data.coverage.hasOverdue,false);
   assert.equal(result.data.dates.length,30);assert.equal(result.data.latestDate,'2026-09-22');
   assert.equal(JSON.stringify(result).includes('server-token'),false);assert.equal(JSON.stringify(result).includes('example.test'),false);
 });
@@ -228,7 +231,17 @@ test('administrator routing forwards only intended action fields and platform op
   await app.run({type:'adminSyncDetails',runId:'run',cursor:'after'});
   await app.run({type:'adminListSyncErrors',cursor:'after'});
   await app.run({type:'adminRetrySyncErrors',operator:'forged',recordDate:'1900-01-01'});
-  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','admin']},{name:'processChunk',args:['run']},{name:'listRuns',args:[undefined,undefined]},{name:'details',args:['run','after']},{name:'listErrors',args:['after']},{name:'retryErrors',args:['admin']}]);
+  await app.run({type:'adminRepairCoverage',operator:'forged',recordDate:'1900-01-01'});
+  assert.deepEqual(app.calls,[{name:'start',args:['2026-09-22','manual','admin']},{name:'processChunk',args:['run']},{name:'listRuns',args:[undefined,undefined]},{name:'details',args:['run','after']},{name:'listErrors',args:['after']},{name:'retryErrors',args:['admin']},{name:'repairCoverage',args:['admin']}]);
+});
+
+test('coverage read failures preserve other administrator controls and surface a retryable diagnostic',async()=>{
+  const app=harness({context:{OPENID:'admin'},coverageError:'coverage unavailable'});
+  const response=await app.run({type:'adminStatus'});
+  assert.equal(response.success,true);
+  assert.equal(response.data.latestDate,'2026-09-22');
+  assert.equal(response.data.coverageError,'coverage unavailable');
+  assert.equal(response.data.coverage,undefined);
 });
 
 test('deployment schedules daily 02:00 upload and hourly 03:00–10:00 reconciliation',()=>{

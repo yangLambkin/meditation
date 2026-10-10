@@ -313,11 +313,15 @@ async function administration(event, openid) {
   try {
     if (event.type === 'adminStatus') {
       const { BATCH_SIZE } = require('./batchJobs');
+      let coverage, coverageError;
+      try { coverage = await require('./syncCoverage').getCoverageStatus({ db, now: () => Date.now() }); }
+      catch (error) { coverageError = error.message || '读取核对进度失败，请重试'; }
       return { success: true, data: {
         latestDate: getSyncBusinessDate(Date.now() - DAY_MS),
         dates: Array.from({ length: 30 }, (_, index) => getSyncBusinessDate(Date.now() - (index + 1) * DAY_MS)),
         timerEnabled: process.env.BIJING_TIMER_ENABLED === 'true' && process.env.BIJING_TIMER_SOURCE === 'wx_trigger',
         apiConfigured: !!(process.env.BIJING_API_BASE && process.env.BIJING_ACCESS_TOKEN), batchSize: BATCH_SIZE,
+        ...(coverage ? { coverage } : { coverageError }),
       } };
     }
     if (event.type === 'adminInitialize') return { success: true, data: await require('./setup').initialize(db) };
@@ -330,6 +334,7 @@ async function administration(event, openid) {
       case 'adminSyncDetails': data = await jobs.details(event.runId, event.cursor); break;
       case 'adminListSyncErrors': data = await jobs.listErrors(event.cursor); break;
       case 'adminRetrySyncErrors': data = await jobs.retryErrors(openid); break;
+      case 'adminRepairCoverage': data = await jobs.repairCoverage(openid); break;
       default: data = await jobs.timer(event.TriggerName);
     }
     return { success: true, data };
@@ -467,7 +472,7 @@ exports.main = async (event = {}, context) => {
   const wxContext = cloud.getWXContext();
   const openid = wxContext.OPENID;
   const timerDispatch = !event.type || event.type === 'cronSyncAll';
-  const adminDispatch = ['adminInitialize', 'adminStatus', 'adminStartSync', 'adminContinueSync', 'adminListSyncRuns', 'adminSyncDetails', 'adminListSyncErrors', 'adminRetrySyncErrors'].includes(event.type);
+  const adminDispatch = ['adminInitialize', 'adminStatus', 'adminStartSync', 'adminContinueSync', 'adminListSyncRuns', 'adminSyncDetails', 'adminListSyncErrors', 'adminRetrySyncErrors', 'adminRepairCoverage'].includes(event.type);
   if (timerDispatch || adminDispatch) {
     const { canRunMaintenance, authorizeControlPanel, forbidden } = require('./maintenanceAuth');
     const environment = typeof process === 'undefined' ? {} : process.env;

@@ -204,7 +204,7 @@ const isActive = (row, now) => Boolean(row && row.kind === 'request' && ['pendin
 
 // Call inside the same transaction that adds the meditation. Approval and
 // ownership cannot be asserted from client parameters or a prior, separate read.
-async function assertBackfillGrant(transaction, openid, id, date, now = Date.now()) {
+async function assertBackfillGrant(transaction, openid, id, date, now = Date.now(), { allowExpiredReplay = false } = {}) {
   requireIdentity(openid);
   if (!isRequestId(id)) throw backfillError('BACKFILL_INVALID_GRANT', '请选择已通过审批的补录申请');
   let row;
@@ -214,7 +214,11 @@ async function assertBackfillGrant(transaction, openid, id, date, now = Date.now
     throw backfillError('BACKFILL_INVALID_GRANT', '补录申请未通过审批或不属于本人');
   }
   const bounds = range(row.startDate, row.endDate);
-  if (isExpired(row, now)) throw backfillError('BACKFILL_EXPIRED', '补录申请已过期，请查看申请结果');
+  // 原有本机记录的固定身份重放不受恢复联网时刻限制；新补录仍遵循期限。
+  // 缺失或损坏的批准期限不能视为一个曾经有效、现在仅过期的申请。
+  if (isExpired(row, now) && !(allowExpiredReplay && expiresAt(row))) {
+    throw backfillError('BACKFILL_EXPIRED', '补录申请已过期，请查看申请结果');
+  }
   const selected = dateNumber(date);
   if (!Number.isFinite(selected) || selected < bounds.start || selected > bounds.end) {
     throw backfillError('BACKFILL_DATE_OUT_OF_RANGE', '补录日期不在获批范围内');

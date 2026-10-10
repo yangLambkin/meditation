@@ -14,6 +14,9 @@ function workflowHarness() {
     ...authorization,
     command: { in: values => ({ in: values }) },
     collection(name) {
+      if (name === 'bijing_sync_days') return { doc() { return { async get() {
+        return { data: { fromDate: '2026-09-22', nextDate: new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10) } };
+      } }; } };
       if (!['feedback', 'bijing_sync_errors'].includes(name)) return authorization.collection(name);
       let limit = 20, filter = {};
       return {

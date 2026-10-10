@@ -133,6 +133,165 @@ function withinLimits(app) {
   assert.ok(app.transactionOperations.every(count => count <= 100));
 }
 
+const coverageState = app => app.state.bijing_sync_days.find(row => row._id === '__source_check_coverage__');
+const dayState = (app, recordDate) => app.state.bijing_sync_days.find(row => row._id === recordDate);
+
+test('a completely missed scheduled day is discovered without upload logs or personal errors', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-24T03:00:00+08:00'),
+    duration: (_, recordDate) => recordDate === date ? 35 : 0 });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${date}`), 35);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  assert.equal(dayState(app, date).sourceCheckRequired, false);
+  assert.ok(dayState(app, date).sourceCheckedAt);
+  assert.equal(coverageState(app).nextDate, '2026-09-24');
+  withinLimits(app);
+});
+
+test('long outages discover older than thirty days in bounded pages without dropping later dates', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-11-03T03:00:00+08:00'), duration: () => 0 });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(coverageState(app).scheduledThrough, '2026-09-28');
+  assert.equal(coverageState(app).nextDate, '2026-09-29');
+  for (let hour = 4; hour <= 8; hour++) {
+    app.advance(HOUR);
+    await app.jobs.timer('checkBijingSync');
+  }
+  assert.equal(coverageState(app).scheduledThrough, '2026-11-01');
+  assert.equal(coverageState(app).nextDate, '2026-11-03');
+  const scannedDates = new Set(app.sourceReads.map(row => row.recordDate));
+  for (let timestamp = Date.parse(`${date}T00:00:00Z`); timestamp <= Date.parse('2026-11-02T00:00:00Z'); timestamp += 86400000) {
+    assert.ok(scannedDates.has(new Date(timestamp).toISOString().slice(0, 10)));
+  }
+  withinLimits(app);
+});
+
+test('an unfinished oldest source scan cannot advance completion or block later missing dates', async () => {
+  let healthy = false;
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-26T03:00:00+08:00'), query: (records, result) => {
+    if (!healthy && records[0].recordDate === date) throw new Error('oldest date unavailable');
+    return result(records);
+  } });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(coverageState(app).nextDate, date);
+  assert.equal(coverageState(app).scheduledThrough, '2026-09-24');
+  assert.equal(dayState(app, date).sourceCheckedAt, undefined);
+  assert.equal(app.remote.get('BJ0/2026-09-24'), 20);
+  assert.equal(app.remote.get('BJ0/2026-09-25'), 20);
+  healthy = true;
+  app.advance(HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.equal(coverageState(app).nextDate, '2026-09-26');
+});
+
+test('an existing errors-only lease retains missing full-source work after its own repair succeeds', async () => {
+  const app = harness({ users: users(1) });
+  app.seedError('BJ0', date);
+  const repair = await app.jobs.retryErrors('admin');
+  app.advance(Date.parse('2026-09-24T03:00:00+08:00') - app.now());
+  Object.assign(app.state.bijing_sync_runs.find(row => row._id === repair.runId), { leaseToken: 'existing-repair', leaseUntil: app.now() + 120000 });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(dayState(app, date).activeRunId, repair.runId);
+  assert.equal(dayState(app, date).sourceCheckRequired, true);
+  assert.equal(coverageState(app).nextDate, date);
+  app.advance(HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_runs.find(row => row._id === repair.runId).status, 'success');
+  assert.equal(dayState(app, date).sourceCheckRequired, true);
+  app.advance(HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.ok(dayState(app, date).sourceCheckedAt);
+  assert.equal(coverageState(app).nextDate, '2026-09-24');
+});
+
+test('concurrent discovery reuses the same missing-date run and day lock', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-24T03:00:00+08:00') });
+  await Promise.all([app.jobs.timer('checkBijingSync'), app.jobs.timer('checkBijingSync')]);
+  const historical = app.state.bijing_sync_runs.filter(run => run.recordDate === date && run.mode === 'full');
+  assert.equal(historical.length, 1);
+  assert.equal(historical[0].status, 'success');
+  assert.equal(coverageState(app).nextDate, '2026-09-24');
+});
+
+test('administrator coverage repair starts a source check beyond the normal thirty-day range', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-11-03T11:00:00+08:00') });
+  const run = await app.jobs.repairCoverage('admin');
+  assert.equal(run.recordDate, date);
+  assert.equal(run.phase, 'verify');
+  assert.equal(run.operator, 'admin');
+  assert.equal(app.posts.length, 0);
+  await app.finish(run);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+  assert.equal(coverageState(app).nextDate, '2026-09-23');
+});
+
+test('a killed source checkpoint keeps coverage pending until its original run resumes', async () => {
+  let killed = false;
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-24T03:00:00+08:00'), beforeCheckpoint: (run, patch) => {
+    if (!killed && run.recordDate === date && patch.phase === 'retry') {
+      killed = true;
+      throw Object.assign(new Error('worker terminated'), { code: 'SYNC_LEASE_UNAVAILABLE' });
+    }
+  } });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(coverageState(app).nextDate, date);
+  assert.equal(dayState(app, date).sourceCheckedAt, undefined);
+  app.advance(HOUR);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(coverageState(app).nextDate, '2026-09-24');
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('manual completion closes an old gap and advances already checked later dates immediately', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-26T11:00:00+08:00') });
+  for (const checkedDate of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+    app.state.bijing_sync_days.push({ _id: checkedDate, recordDate: checkedDate, sourceCheckedAt: app.now() - HOUR });
+  }
+  await app.finish(await app.jobs.repairCoverage('admin'));
+  assert.equal(coverageState(app).nextDate, '2026-09-26');
+  assert.equal((await app.jobs.repairCoverage('admin')).runId, '');
+});
+
+test('failure before enumerating any user cannot consume a missing-date coverage intent', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-24T03:00:00+08:00'), readError: true });
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(coverageState(app).scheduledThrough, date);
+  assert.equal(coverageState(app).nextDate, date);
+  assert.equal(dayState(app, date).sourceCheckRequired, true);
+  assert.equal(dayState(app, date).sourceCheckedAt, undefined);
+  assert.equal(app.state.bijing_sync_errors.length, 0, 'run-level failures remain durable without inventing person errors');
+  const run = app.state.bijing_sync_runs.find(row => row.recordDate === date);
+  assert.equal(run.status, 'failed');
+  assert.match(run.error, /scan unavailable/);
+});
+
+test('manual coverage repair converts an abandoned automatic upload to source verification', async () => {
+  const app = harness({ users: users(1) });
+  const upload = await app.jobs.startDailyUpload();
+  Object.assign(app.state.bijing_sync_runs[0], { leaseToken: 'killed-upload', leaseUntil: app.now() + 120000 });
+  app.advance(Date.parse('2026-09-24T11:00:00+08:00') - app.now());
+  const repair = await app.jobs.repairCoverage('admin');
+  assert.equal(repair.runId, upload.runId);
+  assert.equal(repair.phase, 'verify');
+  await app.finish(repair);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('manual coverage repair recognizes completed pre-upgrade checks and selects the next real gap', async () => {
+  const app = harness({ users: users(1), clock: Date.parse('2026-09-24T11:00:00+08:00') });
+  await app.finish(await app.jobs.start(date, 'manual', 'admin'));
+  app.state.bijing_sync_days = app.state.bijing_sync_days.filter(row => row._id !== '__source_check_coverage__');
+  delete dayState(app, date).sourceCheckedAt;
+  delete dayState(app, date).sourceCheckRunId;
+  delete dayState(app, date).sourceCheckRequired;
+  const repair = await app.jobs.repairCoverage('admin');
+  assert.equal(repair.recordDate, '2026-09-23');
+  assert.equal(repair.phase, 'verify');
+  assert.equal(coverageState(app).nextDate, '2026-09-23');
+  assert.equal(app.state.bijing_sync_runs.filter(run => run.recordDate === date).length, 1);
+});
+
 // Upload traverses users in memory. Only the independent check persists per-user
 // outcomes and checkpoints; an upload's acknowledgement is not verification.
 test('02:00 uploads all 1000 users without progress items and 03:00 independently checks them in ten requests', async () => {
