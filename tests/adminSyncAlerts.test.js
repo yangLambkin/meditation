@@ -56,11 +56,11 @@ function cloudHarness({ openid, records = [], feedback = [], fail = false, syncE
 
 const bothAlertReads = () => ['database', 'bijing_sync_errors', 1, 'database', 'feedback', { status: { in: ['pending', 'processing'] } }, 1];
 
-test('an administrator sees a missing-date reminder after the deadline even with no runs or person errors', async () => {
+test('overdue coverage does not trigger an administrator reminder or read coverage', async () => {
   const now = Date.parse('2026-10-10T11:00:00+08:00');
   const overdue = cloudHarness({ openid: 'admin', now });
-  assert.deepEqual(await overdue.read(), { success: true, data: { isAdmin: true, hasErrors: true, hasFeedback: false } });
-  assert.deepEqual(overdue.coverageReads, ['__source_check_coverage__']);
+  assert.deepEqual(await overdue.read(), { success: true, data: { isAdmin: true, hasErrors: false, hasFeedback: false } });
+  assert.deepEqual(overdue.coverageReads, []);
   const recovered = cloudHarness({ openid: 'admin', now, coverage: { fromDate: '2026-09-22', nextDate: '2026-10-10' } });
   assert.equal((await recovered.read()).data.hasErrors, false);
   const denied = cloudHarness({ openid: 'ordinary', now });
@@ -68,10 +68,11 @@ test('an administrator sees a missing-date reminder after the deadline even with
   assert.deepEqual(denied.coverageReads, []);
 });
 
-test('a coverage read failure cannot report all clear or erase another confirmed alert', async () => {
+test('unused coverage storage cannot affect concrete administrator alerts', async () => {
   const options = { openid: 'admin', coverageError: new Error('private storage failure') };
   const failed = await cloudHarness(options).read();
-  assert.equal(failed.success, false);
+  assert.equal(failed.success, true);
+  assert.equal(failed.data.hasErrors, false);
   assert.equal(JSON.stringify(failed).includes('private'), false);
   const otherAlert = await cloudHarness({ ...options, records: [{ _id: 'pending' }] }).read();
   assert.equal(otherAlert.data.hasErrors, true);

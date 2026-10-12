@@ -87,7 +87,7 @@ function clearedPrivateData() {
   return { ...clearedRecordQuery(), ...clearedFeedback(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
     runs: [], runsLoading: false, runsCursor: '', runsPageCount: 1, showAllRuns: true, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
-    syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '', syncCoverage: null, syncCoverageError: '',
+    syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
     teams: [], teamsLoading: false, teamsError: '', teamsCursor: '', teamIndex: -1, selectedTeam: null,
     membersLoading: false, candidates: [], candidateIndex: -1, selectedCandidate: null,
     logs: [], logsLoading: false, logsError: '', logsCursor: '' };
@@ -102,7 +102,7 @@ Page({
     dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
     runs: [], runsLoading: false, runsCursor: '', runsPageCount: 1, showAllRuns: true, syncBusy: false, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
-    syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '', syncCoverage: null, syncCoverageError: '',
+    syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
     teams: [], teamsLoading: false, teamsError: '', teamsCursor: '', teamIndex: -1, selectedTeam: null,
     membersLoading: false, candidates: [], candidateIndex: -1, selectedCandidate: null, transferBusy: false,
     logs: [], logsLoading: false, logsError: '', logsCursor: ''
@@ -146,7 +146,6 @@ Page({
         const recordDate = status.latestDate || dates[0] || '';
         this.setData({ authorized: true, verifying: false, dates, recordDate,
           dateIndex: Math.max(0, dates.indexOf(recordDate)), timerEnabled: status.timerEnabled === true, apiConfigured: status.apiConfigured === true });
-        this.applySyncCoverage(status);
         await this.loadSyncErrors();
         await this.loadRuns();
       } else if (tab === 'query') {
@@ -219,7 +218,6 @@ Page({
     if (!this._visible) return;
     if (!this.data.entryAuthorized || !this.data.authorized) return this.retryAccess();
     if (this.data.tab === 'sync') {
-      await this.loadSyncCoverage();
       await this.loadSyncErrors();
       await this.loadRuns();
     }
@@ -544,14 +542,6 @@ Page({
       const run = await this.callAdmin('bijingSync', type, payload);
       if (!this.isCurrent(generation) || !this.data.authorized) return;
       const runId = run.runId || run._id || payload.runId;
-      if (!runId && type === 'adminRepairCoverage') {
-        await this.loadSyncCoverage();
-        await this.loadRuns();
-        if (this.isCurrent(generation) && this.data.authorized) this.setData({ syncMessage: this.data.syncCoverageError
-          ? '请刷新核对进度后重试。' : this.data.syncCoverage && this.data.syncCoverage.hasOverdue
-            ? '待核对日期仍在处理中，请稍后刷新或重试。' : '当前没有逾期未核对日期。' });
-        return;
-      }
       if (!runId && type === 'adminRetrySyncErrors') {
         await this.loadSyncErrors();
         if (!this.isCurrent(generation) || !this.data.authorized) return;
@@ -572,7 +562,6 @@ Page({
           : ['uploaded', 'waiting'].includes(run.status) ? '上传已完成，当日北京时间 03:00–10:00 每小时整点核对和修复。'
           : run.status === 'success' ? '同步核对完成，已恢复的记录已从待处理错误中移除。' : '本次执行已结束，请查看待处理错误及执行记录。' });
       await this.loadSyncErrors();
-      await this.loadSyncCoverage();
       await this.loadRuns();
       if (this.data.selectedRunId === runId) await this.loadItems(false);
     } catch (error) {
@@ -587,38 +576,6 @@ Page({
         this.schedulePoll();
       }
     }
-  },
-
-  applySyncCoverage(status) {
-    const value = status && status.coverage;
-    if (!value || typeof value.hasOverdue !== 'boolean' || typeof value.nextDate !== 'string') {
-      this.setData({ syncCoverageError: status && status.coverageError || '核对进度暂时无法读取，请刷新重试。' });
-      return;
-    }
-    this.setData({ syncCoverage: { ...value, dueText: timeText(value.dueAt) }, syncCoverageError: '' });
-  },
-  async loadSyncCoverage() {
-    if (!this._visible || !this.data.authorized || this.data.tab !== 'sync') return;
-    const generation = this._generation;
-    const request = this._coverageRequest = (this._coverageRequest || 0) + 1;
-    try {
-      const status = await this.callAdmin('bijingSync', 'adminStatus');
-      if (!this.isCurrent(generation) || request !== this._coverageRequest || !this.data.authorized) return;
-      this.applySyncCoverage(status);
-      this.setData({ timerEnabled: status.timerEnabled === true, apiConfigured: status.apiConfigured === true });
-    } catch (error) {
-      if (this.isCurrent(generation) && request === this._coverageRequest) this.setData({ syncCoverageError: errorText(error) });
-    }
-  },
-  async repairSyncCoverage() {
-    if (this._syncBusy || !this._visible || !this.data.authorized || this.data.tab !== 'sync' ||
-        !this.data.syncCoverage || !this.data.syncCoverage.hasOverdue) return;
-    if (!this.data.apiConfigured) {
-      this.setData({ syncError: '必经接口尚未配置，请完成服务端配置后重试。' });
-      return;
-    }
-    this._continuePaused = false;
-    await this.runSyncAction('adminRepairCoverage', {});
   },
 
   loadMoreSyncErrors() { return this.loadSyncErrors(true); },

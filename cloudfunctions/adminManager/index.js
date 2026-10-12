@@ -76,17 +76,15 @@ exports.main = async (event = {}) => {
   if (!isAdmin) return { success: true, data: { isAdmin: false, hasErrors: false } };
   try {
     const db = getDatabase();
-    const [sync, feedback, coverage] = await Promise.all([
+    const [sync, feedback] = await Promise.all([
       alertExists(() => db.collection('bijing_sync_errors').field({ _id: true }).limit(1).get()),
       alertExists(() => db.collection('feedback').where({ status: db.command.in(['pending', 'processing']) })
-        .field({ _id: true }).limit(1).get()),
-      Promise.resolve().then(() => require('./syncCoverage').getCoverageStatus({ db, now: () => Date.now() }))
-        .then(status => ({ exists: status.hasOverdue, failed: false }), () => ({ exists: false, failed: true }))
+        .field({ _id: true }).limit(1).get())
     ]);
     // Either confirmed positive is enough to keep the reminder visible, even
     // when the other source is temporarily unavailable.
-    if (!sync.exists && !feedback.exists && !coverage.exists && (sync.failed || feedback.failed || coverage.failed)) throw new Error('Alert source unavailable');
-    return { success: true, data: { isAdmin: true, hasErrors: sync.exists || coverage.exists, hasFeedback: feedback.exists } };
+    if (!sync.exists && !feedback.exists && (sync.failed || feedback.failed)) throw new Error('Alert source unavailable');
+    return { success: true, data: { isAdmin: true, hasErrors: sync.exists, hasFeedback: feedback.exists } };
   } catch (error) {
     return { success: false, error: '管理员提醒暂时无法读取，请稍后重试' };
   }

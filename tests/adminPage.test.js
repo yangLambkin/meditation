@@ -53,52 +53,17 @@ function run(overrides = {}) {
     startedAt: '2026-09-22T18:00:00.000Z', total: 2, successCount: 0, failedCount: 0, skippedCount: 0, ...overrides };
 }
 
-test('overdue coverage is actionable without per-person errors and supports dates older than the manual picker', async () => {
-  let repaired = false;
-  const coverage = { nextDate: '2026-08-01', overdueThrough: DATE, hasOverdue: true,
-    dueAt: Date.parse('2026-08-02T11:00:00+08:00') };
+test('sync page omits overdue coverage controls and requests', async () => {
   const { page, calls } = harness({ api(name, data) {
-    if (data.type === 'adminStatus') return success({ ...STATUS, coverage: { ...coverage, hasOverdue: !repaired } });
-    if (data.type === 'adminRepairCoverage') {
-      repaired = true;
-      return success(run({ recordDate: '2026-08-01', status: 'success', finishedAt: Date.now() }));
-    }
+    if (data.type === 'adminStatus') return success({ ...STATUS, coverage: { hasOverdue: true, nextDate: '2026-09-22' } });
     return success({ runs: [], errors: [] });
   } });
   await page.onShow();
-  assert.equal(page.data.syncErrors.length, 0);
-  assert.equal(page.data.syncCoverage.hasOverdue, true);
-  assert.equal(page.data.syncCoverage.dueText, '2026-08-02 11:00:00');
-  await page.repairSyncCoverage();
-  assert.equal(calls.cloud.filter(call => call.data.type === 'adminRepairCoverage').length, 1);
-  assert.equal(page.data.syncCoverage.hasOverdue, false);
-  assert.match(page.data.syncMessage, /同步核对完成/);
-  page.onHide();
-});
-
-test('coverage refresh preserves an existing overdue warning on read failure and ignores late results after hiding', async () => {
-  const pending = deferred();
-  let stage = 'initial';
-  const coverage = { nextDate: DATE, hasOverdue: true };
-  const { page } = harness({ api(name, data) {
-    if (data.type === 'adminStatus') {
-      if (stage === 'failure') return { success: false, error: '进度读取失败' };
-      if (stage === 'pending') return pending.promise;
-      return success({ ...STATUS, coverage });
-    }
-    return success({ runs: [], errors: [] });
-  } });
-  await page.onShow();
-  stage = 'failure';
-  await page.loadSyncCoverage();
-  assert.equal(page.data.syncCoverage.hasOverdue, true);
-  assert.match(page.data.syncCoverageError, /进度读取失败/);
-  stage = 'pending';
-  const refresh = page.loadSyncCoverage();
-  page.onHide();
-  pending.resolve(success({ ...STATUS, coverage: { ...coverage, hasOverdue: false } }));
-  await refresh;
-  assert.notEqual(page.data.syncCoverage && page.data.syncCoverage.hasOverdue, false);
+  assert.equal(page.data.syncCoverage, undefined);
+  assert.equal(page.repairSyncCoverage, undefined);
+  assert.equal(calls.cloud.filter(call => call.data.type === 'adminStatus').length, 1);
+  const template = fs.readFileSync(require.resolve('../miniprogram/pages/admin/admin.wxml'), 'utf8');
+  assert.doesNotMatch(template, /逾期未完成核对|repairSyncCoverage|syncCoverage/);
 });
 
 test('seven version taps check the independent identity service and only admit the designated administrator', async () => {
