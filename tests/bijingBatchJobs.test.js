@@ -167,9 +167,10 @@ test('one 100-person source-verification response saves progress in bounded tran
   assert.ok(app.transactions.filter(tx => tx.itemWrites).every(tx => tx.itemWrites <= 20));
 });
 
-test('timer upload finishes as uploaded and releases the day without writing verification items or errors', async () => {
+test('legacy timer upload finishes as uploaded and releases the day without writing verification items or errors', async () => {
   const app = harness({ users: users(150) });
   const started = await app.jobs.startDailyUpload();
+  delete app.state.bijing_sync_runs[0].verifyImmediately;
   const uploaded = await app.jobs.processChunk(started.runId);
   assert.equal(uploaded.status, 'uploaded'); assert.equal(uploaded.phase, 'upload');
   assert.equal(uploaded.total, 150); assert.equal(uploaded.successCount, 0); assert.equal(uploaded.cursor, '');
@@ -416,12 +417,12 @@ test('the same daily upload is not recreated or resent while an explicit manual 
   let fails = true;
   const app = harness({ post: (d, records, { writeRemote, ack }) => { if (!fails) writeRemote(d, records); return ack(d, records); } });
   const first = await app.jobs.timer('dailySyncBijing');
-  assert.equal(first.status, 'uploaded');
+  assert.equal(first.status, 'failed');
   app.advance(300000);
   const repeated = await app.jobs.timer('dailySyncBijing');
-  assert.equal(repeated.runId, first.runId); assert.equal(repeated.status, 'uploaded');
+  assert.equal(repeated.runId, first.runId); assert.equal(repeated.status, 'failed');
   assert.equal(app.state.bijing_sync_runs.filter(r => r.recordDate === date).length, 1);
-  assert.equal(app.posts.length, 1); assert.equal(app.queries.length, 0);
+  assert.equal(app.posts.length, 2); assert.equal(app.queries.length, 2);
   fails = false; const recovered = await app.finish(await app.jobs.start(date, 'manual', 'admin'));
   assert.equal(recovered.status, 'success'); assert.equal(recovered.attempt, 2); assert.equal(app.state.bijing_sync_errors.length, 0);
 });

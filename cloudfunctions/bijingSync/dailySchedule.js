@@ -17,7 +17,7 @@ function validDate(value) {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 
-// The 02:00 trigger uploads. Hourly checks from 03:00 through 10:00 either
+// The 02:00 trigger uploads, verifies and repairs. Hourly checks from 03:00 through 10:00 either
 // resume unfinished work or start a fresh comparison of the latest ended day.
 function createDailySchedule({ db, jobs, now = Date.now }) {
   // At 00:00–01:59 the current meditation day is still open, so continue the

@@ -119,6 +119,71 @@ function harness(options = {}) {
   return { jobs, state, posts, zeros, queries, markers, requests, sourceReads, remote, finish, seedError, transactionOperations, leaseAcquisitions, checkpoints, advance: ms => clock += ms, now: () => clock };
 }
 
+// Seed the pre-upgrade upload-only run shape to retain recovery coverage.
+async function legacyDailyUpload(app) {
+  const run = await app.jobs.startDailyUpload();
+  delete app.state.bijing_sync_runs.find(row => row._id === run.runId).verifyImmediately;
+  return app.jobs.processChunk(run.runId, { automatic: true });
+}
+
+for (const count of [99, 100, 101, 1000]) {
+  test(`02:00 completes upload and verification for ${count} users before 03:00`, async () => {
+    const app = harness({ users: users(count) });
+    const done = await app.jobs.timer('dailySyncBijing');
+    assert.equal(done.status, 'success');
+    assert.equal(done.total, count);
+    assert.equal(done.successCount, count);
+    assert.equal(app.queries.length, Math.ceil(count / BATCH_SIZE));
+    assert.equal(cycle(app), undefined);
+    const requests = app.requests.length;
+    assert.equal((await app.jobs.timer('dailySyncBijing')).runId, done.runId);
+    assert.equal(app.requests.length, requests);
+    for (let hour = 3; hour <= 10; hour++) {
+      atCheckTime(app, hour);
+      app.remote.delete(`BJ0/${date}`);
+      const before = app.requests.length;
+      await app.jobs.timer('checkBijingSync');
+      const sequence = app.requests.slice(before);
+      assert.equal(sequence[0], 'query');
+      assert.ok(sequence.indexOf('post') > 0);
+      assert.equal(sequence.at(-1), 'query');
+      assert.equal(app.remote.get(`BJ0/${date}`), 20);
+    }
+    withinLimits(app);
+  });
+}
+
+test('02:00 verifies acknowledged uploads, repairs missing records and verifies again', async () => {
+  let attempts = 0;
+  const app = harness({ users: users(1), post: (recordDate, records, { ack, writeRemote }) => {
+    if (++attempts > 1) writeRemote(recordDate, records);
+    return ack(recordDate, records);
+  } });
+  const done = await app.jobs.timer('dailySyncBijing');
+  assert.equal(done.status, 'success');
+  assert.deepEqual(app.requests, ['post', 'query', 'post', 'query']);
+  assert.equal(app.state.bijing_sync_errors.length, 0);
+  assert.equal(app.remote.get(`BJ0/${date}`), 20);
+});
+
+test('a 02:00 query failure retains verification progress for the next hourly check', async () => {
+  let fails = true;
+  const app = harness({ users: users(1), query: (records, result) => {
+    if (fails) throw new Error('remote query unavailable');
+    return result(records);
+  } });
+  const pending = await app.jobs.timer('dailySyncBijing');
+  assert.equal(pending.phase, 'verify');
+  assert.notEqual(pending.status, 'success');
+  assert.equal(app.markers.length, 0);
+  fails = false;
+  atCheckTime(app);
+  await app.jobs.timer('checkBijingSync');
+  assert.equal(app.state.bijing_sync_runs.find(row => row._id === pending.runId).status, 'success');
+  assert.equal(cycle(app).status, 'complete');
+  assert.equal(app.posts.length, 1);
+});
+
 const HOUR = 3600000;
 const firstCycle = '2026-09-23';
 const sourceChecks = app => app.state.bijing_sync_runs.filter(run => run.trigger === 'timer-check' && run.sourceCheck === true);
@@ -303,7 +368,7 @@ test('02:00 uploads all 1000 users without progress items and 03:00 independentl
     app.advance(9000);
     return ack(recordDate, records);
   }, query: (records, result) => { app.advance(5000); return result(records); } });
-  const uploaded = await app.jobs.timer('dailySyncBijing');
+  const uploaded = await legacyDailyUpload(app);
   assert.equal(uploaded.status, 'uploaded');
   assert.equal(uploaded.phase, 'upload');
   assert.equal(uploaded.total, 1000);
@@ -340,7 +405,7 @@ test('02:00 uploads all 1000 users without progress items and 03:00 independentl
 for (const count of [99, 100, 101, 1000]) {
   test(`upload and independent source check cover the ${count}-user API boundary without lost or duplicate users`, async () => {
     const app = harness({ users: users(count) });
-    const uploaded = await app.jobs.timer('dailySyncBijing');
+    const uploaded = await legacyDailyUpload(app);
     assert.equal(uploaded.status, 'uploaded');
     assert.equal(uploaded.total, count);
     assert.equal(app.state.bijing_sync_items.length, 0);
@@ -416,7 +481,7 @@ test('source-check interruption after 40 committed users holds the lease and rec
       throw error;
     }
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   assert.equal(app.state.bijing_sync_items.length, 0);
   atCheckTime(app);
   const paused = await app.jobs.timer('checkBijingSync');
@@ -454,7 +519,7 @@ test('source-check interruption after 40 committed users holds the lease and rec
 
 test('successful upload acknowledgements cannot hide records still missing in the final query response', async () => {
   const app = harness({ post: (recordDate, records, { ack }) => ack(recordDate, records) });
-  const uploaded = await app.jobs.timer('dailySyncBijing');
+  const uploaded = await legacyDailyUpload(app);
   assert.equal(uploaded.status, 'uploaded');
   assert.equal(app.state.bijing_sync_items.length, 0);
   atCheckTime(app);
@@ -479,7 +544,7 @@ test('a timeout after the remote upload commit is resolved by source verificatio
     writeRemote(recordDate, records);
     throw new Error('upload acknowledgement timed out');
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app);
   const checked = await app.jobs.timer('checkBijingSync');
   assert.equal(checked.status, 'success');
@@ -493,7 +558,7 @@ test('a timeout after the remote upload commit is resolved by source verificatio
 test('the independent check compares current source totals and confirms the repaired remote duration', async () => {
   let duration = 20;
   const app = harness({ duration: () => duration });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   duration = 35;
   atCheckTime(app);
   const checked = await app.jobs.timer('checkBijingSync');
@@ -516,7 +581,7 @@ test('zero-duration users are skipped and source-read failures remain repairable
     if (openid === 'openid1' && !healthy) throw new Error('source temporarily unavailable');
     return openid === 'openid1' ? 35 : 20;
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   assert.equal(app.state.bijing_sync_items.length, 0);
   atCheckTime(app);
   await app.jobs.timer('checkBijingSync');
@@ -562,13 +627,13 @@ test('a busy upload lease prevents duplicate work and its expiry permits an idem
   const saved = uploads(app)[0];
   saved.leaseToken = 'active-upload-worker';
   saved.leaseUntil = app.now() + 120000;
-  const busy = await app.jobs.timer('dailySyncBijing');
+  const busy = await legacyDailyUpload(app);
   assert.equal(busy.runId, run.runId);
   assert.equal(busy.busy, true);
   assert.equal(app.posts.length, 0);
   assert.equal(app.state.bijing_sync_items.length, 0);
   app.advance(120001);
-  const restarted = await app.jobs.timer('dailySyncBijing');
+  const restarted = await legacyDailyUpload(app);
   assert.equal(restarted.status, 'uploaded');
   assert.equal(restarted.total, 145);
   assert.deepEqual(app.posts.map(post => post.records.length), [100, 45]);
@@ -605,9 +670,9 @@ test('03:00 respects a live upload lease and starts its separate source check af
 
 test('duplicate upload and check deliveries do not create runs or repeat completed HTTP work', async () => {
   const app = harness();
-  const upload = await app.jobs.timer('dailySyncBijing');
+  const upload = await legacyDailyUpload(app);
   atCheckTime(app);
-  const duplicateUpload = await app.jobs.timer('dailySyncBijing');
+  const duplicateUpload = await legacyDailyUpload(app);
   assert.equal(duplicateUpload.runId, upload.runId);
   assert.equal(duplicateUpload.status, 'uploaded');
   assert.equal(app.posts.length, 1);
@@ -616,7 +681,7 @@ test('duplicate upload and check deliveries do not create runs or repeat complet
   const checked = await app.jobs.timer('checkBijingSync');
   assert.equal(checked.status, 'success');
   const before = { runs: app.state.bijing_sync_runs.length, requests: app.requests.length };
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   await app.jobs.timer('checkBijingSync');
   await app.jobs.timer('resumeBijingBatches');
   assert.equal(app.state.bijing_sync_runs.length, before.runs);
@@ -639,7 +704,7 @@ test('03:00 repairs historical errors as well as independently checking the late
 
 test('a query error exits each timer call and three failures terminate the independent check without deleting evidence', async () => {
   const app = harness({ query: () => { throw new Error('check endpoint unavailable'); } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app);
   let runId;
   for (let failures = 1; failures <= 3; failures++) {
@@ -663,7 +728,7 @@ test('a query error exits each timer call and three failures terminate the indep
 test('slow success markers shorten checkpoints so a worker can save progress before its time limit', async () => {
   let app;
   app = harness({ users: users(125), mark: () => { app.advance(21000); } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app);
   const checked = await app.jobs.timer('checkBijingSync');
   assert.equal(checked.status, 'success');
@@ -735,7 +800,7 @@ test('03:00 and 04:00 create distinct hourly checks while repeated delivery with
     if (write) writeRemote(recordDate, records);
     return ack(recordDate, records);
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app, 3);
   const first = await app.jobs.timer('checkBijingSync');
   assert.equal(first.status, 'failed');
@@ -782,7 +847,7 @@ test('the next hourly trigger resumes an active check and consumes that hour wit
       throw error;
     }
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app, 3);
   const paused = await app.jobs.timer('checkBijingSync');
   assert.equal(paused.busy, true);
@@ -818,7 +883,7 @@ test('the hourly trigger repairs historical errors in the allowed window and is 
   let duration = 20;
   const app = harness({ users: users(1), duration: () => duration });
   const historical = clone(app.seedError('BJ0', '2026-01-01'));
-  const uploaded = await app.jobs.timer('dailySyncBijing');
+  const uploaded = await legacyDailyUpload(app);
   assert.equal(uploaded.status, 'uploaded');
   app.advance(59 * 60000);
   assert.equal(await app.jobs.timer('checkBijingSync'), null);
@@ -856,7 +921,7 @@ test('an 11:00 check trigger does not advance an unfinished 10:00 check', async 
       throw error;
     }
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app, 10);
   const paused = await app.jobs.timer('checkBijingSync');
   assert.equal(paused.busy, true);
@@ -959,7 +1024,7 @@ test('a 10:00 query failure is durably queued and the next day repairs its origi
     if (fail) throw new Error('last check timed out');
     return result(records);
   } });
-  await app.jobs.timer('dailySyncBijing');
+  await legacyDailyUpload(app);
   atCheckTime(app, 10);
   const failed = await app.jobs.timer('checkBijingSync');
   assert.equal(failed.status, 'running');
@@ -1105,7 +1170,7 @@ test('a source-page ownership change cannot use the old account synchronization 
 
 test('a historical acknowledged upload that never received its first source check is verified on a later day', async () => {
   const app = harness({ users: users(1) });
-  const uploaded = await app.jobs.timer('dailySyncBijing');
+  const uploaded = await legacyDailyUpload(app);
   assert.equal(uploaded.status, 'uploaded');
   app.remote.delete(`BJ0/${date}`);
   app.advance(25 * HOUR);
@@ -1118,7 +1183,7 @@ test('a historical acknowledged upload that never received its first source chec
 
 test('an upload already superseded by a completed source check is not rechecked historically', async () => {
   const app = harness({ users: users(1) });
-  const uploaded = await app.jobs.timer('dailySyncBijing');
+  const uploaded = await legacyDailyUpload(app);
   atCheckTime(app);
   await app.jobs.timer('checkBijingSync');
   const priorQueries = app.queries.filter(records => records[0].recordDate === date).length;

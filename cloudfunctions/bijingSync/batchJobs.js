@@ -43,7 +43,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
   }
   function verificationTime(run) {
     // Legacy automatic runs wait for the first scheduled check at 03:00.
-    return run.trigger === 'timer' && run.mode !== 'errors'
+    return run.trigger === 'timer' && run.mode !== 'errors' && !run.verifyImmediately
       ? Date.parse(`${run.recordDate}T03:00:00+08:00`) + 86400000 : 0;
   }
   function waitsForCheck(run) {
@@ -96,7 +96,8 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
         successCount: 0, failedCount: 0, skippedCount: 0, discrepancyCount: 0, error: '', interruptions: 0, consecutiveInterruptions: 0,
         queryFailures: 0, attempt: (day && day.attempts || 0) + 1, leaseToken: '', leaseUntil: 0,
         ...(mode === 'full' ? { sourceCheck: true } : {}),
-        ...(automatic && mode === 'full' ? { verifyAfter: Date.parse(`${recordDate}T03:00:00+08:00`) + 86400000 } : {}),
+        ...(schedule.upload ? { verifyImmediately: true } : {}),
+        ...(automatic && mode === 'full' && !schedule.upload ? { verifyAfter: Date.parse(`${recordDate}T03:00:00+08:00`) + 86400000 } : {}),
         ...(schedule.repairCycle ? { repairCycle: schedule.repairCycle, queueAttemptCycle: schedule.repairCycle } : {}),
       };
       const { _id, ...data } = run;
@@ -426,7 +427,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
     return db.runTransaction(async tx => {
       const current = await optional(tx, RUNS, run._id);
       if (!current || current.leaseToken !== run.leaseToken || current.leaseUntil <= now()) throw leaseUnavailable();
-      const automaticUpload = run.trigger === 'timer';
+      const automaticUpload = run.trigger === 'timer' && !run.verifyImmediately;
       const timestamp = now();
       const patch = { phase: automaticUpload ? 'upload' : 'verify', status: automaticUpload ? 'uploaded' : 'running',
         cursor: '', sourceCheck: true, uploadSummary: summary, uploadedAt: timestamp,
@@ -777,7 +778,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
   }
   async function timer(triggerName) {
     const { createDailySchedule, CHECK_CYCLE_ID, getCycleKey } = require('./dailySchedule');
-    const uploadOnly = triggerName === 'dailySyncBijing';
+    const dailySync = triggerName === 'dailySyncBijing';
     const schedule = createDailySchedule({
       db, now, jobs: { startDailyUpload, startScheduledRepair,
         repairPending: async (cycleKey, processCurrent) => {
@@ -792,7 +793,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
         },
         ensureDailyCheck: require('./sourceCheck').createSourceCheck({ db, now }).ensureDailyCheck,
         resumeActive: options => resumeActive({ ...options, batch: true }),
-        processChunk: runId => processBatch(runId, { automatic: true, ...(uploadOnly ? { expectedPhase: 'upload' } : {}) }) },
+        processChunk: runId => processBatch(runId, { automatic: true }) },
     });
     const recordDate = recentDates(1)[0];
     const cycleProgress = cycle => JSON.stringify(cycle && [getCycleKey(cycle), cycle.cursor, cycle.status]);
@@ -801,11 +802,11 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
     // The 100-record limit bounds an API batch, not the whole invocation.
     // There is no wall-clock cutoff: ordinary progress continues in this call.
     while (recentDates(1)[0] === recordDate) {
-      const cycleBefore = uploadOnly ? null : await optional(db, DAYS, CHECK_CYCLE_ID);
-      // Continue the same upload run directly. A concurrent check worker must
-      // not turn this upload-only invocation into reconciliation or repair.
-      const result = uploadOnly && last
-        ? await processBatch(last.runId, { automatic: true, expectedPhase: 'upload' })
+      const cycleBefore = dailySync ? null : await optional(db, DAYS, CHECK_CYCLE_ID);
+      // Finish this daily run through the same verification and repair phases
+      // as manual synchronization, without opening an hourly check cycle.
+      const result = dailySync && last
+        ? await processBatch(last.runId, { automatic: true })
         : await schedule.timer(nextTrigger);
       nextTrigger = 'resumeBijingBatches';
       if (result != null) last = result;
@@ -818,9 +819,7 @@ function createBatchJobs({ db, getDayDuration, markSynced, postBatch, postZero, 
         break;
       }
       if (result.busy || result.status === 'waiting' || result.status === 'uploaded' || result.error) break;
-      // Even a slow 02:00 upload that lasts past 03:00 stops after upload; the
-      // check trigger (or its continuation) owns reconciliation and repair.
-      if (triggerName === 'dailySyncBijing' && result.phase !== 'upload') break;
+      if (dailySync && !['running', 'interrupted'].includes(result.status)) break;
       const progress = JSON.stringify([result.runId, result.recordDate, result.phase, result.cursor, result.status,
         result.total, result.successCount, result.failedCount, result.skippedCount, result.discrepancyCount, result.queryFailures]);
       if (seen.has(progress)) break;
