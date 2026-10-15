@@ -282,15 +282,34 @@ test('member relations left by old clients can be repaired when rejoining', asyn
   assert.equal(app.stored.teams[0].memberCount, 2);
 });
 
-test('concurrent admission at capacity uses canonical membership, not a stale stored counter', async () => {
-  const members = ['owner', ...Array.from({ length: 48 }, (_, index) => `member-${index}`)];
+test('concurrent admission at the 500-member capacity uses canonical membership, not a stale stored counter', async () => {
+  const members = ['owner', ...Array.from({ length: 498 }, (_, index) => `member-${index}`)];
   const app = harness({ teams: [team({ members, memberCount: 1 })], invites: [invitation()] });
   const results = await Promise.all([app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'last-slot'), app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'over-limit')]);
   assert.equal(results.filter(result => result.success).length, 1);
-  assert.equal(app.stored.teams[0].members.length, 50);
-  assert.equal(app.stored.teams[0].memberCount, 50);
+  assert.equal(app.stored.teams[0].members.length, 500);
+  assert.equal(app.stored.teams[0].memberCount, 500);
   assert.equal(app.stored.team_members.length, 1);
+  assert.equal(results.find(result => !result.success).error, '团队人数已达上限');
   assert.equal((await app.call('joinTeam', { teamId: 'team' })).success, true, 'existing members can retry at capacity');
+  const fullTeam = app.stored;
+  assert.equal((await app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'another-member')).success, false);
+  assert.deepEqual(app.stored, fullTeam, 'rejected joins leave membership and relations unchanged');
+});
+
+test('teams at the former 50-member limit and below 500 can admit members despite stale counts and duplicates', async () => {
+  for (const count of [50, 499]) {
+    const members = ['owner', ...Array.from({ length: count - 1 }, (_, index) => `member-${index}`)];
+    const app = harness({ teams: [team({ members: [...members, 'owner', members[1]], memberCount: 500 })], invites: [invitation()] });
+    const result = await app.call('joinTeam', { teamId: 'team', inviteId: 'invite' }, 'new-member');
+    assert.equal(result.success, true, `${count} canonical members should allow another member`);
+    assert.deepEqual(app.stored.teams[0].members, [...members, 'new-member']);
+    assert.equal(app.stored.teams[0].memberCount, count + 1);
+    assert.equal(app.stored.team_members.length, 1);
+    assert.equal(app.stored.team_members[0].openid, 'new-member');
+    assert.equal((await app.call('joinTeam', { teamId: 'team' }, 'new-member')).success, true);
+    assert.equal(app.stored.teams[0].memberCount, count + 1, 'retries do not consume another slot');
+  }
 });
 
 test('membership and relation writes roll back together on join/leave/commit failure', async () => {
@@ -549,6 +568,28 @@ test('checkin queries reject arbitrary users and outsiders before reading record
   ]) assert.equal((await app.call(type, data, openid)).success, false);
   assert.equal(app.reads.filter(read => read.name === 'meditation_records').length, 0);
   assert.equal((await app.call('getTeamMembersCheckinData', { memberOpenids: ['member'] })).success, true);
+});
+
+test('checkin queries accept all 500 team members while retaining size and membership validation', async () => {
+  const members = ['owner', ...Array.from({ length: 499 }, (_, index) => `member-${index}`)];
+  const app = harness({ teams: [team({ members, memberCount: members.length })], meditation_records: [
+    { _id: 'first-record', _openid: members[0], date: '2026-09-17' },
+    { _id: 'last-record', _openid: members[499], date: '2026-09-17' }
+  ] });
+  const result = await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: members });
+  assert.equal(result.success, true);
+  assert.equal(Object.keys(result.data).length, 500);
+  assert.deepEqual(result.data.owner, { monthlyCount: 1, totalCount: 1 });
+  assert.deepEqual(result.data[members[499]], { monthlyCount: 1, totalCount: 1 });
+  assert.deepEqual(result.data[members[1]], { monthlyCount: 0, totalCount: 0 });
+  const recordReads = app.reads.filter(read => read.name === 'meditation_records').length;
+  const oversized = await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: [...members, 'outsider'] });
+  assert.equal(oversized.success, false);
+  assert.equal(oversized.error, '成员列表无效');
+  const unauthorized = await app.call('getTeamMembersCheckinData', { teamId: 'team', memberOpenids: [...members.slice(0, 499), 'outsider'] });
+  assert.equal(unauthorized.success, false);
+  assert.equal(unauthorized.error, '只能查看同团队成员的打卡数据');
+  assert.equal(app.reads.filter(read => read.name === 'meditation_records').length, recordReads);
 });
 
 test('monthly counts include every record and use the Beijing 02:00 business month', async () => {

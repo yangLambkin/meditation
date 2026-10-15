@@ -177,7 +177,7 @@
     <button wx:if="{{!isLoading}}" class="text-button" bindtap="goToTeamList">返回团队列表</button>
   </view>
 
-  <canvas type="2d" id="reminderCanvas" class="reminder-canvas" aria-hidden="true"></canvas>
+  <canvas type="2d" id="reminderCanvas" class="reminder-canvas" style="width: {{reminderCanvasWidth}}px; height: {{reminderCanvasHeight}}px;" aria-hidden="true"></canvas>
 
   <view wx:if="{{(isCreator || isDeputy) && reminderDialogOpen}}" class="invite-overlay" bindtap="closeReminderDialog" catchtouchmove="noop">
     <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasGoal ? '今日未达标长图' : '今日未练习长图'}}">

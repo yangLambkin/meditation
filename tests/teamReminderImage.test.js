@@ -115,8 +115,9 @@ test('all 50 cards fit within a bounded canvas, including the last card and oute
   const h = harness();
   const members = Array.from({ length: 50 }, (_, index) => member(`同学${index + 1}`));
   const result = await h.generate(members);
-  assert.ok(result.width <= 8192 && result.height <= 8192);
-  assert.ok(result.width * result.height <= 8 * 1024 * 1024);
+  assert.ok(result.width <= 16384 && result.height <= 16384);
+  assert.ok(result.width * result.height <= 32 * 1024 * 1024);
+  assert.ok(result.width >= 1000, 'large teams retain enough pixels for readable text');
   assert.equal(h.text.filter(item => /^同学\d+$/.test(item.value)).length, 50);
   const cards = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#ffffff');
   assert.equal(cards.length, 50);
@@ -124,6 +125,21 @@ test('all 50 cards fit within a bounded canvas, including the last card and oute
   const lastBottom = Math.max(...cards[49].points.map(point => point[1]));
   assert.equal(logicalHeight - lastBottom, 24);
   assert.equal(logicalHeight * h.context.transform[1], result.height);
+});
+
+test('expanded teams can export all 500 reminder cards without truncating the list or exceeding canvas limits', async () => {
+  const h = harness();
+  const result = await h.generate(Array.from({ length: 500 }, (_, index) => member(`同学${index + 1}`)));
+  assert.equal(h.exports.length, 1);
+  assert.ok(result.width > 0 && result.height > 0);
+  assert.ok(result.width <= 16384 && result.height <= 16384);
+  assert.ok(result.width * result.height <= 32 * 1024 * 1024);
+  assert.equal(h.text.filter(item => /^同学\d+$/.test(item.value)).length, 500);
+  const cards = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#ffffff');
+  assert.equal(cards.length, 500);
+  const logicalHeight = h.fills.find(fill => fill.kind === 'rect' && fill.color === '#f8f9fb').height;
+  assert.equal(logicalHeight - Math.max(...cards[499].points.map(point => point[1])), 24);
+  assert.equal(h.exports[0].destHeight, result.height);
 });
 
 test('long names wrap in full and increase card height without overlapping the subtitle or badge', async () => {
@@ -297,5 +313,26 @@ test('invalid reports, empty lists and qualified members cannot produce an image
   await assert.rejects(h.generate([member('同学')], { report: { settings: {} } }), /数据不完整/);
   await assert.rejects(h.generate([]), /没有需要提醒/);
   await assert.rejects(h.generate([member('达标', { todayStatus: 'qualified' })]), /数据不完整/);
+  await assert.rejects(h.generate(Array.from({ length: 501 }, () => member('同学'))), /团队成员数据异常/);
   assert.equal(h.exports.length, 0);
+});
+
+ test('waits for the native canvas dimensions before drawing and exporting the full image', async () => {
+  const h = harness();
+  let release;
+  let size;
+  const generating = h.generate([member('同学')], { resizeCanvas: (width, height) => {
+    size = { width, height };
+    return new Promise(resolve => { release = resolve; });
+  } });
+  await flush();
+  assert.equal(h.exports.length, 0);
+  assert.equal(h.fills.length, 0);
+  release();
+  const result = await generating;
+  assert.deepEqual(size, { width: result.width, height: result.height });
+  assert.equal(h.canvas.width, size.width);
+  assert.equal(h.canvas.height, size.height);
+  assert.equal(h.exports[0].width, size.width);
+  assert.equal(h.exports[0].height, size.height);
 });

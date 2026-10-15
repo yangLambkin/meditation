@@ -4,7 +4,7 @@ const { authorizeControlPanel } = require('./maintenanceAuth');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
-const MAX_MEMBERS = 50;
+const MAX_MEMBERS = 500;
 const MAX_DEPUTIES = 7;
 const PAGE_SIZE = 100;
 const DEFAULT_ICON = '/images/icons/team.png';

@@ -33,7 +33,8 @@ Page({
     isPreparingInvite: false, inviteReady: false, inviteError: '',
     inviteDialogOpen: false, inviteExpiresLabel: '',
     isPreparingReminder: false, isSavingReminder: false,
-    reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: ''
+    reminderDialogOpen: false, reminderImagePath: '', reminderCount: 0, reminderDate: '',
+    reminderCanvasWidth: 750, reminderCanvasHeight: 1000
   },
 
   onLoad(options = {}) {
@@ -362,7 +363,10 @@ Page({
       }
       const canvas = await this.getReminderCanvas();
       if (!isCurrent()) return;
-      const reminder = await createReminderImage({ canvas, report, members, teamName: teamInfo.name, isCurrent });
+      const reminder = await createReminderImage({ canvas, report, members, teamName: teamInfo.name, isCurrent,
+        resizeCanvas: (width, height) => new Promise(resolve => {
+          this.setData({ reminderCanvasWidth: width, reminderCanvasHeight: height }, resolve);
+        }) });
       if (!isCurrent()) return;
       if (report.nextResetAt <= Date.now()) {
         wx.showToast({ title: '练习日已更新，请重新查看', icon: 'none' });

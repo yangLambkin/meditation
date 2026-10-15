@@ -1,7 +1,7 @@
 const { getAvatarInitial, getAvatarSource } = require('../../../utils/avatar.js');
 const LOGICAL_WIDTH = 750;
-const MAX_CANVAS_EDGE = 8192;
-const MAX_CANVAS_PIXELS = 8 * 1024 * 1024;
+const MAX_CANVAS_EDGE = 16384;
+const MAX_CANVAS_PIXELS = 32 * 1024 * 1024;
 const AVATAR_CONCURRENCY = 4;
 const AVATAR_TIMEOUT_MS = 4000;
 const AVATAR_BATCH_TIMEOUT_MS = 7000;
@@ -287,7 +287,7 @@ function exportImage(canvas, width, height, wxApi, isCurrent) {
   });
 }
 
-async function createReminderImage({ canvas, report, members, teamName = '', wxApi = wx, isCurrent = () => true } = {}) {
+async function createReminderImage({ canvas, report, members, teamName = '', wxApi = wx, isCurrent = () => true, resizeCanvas = async () => {} } = {}) {
   checkCurrent(isCurrent);
   const goal = report && report.settings && report.settings.dailyGoalMinutes;
   if (!report || !/^\d{4}-\d{2}-\d{2}$/.test(report.businessDate || '') ||
@@ -297,7 +297,7 @@ async function createReminderImage({ canvas, report, members, teamName = '', wxA
     throw new Error('当日练习数据不完整，请刷新后重试');
   }
   if (!members.length) throw new Error('当日没有需要提醒的成员');
-  if (members.length > 50) throw new Error('团队成员数据异常，请刷新后重试');
+  if (members.length > 500) throw new Error('团队成员数据异常，请刷新后重试');
   if (!canvas || typeof canvas.getContext !== 'function' || !wxApi || typeof wxApi.canvasToTempFilePath !== 'function') {
     throw new Error('暂时无法生成图片，请重试或更新微信');
   }
@@ -311,6 +311,10 @@ async function createReminderImage({ canvas, report, members, teamName = '', wxA
   const width = Math.max(1, Math.floor(LOGICAL_WIDTH * scale));
   const height = Math.max(1, Math.floor(logicalHeight * scale));
   const avatars = await loadAvatars(canvas, members, wxApi, isCurrent);
+  checkCurrent(isCurrent);
+  // Keep the native canvas display size aligned with its backing store. WeChat
+  // uses display coordinates for the export crop on some clients.
+  await resizeCanvas(width, height);
   checkCurrent(isCurrent);
   canvas.width = width;
   canvas.height = height;

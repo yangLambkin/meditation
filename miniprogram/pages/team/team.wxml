@@ -1,5 +1,5 @@
 <view class="team-page">
-  <view class="team-hero">
+  <view class="team-hero" bindtap="onHeroTap">
     <view class="hero-decoration" aria-hidden="true">
       <view class="hero-shape"></view>
       <image class="hero-image" src="/images/bg_image.png" mode="aspectFill" />
@@ -19,7 +19,7 @@
             <text class="count-label">我创建的</text>
           </view>
         </view>
-        <button class="create-button" size="mini" bindtap="createNewTeam" aria-label="创建团队">创建团队</button>
+        <button wx:if="{{showCreateTeam}}" class="create-button" size="mini" bindtap="createNewTeam" aria-label="创建团队">创建团队</button>
       </view>
     </view>
   </view>
@@ -41,9 +41,9 @@
       <text class="team-description">{{item.description || ''}}</text>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
-      <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长或副团长，通过邀请加入团队。
-也可以创建自己的团队，邀请伙伴一起练习。</text>
-      <button class="primary-button" bindtap="createNewTeam">创建第一个团队</button>
+      <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长或副团长，通过邀请加入团队。<text wx:if="{{showCreateTeam}}">
+也可以创建自己的团队，邀请伙伴一起练习。</text></text>
+      <button wx:if="{{showCreateTeam}}" class="primary-button" bindtap="createNewTeam">创建第一个团队</button>
     </view>
   </block>
 
@@ -60,6 +60,6 @@
       </view>
       <text class="team-description">{{item.description || ''}}</text>
     </view>
-    <view wx:if="{{!allTeams.length && !isLoading}}" class="empty-state"><view class="empty-symbol">◎</view><text class="empty-title">还没有公开团队</text><text class="empty-description">创建一个团队，邀请伙伴加入。</text></view>
+    <view wx:if="{{!allTeams.length && !isLoading}}" class="empty-state"><view class="empty-symbol">◎</view><text class="empty-title">还没有公开团队</text><text class="empty-description">{{showCreateTeam ? '创建一个团队，邀请伙伴加入。' : '请联系团长或副团长，通过邀请加入团队。'}}</text></view>
   </block>
 </view>

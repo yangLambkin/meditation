@@ -10,7 +10,13 @@ Page({
   data: {
     myTeams: [], joinedTeams: [], mergedJoinedTeams: [], allTeams: [],
     isLoading: false, currentTab: 'created', userNickname: '匿名用户',
-    hasUserInfo: false, totalJoinedTeams: 0
+    hasUserInfo: false, totalJoinedTeams: 0, showCreateTeam: false
+  },
+
+  onHeroTap() {
+    if (this.data.showCreateTeam) return;
+    this._heroTapCount = (this._heroTapCount || 0) + 1;
+    if (this._heroTapCount === 7) this.setData({ showCreateTeam: true });
   },
 
   createNewTeam() {
