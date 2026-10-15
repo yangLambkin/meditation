@@ -559,6 +559,48 @@ test('public team preview hides OPENIDs and reports membership from cloud identi
   assert.equal((await app.call('checkTeamMember', { teamId: 'team', openid: 'owner' }, 'outsider')).isMember, false);
 });
 
+test('member roster batches minimal profile fields and never reads practice history', async () => {
+  const ids = Array.from({ length: 500 }, (_, index) => index === 0 ? 'owner' : `member-${index}`);
+  const app = harness({ teams: [team({ members: ids })], users: ids.map((id, index) => ({
+    _id: `profile-${String(index).padStart(3, '0')}`, _openid: id, nickName: id, avatarUrl: `cloud://${id}`,
+    bijingBound: index === 1, bijingStudentNumber: index === 1 ? ' BJ123456 ' : 'BJ_STALE',
+    bijingBindingVersion: 'private-token', secret: 'private-profile'
+  })) });
+  const result = await app.call('getTeamInfo', { teamId: 'team' });
+  assert.equal(result.success, true);
+  assert.equal(result.data.members.length, 500);
+  assert.equal(result.data.members[1].bijingStudentNumber, 'BJ123456');
+  assert.equal(result.data.members[0].bijingStudentNumber, '');
+  assert.equal(app.reads.filter(read => read.name === 'meditation_records').length, 0);
+  const profileReads = app.reads.filter(read => read.name === 'users');
+  assert.equal(profileReads.length, 25);
+  assert.ok(profileReads.every(read => read.filter._openid.inValues.length <= 20));
+  assert.ok(profileReads.every(read => Object.keys(read.projection).sort().join(',') ===
+    '_id,_openid,avatarUrl,bijingBound,bijingStudentNumber,nickName'));
+  assert.doesNotMatch(JSON.stringify(result.data), /private-token|private-profile|BJ_STALE/);
+});
+
+test('roster uses the bound profile among legacy duplicates and public previews cannot read or expose student numbers', async () => {
+  const initial = { teams: [team()], users: [
+    { _id: 'a-old', _openid: 'owner', nickName: '旧昵称', bijingBound: false, bijingStudentNumber: 'BJ_OLD' },
+    { _id: 'z-active', _openid: 'owner', nickName: '当前昵称', bijingBound: true, bijingStudentNumber: 'BJ123456' }
+  ] };
+  const app = harness(initial);
+  const member = await app.call('getTeamInfo', { teamId: 'team' });
+  assert.equal(member.data.members[0].nickname, '当前昵称');
+  assert.equal(member.data.members[0].bijingStudentNumber, 'BJ123456');
+  for (const viewer of ['', 'outsider']) {
+    const preview = harness(initial);
+    const result = await preview.call('getTeamInfo', { teamId: 'team' }, viewer, { openid: 'owner' });
+    assert.equal(Object.hasOwn(result.data.members[0], 'bijingStudentNumber'), false);
+    assert.ok(preview.reads.filter(read => read.name === 'users').every(read =>
+      !read.projection.bijingBound && !read.projection.bijingStudentNumber));
+    assert.doesNotMatch(JSON.stringify(result.data), /BJ123456|BJ_OLD/);
+  }
+  const failed = await harness(initial, { fail: 'users:get' }).call('getTeamInfo', { teamId: 'team' });
+  assert.equal(failed.success, false);
+});
+
 test('checkin queries reject arbitrary users and outsiders before reading records', async () => {
   const app = harness({ teams: [team({ members: ['owner', 'member'] })] });
   for (const [type, data, openid] of [

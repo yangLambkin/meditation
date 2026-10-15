@@ -47,7 +47,8 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
   title: `邀请您加入${team.name}团队`
 });
 
-function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+// Most cases exercise the report view; pass initialTab: null to test the actual default members view.
+function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
@@ -158,6 +159,7 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, setTe
       }
     };
     page.onLoad({ teamId });
+    if (initialTab) page.setData({ currentTab: initialTab });
     return page;
   }
   const page = createNextPage();
@@ -166,13 +168,19 @@ function createPage({ cloud, generateInvite, deleteTeam, removeTeamMember, setTe
 const event = (key, value) => ({ currentTarget: { dataset: { [key]: value } } });
 async function flushPromises() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 
-test('team members are the default tab, report is the only statistics source, and attention prioritizes non-practitioners', async () => {
-  const { page, calls, manager } = createPage();
+test('default members view loads only profiles and loads report statistics on demand', async () => {
+  const { page, calls, manager } = createPage({ initialTab: null });
   await page.onShow();
+  assert.equal(page.data.currentTab, 'members');
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.isLoading, false);
+  assert.equal(page.data.teamMembers.length, 3);
+  await page.switchTab(event('tab', 'records'));
   assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport']);
   assert.equal(calls.cloud[1].data.teamId, 'team-a');
   assert.equal(Object.hasOwn(calls.cloud[1].data, 'month'), false);
-  assert.equal(page.data.currentTab, 'members');
+  assert.equal(page.data.currentTab, 'records');
   assert.equal(page.data.recordTab, 'today');
   assert.equal(page.data.todayFilter, 'attention');
   assert.equal(page.data.attentionCount, 2);
@@ -182,6 +190,145 @@ test('team members are the default tab, report is the only statistics source, an
   assert.equal(page.data.isCreator, true);
   assert.deepEqual(Array.from(manager.teams[0].members), ['owner', 'member', 'third']);
   assert.equal(manager.teams[0].cloudId, 'team-a');
+});
+
+test('opening member details and returning preserves the roster without a request or list reset', async () => {
+  const boundTeam = structuredClone(team);
+  boundTeam.members[1].bijingStudentNumber = 'BJ123456';
+  const { page, calls } = createPage({ initialTab: null, cloud: type => {
+    assert.equal(type, 'getTeamInfo');
+    return success(boundTeam);
+  } });
+  await page.onShow();
+  const members = page.data.teamMembers;
+  page.openMemberRecords({ currentTarget: { dataset: { memberOpenid: 'member', view: 'month' } } });
+  assert.equal(calls.navigation.length, 1);
+  assert.match(calls.navigation[0].url, /memberOpenid=member/);
+  page.onHide();
+  const updateCount = page.dataUpdates.length;
+  await page.onShow();
+  assert.equal(page.data.teamMembers, members);
+  assert.equal(page.data.teamMembers[1].bijingStudentNumber, 'BJ123456');
+  assert.equal(page.dataUpdates.slice(updateCount).some(update => Object.hasOwn(update, 'teamMembers')), false);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
+});
+
+test('record tab and return navigation reuse the report while pull refresh invalidates it', async () => {
+  const { page, calls } = createPage({ initialTab: null });
+  await page.onShow();
+  await page.switchTab(event('tab', 'records'));
+  const savedReport = page.data.report;
+  await page.switchTab(event('tab', 'members'));
+  await page.switchTab(event('tab', 'records'));
+  page.onHide();
+  await page.onShow();
+  assert.equal(page.data.report, savedReport);
+  assert.equal(calls.cloud.length, 2);
+  await page.switchTab(event('tab', 'members'));
+  await page.onPullDownRefresh();
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport', 'getTeamInfo']);
+  assert.equal(page.data.report, null);
+  assert.equal(calls.refreshStopped, 1);
+  await page.switchTab(event('tab', 'records'));
+  assert.equal(calls.cloud.filter(call => call.type === 'getTeamPracticeReport').length, 2);
+});
+
+test('member cards keep bound student numbers after a practice report replaces statistics', async () => {
+  const boundTeam = structuredClone(team);
+  boundTeam.members[1].bijingStudentNumber = 'BJ123456';
+  const { page } = createPage({ initialTab: null,
+    cloud: type => success(type === 'getTeamInfo' ? boundTeam : report) });
+  await page.onShow();
+  await page.switchTab(event('tab', 'records'));
+  await page.switchTab(event('tab', 'members'));
+  assert.equal(page.data.teamMembers.find(item => item.openid === 'member').bijingStudentNumber, 'BJ123456');
+  const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
+  const roster = template.slice(template.indexOf('class="roster-card"'), template.indexOf('class="record-toolbar"'));
+  assert.match(roster, /必经学号：/);
+  assert.match(roster, /未绑定必经学号/);
+  assert.doesNotMatch(roster, /totalPracticeCount|lastPracticeLabel/);
+});
+
+test('switching to records during roster loading fetches the report once after profiles are ready', async () => {
+  let finishTeam;
+  let finishReport;
+  const { page, calls } = createPage({ initialTab: null, cloud: type => new Promise(resolve => {
+    if (type === 'getTeamInfo') finishTeam = resolve;
+    else finishReport = resolve;
+  }) });
+  const loading = page.onShow();
+  await page.switchTab(event('tab', 'records'));
+  finishTeam(success(team));
+  await flushPromises();
+  const duplicate = page.switchTab(event('tab', 'records'));
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport']);
+  finishReport(success(report));
+  await Promise.all([loading, duplicate]);
+  assert.equal(page.data.report.businessDate, report.businessDate);
+  assert.equal(page.data.isLoading, false);
+});
+
+test('returning to members after the practice day changes invalidates only statistics', async () => {
+  const { page, calls, setNow } = createPage({ initialTab: null });
+  await page.onShow();
+  await page.switchTab(event('tab', 'records'));
+  await page.switchTab(event('tab', 'members'));
+  page.onHide();
+  setNow(nextResetAt + 1);
+  await page.onShow();
+  assert.equal(calls.cloud.length, 2);
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.teamMembers.length, 3);
+  assert.equal(page.data.isLoading, false);
+});
+
+test('saving settings from members refreshes profiles once and keeps statistics lazy', async () => {
+  const currentTeam = structuredClone(team);
+  const { page, calls } = createPage({ initialTab: null, cloud: (type, data) => {
+    if (type === 'getTeamInfo') return success(currentTeam);
+    assert.equal(type, 'updateTeam');
+    Object.assign(currentTeam, data.teamData);
+    return success({});
+  } });
+  await page.onShow();
+  page.openSettings();
+  page.changeTeamName({ detail: { value: '更新后的团队' } });
+  await page.saveSettings();
+  assert.equal(page.data.teamInfo.name, '更新后的团队');
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.settingsOpen, false);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'updateTeam', 'getTeamInfo']);
+});
+
+test('cached member profiles are cleared before showing another account', async () => {
+  let currentTeam = team;
+  const { page, calls, storage } = createPage({ initialTab: null, cloud: type => {
+    assert.equal(type, 'getTeamInfo');
+    return success(currentTeam);
+  } });
+  await page.onShow();
+  page.onHide();
+  storage.set('userOpenId', 'outsider');
+  currentTeam = { ...team, isMember: false };
+  await page.onShow();
+  assert.equal(page.data.teamInfo, null);
+  assert.equal(page.data.teamMembers.length, 0);
+  assert.equal(page.data.isMember, false);
+  assert.equal(calls.cloud.length, 2);
+  assert.match(calls.redirects[0].url, /joinTeam/);
+});
+
+test('a failed initial roster is retried on return instead of being treated as cached', async () => {
+  let reads = 0;
+  const { page, calls } = createPage({ initialTab: null, cloud: () => ++reads === 1
+    ? { result: { success: false, error: '网络暂不可用' } } : success(team) });
+  await page.onShow();
+  assert.equal(page.data.teamInfo, null);
+  page.onHide();
+  await page.onShow();
+  assert.equal(page.data.teamMembers.length, 3);
+  assert.equal(page.data.loadError, '');
+  assert.equal(calls.cloud.length, 2);
 });
 
 test('today filters use the same report and history orders by unmet days including missed practice', async () => {
@@ -660,7 +807,7 @@ test('a rejected edit during initial or refreshed report loading restores record
   }
 });
 
-test('hiding invalidates pending reports and returning reloads while preserving the editable draft', async () => {
+test('hiding invalidates pending reports and returning retries only statistics while preserving the editable draft', async () => {
   const finishReports = [];
   const { page, calls } = createPage({ cloud: type => type === 'getTeamInfo'
     ? success(team) : new Promise(resolve => { finishReports.push(resolve); }) });
@@ -675,7 +822,7 @@ test('hiding invalidates pending reports and returning reloads while preserving 
   assert.equal(page.data.settingsOpen, true);
   const resumed = page.onShow();
   await flushPromises();
-  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport', 'getTeamInfo', 'getTeamPracticeReport']);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport', 'getTeamPracticeReport']);
   assert.equal(finishReports.length, 2);
   assert.equal(page.data.isLoading, true);
   const staleReport = structuredClone(report);
@@ -990,7 +1137,7 @@ test('02:00 rollover invalidates the report and fetches the next practice day, w
   assert.equal(page.data.report, null);
   for (let i = 0; i < 12; i++) await Promise.resolve();
   assert.equal(page.data.report.businessDate, '2026-09-20');
-  assert.equal(calls.cloud.length, 4);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport', 'getTeamPracticeReport']);
   page.onHide();
   assert.equal(page._resetTimer, null);
   await page.onShow();
@@ -1358,7 +1505,7 @@ test('hiding and refreshing close prepared dialogs and require a new click befor
   assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1);
 });
 
-test('cached page invitations remain unavailable until refreshed creator permissions are confirmed and the owner clicks again', async () => {
+test('manual refresh disables cached invitations until creator permissions are confirmed and the owner clicks again', async () => {
   for (const permission of ['owner', 'member', 'outsider', 'deleted']) {
     let finishTeam;
     let teamReads = 0;
@@ -1369,7 +1516,8 @@ test('cached page invitations remain unavailable until refreshed creator permiss
     await page.onShow();
     await page.prepareInvite();
     page.onHide();
-    const returning = page.onShow();
+    await page.onShow();
+    const returning = page.onPullDownRefresh();
     await page.prepareInvite();
     assert.equal(page.data.inviteReady, false);
     assert.equal(page.data.inviteDialogOpen, false);

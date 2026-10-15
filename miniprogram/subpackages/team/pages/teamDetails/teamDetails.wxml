@@ -11,8 +11,8 @@
       </view>
       <view class="team-stats">
         <view class="team-stat"><text class="team-stat-value">{{teamMembers.length}}</text><text class="team-stat-label">团队成员</text></view>
-        <view class="team-stat"><text class="team-stat-value">{{overview ? overview.totalPracticeCount : '—'}}</text><text class="team-stat-label">累计练习</text></view>
-        <view class="team-stat"><text class="team-stat-value">{{overview ? overview.activityRate + '%' : '—'}}</text><text class="team-stat-label">今日活跃度</text></view>
+        <view wx:if="{{currentTab === 'records'}}" class="team-stat"><text class="team-stat-value">{{overview ? overview.totalPracticeCount : '—'}}</text><text class="team-stat-label">累计练习</text></view>
+        <view wx:if="{{currentTab === 'records'}}" class="team-stat"><text class="team-stat-value">{{overview ? overview.activityRate + '%' : '—'}}</text><text class="team-stat-label">今日活跃度</text></view>
       </view>
       <view wx:if="{{isCreator || isDeputy}}" class="hero-actions">
         <button class="invite-button" bindtap="prepareInvite" loading="{{isPreparingInvite}}" disabled="{{isPreparingInvite || isSaving || isDeleting || removingMemberId || roleChangingMemberId}}">{{isPreparingInvite ? '准备中…' : '邀请成员'}}</button>
@@ -33,16 +33,13 @@
         <nickname-avatar avatar-class="member-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" />
         <view class="member-identity">
           <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view>
-          <text wx:if="{{report && item.totalPracticeCount !== undefined}}" class="member-subtitle">练习 {{item.totalPracticeCount}} 次 · {{item.cumulativeMinutesLabel}} 分钟</text>
-          <text wx:if="{{report}}" class="member-last-practice">{{item.lastPracticeLabel ? '最近练习 · ' + item.lastPracticeLabel : (item.totalPracticeCount === 0 ? '还没有练习记录' : '')}}</text>
+          <text class="member-subtitle">{{item.bijingStudentNumber ? '必经学号：' + item.bijingStudentNumber : '未绑定必经学号'}}</text>
           <text wx:if="{{removingMemberId === item.openid}}" class="member-remove-status">正在移除…</text>
           <text wx:elif="{{roleChangingMemberId === item.openid}}" class="member-remove-status">正在更新身份…</text>
         </view>
         <text class="member-card-chevron" aria-hidden="true">›</text>
       </view>
-      <view wx:if="{{isLoading}}" class="member-load-note">正在同步成员练习数据…</view>
-      <view wx:elif="{{reportError}}" class="member-load-note"><text>成员已加载，练习数据暂不可用</text><button class="text-button" bindtap="loadTeamData">重新加载</button></view>
-      <text wx:elif="{{report}}" class="page-footnote">练习次数与时长从 {{report.settings.effectivePracticeStartDate || report.settings.practiceStartDate}} 起统计</text>
+      <text class="page-footnote">点击成员查看练习记录</text>
     </view>
 
     <block wx:if="{{currentTab === 'records'}}">
