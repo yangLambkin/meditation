@@ -63,6 +63,56 @@ test('a nickname-only profile stays visible on the me page without requiring a c
   assert.equal(page.data.hasUserInfo, true);
 });
 
+for (const nickname of ['济波（海涛）', '济波(海涛)', '阿依·古丽', '静心🌿']) {
+  test(`a nickname with display characters completes first login: ${nickname}`, async () => {
+    const server = profileServer();
+    const audits = [];
+    const { page, storage, calls } = createPage('profile', {
+      storage: { userOpenId: 'local_123', userInfo: {}, userNickname: '' },
+      checkText: async (text, scene) => { audits.push({ text, scene }); return true; },
+      respond: server.respond
+    });
+    page.initByUserType();
+    page.onNicknameInput({ detail: { value: nickname } });
+    assert.equal(page.data.isProfileValid, true);
+    assert.equal(await page.saveProfile(), true);
+    assert.deepEqual(audits, [{ text: nickname, scene: 1 }]);
+    assert.equal(server.user().nickName, nickname);
+    assert.equal(storage.userOpenId, 'oz-account');
+    assert.equal(storage.userNickname, nickname);
+    assert.equal(calls.navigation, 1);
+  });
+}
+
+test('a nickname with parentheses still requires content approval before login or saving', async () => {
+  const audits = [];
+  const { page, storage, calls } = createPage('profile', {
+    storage: { userOpenId: 'local_123', userInfo: {}, userNickname: '' },
+    checkText: async text => { audits.push(text); return false; }
+  });
+  page.initByUserType();
+  page.onNicknameInput({ detail: { value: '济波（海涛）' } });
+  assert.equal(page.data.isProfileValid, true);
+  assert.equal(await page.saveProfile(), false);
+  assert.deepEqual(audits, ['济波（海涛）']);
+  assert.equal(calls.cloud.length, 0);
+  assert.equal(storage.userOpenId, 'local_123');
+  assert.equal(page.data.nickname, '济波（海涛）');
+  assert.equal(calls.navigation, 0);
+});
+
+test('empty and overlong nicknames remain invalid without starting login or saving', async () => {
+  for (const nickname of ['', '   ', '觉'.repeat(16)]) {
+    const { page, calls } = createPage();
+    page.initByUserType();
+    page.onNicknameInput({ detail: { value: nickname } });
+    assert.equal(page.data.isProfileValid, false);
+    await page.saveProfile();
+    assert.equal(calls.cloud.length, 0);
+    assert.equal(calls.navigation, 0);
+  }
+});
+
 test('rejected nickname ends loading and keeps the draft without cloud calls', async () => {
   const { page, calls } = createPage('profile', { safe: false });
   page.setData({ nickname: '草稿', isLoading: true });
