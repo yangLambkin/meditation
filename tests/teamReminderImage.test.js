@@ -52,6 +52,17 @@ function harness({ getImageInfo, cloud, decode, exportImage } = {}) {
       return image;
     }
   };
+  // Match the native canvas limit reported by affected WeChat clients.
+  for (const dimension of ['width', 'height']) {
+    let size = 0;
+    Object.defineProperty(canvas, dimension, {
+      get: () => size,
+      set(value) {
+        if (value > 16383) throw new RangeError(`set ${dimension} out of range: ${value} > 16383`);
+        size = value;
+      }
+    });
+  }
   const wxApi = {
     cloud,
     getImageInfo(options) {
@@ -115,7 +126,7 @@ test('all 50 cards fit within a bounded canvas, including the last card and oute
   const h = harness();
   const members = Array.from({ length: 50 }, (_, index) => member(`同学${index + 1}`));
   const result = await h.generate(members);
-  assert.ok(result.width <= 16384 && result.height <= 16384);
+  assert.ok(result.width <= 16383 && result.height <= 16383);
   assert.ok(result.width * result.height <= 32 * 1024 * 1024);
   assert.ok(result.width >= 1000, 'large teams retain enough pixels for readable text');
   assert.equal(h.text.filter(item => /^同学\d+$/.test(item.value)).length, 50);
@@ -127,12 +138,38 @@ test('all 50 cards fit within a bounded canvas, including the last card and oute
   assert.equal(logicalHeight * h.context.transform[1], result.height);
 });
 
+test('exports all 55 reminders from a 69-member team on clients with a 16383-pixel canvas limit', async () => {
+  const h = harness();
+  const members = Array.from({ length: 69 }, (_, index) => member(`同学${index + 1}`,
+    index < 14 ? { todayStatus: 'not_practiced', statusLabel: '尚未练习', todayMinutes: 0,
+      todayMinutesLabel: '0', todayPracticeCount: 0, progress: 0 }
+      : index >= 55 ? { todayStatus: 'qualified', todayMinutes: 60 } : {}));
+  const selected = selectReminderMembers({ ...report, members });
+  let displaySize;
+  const result = await h.generate(selected, { teamName: '霍格沃茨（三期）百日筑基营',
+    resizeCanvas: (width, height) => { displaySize = { width, height }; } });
+  assert.equal(selected.length, 55);
+  assert.ok(result.height <= 16383);
+  assert.deepEqual(displaySize, { width: result.width, height: result.height });
+  assert.equal(h.canvas.width, result.width);
+  assert.equal(h.canvas.height, result.height);
+  assert.equal(h.exports.length, 1);
+  assert.equal(h.exports[0].height, result.height);
+  assert.equal(h.exports[0].destHeight, result.height);
+  assert.deepEqual(h.text.filter(item => /^同学\d+$/.test(item.value)).map(item => item.value),
+    selected.map(item => item.nickname));
+  const cards = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#ffffff');
+  assert.equal(cards.length, 55);
+  const logicalHeight = h.fills.find(fill => fill.kind === 'rect' && fill.color === '#f8f9fb').height;
+  assert.equal(logicalHeight - Math.max(...cards[54].points.map(point => point[1])), 24);
+});
+
 test('expanded teams can export all 500 reminder cards without truncating the list or exceeding canvas limits', async () => {
   const h = harness();
   const result = await h.generate(Array.from({ length: 500 }, (_, index) => member(`同学${index + 1}`)));
   assert.equal(h.exports.length, 1);
   assert.ok(result.width > 0 && result.height > 0);
-  assert.ok(result.width <= 16384 && result.height <= 16384);
+  assert.ok(result.width <= 16383 && result.height <= 16383);
   assert.ok(result.width * result.height <= 32 * 1024 * 1024);
   assert.equal(h.text.filter(item => /^同学\d+$/.test(item.value)).length, 500);
   const cards = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#ffffff');
