@@ -45,7 +45,15 @@ Page({
 
   onShow() {
     this._isVisible = true;
-    if (this.data.teamId) return this.loadTeamData();
+    if (!this.data.teamId) return;
+    if (!this._teamInfoReady || !this.data.teamInfo ||
+        this._viewerOpenid !== wx.getStorageSync('userOpenId') || this._viewerTeamId !== this.data.teamId) {
+      return this.loadTeamData();
+    }
+    // 返回时复用本页的成员、选中项和滚动位置，只让过期的练习统计失效。
+    if (this.data.report && this.data.report.nextResetAt <= Date.now()) this.clearPracticeReport();
+    if (this.data.report) this.scheduleReset(this.data.report.nextResetAt);
+    if (this.data.currentTab === 'records') return this.loadTeamReport();
   },
 
   onHide() {
@@ -90,9 +98,46 @@ Page({
       this._resetTimer = null;
       if (!this._isVisible || this._unloaded) return;
       // 新练习日不能继续显示上一天的「今日」结果。
-      this.setData({ report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: '' });
-      this.loadTeamData();
+      this.clearPracticeReport();
+      if (this.data.currentTab === 'records') this.loadTeamReport();
     }, Math.max(1000, Math.min(DAY_MS + 1000, nextResetAt - Date.now() + 100)));
+  },
+
+  clearPracticeReport() {
+    this._reportMembers = [];
+    this.setData({ report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: '', dateMax: currentPracticeDate() });
+  },
+
+  async loadTeamReport() {
+    const { teamId, teamInfo } = this.data;
+    const openid = wx.getStorageSync('userOpenId');
+    if (!this._teamInfoReady || !teamInfo || teamInfo._id !== teamId || !this.data.isMember ||
+        !this._isVisible || this._unloaded || this._viewerOpenid !== openid || this._viewerTeamId !== teamId ||
+        this.data.isSaving || this.data.isDeleting || this.data.removingMemberId || this.data.roleChangingMemberId) return;
+    if (this.data.report && this.data.report.nextResetAt > Date.now()) return;
+    const version = this._loadVersion;
+    if (this._reportRequest && this._reportRequest.version === version) return this._reportRequest.promise;
+    if (this.data.isLoading) return;
+    const request = { version };
+    const isCurrent = () => !this._unloaded && this._isVisible && version === this._loadVersion &&
+      this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
+    this.clearPracticeReport();
+    this.setData({ isLoading: true });
+    this._reportRequest = request;
+    request.promise = (async () => {
+      try {
+        const report = await this.callTeam('getTeamPracticeReport', { teamId });
+        if (!isCurrent()) return;
+        this.applyReport(report);
+        this.scheduleReset(Number(report.nextResetAt));
+      } catch (error) {
+        if (isCurrent()) this.setData({ reportError: error.message || '练习数据暂时无法加载' });
+      } finally {
+        if (this._reportRequest === request) this._reportRequest = null;
+        if (isCurrent()) this.setData({ isLoading: false });
+      }
+    })();
+    return request.promise;
   },
 
   async loadTeamData() {
@@ -137,15 +182,8 @@ Page({
         this.resetInvitation();
       }
       wx.setNavigationBarTitle({ title: team.name });
-      try {
-        const report = await this.callTeam('getTeamPracticeReport', { teamId: team._id });
-        if (!isCurrent()) return;
-        this.applyReport(report);
-        this.scheduleReset(Number(report.nextResetAt));
-      } catch (error) {
-        if (!isCurrent()) return;
-        this.setData({ report: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: error.message || '练习数据暂时无法加载' });
-      }
+      this.setData({ isLoading: false });
+      if (this.data.currentTab === 'records') await this.loadTeamReport();
     } catch (error) {
       if (!isCurrent()) return;
       this.setData({ teamInfo: null, isCreator: false, isDeputy: false, deputyCount: 0, isMember: false, settingsOpen: false, loadError: error.message || '团队信息暂时无法加载' });
@@ -182,7 +220,8 @@ Page({
     }
     const goal = report.settings.dailyGoalMinutes;
     const hasGoal = goal !== null;
-    const members = this.profileMembers(report.members).map(member => ({
+    const profiles = new Map(this.data.teamMembers.map(member => [member.openid, member]));
+    const members = this.profileMembers(report.members.map(member => ({ ...profiles.get(member.openid), ...member }))).map(member => ({
       ...member,
       statusLabel: statusLabels[member.todayStatus],
       todayMinutesLabel: this.formatMinutes(member.todayMinutes),
@@ -296,7 +335,9 @@ Page({
 
   switchTab(event) {
     const tab = event.currentTarget.dataset.tab;
-    if (tab === 'members' || tab === 'records') this.setData({ currentTab: tab });
+    if (tab !== 'members' && tab !== 'records') return;
+    this.setData({ currentTab: tab });
+    if (tab === 'records') return this.loadTeamReport();
   },
 
   switchRecordTab(event) {
@@ -819,7 +860,8 @@ Page({
       if (!this._unloaded) {
         this.setData({ isSaving: false });
         if (isCurrent() && this.data.report) this.scheduleReset(this.data.report.nextResetAt);
-        if (isCurrent() && this._isVisible && !this.data.report && !this.data.reportError) await this.loadTeamData();
+        if (isCurrent() && this._isVisible && !this.data.report && !this.data.reportError &&
+            (!this._teamInfoReady || this.data.currentTab === 'records')) await this.loadTeamData();
         if (wx.getStorageSync('userOpenId') !== openid && this._isVisible) this.loadTeamData();
       }
     }

@@ -1,6 +1,7 @@
 const { getAvatarInitial, getAvatarSource } = require('../../../utils/avatar.js');
 const LOGICAL_WIDTH = 750;
-const MAX_CANVAS_EDGE = 16384;
+// Some native WeChat canvases reject 16384; keep each edge within 16383 pixels.
+const MAX_CANVAS_EDGE = 16383;
 const MAX_CANVAS_PIXELS = 32 * 1024 * 1024;
 const AVATAR_CONCURRENCY = 4;
 const AVATAR_TIMEOUT_MS = 4000;

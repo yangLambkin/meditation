@@ -496,18 +496,32 @@ async function setTeamDeputy(data, openid) {
 async function getTeamInfo(teamId, openid) {
   const team = await activeTeam(db, teamId);
   const allowed = isMember(team, openid);
-  const members = await Promise.all(memberIds(team).map(async memberOpenid => {
-    let user = {};
-    try {
-      const users = await db.collection('users').where({ _openid: memberOpenid }).limit(1).get();
-      user = users.data[0] || {};
-    } catch (error) { console.warn('获取成员资料失败:', error); }
+  const ids = memberIds(team);
+  const profiles = new Map();
+  const isBound = user => user.bijingBound === true && typeof user.bijingStudentNumber === 'string' && user.bijingStudentNumber.trim();
+  const batches = [];
+  for (let offset = 0; offset < ids.length; offset += MEMBER_BATCH_SIZE) {
+    batches.push(ids.slice(offset, offset + MEMBER_BATCH_SIZE));
+  }
+  // 首屏只批量读取卡片资料，不查询或汇总练习记录。
+  await Promise.all(batches.map(async batch => {
+    const users = await readAll(db.collection('users').where({ _openid: db.command.in(batch) })
+      .field({ _id: true, _openid: true, nickName: true, avatarUrl: true,
+        ...(allowed ? { bijingBound: true, bijingStudentNumber: true } : {}) }).orderBy('_id', 'asc'));
+    users.forEach(user => {
+      const previous = profiles.get(user._openid);
+      if (!previous || (isBound(user) && !isBound(previous))) profiles.set(user._openid, user);
+    });
+  }));
+  const members = ids.map(memberOpenid => {
+    const user = profiles.get(memberOpenid) || {};
     return {
       ...(allowed ? { openid: memberOpenid } : {}),
+      ...(allowed ? { bijingStudentNumber: isBound(user) ? user.bijingStudentNumber.trim() : '' } : {}),
       nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
       avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, memberOpenid)
     };
-  }));
+  });
   const info = allowed ? { ...team, deputyLeaders: deputyIds(team) } : publicTeam(team);
   return { success: true, data: { ...info, ...practiceSettings(team), members, memberCount: members.length, isMember: allowed } };
 }
