@@ -33,7 +33,7 @@
         <nickname-avatar avatar-class="member-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" />
         <view class="member-identity">
           <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view>
-          <text class="member-subtitle">{{item.bijingStudentNumber ? '必经学号：' + item.bijingStudentNumber : '未绑定必经学号'}}</text>
+          <text class="member-subtitle">{{item.bijingStudentNumberLabel}}</text>
           <text wx:if="{{removingMemberId === item.openid}}" class="member-remove-status">正在移除…</text>
           <text wx:elif="{{roleChangingMemberId === item.openid}}" class="member-remove-status">正在更新身份…</text>
         </view>

@@ -301,7 +301,9 @@ Page({
   profileMembers(members, team = this.data.teamInfo) {
     return members.map(value => {
       const member = typeof value === 'string' ? { openid: value } : value;
+      const studentNumber = typeof member.bijingStudentNumber === 'string' ? member.bijingStudentNumber.trim() : null;
       return { ...member,
+        bijingStudentNumberLabel: studentNumber === null ? '学号暂未获取' : studentNumber || '未绑定学号',
         isCreator: !!team && member.openid === team.creator,
         isDeputy: !!team && member.openid !== team.creator && (team.deputyLeaders || []).includes(member.openid),
         avatar: typeof member.avatarUrl === 'string' && member.avatarUrl && !/^(wxfile:|https?:\/\/tmp\/)/.test(member.avatarUrl) ? member.avatarUrl : '/images/avatar.png',

@@ -44,6 +44,8 @@ button::after { border: none; }
 .main-tab.active { color: #ffffff; background: #b29764; }
 .roster-card { gap: 20rpx; padding: 26rpx 24rpx; border-radius: 22rpx; margin-bottom: 16rpx; background: #ffffff; }
 .roster-card .member-avatar { width: 86rpx; height: 86rpx; border-radius: 26rpx; }
+.roster-card .member-name-row { align-items: center; }
+.roster-card .member-subtitle { margin-top: 6rpx; font-variant-numeric: tabular-nums; }
 .member-remove-status { display: block; margin-top: 8rpx; font-size: 21rpx; line-height: 1.5; color: #a4594e; }
 .member-last-practice { display: block; margin-top: 8rpx; font-size: 21rpx; line-height: 1.5; color: #99a1ae; }
 .member-load-note { padding: 20rpx; text-align: center; color: #99a1ae; font-size: 23rpx; }

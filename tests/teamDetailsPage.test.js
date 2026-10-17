@@ -242,11 +242,29 @@ test('member cards keep bound student numbers after a practice report replaces s
   await page.switchTab(event('tab', 'records'));
   await page.switchTab(event('tab', 'members'));
   assert.equal(page.data.teamMembers.find(item => item.openid === 'member').bijingStudentNumber, 'BJ123456');
+  assert.equal(page.data.teamMembers.find(item => item.openid === 'member').bijingStudentNumberLabel, 'BJ123456');
   const template = fs.readFileSync(pagePath.replace('.js', '.wxml'), 'utf8');
   const roster = template.slice(template.indexOf('class="roster-card"'), template.indexOf('class="record-toolbar"'));
-  assert.match(roster, /必经学号：/);
-  assert.match(roster, /未绑定必经学号/);
+  assert.match(roster, /item.bijingStudentNumberLabel/);
   assert.doesNotMatch(roster, /totalPracticeCount|lastPracticeLabel/);
+});
+
+test('missing student numbers are unavailable until a roster refresh confirms binding state', async () => {
+  let currentTeam = structuredClone(team);
+  const { page } = createPage({ initialTab: null,
+    cloud: type => success(type === 'getTeamInfo' ? currentTeam : report) });
+  await page.onShow();
+  assert.ok(page.data.teamMembers.every(item => item.bijingStudentNumberLabel === '学号暂未获取'));
+  await page.switchTab(event('tab', 'records'));
+  await page.switchTab(event('tab', 'members'));
+  assert.ok(page.data.teamMembers.every(item => item.bijingStudentNumberLabel === '学号暂未获取'));
+
+  currentTeam.members[0].bijingStudentNumber = ' BJ2407159 ';
+  currentTeam.members[1].bijingStudentNumber = '';
+  currentTeam.members[2].bijingStudentNumber = null;
+  await page.onPullDownRefresh();
+  const labels = Object.fromEntries(page.data.teamMembers.map(item => [item.openid, item.bijingStudentNumberLabel]));
+  assert.deepEqual(labels, { owner: 'BJ2407159', member: '未绑定学号', third: '学号暂未获取' });
 });
 
 test('switching to records during roster loading fetches the report once after profiles are ready', async () => {
