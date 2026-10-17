@@ -493,12 +493,24 @@ async function setTeamDeputy(data, openid) {
   return { success: true, data: result };
 }
 
+function boundStudentNumber(user) {
+  return user.bijingBound === true && typeof user.bijingStudentNumber === 'string'
+    ? user.bijingStudentNumber.trim() : '';
+}
+
+function mergeMemberProfiles(profiles, users) {
+  // 各入口按 _id 升序读取，历史重复资料统一优先采用有效绑定的资料。
+  users.forEach(user => {
+    const previous = profiles.get(user._openid);
+    if (!previous || (boundStudentNumber(user) && !boundStudentNumber(previous))) profiles.set(user._openid, user);
+  });
+}
+
 async function getTeamInfo(teamId, openid) {
   const team = await activeTeam(db, teamId);
   const allowed = isMember(team, openid);
   const ids = memberIds(team);
   const profiles = new Map();
-  const isBound = user => user.bijingBound === true && typeof user.bijingStudentNumber === 'string' && user.bijingStudentNumber.trim();
   const batches = [];
   for (let offset = 0; offset < ids.length; offset += MEMBER_BATCH_SIZE) {
     batches.push(ids.slice(offset, offset + MEMBER_BATCH_SIZE));
@@ -508,16 +520,13 @@ async function getTeamInfo(teamId, openid) {
     const users = await readAll(db.collection('users').where({ _openid: db.command.in(batch) })
       .field({ _id: true, _openid: true, nickName: true, avatarUrl: true,
         ...(allowed ? { bijingBound: true, bijingStudentNumber: true } : {}) }).orderBy('_id', 'asc'));
-    users.forEach(user => {
-      const previous = profiles.get(user._openid);
-      if (!previous || (isBound(user) && !isBound(previous))) profiles.set(user._openid, user);
-    });
+    mergeMemberProfiles(profiles, users);
   }));
   const members = ids.map(memberOpenid => {
     const user = profiles.get(memberOpenid) || {};
     return {
       ...(allowed ? { openid: memberOpenid } : {}),
-      ...(allowed ? { bijingStudentNumber: isBound(user) ? user.bijingStudentNumber.trim() : '' } : {}),
+      ...(allowed ? { bijingStudentNumber: boundStudentNumber(user) } : {}),
       nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
       avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, memberOpenid)
     };
@@ -627,14 +636,11 @@ async function getTeamMemberPracticeRecords(data, openid) {
   if (!isMember(team, memberOpenid)) throw new Error('该用户已不在团队中');
   const startDate = practiceSettings(team, now).effectivePracticeStartDate;
   const businessDate = practiceDate(now);
-  const users = await db.collection('users').where({ _openid: memberOpenid })
-    .field({ _id: true, nickName: true, avatarUrl: true }).orderBy('_id', 'asc').limit(1).get();
-  const user = users.data[0] || {};
-  const member = {
-    openid: memberOpenid,
-    nickname: user.nickName || (memberOpenid === team.creator ? team.creatorName : '') || '匿名用户',
-    avatarUrl: user.avatarUrl || '/images/avatar.png', ...memberRole(team, memberOpenid)
-  };
+  const users = await readAll(db.collection('users').where({ _openid: memberOpenid })
+    .field({ _id: true, _openid: true, nickName: true, avatarUrl: true, bijingBound: true, bijingStudentNumber: true }).orderBy('_id', 'asc'));
+  const profiles = new Map();
+  mergeMemberProfiles(profiles, users);
+  const member = memberPracticeProfile(team, memberOpenid, profiles);
   const records = [];
   let cursor = null;
   for (;;) {
@@ -703,8 +709,8 @@ async function aggregateTeamPractice({ ids, startDate, businessDate, now }) {
     const batch = ids.slice(offset, offset + MEMBER_BATCH_SIZE);
     const filter = { _openid: db.command.in(batch) };
     const users = await readAll(db.collection('users').where(filter)
-      .field({ _id: true, _openid: true, nickName: true, avatarUrl: true }).orderBy('_id', 'asc'));
-    users.forEach(user => { if (!profiles.has(user._openid)) profiles.set(user._openid, user); });
+      .field({ _id: true, _openid: true, nickName: true, avatarUrl: true, bijingBound: true, bijingStudentNumber: true }).orderBy('_id', 'asc'));
+    mergeMemberProfiles(profiles, users);
 
     // 旧记录的timestamp存在数字/ISO/数字字符串三种类型，date又是自然日。
     // 仅按date裁剪会漏掉次日凌晨或旧的错日数据，因此按当前成员分批扫描，

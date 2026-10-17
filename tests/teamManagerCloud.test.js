@@ -601,6 +601,36 @@ test('roster uses the bound profile among legacy duplicates and public previews 
   assert.equal(failed.success, false);
 });
 
+test('practice views use the same bound legacy profile as the roster without exposing binding fields', async () => {
+  for (const boundFirst of [true, false]) {
+    const app = harness({ teams: [team()], users: [
+      { _id: 'm-old', _openid: 'owner', nickName: '旧昵称', avatarUrl: 'cloud://old',
+        bijingBound: false, bijingStudentNumber: 'BJ_OLD' },
+      { _id: 'n-invalid', _openid: 'owner', nickName: '无效绑定', avatarUrl: 'cloud://invalid',
+        bijingBound: true, bijingStudentNumber: '   ' },
+      { _id: boundFirst ? 'a-active' : 'z-active', _openid: 'owner', nickName: '当前昵称', avatarUrl: 'cloud://current',
+        bijingBound: true, bijingStudentNumber: ' BJ123456 ', bijingBindingVersion: 'private-version', secret: 'private-profile' }
+    ] });
+    const roster = await app.call('getTeamInfo', { teamId: 'team' });
+    assert.equal(roster.success, true);
+    const identity = ({ nickname, avatarUrl }) => ({ nickname, avatarUrl });
+    const expected = identity(roster.data.members[0]);
+    assert.deepEqual(expected, { nickname: '当前昵称', avatarUrl: 'cloud://current' });
+    const report = await app.call('getTeamPracticeReport', { teamId: 'team' });
+    assert.equal(report.success, true);
+    assert.deepEqual(identity(report.data.members[0]), expected);
+    const history = await app.call('getTeamHistoryDetails', { teamId: 'team', filter: 'all', limit: 1 });
+    assert.equal(history.success, true);
+    assert.deepEqual(identity(history.data.items[0]), expected);
+    const records = await app.call('getTeamMemberPracticeRecords', { teamId: 'team', memberOpenid: 'owner' });
+    assert.equal(records.success, true);
+    assert.deepEqual(identity(records.data.member), expected);
+    for (const result of [report, history, records]) {
+      assert.doesNotMatch(JSON.stringify(result), /bijingBound|bijingStudentNumber|BJ123456|BJ_OLD|private-version|private-profile/);
+    }
+  }
+});
+
 test('checkin queries reject arbitrary users and outsiders before reading records', async () => {
   const app = harness({ teams: [team({ members: ['owner', 'member'] })] });
   for (const [type, data, openid] of [
@@ -1115,7 +1145,7 @@ test('history details agree with report counts and identify each unpracticed or 
     assert.deepEqual(read.filter._openid.inValues.slice().sort(), ['absent', 'member', 'owner']);
   }
   for (const read of app.reads.filter(read => read.name === 'users')) {
-    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'avatarUrl', 'nickName']);
+    assert.deepEqual(Object.keys(read.projection).sort(), ['_id', '_openid', 'avatarUrl', 'bijingBound', 'bijingStudentNumber', 'nickName']);
   }
 });
 

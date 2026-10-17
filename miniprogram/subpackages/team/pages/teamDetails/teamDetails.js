@@ -798,7 +798,11 @@ Page({
       if (!this._unloaded) this.setData({ removingMemberId: '' });
       if (removed && isCurrent() && this._isVisible) await this.loadTeamData();
       else if (!this._unloaded && !isCurrent() && this._isVisible) await this.loadTeamData();
-      else if (isCurrent() && this.data.report) this.scheduleReset(this.data.report.nextResetAt);
+      else if (isCurrent()) {
+        if (this.data.report) this.scheduleReset(this.data.report.nextResetAt);
+        // 移除期间切换到记录页会暂缓统计请求，失败后也要恢复加载。
+        if (this._isVisible && this.data.currentTab === 'records') await this.loadTeamReport();
+      }
     }
   },
 

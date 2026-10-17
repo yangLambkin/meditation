@@ -2265,6 +2265,80 @@ test('failed removal retains members and reports the server error', async () => 
   assert.equal(calls.modals.at(-1).title, '移除失败');
 });
 
+test('failed removal resumes a report requested while removal was pending', async () => {
+  for (const failure of ['response', 'network']) {
+    let finishRemoval;
+    const { page, calls } = createPage({ initialTab: null,
+      removeTeamMember: () => new Promise((resolve, reject) => {
+        finishRemoval = () => failure === 'network' ? reject(new Error('网络暂不可用'))
+          : resolve({ success: false, error: '暂时无法移除' });
+      })
+    });
+    await page.onShow();
+    const removing = page.confirmRemoveMember(event('memberOpenid', 'member'));
+    await flushPromises();
+    assert.equal(page.data.removingMemberId, 'member');
+    await page.switchTab(event('tab', 'records'));
+    assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
+    finishRemoval();
+    await removing;
+    assert.equal(page.data.currentTab, 'records');
+    assert.equal(page.data.report.businessDate, report.businessDate);
+    assert.equal(page.data.teamMembers.length, 3);
+    assert.equal(page.data.isLoading, false);
+    assert.equal(page.data.removingMemberId, '');
+    assert.equal(page.data.reportError, '');
+    assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport']);
+  }
+});
+
+test('a report resumed after failed removal exposes fetch errors and permits retry', async () => {
+  let finishRemoval;
+  let failReport = true;
+  const { page, calls } = createPage({ initialTab: null,
+    removeTeamMember: () => new Promise(resolve => {
+      finishRemoval = () => resolve({ success: false, error: '暂时无法移除' });
+    }),
+    cloud: type => type === 'getTeamPracticeReport' && failReport
+      ? { result: { success: false, error: '统计暂不可用' } } : success(type === 'getTeamInfo' ? team : report)
+  });
+  await page.onShow();
+  const removing = page.confirmRemoveMember(event('memberOpenid', 'member'));
+  await flushPromises();
+  await page.switchTab(event('tab', 'records'));
+  finishRemoval();
+  await removing;
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.reportError, '统计暂不可用');
+  assert.equal(page.data.isLoading, false);
+  failReport = false;
+  await page.switchTab(event('tab', 'records'));
+  assert.equal(page.data.report.businessDate, report.businessDate);
+  assert.equal(page.data.reportError, '');
+  assert.equal(calls.cloud.filter(call => call.type === 'getTeamPracticeReport').length, 2);
+});
+
+test('failed removal keeps reports lazy when the user leaves the records view', async () => {
+  for (const leave of ['members', 'onHide', 'onUnload']) {
+    let finishRemoval;
+    const { page, calls } = createPage({ initialTab: null,
+      removeTeamMember: () => new Promise(resolve => {
+        finishRemoval = () => resolve({ success: false, error: '暂时无法移除' });
+      })
+    });
+    await page.onShow();
+    const removing = page.confirmRemoveMember(event('memberOpenid', 'member'));
+    await flushPromises();
+    await page.switchTab(event('tab', 'records'));
+    if (leave === 'members') await page.switchTab(event('tab', 'members'));
+    else page[leave]();
+    finishRemoval();
+    await removing;
+    assert.equal(page.data.report, null);
+    assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
+  }
+});
+
 test('confirmation opened for one account cannot remove a member after identity or visibility changes', async () => {
   for (const hide of [true, false]) {
     const { page, calls, storage } = createPage({ confirm: null });
