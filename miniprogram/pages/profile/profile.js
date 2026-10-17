@@ -165,15 +165,7 @@ Page({
       return false;
     }
     
-    // 检查昵称是否只包含允许的字符
-    const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9\s\-\.\_]+$/;
-    if (!validPattern.test(nickname)) {
-      this.setData({
-        nicknameHint: '昵称包含不允许的字符',
-        isProfileValid: false
-      });
-      return false;
-    }
+    // 括号、间隔号、表情等可用于昵称，内容安全仍在保存前审核。
     
     this.setData({
       nicknameHint: '昵称格式正确',

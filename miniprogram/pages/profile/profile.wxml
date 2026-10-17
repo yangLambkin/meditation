@@ -25,12 +25,14 @@
         value="{{nickname}}"
         maxlength="15"
         bindinput="onNicknameInput"
+        bindblur="onNicknameInput"
       />
       <text class="char-count">{{nickname.length}}/15</text>
       
       <!-- 隐藏的提交按钮，通过表单确保安全检测 -->
       <button class="hidden-submit" form-type="submit"></button>
     </form>
+    <text class="nickname-hint">{{nicknameHint}}</text>
   </view>
 
   <!-- 操作按钮区域 -->
