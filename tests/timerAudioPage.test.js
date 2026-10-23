@@ -1148,8 +1148,8 @@ test('countdown checkpoints recover only the last known duration after an exit w
     } });
     assert.equal(reopened.page.data.isRunning, false);
     assert.equal(reopened.page.data.isPaused, false);
-    assert.equal(reopened.page.data.elapsedTime, 125);
-    assert.equal(reopened.page.data.remainingTime, state.totalTime - 125);
+    assert.equal(reopened.page.data.elapsedTime, 0);
+    assert.equal(reopened.page.data.remainingTime, reopened.page.data.totalTime);
     assert.equal(reopened.records.length, 1);
     assert.equal(reopened.records[0][0], 2);
     assert.equal(reopened.records[0][3], savedAt);
@@ -1385,8 +1385,8 @@ test('reopening a countdown never fills the remaining duration with time spent o
   assert.equal(page.data.showStopButton, false);
   assert.equal(page.data.showResetButton, false);
   assert.equal(page.data.showCompletionDialog, false);
-  assert.equal(page.data.elapsedTime, 30);
-  assert.equal(page.data.remainingTime, 30);
+  assert.equal(page.data.elapsedTime, 0);
+  assert.equal(page.data.remainingTime, page.data.totalTime);
   await page.confirmCompletion();
   assert.equal(records.length, 0, 'only 30 seconds were completed before exiting');
 });
@@ -1548,8 +1548,12 @@ test('completion reflection survives page recreation within the same App runtime
   const h = createPage();
   h.page.applyDuration(1); h.page.startTimer(); h.advance(60000);
   h.page.onCompletionInput({ detail: { value: '保留这段感受' } });
+  h.page.saveDurationOptions([20, 7, 10]);
   h.page.onUnload();
   const fresh = h.recreatePage();
+  assert.equal(fresh.data.duration, 1);
+  assert.equal(fresh.data.completionDuration, 1);
+  assert.equal(fresh.data.showCompletionDialog, true);
   assert.equal(fresh.data.completionText, '保留这段感受');
   await fresh.confirmCompletion();
   assert.equal(h.records.length, 1);
@@ -1579,6 +1583,66 @@ test('a cancelled countdown cannot restore its discarded progress after page rec
   assert.equal(fresh.data.remainingTime, fresh.data.totalTime);
   assert.equal(fresh.data.isRunning, false);
   assert.equal(fresh.data.isPaused, false);
+  assert.equal(h.records.length, 0);
+});
+
+for (const restart of ['page recreation', 'cold startup']) {
+  test(`settled countdowns use current recommendations after ${restart}`, async () => {
+    for (const ending of ['timeout', 'manual', 'app hide', 'under one minute']) {
+      const h = createPage();
+      h.page.applyDuration(ending === 'timeout' ? 1 : 7);
+      h.page.startTimer();
+      const oldSessionId = h.page.sessionId;
+      h.advance(ending === 'timeout' ? 60000 : ending === 'under one minute' ? 30000 : 65000);
+      if (ending === 'app hide') {
+        h.emitApp('hide');
+        h.emitApp('show');
+      } else {
+        if (ending !== 'timeout') h.page.handleStop();
+        await h.page.confirmCompletion();
+      }
+      h.page.onShow();
+      const savedRecords = ending === 'under one minute' ? 0 : 1;
+      assert.equal(h.records.length, savedRecords, ending);
+      assert.equal(h.page.pendingCompletion, null, ending);
+      h.page.saveDurationOptions([20, 7, 10]);
+      h.page.onUnload();
+      const reopened = restart === 'cold startup'
+        ? createPage({ initialStorage: structuredClone(Object.fromEntries(h.storage)) }) : h;
+      const fresh = restart === 'cold startup' ? reopened.page : h.recreatePage();
+
+      assert.equal(fresh.data.duration, 20, ending);
+      assert.equal(fresh.data.displayTime, '20:00', ending);
+      assert.equal(fresh.data.elapsedTime, 0, ending);
+      assert.equal(fresh.data.isRunning, false, ending);
+      assert.equal(fresh.data.isPaused, false, ending);
+      assert.equal(fresh.data.showCompletionDialog, false, ending);
+      assert.equal(reopened.records.length, restart === 'cold startup' ? 0 : savedRecords, ending);
+      const playsBeforeStart = reopened.plays().length;
+      fresh.startTimer();
+      assert.notEqual(fresh.sessionId, oldSessionId, ending);
+      assert.equal(fresh.data.isRunning, true, ending);
+      assert.equal(reopened.countdown.getSnapshot().totalTime, 1200, ending);
+      assert.equal(reopened.plays().length, playsBeforeStart, 'the new opening cue still waits five seconds');
+    }
+  });
+}
+
+test('a paused countdown keeps its session when recommendations change before page recreation', () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(65000); h.page.pauseTimer();
+  const sessionId = h.page.sessionId;
+  h.page.saveDurationOptions([20, 7, 10]);
+  h.page.onUnload(); h.advance(30000);
+  const fresh = h.recreatePage();
+  assert.equal(fresh.sessionId, sessionId);
+  assert.equal(fresh.data.duration, 7);
+  assert.equal(fresh.data.isPaused, true);
+  assert.equal(fresh.data.elapsedTime, 65);
+  assert.equal(fresh.data.remainingTime, 355);
+  fresh.startTimer(); h.advance(1000);
+  assert.equal(fresh.sessionId, sessionId);
+  assert.equal(fresh.data.elapsedTime, 66);
   assert.equal(h.records.length, 0);
 });
 

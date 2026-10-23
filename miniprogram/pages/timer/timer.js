@@ -122,6 +122,10 @@ Page({
     // 已结束的旧倒计时不能覆盖后续正计时尚未确认的感受草稿。
     if (this.pendingCompletion && this.pendingCompletion.sessionId !== state.sessionId) return;
     if (state.status === 'cancelled' && event.type === 'restore') return;
+    // 新页面保留推荐时长；已结算且无草稿的旧会话仅用于防止重复入账。
+    // 同一页面仍需接收终态，修正退出时可能未能渲染的运行/暂停状态。
+    if (event.type === 'restore' && (state.status === 'completed' || state.status === 'exited')
+      && !state.pendingCompletion && this.sessionId !== state.sessionId) return;
     if (!state.isRunning && !state.isPaused && this.sessionId !== state.sessionId
       && event.type !== 'restore' && event.type !== 'complete' && event.type !== 'exit') return;
     if (this.sessionId && this.sessionId !== state.sessionId && !this.data.isCountdown) return;
