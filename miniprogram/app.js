@@ -3,6 +3,7 @@ const checkinManager = require('./utils/checkin.js');
 
 App({
   onLaunch: function () {
+    this._timerForeground = true;
     if (!wx.cloud) {
       console.error("请使用 2.2.3 或以上的基础库以使用云能力");
       return;
@@ -33,6 +34,8 @@ App({
   },
 
   onShow() {
+    this._timerForeground = true;
+    if (this._countdownSession) this._countdownSession.appShow();
     if (!wx.cloud) return;
     this.startSyncAlertRefresh();
     // 接续已入账历史记录的必经任务，独立运行，不阻塞云端记录的读取/上传。
@@ -48,8 +51,24 @@ App({
   },
 
   onHide() {
+    this._timerForeground = false;
+    // 先结束倒计时；页面卸载或提醒清理失败都不能遗漏真正退出。
+    if (this._countdownSession) this._countdownSession.appHide();
     this._syncAlertVisible = false;
     this.clearSyncAlert();
+  },
+
+  getCountdownSession() {
+    if (!this._countdownSession) {
+      // 只在使用倒计时时加载；控制器由 App 持有，不随计时页重建。
+      const { createCountdownSessionController } = require('./utils/countdownSession');
+      this._countdownSession = createCountdownSessionController({
+        api: wx,
+        recordCheckin: (...args) => checkinManager.recordCheckin(...args)
+      });
+      if (this._timerForeground === false) this._countdownSession.appHide();
+    }
+    return this._countdownSession;
   },
 
   syncAlertIdentity() {

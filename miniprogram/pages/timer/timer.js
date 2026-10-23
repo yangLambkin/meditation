@@ -94,17 +94,75 @@ Page({
     this.isOpeningDaily = false;
     this.didOpenDaily = false;
     this.sessionId = null;
+    this.countdownSession = getApp().getCountdownSession();
     this.pendingCompletion = wx.getStorageSync('timerPendingCompletion') || null;
     this.setData({ completionNotice: wx.getStorageSync('timerCompletionNotice') || '' });
     this.loadDurationOptions();
 
     this.updateDisplay();
     this.updateButtonStates();
-    this.createAudioPlayer();
-    this.checkCloudFileExists();
-    this.getBackgroundMusicUrl();
+    this.safeTimerEffect('create_cue', () => this.createAudioPlayer());
+    this.safeTimerEffect('check_audio_file', () => this.checkCloudFileExists());
+    this.safeTimerEffect('load_guide', () => this.getBackgroundMusicUrl());
     this.setupAppStateListeners();
+    this.detachCountdown = this.countdownSession.attach((state, event) => this.onCountdownState(state, event));
     this.restoreTimerState();
+  },
+
+  // 会话归应用持有；页面只投影状态，卸载不会丢掉仍在前台的倒计时。
+  onCountdownState(state, event = {}) {
+    if (this.isUnloaded) return;
+    if (event.type === 'restore' || event.type === 'exit') {
+      // 冷恢复可能在 attach 内才生成通知；以存储为准，已展示的通知不再重复。
+      this.safeTimerEffect('restore_notice', () => this.setData({
+        completionNotice: wx.getStorageSync('timerCompletionNotice') || ''
+      }));
+    }
+    if (!state.sessionId) return;
+    // 已结束的旧倒计时不能覆盖后续正计时尚未确认的感受草稿。
+    if (this.pendingCompletion && this.pendingCompletion.sessionId !== state.sessionId) return;
+    if (state.status === 'cancelled' && event.type === 'restore') return;
+    if (!state.isRunning && !state.isPaused && this.sessionId !== state.sessionId
+      && event.type !== 'restore' && event.type !== 'complete' && event.type !== 'exit') return;
+    if (this.sessionId && this.sessionId !== state.sessionId && !this.data.isCountdown) return;
+    this.sessionId = state.sessionId;
+    const manual = state.status === 'completed' && state.terminalReason === 'manual';
+    this.pendingCompletion = state.pendingCompletion || null;
+    this.safeTimerEffect('render_countdown', () => {
+      this.setData({
+        isCountdown: true,
+        totalTime: state.totalTime,
+        duration: state.totalTime / 60,
+        durationText: `${state.totalTime / 60} 分钟`,
+        isRunning: state.isRunning,
+        isPaused: state.isPaused,
+        startTimestamp: state.startTimestamp,
+        pauseTimestamp: state.pauseTimestamp,
+        totalPausedTime: state.totalPausedTime,
+        elapsedTime: manual ? 0 : state.elapsedTime,
+        remainingTime: manual ? state.totalTime : state.remainingTime
+      });
+      this.updateDisplay();
+      this.updateButtonStates();
+    });
+    if (event.type === 'complete' || event.type === 'exit') {
+      this.safeTimerEffect('stop_brightness', () => this.stopBrightnessControl());
+      this.safeTimerEffect('stop_guide', () => this.stopBackgroundMusic());
+      this.safeTimerEffect('stop_cue', () => this.stopSessionSound());
+      if (event.type === 'complete') {
+        this.safeTimerEffect('end_cue', () => this.playSessionSound('end'));
+        if (this.pendingCompletion) this.safeTimerEffect('show_completion', () => this.showCompletion());
+        else wx.showToast({ title: '不足1分钟，本次不会记录', icon: 'none', duration: 2500 });
+      }
+    }
+  },
+
+  safeTimerEffect(type, action) {
+    try { return action(); }
+    catch (error) {
+      if (this.countdownSession) this.countdownSession.diagnose(`${type}_error`, { message: String(error && error.message || error).slice(0, 160) });
+      console.warn('计时附属操作失败，保留会话状态:', type);
+    }
   },
 
   onReady() {
@@ -125,7 +183,12 @@ Page({
         isCompletionSaved: false
       });
     }
-    this.setKeepScreenOn();
+    const countdown = this.countdownSession && this.countdownSession.getSnapshot();
+    if (countdown && (countdown.isRunning || countdown.isPaused
+      || (this.data.isCountdown && countdown.sessionId && countdown.sessionId === this.sessionId))) {
+      this.onCountdownState(countdown, { type: 'restore' });
+    }
+    this.safeTimerEffect('keep_screen_on', () => this.setKeepScreenOn());
     if (this.pendingCompletion) this.showCompletion();
     if (this.data.completionNotice) {
       wx.showToast({ title: this.data.completionNotice, icon: 'none', duration: 2500 });
@@ -140,7 +203,8 @@ Page({
 
   onHide() {
     this.isPageVisible = false;
-    this.restoreScreenSettings();
+    this.safeTimerEffect('page_hide_screen', () => this.restoreScreenSettings());
+    this.countdownSession.diagnose('page_hide');
   },
 
   // 设置应用状态监听
@@ -159,16 +223,14 @@ Page({
     this.appHideHandler = () => {
       if (this.isUnloaded) return;
       this.isPageVisible = false;
-      this.restoreScreenSettings();
-      // 退出时释放提示音上下文，避免微信恢复未播完的收坐音频。
-      this.destroyAudioPlayer();
-      this.stopBackgroundMusic();
-      // 微信不区分关闭和切后台：两种计时都在此刻结束，不累计离线时间。
-      if (this.data.isRunning || this.data.isPaused) {
-        this.finishSession(this.calculateElapsedTime(), { silent: true });
-        return;
+      // App 通常已经先终结倒计时；重复通知幂等，不依赖页面清理成功。
+      this.countdownSession.appHide();
+      if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+        this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'app_hide' });
       }
-      this.saveTimerState();
+      this.safeTimerEffect('exit_screen', () => this.restoreScreenSettings());
+      this.safeTimerEffect('exit_cue', () => this.destroyAudioPlayer());
+      this.safeTimerEffect('exit_guide', () => this.stopBackgroundMusic());
     };
     wx.onAppShow(this.appShowHandler);
     wx.onAppHide(this.appHideHandler);
@@ -176,6 +238,7 @@ Page({
 
   // 时间同步（屏幕重新打开时校正时间）
   syncTimerTime() {
+    if (this.data.isCountdown) { this.countdownSession.tick(); return; }
     if (!this.data.isRunning || !this.data.startTimestamp) return;
     
     const currentTime = Date.now();
@@ -219,7 +282,15 @@ Page({
     // 计算开始时间戳
     const now = Date.now();
     
-    if (this.data.isPaused && this.data.pauseTimestamp > 0) {
+    if (this.data.isCountdown) {
+      const sessionId = isResuming ? this.sessionId : `timer_${now}_${Math.random().toString(36).slice(2)}`;
+      if (isResuming) this.countdownSession.resume();
+      else this.countdownSession.start({ sessionId, totalTime: this.data.totalTime, startTimestamp: now });
+      const state = this.countdownSession.getSnapshot();
+      this.onCountdownState(state, { type: 'restore' });
+      // 暂停后可能已经真实退出；以控制器结果为准，不能由页面先置为运行中。
+      if (!state.isRunning || state.sessionId !== sessionId) return;
+    } else if (this.data.isPaused && this.data.pauseTimestamp > 0) {
       // 从暂停状态恢复，累计暂停时间
       const pausedDuration = now - this.data.pauseTimestamp;
       this.setData({
@@ -238,29 +309,27 @@ Page({
       });
     }
     
-    this.setData({
-      isRunning: true,
-      isPaused: false
-    });
-
-    if (!isResuming) {
-      this.stopBackgroundMusic();
-      this.stopSessionSound();
-      this.scheduleStartSound();
-    } else if (this.startSoundRemaining !== null) {
-      this.scheduleStartSound(this.startSoundRemaining);
-    } else if (this.currentSessionSound === 'start') {
-      // 暂停后继续未播完的起坐音频，不从头重播。
-      this.audioPlayer.play();
-    } else {
-      this.playBackgroundMusic();
+    if (!this.data.isCountdown) {
+      this.setData({ isRunning: true, isPaused: false });
+      this.createForegroundTimer();
     }
-
-    // 使用前台计时器（屏幕常亮，无需后台计时器）
-    this.createForegroundTimer();
-    
-    // 1分钟后降低屏幕亮度
-    this.startBrightnessControl();
+    this.safeTimerEffect('keep_screen_on', () => this.setKeepScreenOn());
+    this.safeTimerEffect('start_audio', () => {
+      if (!isResuming) {
+        this.stopBackgroundMusic();
+        this.stopSessionSound();
+        this.scheduleStartSound();
+      } else if (this.startSoundRemaining !== null) {
+        this.scheduleStartSound(this.startSoundRemaining);
+      } else if (this.currentSessionSound === 'start') {
+        // 暂停后继续未播完的起坐音频，不从头重播。
+        this.audioPlayer.play();
+      } else {
+        this.playBackgroundMusic();
+      }
+    });
+    // 屏幕和音频失败不会中止已经创建的会话。
+    this.safeTimerEffect('start_brightness', () => this.startBrightnessControl());
     
     console.log('✅ 启动前台计时器（屏幕常亮模式）');
 
@@ -278,6 +347,7 @@ Page({
 
   // 前台计时器更新（屏幕常亮模式）
   updateForegroundTimer() {
+    if (this.data.isCountdown) { this.countdownSession.tick(); return; }
     if (!this.data.isRunning) return;
     
     const elapsed = this.calculateElapsedTime();
@@ -301,6 +371,10 @@ Page({
 
   // 计算已用时间
   calculateElapsedTime() {
+    if (this.data.isCountdown) {
+      const state = this.countdownSession.getSnapshot();
+      if (state.sessionId === this.sessionId) return state.elapsedTime;
+    }
     if (!this.data.startTimestamp) return 0;
     
     const currentTime = Date.now();
@@ -314,12 +388,14 @@ Page({
 
   // 处理计时完成；以设定的结束时刻入账，不把后台延迟算入静坐。
   handleTimerFinished() {
+    if (this.data.isCountdown) { this.countdownSession.finish('deadline'); return; }
     if (!this.data.isRunning && !this.data.isPaused) return;
     const endedAt = this.data.startTimestamp + this.data.totalPausedTime + this.data.totalTime * 1000;
     this.finishSession(this.data.totalTime, { endedAt });
   },
 
-  finishSession(elapsedSeconds, { silent = false, endedAt = Date.now(), resetDisplay = false } = {}) {
+  finishSession(elapsedSeconds, { silent = false, endedAt = Date.now(), resetDisplay = false, reason = 'unknown' } = {}) {
+    if (this.data.isCountdown) { this.countdownSession.finish(reason); return; }
     if (!this.data.isRunning && !this.data.isPaused) return;
     const modeName = this.data.isCountdown ? '倒计时' : '正计时';
     const sessionLimit = this.data.isCountdown ? Math.min(this.data.totalTime, MAX_SESSION_SECONDS) : MAX_SESSION_SECONDS;
@@ -380,6 +456,7 @@ Page({
     this.setData({ completionText: text });
     if (this.pendingCompletion) {
       this.pendingCompletion.text = text;
+      if (this.countdownSession) this.countdownSession.updateCompletionText(this.pendingCompletion.sessionId, text);
       wx.setStorageSync('timerPendingCompletion', this.pendingCompletion);
     }
   },
@@ -439,6 +516,7 @@ Page({
       );
       if (!result || !result.success) throw new Error('本地保存失败');
       wx.setStorageSync('timerPendingCompletion', null);
+      if (this.countdownSession) this.countdownSession.markCompletionSaved(completion.sessionId);
       this.pendingCompletion = null;
       return result;
     } catch (error) {
@@ -456,8 +534,9 @@ Page({
     
     this.cleanupTimers();
     
+    if (this.data.isCountdown && !this.countdownSession.pause().isPaused) return;
     // 同时取消尚未触发的调暗，恢复本次实际修改过的亮度。
-    this.stopBrightnessControl();
+    this.safeTimerEffect('pause_brightness', () => this.stopBrightnessControl());
     
     this.setData({
       isRunning: false,
@@ -466,7 +545,7 @@ Page({
     });
     
     // 暂停背景音乐
-    this.pauseBackgroundMusic();
+    this.safeTimerEffect('pause_guide', () => this.pauseBackgroundMusic());
     if (this.startSoundTimer !== null) {
       clearTimeout(this.startSoundTimer);
       this.startSoundTimer = null;
@@ -474,7 +553,7 @@ Page({
         this.startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
     }
     if (this.currentSessionSound === 'start' && this.audioPlayer) {
-      this.audioPlayer.pause();
+      this.safeTimerEffect('pause_cue', () => this.audioPlayer.pause());
     }
     
     this.updateButtonStates();
@@ -483,13 +562,13 @@ Page({
   },
 
   // 停止计时器
-  stopTimer({ playEndSound = true } = {}) {
+  stopTimer({ playEndSound = true, reason = 'cancel' } = {}) {
     const wasActive = this.data.isRunning || this.data.isPaused;
-    
+    if (this.data.isCountdown) this.countdownSession.cancel(reason);
     this.cleanupTimers();
     
     // 停止亮度控制并恢复亮度
-    this.stopBrightnessControl();
+    this.safeTimerEffect('stop_brightness', () => this.stopBrightnessControl());
     
     this.setData({
       elapsedTime: 0,
@@ -502,12 +581,12 @@ Page({
     });
     
     // 停止背景音乐
-    this.stopBackgroundMusic();
-    this.stopSessionSound();
+    this.safeTimerEffect('stop_guide', () => this.stopBackgroundMusic());
+    this.safeTimerEffect('stop_cue', () => this.stopSessionSound());
     
     // 运行中或暂停后结束，均播放收坐音频。
     if (wasActive && playEndSound) {
-      this.playSessionSound('end');
+      this.safeTimerEffect('end_cue', () => this.playSessionSound('end'));
     }
     
     this.updateDisplay();
@@ -519,7 +598,7 @@ Page({
 
   // 用户结束时按实际已用分钟保存，暂停时间不计入。
   handleStop() {
-    this.finishSession(this.calculateElapsedTime(), { resetDisplay: true });
+    this.finishSession(this.calculateElapsedTime(), { resetDisplay: true, reason: 'manual' });
   },
 
   // 停止所有计时器
@@ -566,6 +645,7 @@ Page({
 
   // 保存运行检查点。停止状态不保留可恢复的时间戳。
   saveTimerState() {
+    if (this.data.isCountdown) return;
     if (!this.data.isRunning && !this.data.isPaused) {
       wx.setStorageSync('timerState', null);
       return;
@@ -586,6 +666,7 @@ Page({
 
   restoreTimerState() {
     const state = wx.getStorageSync('timerState');
+    if (state && state.isCountdown === true) return;
     if (this.pendingCompletion) {
       wx.setStorageSync('timerState', null);
       return;
@@ -623,6 +704,7 @@ Page({
         console.log('✅ 屏幕常亮设置成功');
       },
       fail: (err) => {
+        this.countdownSession.diagnose('keep_screen_failed', { message: err.errMsg });
         console.warn('⚠️ 屏幕常亮设置失败:', err);
       }
     });
@@ -631,7 +713,7 @@ Page({
   // 设置最低亮度
   setMinBrightness() {
     if (!this.isPageVisible || this.isUnloaded || !this.data.isRunning) return;
-    this.screenBrightness.dim();
+    this.safeTimerEffect('dim_screen', () => this.screenBrightness.dim());
   },
 
   // 开始亮度控制（1分钟后降低亮度）
@@ -676,34 +758,34 @@ Page({
   },
 
   onUnload() {
-    if (this.data.isRunning || this.data.isPaused) {
-      this.finishSession(this.calculateElapsedTime(), { silent: true });
+    if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+      this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'page_unload' });
     }
+    if (this.detachCountdown) this.detachCountdown();
+    this.countdownSession.diagnose('page_unload');
     this.isUnloaded = true;
     this.isPageVisible = false;
     wx.offAppShow(this.appShowHandler);
     wx.offAppHide(this.appHideHandler);
     this.cleanupTimers();
-    this.stopBackgroundMusic();
-    this.destroyAudioPlayer();
+    this.safeTimerEffect('unload_guide', () => this.stopBackgroundMusic());
+    this.safeTimerEffect('unload_cue', () => this.destroyAudioPlayer());
     this.saveTimerState();
-    
-    // 恢复屏幕设置
-    this.restoreScreenSettings();
+    this.safeTimerEffect('unload_screen', () => this.restoreScreenSettings());
     
     console.log('📱 页面卸载，资源清理完成');
   },
 
   // 模式与时长设置
   toggleMode(e) {
-    this.stopTimer({ playEndSound: false });
+    this.stopTimer({ playEndSound: false, reason: 'mode_change' });
     this.setData({ isCountdown: e.detail.value });
     this.updateDisplay();
     this.updateButtonStates();
   },
 
   resetTimer() {
-    this.stopTimer({ playEndSound: false });
+    this.stopTimer({ playEndSound: false, reason: 'reset' });
     this.updateDisplay();
     this.updateButtonStates();
   },
@@ -808,7 +890,7 @@ Page({
 
   applyDuration(minutes) {
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 180) return;
-    this.stopTimer({ playEndSound: false });
+    this.stopTimer({ playEndSound: false, reason: 'duration_change' });
     this.setData({
       duration: minutes,
       durationText: `${minutes} 分钟`,
@@ -850,6 +932,7 @@ Page({
     });
     player.onError((err) => {
       if (this.audioPlayer !== player || this.isUnloaded) return;
+      this.countdownSession.diagnose('cue_error', { code: err.errCode, cue: this.currentSessionSound });
       console.error('❌ 打坐提示音播放失败:', err);
       this.handleSessionSoundEnded();
     });
@@ -870,7 +953,7 @@ Page({
       this.startSoundTimer = null;
       this.startSoundRemaining = null;
       if (this.data.isRunning && !this.isUnloaded) {
-        this.playSessionSound('start');
+        this.safeTimerEffect('start_cue', () => this.playSessionSound('start'));
       }
     }, delay);
   },
@@ -899,7 +982,7 @@ Page({
     this.currentSessionSound = null;
     // 起坐播完后才接着播放引导，避免两段音频同时播放。
     if (wasStartSound && this.data.isRunning && !this.isUnloaded) {
-      this.playBackgroundMusic();
+      this.safeTimerEffect('start_guide', () => this.playBackgroundMusic());
     }
   },
 
@@ -934,6 +1017,7 @@ Page({
           console.log('✅ 背景音乐开始播放（支持后台）');
         });
         this.backgroundMusicPlayer.onError((err) => {
+          this.countdownSession.diagnose('guide_error', { code: err.errCode });
           console.error('❌ 背景音乐播放失败:', err);
           console.error('错误详情:', {
             errCode: err.errCode,

@@ -130,16 +130,7 @@ function createPage({
     contentSec = module.exports;
   }
 
-  vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
-    wx,
-    Date: ClockDate,
-    console: { log() {}, warn() {}, error() {} },
-    setTimeout: (callback, delay) => addTimer(callback, delay),
-    clearTimeout: id => timers.delete(id),
-    setInterval: (callback, delay) => addTimer(callback, delay, true),
-    clearInterval: id => timers.delete(id),
-    require(request) {
-      if (request === '../../utils/checkin') return {
+  const checkin = {
         recordCheckin(...args) {
           const result = recordCheckin ? recordCheckin(...args) : { success: true };
           if (!result || !result.success) return result;
@@ -152,6 +143,27 @@ function createPage({
           assert.fail('timer completion must not wait for or repeat the background upload');
         }
       };
+  const controllerModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/countdownSession.js'), 'utf8'), {
+    module: controllerModule, Date: ClockDate, console,
+    setInterval: (callback, delay) => addTimer(callback, delay, true),
+    clearInterval: id => timers.delete(id)
+  });
+  const countdown = controllerModule.exports.createCountdownSessionController({ api: wx,
+    recordCheckin: (...args) => checkin.recordCheckin(...args) });
+  const application = { getCountdownSession: () => countdown };
+
+  vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
+    wx,
+    getApp: () => application,
+    Date: ClockDate,
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout: (callback, delay) => addTimer(callback, delay),
+    clearTimeout: id => timers.delete(id),
+    setInterval: (callback, delay) => addTimer(callback, delay, true),
+    clearInterval: id => timers.delete(id),
+    require(request) {
+      if (request === '../../utils/checkin') return checkin;
       if (request === '../../utils/contentSec') return contentSec;
       if (request === '../../utils/dailyCardImage') return {
         prepareNextImage() { imagePrefetches.push(true); }
@@ -162,7 +174,7 @@ function createPage({
     Page: page => { definition = page; }
   }, { filename: pagePath });
 
-  const page = {
+  let page = {
     ...definition,
     data: structuredClone(definition.data),
     setData(values) { Object.assign(this.data, values); }
@@ -194,7 +206,16 @@ function createPage({
     page, players, audioCalls, navigations, modals, toasts, records, uploads, storage, advance, imagePrefetches,
     jump: milliseconds => { now += milliseconds; },
     plays: () => audioCalls.filter(call => call.action === 'play').map(call => call.src),
-    emitApp: event => { for (const callback of [...listeners[event]]) callback(); }
+    countdown, timers,
+    recreatePage() {
+      page = { ...definition, data: structuredClone(definition.data),
+        setData(values) { Object.assign(this.data, values); } };
+      page.onLoad({}); page.onShow(); return page;
+    },
+    emitApp: event => {
+      if (event === 'hide') countdown.appHide(); else countdown.appShow();
+      for (const callback of [...listeners[event]]) callback();
+    }
   };
 }
 
@@ -1044,7 +1065,7 @@ test('exiting a running or paused countdown stops it immediately and records onl
       assert.equal(page.startSoundTimer, null);
       assert.equal(page.data.showStopButton, false);
       assert.equal(page.data.showResetButton, false);
-      assert.equal(storage.get('timerState'), null);
+      assert.equal(storage.get('timerState').status, 'exited');
       assert.equal(records.length, 1);
       assert.equal(records[0][0], 2);
       assert.equal(records[0][4], sessionId);
@@ -1087,22 +1108,27 @@ test('exiting a countdown silences pending 起坐, playing 起坐, and playing g
   }
 });
 
-test('unloading a countdown ends it and a fresh start has a new identity and full duration', () => {
-  const { page, records, storage, advance } = createPage();
-  page.startTimer();
-  const sessionId = page.sessionId;
-  advance(90000);
-  page.onUnload();
-  assert.equal(page.data.isRunning, false);
-  assert.equal(storage.get('timerState'), null);
-  assert.equal(records.length, 1);
-  assert.equal(records[0][0], 1);
-  const reopened = createPage({ initialStorage: Object.fromEntries(storage) });
-  reopened.page.startTimer();
-  assert.equal(reopened.page.data.isRunning, true);
-  assert.equal(reopened.page.data.elapsedTime, 0);
-  assert.equal(reopened.page.data.remainingTime, reopened.page.data.totalTime);
-  assert.notEqual(reopened.page.sessionId, sessionId);
+test('page recreation continues the foreground countdown; a real exit still ends it', () => {
+  const h = createPage();
+  h.page.startTimer();
+  const sessionId = h.page.sessionId;
+  h.advance(90000);
+  h.page.onUnload();
+  h.page.setData = () => { throw new Error('unloaded page cannot render'); };
+  assert.equal(h.countdown.getSnapshot().isRunning, true);
+  assert.equal(h.records.length, 0);
+  h.advance(30000);
+  const reopened = h.recreatePage();
+  assert.equal(reopened.sessionId, sessionId);
+  assert.equal(reopened.data.elapsedTime, 120);
+  assert.equal(reopened.data.remainingTime, 300);
+  assert.equal(h.plays().filter(src => src === START_AUDIO).length, 1);
+  h.emitApp('hide');
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][0], 2);
+  h.emitApp('show'); reopened.onShow(); reopened.startTimer();
+  assert.equal(reopened.data.elapsedTime, 0);
+  assert.notEqual(reopened.sessionId, sessionId);
 });
 
 test('countdown checkpoints recover only the last known duration after an exit without callbacks', () => {
@@ -1116,7 +1142,7 @@ test('countdown checkpoints recover only the last known duration after an exit w
     const savedAt = Date.parse('2026-09-17T08:00:00+08:00');
     const reopened = createPage({ initialStorage: {
       timerState: {
-        ...state, isRunning: !isPaused, isPaused, saveTime: savedAt,
+        ...state, isRunning: !isPaused, isPaused, status: isPaused ? 'paused' : 'running', saveTime: savedAt,
         startTimestamp: savedAt - 125000, pauseTimestamp: isPaused ? savedAt : 0
       }
     } });
@@ -1128,7 +1154,7 @@ test('countdown checkpoints recover only the last known duration after an exit w
     assert.equal(reopened.records[0][0], 2);
     assert.equal(reopened.records[0][3], savedAt);
     assert.equal(reopened.records[0][4], state.sessionId);
-    assert.equal(reopened.storage.get('timerState'), null);
+    assert.equal(reopened.storage.get('timerState').status, 'exited');
   }
 });
 
@@ -1434,4 +1460,205 @@ test('delayed updates or background exits cannot create a record over 1440 minut
     assert.equal(records[0][0], 1440);
     assert.equal(records[0][3], startedAt + 86400000);
   }
+});
+
+
+test('foreground ticker loss and corrupted display recover without restarting or short records', async () => {
+  const h = createPage();
+  h.page.applyDuration(30);
+  h.page.startTimer();
+  const sessionId = h.page.sessionId;
+  h.advance(65000);
+  const ticker = [...h.timers].find(([, task]) => task.interval && task.delay === 1000);
+  assert.ok(ticker);
+  h.timers.delete(ticker[0]);
+  h.page.setData({ isRunning: false, remainingTime: 0, displayTime: '00:00' });
+  h.advance(5000);
+  assert.equal(h.page.data.isRunning, true);
+  assert.equal(h.page.data.remainingTime, 1730);
+  assert.equal(h.page.sessionId, sessionId);
+  assert.equal(h.records.length, 0);
+  assert.deepEqual(h.plays(), [START_AUDIO]);
+  h.advance(1730000);
+  assert.equal(h.page.pendingCompletion.duration, 30);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+  await h.page.confirmCompletion();
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][4], sessionId);
+});
+
+test('an unexplained early finish is rejected but the explicit stop still works', () => {
+  const h = createPage();
+  h.page.applyDuration(30); h.page.startTimer(); h.advance(125000);
+  h.page.finishSession(125, { silent: true });
+  h.page.handleTimerFinished();
+  assert.equal(h.page.data.isRunning, true);
+  assert.equal(h.records.length, 0);
+  assert.equal(h.page.pendingCompletion, null);
+  h.page.handleStop();
+  assert.equal(h.page.data.isRunning, false);
+  assert.equal(h.page.pendingCompletion.duration, 2);
+});
+
+test('app exit after unloading still saves once even when resource cleanup throws', () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(125000);
+  h.page.stopBackgroundMusic = () => { throw new Error('native stop failed'); };
+  h.page.restoreScreenSettings = () => { throw new Error('native brightness failed'); };
+  h.page.onUnload();
+  assert.equal(h.records.length, 0);
+  h.emitApp('hide'); h.emitApp('hide');
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][0], 2);
+  h.emitApp('show');
+  const fresh = h.recreatePage();
+  h.advance(10000);
+  assert.equal(fresh.data.isRunning, false);
+  assert.equal(h.records.length, 1);
+});
+
+test('a pause arriving at the deadline cannot revive the completed countdown', () => {
+  const h = createPage();
+  h.page.applyDuration(1); h.page.startTimer(); h.jump(60000);
+  h.page.pauseTimer();
+  assert.equal(h.page.data.isRunning, false);
+  assert.equal(h.page.data.isPaused, false);
+  assert.equal(h.page.pendingCompletion.duration, 1);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+});
+
+test('a failed display update does not block completion or repeat its sound on return', () => {
+  const h = createPage();
+  h.page.applyDuration(1); h.page.startTimer(); h.advance(59000);
+  const setData = h.page.setData;
+  let failed = false;
+  h.page.setData = function(values) {
+    if (!failed && 'elapsedTime' in values) { failed = true; throw new Error('one frame failed'); }
+    setData.call(this, values);
+  };
+  h.advance(1000);
+  assert.equal(h.page.pendingCompletion.duration, 1);
+  h.page.onShow();
+  assert.equal(h.page.data.isRunning, false);
+  assert.equal(h.page.data.showCompletionDialog, true);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+});
+
+test('completion reflection survives page recreation within the same App runtime', async () => {
+  const h = createPage();
+  h.page.applyDuration(1); h.page.startTimer(); h.advance(60000);
+  h.page.onCompletionInput({ detail: { value: '保留这段感受' } });
+  h.page.onUnload();
+  const fresh = h.recreatePage();
+  assert.equal(fresh.data.completionText, '保留这段感受');
+  await fresh.confirmCompletion();
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][2][0].text, '保留这段感受');
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+});
+
+test('a cold countdown checkpoint shows its newly saved completion notice only once', () => {
+  const startTimestamp = Date.parse('2026-09-18T07:00:00+08:00');
+  const h = createPage({ initialStorage: { timerState: {
+    sessionId: 'cold-notice', isCountdown: true, isRunning: true, isPaused: false,
+    elapsedTime: 125, totalTime: 1800, saveTime: startTimestamp + 125000,
+    startTimestamp, totalPausedTime: 0, pauseTimestamp: 0
+  } } });
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][0], 2);
+  assert.deepEqual(h.toasts.map(item => item.title), ['倒计时已结束，2分钟已存本机']);
+  h.page.onShow();
+  assert.equal(h.toasts.length, 1);
+});
+
+test('a cancelled countdown cannot restore its discarded progress after page recreation', () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(125000); h.page.resetTimer(); h.page.onUnload();
+  const fresh = h.recreatePage();
+  assert.equal(fresh.data.elapsedTime, 0);
+  assert.equal(fresh.data.remainingTime, fresh.data.totalTime);
+  assert.equal(fresh.data.isRunning, false);
+  assert.equal(fresh.data.isPaused, false);
+  assert.equal(h.records.length, 0);
+});
+
+test('manual countdown completion retains its reset display on return and recreation', () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(125000); h.page.handleStop();
+  h.page.onShow();
+  assert.equal(h.page.data.elapsedTime, 0);
+  assert.equal(h.page.data.remainingTime, h.page.data.totalTime);
+  h.page.onUnload();
+  const fresh = h.recreatePage();
+  assert.equal(fresh.data.elapsedTime, 0);
+  assert.equal(fresh.pendingCompletion.duration, 2);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+});
+
+test('a stale paused page cannot resume a countdown already ended by app exit', () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(65000); h.page.pauseTimer();
+  const setData = h.page.setData;
+  h.page.setData = () => { throw new Error('render interrupted during exit'); };
+  h.emitApp('hide');
+  h.page.setData = setData;
+  h.emitApp('show');
+  const playCount = h.plays().length;
+  h.page.startTimer();
+  assert.equal(h.countdown.getSnapshot().status, 'exited');
+  assert.equal(h.page.data.isRunning, false);
+  assert.equal(h.page.data.isPaused, false);
+  assert.equal(h.plays().length, playCount);
+  assert.equal(h.records.length, 1);
+});
+
+test('an old countdown terminal state cannot hide a newer count-up completion draft', async () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(65000); h.page.handleStop();
+  await h.page.confirmCompletion(); h.page.onShow();
+  h.page.toggleMode({ detail: { value: false } });
+  h.page.startTimer(); h.advance(125000); h.page.handleStop();
+  const completionId = h.page.pendingCompletion.sessionId;
+  h.page.onCompletionInput({ detail: { value: '正计时感受' } });
+  h.page.onUnload();
+  const fresh = h.recreatePage();
+  assert.equal(fresh.pendingCompletion.sessionId, completionId);
+  assert.equal(fresh.data.completionText, '正计时感受');
+  await fresh.confirmCompletion();
+  assert.equal(h.records.length, 2);
+  assert.equal(h.records[1][4], completionId);
+  assert.equal(h.records[1][2][0].text, '正计时感受');
+});
+
+test('repeated native render failures are throttled without stopping the countdown', () => {
+  const h = createPage();
+  h.page.startTimer();
+  h.page.setData = () => { throw new Error('same render failure'); };
+  h.advance(29000);
+  assert.equal(h.countdown.getSnapshot().isRunning, true);
+  const faults = h.storage.get('timerDiagnostics').filter(item => item.type === 'render_countdown_error');
+  assert.equal(faults.length, 1);
+});
+
+test('a countdown finishing during foreground page reconstruction announces once on reattach', () => {
+  const h = createPage();
+  h.page.applyDuration(1); h.page.startTimer(); h.advance(59000); h.page.onUnload();
+  h.advance(1000);
+  assert.equal(h.countdown.getSnapshot().status, 'completed');
+  const fresh = h.recreatePage();
+  assert.equal(fresh.data.showCompletionDialog, true);
+  assert.equal(fresh.pendingCompletion.duration, 1);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+  fresh.onUnload(); h.recreatePage();
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 1);
+});
+
+test('leaving the app discards a deferred completion cue without losing its completed record', () => {
+  const h = createPage();
+  h.page.applyDuration(1); h.page.startTimer(); h.advance(59000); h.page.onUnload();
+  h.advance(1000); h.emitApp('hide'); h.emitApp('show');
+  const fresh = h.recreatePage();
+  assert.equal(fresh.pendingCompletion.duration, 1);
+  assert.equal(fresh.data.showCompletionDialog, true);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 0);
 });

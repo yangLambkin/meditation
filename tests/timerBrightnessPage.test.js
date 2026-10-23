@@ -97,8 +97,11 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     }, { filename });
     return module.exports;
   }
+  const countdown = loadModule(path.resolve(__dirname, '../miniprogram/utils/countdownSession.js'))
+    .createCountdownSessionController({ api: wx, recordCheckin: () => ({ success: true }) });
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     ...globals,
+    getApp: () => ({ getCountdownSession: () => countdown }),
     Page: page => { definition = page; },
     require(request) {
       if (request === '../../utils/checkin') return { recordCheckin: () => ({ success: true }) };
@@ -137,7 +140,10 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     page, calls, listeners, advance, flush, finishWrite,
     values: () => calls.writes.map(write => write.options.value),
     setBrightness: value => { currentBrightness = value; },
-    emit: type => { for (const callback of [...listeners[type]]) callback({}); }
+    emit: type => {
+      if (type === 'hide') countdown.appHide(); else countdown.appShow();
+      for (const callback of [...listeners[type]]) callback({});
+    }
   };
 }
 
