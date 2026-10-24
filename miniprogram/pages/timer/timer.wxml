@@ -10,7 +10,7 @@
         <!-- 背景圆环 -->
         <view class="progress-circle-bg {{!isCountdown ? 'progress-circle-static' : ''}}"></view>
         <!-- 两个固定裁剪区分别显示剩余进度，旋转中心均位于圆心 -->
-        <view wx:if="{{isCountdown}}" class="progress-circle-fill {{isRunning ? 'is-animating' : ''}}">
+        <view wx:if="{{isCountdown}}" class="progress-circle-fill {{isRunning && isProgressAnimating ? 'is-animating' : ''}}">
           <view class="progress-circle-clip progress-circle-clip-left">
             <view class="progress-circle-half progress-circle-left {{progressAngleLeft <= -180 ? 'progress-circle-empty' : ''}}" style="transform: rotate({{progressAngleLeft}}deg);"></view>
           </view>
@@ -202,15 +202,16 @@
       </view>
     </view>
   </view>
-  <!-- 感受可留空，直接确认即可完成本次静坐。 -->
+  <!-- 感受可留空，完成后留页，也可主动选择查看日签。 -->
   <view wx:if="{{showCompletionDialog}}" class="completion-modal">
     <view class="completion-overlay"></view>
     <view class="completion-content">
       <text class="completion-title">静坐结束</text>
       <text class="completion-summary">这一刻，已静坐 {{completionDuration}} 分钟</text>
       <textarea class="completion-input" placeholder="此刻有什么感受？可以写下来，也可以留白。" value="{{completionText}}" bindinput="onCompletionInput" maxlength="2000" disabled="{{isSavingCompletion || isCompletionSaved}}" show-confirm-bar="{{false}}" />
-      <text class="completion-hint">感受选填，留空也可以直接确定</text>
-      <button class="completion-confirm" bindtap="confirmCompletion" loading="{{isSavingCompletion}}" disabled="{{isSavingCompletion}}">{{isCompletionSaved ? '查看日签' : '确定'}}</button>
+      <text class="completion-hint">{{completionDailyFailed ? '记录已保存，可以重试查看日签，或直接完成' : isCompletionSaved ? '本次静坐已保存，可直接完成或查看日签' : '感受选填，完成后保存本次静坐与感受'}}</text>
+      <button class="completion-confirm {{isSavingCompletion ? 'completion-confirm-disabled' : ''}}" bindtap="confirmCompletion" loading="{{isSavingCompletion && completionAction === 'stay'}}" disabled="{{isSavingCompletion}}">完成</button>
+      <button class="completion-daily {{isSavingCompletion ? 'completion-daily-disabled' : ''}}" bindtap="confirmCompletionAndViewDaily" loading="{{isSavingCompletion && completionAction === 'daily'}}" disabled="{{isSavingCompletion}}">{{completionDailyFailed ? '重试查看日签' : isCompletionSaved ? '查看日签' : '完成并看日签'}}</button>
     </view>
   </view>
 </view>

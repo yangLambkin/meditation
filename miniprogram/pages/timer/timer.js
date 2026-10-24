@@ -43,6 +43,8 @@ Page({
     completionText: '',
     isSavingCompletion: false,
     isCompletionSaved: false,
+    completionAction: '',
+    completionDailyFailed: false,
     completionNotice: '',
 
     // 计时器控制
@@ -51,6 +53,7 @@ Page({
     // 进度显示
     progressAngleLeft: 0,
     progressAngleRight: 0,
+    isProgressAnimating: false,
     displayTime: `${String(DEFAULT_DURATIONS[0]).padStart(2, '0')}:00`,
     
     // 按钮状态
@@ -133,6 +136,8 @@ Page({
     const manual = state.status === 'completed' && state.terminalReason === 'manual';
     this.pendingCompletion = state.pendingCompletion || null;
     this.safeTimerEffect('render_countdown', () => {
+      const animateProgress = event.type === 'tick' && this.data.isRunning
+        && state.remainingTime < this.data.remainingTime;
       this.setData({
         isCountdown: true,
         totalTime: state.totalTime,
@@ -146,7 +151,7 @@ Page({
         elapsedTime: manual ? 0 : state.elapsedTime,
         remainingTime: manual ? state.totalTime : state.remainingTime
       });
-      this.updateDisplay();
+      this.updateDisplay({ animateProgress });
       this.updateButtonStates();
     });
     if (event.type === 'complete' || event.type === 'exit') {
@@ -177,16 +182,7 @@ Page({
     applySyncAlertDot();
     this.isPageVisible = true;
     // 路由动画期间保留完成弹窗，回到计时页时再清理，避免先闪回计时界面。
-    if (this.didOpenDaily) {
-      this.didOpenDaily = false;
-      this.isOpeningDaily = false;
-      this.setData({
-        showCompletionDialog: false,
-        completionText: '',
-        isSavingCompletion: false,
-        isCompletionSaved: false
-      });
-    }
+    if (this.didOpenDaily) this.closeCompletionDialog();
     const countdown = this.countdownSession && this.countdownSession.getSnapshot();
     if (countdown && (countdown.isRunning || countdown.isPaused
       || (this.data.isCountdown && countdown.sessionId && countdown.sessionId === this.sessionId))) {
@@ -465,9 +461,18 @@ Page({
     }
   },
 
-  async confirmCompletion() {
+  confirmCompletion() {
+    return this.submitCompletion({ openDaily: false });
+  },
+
+  confirmCompletionAndViewDaily() {
+    return this.submitCompletion({ openDaily: true });
+  },
+
+  async submitCompletion({ openDaily = false } = {}) {
     if ((!this.pendingCompletion && !this.data.isCompletionSaved) || this.data.isSavingCompletion) return;
-    this.setData({ isSavingCompletion: true });
+    // 两个出口共用保存锁，先点的操作决定去向，重试日签不会重复保存记录。
+    this.setData({ isSavingCompletion: true, completionAction: openDaily ? 'daily' : 'stay' });
     try {
       if (!this.data.isCompletionSaved) {
         const text = this.data.completionText.trim();
@@ -475,18 +480,43 @@ Page({
         if (!this.saveCompletedSession(text) || this.isUnloaded) return;
         this.setData({ isCompletionSaved: true });
       }
-      if (!this.isUnloaded && this.isPageVisible) this.openCompletionDaily();
+      if (openDaily) {
+        // 后台完成保存后保留两个出口，回到前台也由同学主动选择是否看日签。
+        if (!this.isUnloaded && this.isPageVisible) this.openCompletionDaily();
+      } else {
+        this.closeCompletionDialog();
+      }
     } finally {
-      if (!this.isUnloaded && !this.isOpeningDaily) this.setData({ isSavingCompletion: false });
+      if (!this.isUnloaded && !this.isOpeningDaily) {
+        this.setData({ isSavingCompletion: false, completionAction: '' });
+      }
     }
+  },
+
+  closeCompletionDialog() {
+    this.isOpeningDaily = false;
+    this.didOpenDaily = false;
+    if (this.isPageVisible && !this.isUnloaded) {
+      this.safeTimerEffect('hide_completion_keyboard', () => wx.hideKeyboard({ fail() {} }));
+    }
+    this.setData({
+      showCompletionDialog: false,
+      completionDuration: 0,
+      completionText: '',
+      isSavingCompletion: false,
+      isCompletionSaved: false,
+      completionAction: '',
+      completionDailyFailed: false
+    });
   },
 
   openCompletionDaily() {
     this.isOpeningDaily = true;
+    this.setData({ completionDailyFailed: false });
     const onFailure = () => {
       this.isOpeningDaily = false;
       if (this.isUnloaded) return;
-      this.setData({ isSavingCompletion: false });
+      this.setData({ isSavingCompletion: false, completionAction: '', completionDailyFailed: true });
       if (this.isPageVisible) {
         wx.showToast({ title: '记录已保存，日签打开失败，请重试', icon: 'none' });
       }
@@ -627,20 +657,27 @@ Page({
   },
 
   // 更新显示时间和进度
-  updateDisplay() {
-    let displaySeconds = this.data.isCountdown ? this.data.remainingTime : this.data.elapsedTime;
+  updateDisplay({ animateProgress = false } = {}) {
+    const isActive = this.data.isRunning || this.data.isPaused;
+    // 待开始时倒计时显示当前设定时长，正计时显示零；实际用时保留供记录使用。
+    const displaySeconds = isActive
+      ? (this.data.isCountdown ? this.data.remainingTime : this.data.elapsedTime)
+      : (this.data.isCountdown ? this.data.totalTime : 0);
     const minutes = Math.floor(displaySeconds / 60);
     const seconds = displaySeconds % 60;
     const displayTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-    // 倒计时从完整圆环逐渐缩短；正计时始终保持完整的单色圆环。
+    // 仅运行或暂停中的倒计时显示剩余进度；结束后恢复默认满环。
+    // 实际用时仍保留在会话和完成记录中，不随圆环重置。
     const remainingRatio = this.data.totalTime > 0
       ? Math.min(1, Math.max(0, this.data.remainingTime / this.data.totalTime))
       : 0;
-    const progressAngle = this.data.isCountdown ? remainingRatio * 360 : 360;
+    const progressAngle = this.data.isCountdown && isActive ? remainingRatio * 360 : 360;
 
     this.setData({
       displayTime: displayTime,
+      // 开始、恢复和重置直接定位，只有计时递减时启用过渡。
+      isProgressAnimating: animateProgress && this.data.isCountdown && this.data.isRunning,
       // 每个半圆从 -180°（隐藏）转到 0°（完整显示）。
       progressAngleLeft: Math.max(0, progressAngle - 180) - 180,
       progressAngleRight: Math.min(180, progressAngle) - 180

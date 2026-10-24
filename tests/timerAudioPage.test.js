@@ -572,7 +572,7 @@ test('closing from the daily page stops 收坐 without saving twice and a new se
     const sessionId = page.sessionId;
     advance(60000);
     page.handleStop();
-    await page.confirmCompletion();
+    await page.confirmCompletionAndViewDaily();
     assert.deepEqual(navigations, ['/pages/daily/daily1']);
     assert.equal(players[0].src, END_AUDIO);
     assert.equal(players[0].paused, false, 'navigation within the app allows 收坐 to finish');
@@ -652,7 +652,7 @@ test('unloading destroys the cue player and queued callbacks cannot start or res
 });
 
 
-test('completion saves an empty reflection and repeated confirms record and open the daily page once', async () => {
+test('completion saves an empty reflection once and closes the dialog without opening the daily page', async () => {
   const { page, records, navigations, advance, toasts, storage } = createPage();
   page.setData({ totalTime: 60, remainingTime: 60 });
   page.startTimer();
@@ -661,15 +661,17 @@ test('completion saves an empty reflection and repeated confirms record and open
   assert.equal(page.data.showCompletionDialog, true);
   assert.equal(page.data.showStopButton, false);
   assert.equal(page.data.showResetButton, false);
-  assert.deepEqual(navigations, [], 'the daily page only opens after confirmation');
+  assert.deepEqual(navigations, []);
   await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
   assert.equal(records.length, 1);
   assert.equal(records[0][0], 1);
   assert.equal(records[0][1].length, 0);
   assert.equal(records[0][2].length, 0);
   assert.equal(records[0][4], sessionId);
-  assert.deepEqual(navigations, ['/pages/daily/daily1']);
-  assert.equal(page.data.showCompletionDialog, true, 'the outgoing page retains its dialog throughout the route animation');
+  assert.deepEqual(navigations, [], 'the primary completion action stays on the timer');
+  assert.equal(page.data.showCompletionDialog, false);
+  assert.equal(page.data.isSavingCompletion, false);
+  assert.equal(page.data.isCompletionSaved, false);
   page.onShow();
   assert.equal(page.data.showCompletionDialog, false);
   assert.deepEqual(toasts, [], 'saving a completed timer does not show an upload result');
@@ -686,10 +688,10 @@ test('completion preloads the card and keeps the dialog stable until navigation 
   advance(60000);
   page.handleStop();
   assert.equal(imagePrefetches.length, 1, 'the image request starts while the reflection dialog is visible');
-  await page.confirmCompletion();
+  await page.confirmCompletionAndViewDaily();
   assert.equal(page.data.showCompletionDialog, true, 'confirmation must not expose the timer behind the dialog');
   assert.equal(page.data.isSavingCompletion, true);
-  await page.confirmCompletion();
+  await page.confirmCompletionAndViewDaily();
   assert.equal(navigations.length, 1, 'double taps cannot start concurrent routes');
   assert.equal(records.length, 1);
   page.onHide();
@@ -719,7 +721,7 @@ test('failed navigation can retry opening the saved card without recording or mo
     advance(60000);
     page.handleStop();
     page.onCompletionInput({ detail: { value: '很平静' } });
-    await page.confirmCompletion();
+    await page.confirmCompletionAndViewDaily();
     if (!throws) route.fail({ errMsg: 'navigateTo:fail' });
     assert.equal(page.data.showCompletionDialog, true);
     assert.equal(page.data.isSavingCompletion, false);
@@ -729,7 +731,7 @@ test('failed navigation can retry opening the saved card without recording or mo
     page.startTimer();
     assert.equal(page.data.isRunning, false, 'the saved completion remains available for navigation retry');
     shouldFail = false;
-    await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
+    await Promise.all([page.confirmCompletionAndViewDaily(), page.confirmCompletionAndViewDaily()]);
     assert.equal(records.length, 1);
     assert.deepEqual(checked, ['很平静']);
     assert.equal(navigations.length, 2);
@@ -740,26 +742,132 @@ test('failed navigation can retry opening the saved card without recording or mo
   }
 });
 
-test('a reflection check finishing in the background saves once and waits for a visible navigation retry', async () => {
-  let resolveCheck;
-  const { page, advance, records, navigations } = createPage({
-    checkText: () => new Promise(resolve => { resolveCheck = resolve; })
-  });
-  page.startTimer();
-  advance(60000);
-  page.handleStop();
-  page.onCompletionInput({ detail: { value: '安静' } });
-  const pending = page.confirmCompletion();
-  page.onHide();
-  resolveCheck(true);
-  await pending;
-  assert.equal(records.length, 1);
-  assert.equal(navigations.length, 0);
-  assert.equal(page.data.isSavingCompletion, false);
-  page.onShow();
-  await page.confirmCompletion();
-  assert.equal(records.length, 1);
-  assert.deepEqual(navigations, ['/pages/daily/daily1']);
+test('a saved completion can finish on the timer after daily navigation fails without another save or text check', async () => {
+  for (const throws of [false, true]) {
+    let route;
+    const checked = [];
+    const { page, advance, records, navigations, storage } = createPage({
+      checkText: async text => { checked.push(text); return true; },
+      navigateTo(options) {
+        route = options;
+        if (throws) throw new Error('route failed');
+      }
+    });
+    page.startTimer();
+    const completedId = page.sessionId;
+    advance(60000);
+    page.handleStop();
+    page.onCompletionInput({ detail: { value: '已保存的感受' } });
+    await page.confirmCompletionAndViewDaily();
+    if (!throws) route.fail({ errMsg: 'navigateTo:fail' });
+    assert.equal(page.data.isCompletionSaved, true);
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.showCompletionDialog, true);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+    assert.equal(records.length, 1);
+    await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
+    assert.equal(page.data.showCompletionDialog, false);
+    assert.equal(page.data.isCompletionSaved, false);
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.completionText, '');
+    assert.deepEqual(checked, ['已保存的感受']);
+    assert.equal(records.length, 1);
+    assert.deepEqual(navigations, ['/pages/daily/daily1']);
+    await page.confirmCompletionAndViewDaily();
+    assert.equal(navigations.length, 1, 'a queued daily click after finishing cannot reopen the old record');
+    page.startTimer();
+    assert.equal(page.data.isRunning, true);
+    assert.notEqual(page.sessionId, completedId);
+  }
+});
+
+test('mixed completion clicks save once and keep the destination chosen by the first click', async () => {
+  for (const isCountdown of [true, false]) {
+    for (const viewDaily of [false, true]) {
+      let resolveCheck;
+      let route;
+      const checked = [];
+      const { page, advance, records, navigations } = createPage({
+        isCountdown,
+        checkText(text) {
+          checked.push(text);
+          return new Promise(resolve => { resolveCheck = resolve; });
+        },
+        navigateTo: options => { route = options; }
+      });
+      page.startTimer();
+      advance(60000);
+      page.handleStop();
+      page.onCompletionInput({ detail: { value: '一次确认' } });
+      const pending = viewDaily ? page.confirmCompletionAndViewDaily() : page.confirmCompletion();
+      assert.equal(page.data.isSavingCompletion, true);
+      await (viewDaily ? page.confirmCompletion() : page.confirmCompletionAndViewDaily());
+      assert.equal(records.length, 0);
+      assert.deepEqual(checked, ['一次确认']);
+      resolveCheck(true);
+      await pending;
+      assert.equal(records.length, 1);
+      assert.deepEqual(navigations, viewDaily ? ['/pages/daily/daily1'] : []);
+      if (viewDaily) {
+        assert.equal(page.data.showCompletionDialog, true);
+        assert.equal(page.data.isSavingCompletion, true);
+        await page.confirmCompletion();
+        await page.confirmCompletionAndViewDaily();
+        assert.equal(page.data.showCompletionDialog, true, 'a pending route must retain its outgoing dialog');
+        assert.equal(navigations.length, 1);
+        page.onHide();
+        route.success({});
+        page.onShow();
+      } else {
+        assert.equal(page.data.showCompletionDialog, false);
+        await page.confirmCompletionAndViewDaily();
+        assert.deepEqual(navigations, [], 'a queued secondary click cannot change a completed stay action');
+      }
+      assert.equal(page.data.isSavingCompletion, false);
+      assert.equal(page.data.isCompletionSaved, false);
+      assert.equal(records.length, 1);
+      assert.deepEqual(checked, ['一次确认']);
+    }
+  }
+});
+
+test('a background reflection check saves once and preserves the chosen completion destination without auto-navigation', async () => {
+  for (const isCountdown of [true, false]) {
+    for (const viewDaily of [false, true]) {
+      let resolveCheck;
+      const { page, advance, records, navigations, emitApp, storage } = createPage({
+        isCountdown,
+        checkText: () => new Promise(resolve => { resolveCheck = resolve; })
+      });
+      page.startTimer();
+      advance(60000);
+      page.handleStop();
+      page.onCompletionInput({ detail: { value: '安静' } });
+      const pending = viewDaily ? page.confirmCompletionAndViewDaily() : page.confirmCompletion();
+      page.onHide();
+      emitApp('hide');
+      resolveCheck(true);
+      await pending;
+      assert.equal(records.length, 1);
+      assert.deepEqual(navigations, []);
+      assert.equal(page.pendingCompletion, null);
+      assert.equal(storage.get('timerPendingCompletion'), null);
+      assert.equal(page.data.isSavingCompletion, false);
+      assert.equal(page.data.isCompletionSaved, viewDaily);
+      assert.equal(page.data.showCompletionDialog, viewDaily);
+      emitApp('show');
+      page.onShow();
+      assert.deepEqual(navigations, [], 'returning to the timer must not resume a navigation implicitly');
+      if (viewDaily) {
+        await page.confirmCompletionAndViewDaily();
+        assert.deepEqual(navigations, ['/pages/daily/daily1']);
+        assert.equal(records.length, 1);
+      } else {
+        page.startTimer();
+        assert.equal(page.data.isRunning, true);
+      }
+    }
+  }
 });
 
 test('a late navigation failure stays silent while hidden and allows retry on return', async () => {
@@ -770,13 +878,13 @@ test('a late navigation failure stays silent while hidden and allows retry on re
   page.startTimer();
   advance(60000);
   page.handleStop();
-  await page.confirmCompletion();
+  await page.confirmCompletionAndViewDaily();
   page.onHide();
   route.fail({ errMsg: 'navigateTo:fail' });
   assert.deepEqual(toasts, []);
   assert.equal(page.data.isSavingCompletion, false);
   page.onShow();
-  await page.confirmCompletion();
+  await page.confirmCompletionAndViewDaily();
   assert.equal(records.length, 1);
   assert.equal(navigations.length, 2);
 });
@@ -802,9 +910,9 @@ test('both timer modes finish locally and a late upload result cannot interrupt 
       if (ending !== 'countdown automatic') page.handleStop();
       assert.deepEqual(navigations, [], ending);
       await Promise.all([page.confirmCompletion(), page.confirmCompletion()]);
-      assert.deepEqual(navigations, ['/pages/daily/daily1'], ending);
+      assert.deepEqual(navigations, [], ending);
       page.onShow();
-      assert.equal(page.data.isSavingCompletion, false, 'returning to the timer releases controls before the upload finishes');
+      assert.equal(page.data.isSavingCompletion, false, 'completion releases controls before the upload finishes');
       assert.equal(page.data.showCompletionDialog, false);
       assert.equal(toasts.length, 0);
       assert.equal(records.length, 1);
@@ -829,7 +937,7 @@ test('both timer modes finish locally and a late upload result cannot interrupt 
       await page.confirmCompletion();
       assert.equal(records.length, 1);
       assert.equal(uploadCalls.length, 1);
-      assert.deepEqual(navigations, ['/pages/daily/daily1'], 'late uploads and repeated confirms must not navigate again');
+      assert.deepEqual(navigations, [], 'late uploads and repeated confirms must not navigate');
     }
   }
 });
@@ -982,29 +1090,35 @@ test('both timer modes release saving within 1500 ms when the network request ha
   }
 });
 
-test('an online rejected reflection stays editable and can be cleared to finish in both modes', async () => {
+test('an online rejected reflection stays editable and either completion action can retry after clearing it', async () => {
   for (const isCountdown of [false, true]) {
-    const { page, records, advance, storage } = createPage({
-      isCountdown,
-      networkType: 'wifi',
-      contentSecRequest: async () => ({ result: { success: true, safe: false } })
-    });
-    page.setData({ totalTime: 60, remainingTime: 60 });
-    page.startTimer();
-    advance(60000);
-    if (!isCountdown) page.handleStop();
-    page.onCompletionInput({ detail: { value: 'blocked' } });
-    await page.confirmCompletion();
-    assert.equal(records.length, 0);
-    assert.equal(page.data.showCompletionDialog, true);
-    assert.equal(page.data.isSavingCompletion, false);
-    assert.equal(page.data.completionText, 'blocked');
-    assert.equal(storage.get('timerPendingCompletion').text, 'blocked');
-    page.onCompletionInput({ detail: { value: '' } });
-    await page.confirmCompletion();
-    page.onShow();
-    assert.equal(records.length, 1);
-    assert.equal(page.data.isSavingCompletion, false);
+    for (const action of ['confirmCompletion', 'confirmCompletionAndViewDaily']) {
+      const { page, records, advance, storage, navigations } = createPage({
+        isCountdown,
+        networkType: 'wifi',
+        contentSecRequest: async () => ({ result: { success: true, safe: false } })
+      });
+      page.setData({ totalTime: 60, remainingTime: 60 });
+      page.startTimer();
+      advance(60000);
+      if (!isCountdown) page.handleStop();
+      page.onCompletionInput({ detail: { value: 'blocked' } });
+      await page[action]();
+      assert.equal(records.length, 0);
+      assert.deepEqual(navigations, []);
+      assert.equal(page.data.showCompletionDialog, true);
+      assert.equal(page.data.isSavingCompletion, false);
+      assert.equal(page.data.isCompletionSaved, false);
+      assert.equal(page.data.completionText, 'blocked');
+      assert.equal(storage.get('timerPendingCompletion').text, 'blocked');
+      page.onCompletionInput({ detail: { value: '' } });
+      await page[action]();
+      assert.equal(records.length, 1);
+      assert.deepEqual(navigations, action === 'confirmCompletion' ? [] : ['/pages/daily/daily1']);
+      page.onShow();
+      assert.equal(page.data.showCompletionDialog, false);
+      assert.equal(page.data.isSavingCompletion, false);
+    }
   }
 });
 
@@ -1183,35 +1297,40 @@ test('unloading a count-up records it once and ends the session', () => {
   assert.equal(page.data.isRunning, false);
 });
 
-test('a failed completion retries with the original session id and timestamp', async () => {
-  const attempts = [];
-  const { page, storage, advance, toasts, navigations } = createPage({
-    recordCheckin(...args) {
-      attempts.push(args);
-      if (attempts.length === 1) throw new Error('disk busy');
-      return { success: true };
-    }
-  });
-  page.startTimer();
-  advance(60000);
-  page.handleStop();
-  await page.confirmCompletion();
-  assert.equal(page.data.showCompletionDialog, true);
-  assert.equal(page.data.isSavingCompletion, false, 'a local write failure must release the save button');
-  assert.ok(storage.get('timerPendingCompletion'));
-  assert.equal(toasts.at(-1).title, '保存失败，请重试');
-  assert.deepEqual(navigations, [], 'a failed save must keep the completion available for retry');
-  advance(60000);
-  await page.confirmCompletion();
-  assert.equal(attempts.length, 2);
-  assert.equal(attempts[0][3], attempts[1][3]);
-  assert.equal(attempts[0][4], attempts[1][4]);
-  page.onShow();
-  assert.equal(page.data.showCompletionDialog, false);
-  assert.equal(page.data.isSavingCompletion, false);
-  assert.equal(storage.get('timerPendingCompletion'), null);
-  assert.equal(toasts.length, 1, 'successful retry adds no upload result notification');
-  assert.deepEqual(navigations, ['/pages/daily/daily1']);
+test('either completion action can retry a failed save with the original session id, timestamp and reflection', async () => {
+  for (const action of ['confirmCompletion', 'confirmCompletionAndViewDaily']) {
+    const attempts = [];
+    const { page, storage, advance, toasts, navigations } = createPage({
+      recordCheckin(...args) {
+        attempts.push(args);
+        if (attempts.length === 1) throw new Error('disk busy');
+        return { success: true };
+      }
+    });
+    page.startTimer();
+    advance(60000);
+    page.handleStop();
+    page.onCompletionInput({ detail: { value: '继续保留感受' } });
+    await page[action]();
+    assert.equal(page.data.showCompletionDialog, true);
+    assert.equal(page.data.isSavingCompletion, false, 'a local write failure must release both save actions');
+    assert.equal(page.data.isCompletionSaved, false);
+    assert.equal(storage.get('timerPendingCompletion').text, '继续保留感受');
+    assert.equal(toasts.at(-1).title, '保存失败，请重试');
+    assert.deepEqual(navigations, [], 'a failed save must never open the daily page');
+    advance(60000);
+    await page[action]();
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0][3], attempts[1][3]);
+    assert.equal(attempts[0][4], attempts[1][4]);
+    assert.equal(attempts[1][2][0].text, '继续保留感受');
+    assert.deepEqual(navigations, action === 'confirmCompletion' ? [] : ['/pages/daily/daily1']);
+    page.onShow();
+    assert.equal(page.data.showCompletionDialog, false);
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+    assert.equal(toasts.length, 1, 'successful retry adds no upload result notification');
+  }
 });
 
 test('a restored count-up uses its last foreground checkpoint without adding closed time', () => {
@@ -1243,19 +1362,32 @@ test('unfinished reflection restores the same completion and text after reopenin
   assert.equal(records[0][4], completion.sessionId);
 });
 
-test('a new session after completion starts at zero with a fresh identity', async () => {
-  const { page, advance } = createPage({ isCountdown: false });
-  page.startTimer();
-  const firstId = page.sessionId;
-  advance(60000);
-  page.handleStop();
-  await page.confirmCompletion();
-  page.onShow();
-  page.startTimer();
-  assert.notEqual(page.sessionId, firstId);
-  assert.equal(page.data.elapsedTime, 0);
-  assert.equal(page.data.showStopButton, true);
-  assert.equal(page.data.showResetButton, true);
+test('either timer mode can start a fresh session immediately after completing without navigation', async () => {
+  for (const isCountdown of [true, false]) {
+    const { page, advance, records, navigations, storage } = createPage({ isCountdown });
+    page.startTimer();
+    const firstId = page.sessionId;
+    advance(60000);
+    page.handleStop();
+    page.onCompletionInput({ detail: { value: '已结束' } });
+    await page.confirmCompletion();
+    assert.deepEqual(navigations, []);
+    assert.equal(page.data.showCompletionDialog, false);
+    assert.equal(page.data.completionText, '');
+    assert.equal(page.data.isSavingCompletion, false);
+    assert.equal(page.data.isCompletionSaved, false);
+    assert.equal(page.pendingCompletion, null);
+    assert.equal(storage.get('timerPendingCompletion'), null);
+    assert.equal(records.length, 1);
+    assert.equal(records[0][2][0].text, '已结束');
+    page.startTimer();
+    assert.equal(page.data.isRunning, true, 'the next session must not need an onShow cleanup');
+    assert.notEqual(page.sessionId, firstId);
+    assert.equal(page.data.elapsedTime, 0);
+    assert.equal(page.data.showStopButton, true);
+    assert.equal(page.data.showResetButton, true);
+    assert.equal(records.length, 1);
+  }
 });
 
 test('opening the timer selects the first recommendation in its saved order, even when 30 remains available', () => {
@@ -1725,4 +1857,107 @@ test('leaving the app discards a deferred completion cue without losing its comp
   assert.equal(fresh.pendingCompletion.duration, 1);
   assert.equal(fresh.data.showCompletionDialog, true);
   assert.equal(h.plays().filter(src => src === END_AUDIO).length, 0);
+});
+
+test('a completed countdown restores its full ring and selected time through confirmation, return and the next start', async () => {
+  for (const changeDuration of [false, true]) {
+    const h = createPage();
+    let selectedTime = '01:00';
+    const fullRing = () => {
+      assert.equal(h.page.data.progressAngleLeft, 0);
+      assert.equal(h.page.data.progressAngleRight, 0);
+      assert.equal(h.page.data.isProgressAnimating, false);
+      assert.equal(h.page.data.displayTime, selectedTime);
+    };
+    h.page.applyDuration(1);
+    h.page.startTimer();
+    const sessionId = h.page.sessionId;
+    h.advance(60000);
+    fullRing();
+    assert.equal(h.countdown.getSnapshot().elapsedTime, 60);
+    assert.equal(h.countdown.getSnapshot().remainingTime, 0);
+    assert.equal(h.page.pendingCompletion.duration, 1);
+    h.page.onShow();
+    fullRing();
+    await h.page.confirmCompletion();
+    h.page.onShow();
+    fullRing();
+    assert.equal(h.records.length, 1);
+    assert.equal(h.records[0][0], 1);
+    assert.equal(h.records[0][4], sessionId);
+    if (changeDuration) {
+      h.page.selectDuration({ currentTarget: { dataset: { value: 10 } } });
+      selectedTime = '10:00';
+    }
+    fullRing();
+    h.page.startTimer();
+    fullRing();
+    assert.equal(h.page.data.isRunning, true);
+    assert.notEqual(h.page.sessionId, sessionId);
+    h.advance(1000);
+    assert.ok(h.page.data.progressAngleLeft < 0);
+    assert.equal(h.page.data.isProgressAnimating, true);
+  }
+});
+
+test('stopping either timer mode restores its idle display without changing its record policy', () => {
+  for (const isCountdown of [true, false]) {
+    for (const ending of ['manual', 'reset', 'app exit', 'delayed app exit']) {
+      const h = createPage({ isCountdown });
+      h.page.startTimer();
+      h.advance(125000);
+      const activeTime = isCountdown ? '04:55' : '02:05';
+      assert.equal(h.page.data.displayTime, activeTime);
+      if (ending === 'manual') {
+        h.page.pauseTimer();
+        assert.equal(h.page.data.displayTime, activeTime);
+        h.page.handleStop();
+      } else if (ending === 'reset') h.page.resetTimer();
+      else {
+        if (ending === 'delayed app exit') h.jump(600000);
+        h.emitApp('hide');
+        h.emitApp('show');
+      }
+      h.page.onShow();
+      assert.equal(h.page.data.progressAngleLeft, 0, ending);
+      assert.equal(h.page.data.progressAngleRight, 0, ending);
+      assert.equal(h.page.data.isProgressAnimating, false, ending);
+      assert.equal(h.page.data.displayTime, isCountdown ? '07:00' : '00:00', ending);
+      assert.equal(h.page.data.isRunning, false, ending);
+      assert.equal(h.records.length, ending.includes('app exit') ? 1 : 0, ending);
+      if (ending === 'manual') assert.equal(h.page.pendingCompletion.duration, 2);
+      if (ending.includes('app exit')) {
+        const expectedDuration = ending === 'app exit' ? 2 : isCountdown ? 7 : 12;
+        assert.equal(h.records[0][0], expectedDuration);
+      }
+    }
+  }
+});
+
+test('only countdown ticks animate the ring; pause, resume and page restore retain its progress', () => {
+  const h = createPage();
+  h.page.startTimer();
+  assert.equal(h.page.data.isProgressAnimating, false);
+  h.advance(125000);
+  const angles = [h.page.data.progressAngleLeft, h.page.data.progressAngleRight];
+  assert.ok(angles[0] < 0);
+  assert.equal(h.page.data.isProgressAnimating, true);
+  h.page.pauseTimer();
+  h.advance(30000);
+  assert.deepEqual([h.page.data.progressAngleLeft, h.page.data.progressAngleRight], angles);
+  assert.equal(h.page.data.displayTime, '04:55');
+  assert.equal(h.page.data.isProgressAnimating, false);
+  h.page.startTimer();
+  assert.deepEqual([h.page.data.progressAngleLeft, h.page.data.progressAngleRight], angles);
+  assert.equal(h.page.data.displayTime, '04:55');
+  assert.equal(h.page.data.isProgressAnimating, false);
+  h.page.onUnload();
+  const fresh = h.recreatePage();
+  assert.deepEqual([fresh.data.progressAngleLeft, fresh.data.progressAngleRight], angles);
+  assert.equal(fresh.data.displayTime, '04:55');
+  assert.equal(fresh.data.isProgressAnimating, false);
+  h.advance(1000);
+  assert.ok(fresh.data.progressAngleLeft < angles[0]);
+  assert.equal(fresh.data.displayTime, '04:54');
+  assert.equal(fresh.data.isProgressAnimating, true);
 });

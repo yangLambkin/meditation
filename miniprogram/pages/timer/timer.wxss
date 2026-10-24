@@ -1265,7 +1265,8 @@ button.duration-move-pressed {
 
 .duration-add::after,
 .duration-custom::after,
-.completion-confirm::after {
+.completion-confirm::after,
+.completion-daily::after {
   border: none;
 }
 
@@ -1347,4 +1348,28 @@ button.duration-move-pressed {
   color: #fff;
   font-size: 30rpx;
   line-height: 80rpx;
+}
+
+.completion-daily {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 88rpx;
+  margin-top: 8rpx;
+  margin-bottom: 0;
+  padding: 16rpx 0;
+  border-radius: 16rpx;
+  background: transparent;
+  color: #8b8376;
+  font-size: 26rpx;
+  line-height: 56rpx;
+}
+
+.completion-confirm.completion-confirm-disabled {
+  background: #b29764;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.completion-daily.completion-daily-disabled {
+  background: transparent;
+  color: #b5aea2;
 }
