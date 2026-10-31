@@ -889,6 +889,8 @@ const checkinManager = {
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
+      createdAt: cloudRecord.createdAt,
+      updatedAt: cloudRecord.updatedAt,
       created_at: cloudRecord.created_at
     };
   },
@@ -1033,6 +1035,8 @@ const checkinManager = {
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
+      createdAt: cloudRecord.createdAt,
+      updatedAt: cloudRecord.updatedAt,
       created_at: cloudRecord.created_at
     };
   },
@@ -1131,6 +1135,8 @@ const checkinManager = {
         recordType: record.recordType,
         date: dateStr,
         timestamp: record.timestamp,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
         duration: record.duration || 0,
         emotion: record.emotion || [],
         experience: record.experience || [],

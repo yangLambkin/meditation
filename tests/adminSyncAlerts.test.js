@@ -203,11 +203,11 @@ function appHarness({ manualFeedback = false, tabReady = true } = {}) {
       } },
       getStorageSync() { return identity; },
       showTabBarRedDot(value) {
-        assert.equal(value.index, 3);
+        assert.equal(value.index, 4);
         if (tabReady) dots.push(true);
         else value.fail(new Error('tabbar not ready'));
       },
-      hideTabBarRedDot(value) { assert.equal(value.index, 3); dots.push(false); }
+      hideTabBarRedDot(value) { assert.equal(value.index, 4); dots.push(false); }
     },
     console,
     setTimeout(callback, delay) { const handle = ++id; timers.set(handle, { callback, delay }); return handle; },

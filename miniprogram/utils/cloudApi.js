@@ -3,6 +3,31 @@ const CLOUD_REQUEST_TIMEOUT_MS = 5000;
 const UPLOAD_TIMEOUT_MS = 3000;
 const uploadNetwork = require('./uploadNetwork.js');
 
+function beginPracticeObservation(functionName, data) {
+  try {
+    const mirror = require('./practiceMirror.js');
+    const owner = require('./practiceAuth.js').getOwner();
+    return { mirror, owner, intent: mirror.beforeCloudMutation(functionName, data),
+      ...(functionName === 'meditationManager' && data && data.type === 'getAllRecords'
+        ? { barrier: mirror.captureRecoveryBarrier(owner) } : {}) };
+  } catch (error) {
+    // 新分支不可改变原静坐请求的成功条件。
+    console.warn('功课镜像观察未就绪，原静坐继续:', error && error.message);
+    return null;
+  }
+}
+function finishPracticeObservation(context, functionName, data, result) {
+  if (!context) return;
+  try {
+    context.mirror.observeCloudResult(context.intent, result);
+    if (functionName === 'meditationManager' && data && data.type === 'getAllRecords' &&
+        result && result.result && result.result.success === true && Array.isArray(result.result.data)) {
+      Promise.resolve(context.mirror.acceptCloudSnapshot(result.result.data, context.owner, context.barrier))
+        .catch(error => console.warn('功课镜像来源恢复待重试:', error && error.message));
+    }
+  } catch (error) { console.warn('功课镜像确认待核对:', error && error.message); }
+}
+
 function cloudTimeoutError(timeoutMs) {
   const error = new Error(`上传超时（${timeoutMs / 1000}秒），请手动重试`);
   error.code = 'CLOUD_TIMEOUT';
@@ -35,6 +60,8 @@ const cloudApi = {
   // 调用云函数
   callCloudFunction: function(functionName, data, options = {}) {
     const account = recordAccount(functionName, data);
+    // 原网络写入前先持久化意图，晚到的成功回包也必须独立观察。
+    const practiceContext = beginPracticeObservation(functionName, data);
     const isUpload = data && ((functionName === 'meditationManager' && data.type === 'recordMeditation') ||
       (functionName === 'contentSecCheck' && data.type === 'text' && options.isUpload === true));
     const timeoutMs = isUpload ? UPLOAD_TIMEOUT_MS : CLOUD_REQUEST_TIMEOUT_MS;
@@ -73,6 +100,7 @@ const cloudApi = {
             if (needsTimeout && Date.now() >= deadlineAt) finish(reject, cloudTimeoutError(timeoutMs));
             else finish(resolve, result);
             syncConfirmedHistoricalRecord(functionName, data, result, account);
+            finishPracticeObservation(practiceContext, functionName, data, result);
           },
           fail: error => needsTimeout && Date.now() >= deadlineAt
             ? finish(reject, cloudTimeoutError(timeoutMs)) : finish(reject, error)

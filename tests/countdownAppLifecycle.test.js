@@ -25,6 +25,7 @@ function createApp({ cloud = true } = {}) {
     console: { log() {}, warn() {}, error() {} },
     require(name) {
       calls.modules.push(name);
+      if (name === './utils/practiceMirror.js') return { resume: async () => ({ pending: 0 }) };
       if (name === './utils/checkin.js') return {
         recordCheckin(...args) { calls.records.push(args); return recordResult; }
       };
@@ -52,7 +53,8 @@ test('app lifecycle does not load or construct the countdown controller until re
   app.onLaunch();
   await app.onShow();
   app.onHide();
-  assert.deepEqual(calls.modules, ['./utils/checkin.js']);
+  assert.equal(calls.modules[0], './utils/checkin.js');
+  assert.equal(calls.modules.includes('./utils/countdownSession'), false);
   assert.equal(calls.factories.length, 0);
 });
 

@@ -18,6 +18,7 @@ App({
     
     console.log('云开发初始化完成');
     this.setupRecordRefresh();
+    this.resumePracticeRecords();
     
     // 设置缓存状态标记
     this.setupCacheStatus();
@@ -37,6 +38,7 @@ App({
     this._timerForeground = true;
     if (this._countdownSession) this._countdownSession.appShow();
     if (!wx.cloud) return;
+    this.resumePracticeRecords();
     this.startSyncAlertRefresh();
     // 接续已入账历史记录的必经任务，独立运行，不阻塞云端记录的读取/上传。
     if (typeof checkinManager.resumeHistoricalBijingSync === 'function') {
@@ -77,7 +79,7 @@ App({
   },
   setSyncAlertDot(visible) {
     const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
-    if (typeof action === 'function') action.call(wx, { index: 3, fail() {} });
+    if (typeof action === 'function') action.call(wx, { index: 4, fail() {} });
   },
   getSyncAlertState({ includeBackfill = false } = {}) {
     const state = this._syncAlertState || {};
@@ -206,6 +208,7 @@ App({
       if (isConnected) {
         this.refreshRecordBackups();
         this.resumeRecordBackups();
+        this.resumePracticeRecords();
       }
     };
     wx.onNetworkStatusChange(this._networkStatusHandler);
@@ -214,6 +217,13 @@ App({
   resumeRecordBackups() {
     return Promise.resolve().then(() => checkinManager.retryAutomaticBackups()).catch(error => {
       console.warn('本机记录自动上传失败，保留本机记录:', error);
+    });
+  },
+
+  resumePracticeRecords() {
+    // 新 OpenAPI 分支独立续传，不阻塞静坐原记录、统计及旧必经同步。
+    return Promise.resolve().then(() => require('./utils/practiceMirror.js').resume()).catch(error => {
+      console.warn('功课记录待上传，已保留本机任务:', error && error.message);
     });
   },
 

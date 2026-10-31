@@ -56,6 +56,24 @@ Page({
     hiddenCheckinCount: 0
   },
 
+  openPracticePicker() {
+    wx.showActionSheet({
+      itemList: ['静坐觉察', '走路觉察', '即刻觉察', '熏习', '日行一善', '禅拍'],
+      success: result => {
+        if (result.tapIndex === 0) return this.openCheckinModal();
+        const types = ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clapping'];
+        const type = types[result.tapIndex];
+        if (!type) return;
+        wx.setStorageSync('practiceRecordEntry', type);
+        wx.switchTab({ url: '/pages/practices/practices' });
+      }
+    });
+  },
+
+  openPracticeRecords() {
+    wx.switchTab({ url: '/pages/practices/practices' });
+  },
+
   openCheckinModal() {
     if (this.data.checkinSubmitting) return;
     this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
@@ -1532,6 +1550,11 @@ Page({
   onShow() {
     this.initHomeBackfill();
     this.watchBijingRecordSync();
+    // 记录页选择静坐后继续使用原手动录入流程。
+    if (wx.getStorageSync('practiceSittingEntry')) {
+      wx.removeStorageSync('practiceSittingEntry');
+      this.openCheckinModal();
+    }
     applySyncAlertDot();
     console.log('=== index页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();

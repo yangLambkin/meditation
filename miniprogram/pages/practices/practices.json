@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "功课记录",
+  "navigationBarBackgroundColor": "#F6F6F6",
+  "backgroundColor": "#f8fafc",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 120
+}

@@ -6,13 +6,17 @@ const vm = require('node:vm');
 
 function createApp({
   read = async () => ({ success: true, uploaded: 0, pending: 0 }),
-  retryAutomatic = async () => ({ success: true, uploaded: 0, pending: 0 })
+  retryAutomatic = async () => ({ success: true, uploaded: 0, pending: 0 }),
+  resumePractices = async () => ({ success: true, pending: 0 })
 } = {}) {
   let app;
-  const calls = { reads: [], automaticUploads: [], listeners: [], warnings: [], initializations: 0 };
+  const calls = { reads: [], automaticUploads: [], practices: [], listeners: [], warnings: [], initializations: 0 };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/app.js'), 'utf8'), {
     App: value => { app = value; },
     require(name) {
+      if (name === './utils/practiceMirror.js') return {
+        resume: (...args) => { calls.practices.push(args); return resumePractices(...args); }
+      };
       assert.equal(name, './utils/checkin.js');
       return {
         syncWithCloud: (...args) => { calls.reads.push(args); return read(...args); },
@@ -44,6 +48,7 @@ test('opening the app reads cloud records and independently retries all dates of
   await app.onShow();
   assert.equal(calls.automaticUploads.length, 2, 'returning to the app starts another automatic check');
   assert.equal(calls.reads.length, 2);
+  assert.equal(calls.practices.length, 3, 'launch and each foreground resume the independent practice outbox');
 });
 
 test('network recovery independently refreshes and starts a fresh automatic upload', async () => {
@@ -59,6 +64,7 @@ test('network recovery independently refreshes and starts a fresh automatic uplo
   assert.equal(calls.reads.length, 2);
   assert.equal(calls.reads[1][0].uploadPending, false, 'the independent read request stays read-only');
   assert.equal(calls.automaticUploads.length, 2, 'connectivity recovery starts a fresh upload round');
+  assert.equal(calls.practices.length, 3, 'network restoration also resumes practice tasks');
 });
 
 test('opening starts pending uploads asynchronously without waiting for a pending cloud read', async () => {
@@ -102,4 +108,14 @@ test('synchronous pending upload failures remain contained in the foreground lif
   assert.equal(calls.automaticUploads.length, 1);
   assert.equal(calls.reads.length, 1);
   assert.equal(calls.warnings.length, 1);
+});
+
+test('practice sync failure cannot interrupt original cloud refresh or pending uploads', async () => {
+  const { app, calls } = createApp({ resumePractices: async () => { throw new Error('data unavailable'); } });
+  await app.onShow();
+  assert.equal(calls.reads.length, 1);
+  assert.equal(calls.automaticUploads.length, 1);
+  assert.equal(calls.practices.length, 1);
+  assert.equal(calls.warnings.length, 1);
+  assert.match(calls.warnings[0][0], /功课记录待上传/);
 });

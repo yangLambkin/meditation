@@ -3,6 +3,7 @@
     "pages/index/index",
     "pages/example/index",
     "pages/timer/timer",
+    "pages/practices/practices",
     "pages/recorder/recorder",
     "pages/daily/daily1",
     "pages/me/me",
@@ -55,6 +56,12 @@
         "text": "计时",
         "iconPath": "/images/icons/timer.png",
         "selectedIconPath": "/images/icons/timer-active.png"
+      },
+      {
+        "pagePath": "pages/practices/practices",
+        "text": "记录",
+        "iconPath": "/images/icons/star.png",
+        "selectedIconPath": "/images/icons/star-active.png"
       },
       {
         "pagePath": "pages/team/team",

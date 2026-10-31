@@ -16,8 +16,8 @@ function entryHarness(t) {
   const wx = {
     getStorageSync: key => storage[key],
     setStorageSync: (key, value) => { storage[key] = value; },
-    showTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(true); },
-    hideTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(false); },
+    showTabBarRedDot({ index }) { assert.equal(index, 4); tabDots.push(true); },
+    hideTabBarRedDot({ index }) { assert.equal(index, 4); tabDots.push(false); },
     hideLoading() {},
     cloud: { callFunction(options) {
       assert.ok(['getSyncAlert', 'getFeedbackAlert'].includes(options.data.type));

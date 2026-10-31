@@ -1186,3 +1186,8 @@
 .record-bijing-retry::after { border: none; }
 .checkin-deletion-sync { margin: 16rpx 0; padding: 18rpx 20rpx; border-radius: 12rpx; background: #faf7f0; }
 .checkin-deletion-sync .record-bijing-sync { margin-top: 8rpx; }
+
+.home-practice-entry { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin: 32rpx 28.24rpx 0; padding: 28rpx 24rpx; border: 2rpx solid #eee8dc; border-radius: 20rpx; background: #fffdf8; }
+.home-practice-title { display: block; font-size: 29rpx; font-weight: 600; color: #796442; }
+.home-practice-caption { display: block; margin-top: 10rpx; font-size: 22rpx; color: #a3957d; line-height: 1.6; }
+.home-practice-link { display: flex; flex-shrink: 0; align-items: center; color: #a68a57; font-size: 25rpx; }

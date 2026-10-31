@@ -70,10 +70,10 @@
       <view class="meditation-btn-container">
         <button class="weui-btn meditation-btn primary" bindtap="startMeditation" hover-class="weui-btn_active">
           <image class="meditation-btn-icon" src="/images/icons/timer-start.svg" mode="aspectFit" />
-          <text class="meditation-btn-text">开始觉察</text>
+          <text class="meditation-btn-text">开始静坐</text>
         </button>
-        <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openCheckinModal" hover-class="checkin-record-active">
-          <text class="meditation-btn-text">记录静坐</text>
+        <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openPracticePicker" hover-class="checkin-record-active">
+          <text class="meditation-btn-text">记录功课</text>
         </button>
       </view>
 
@@ -84,9 +84,14 @@
       </view>
     </view>
 
+    <view class="home-practice-entry" bindtap="openPracticeRecords" hover-class="checkin-record-active">
+      <view><text class="home-practice-title">最近功课</text><text class="home-practice-caption">六类功课明细 · 月历 · 分项统计</text></view>
+      <view class="home-practice-link"><text>全部记录</text><view class="checkin-scope-arrow" aria-hidden="true"></view></view>
+    </view>
+
     <view class="checkin-history">
       <view class="checkin-history-heading">
-        <text class="checkin-title">最近三天记录</text>
+        <text class="checkin-title">最近三天静坐</text>
         <button class="checkin-scope-toggle" bindtap="openAllCheckins" aria-label="查看全部打卡记录" hover-class="checkin-record-active">
           <text>全部</text>
           <view class="checkin-scope-arrow" aria-hidden="true"></view>

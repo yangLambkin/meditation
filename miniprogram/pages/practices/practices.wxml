@@ -1,0 +1,141 @@
+<view class="practice-page">
+  <view class="page-heading">
+    <view><text class="page-title">日常功课</text><text class="page-subtitle">在每一次练习里，回到当下</text></view>
+    <button class="add-button" bindtap="choosePractice" disabled="{{!enabled}}">＋ 记录</button>
+  </view>
+
+  <view class="history-notice">
+    <text>展示已上传至 data 的功课，静坐历史尚未全部导入。</text>
+    <text class="text-link" bindtap="openOriginalHistory">原静坐完整历史 ›</text>
+  </view>
+  <view wx:if="{{!enabled}}" class="state-card">
+    <text class="state-title">功课记录准备中</text>
+    <text class="state-message">直连接口部署并启用后，可在这里录入五类功课，查看明细与统计。原静坐功能可继续使用。</text>
+    <button class="outline-button" bindtap="openSittingForm">记录静坐</button>
+  </view>
+
+  <block wx:if="{{enabled}}">
+    <view wx:if="{{pendingCount}}" class="pending-card">
+      <view class="pending-heading" bindtap="togglePending"><text>{{pendingCount}} 条功课记录待上传</text><text>{{showPending ? '收起' : '查看'}} ›</text></view>
+      <text class="caption">静坐原记录保存结果不受影响。待上传记录不计入下方统计。</text>
+      <block wx:if="{{showPending}}">
+        <view class="pending-item" wx:for="{{pending}}" wx:key="id">
+          <view><text class="pending-name">{{item.typeName}} · {{item.dateLabel}}</text><text class="caption">{{item.operation === 'delete' ? '删除 · ' : item.operation === 'update' ? '更新 · ' : ''}}{{item.stateText}}</text></view>
+          <button wx:if="{{item.canCancel}}" class="inline-button" data-id="{{item.id}}" bindtap="cancelPending">取消</button>
+          <button wx:elif="{{item.canDeletePending}}" class="inline-button pending-delete" data-id="{{item.id}}" bindtap="deletePending" loading="{{pendingActionId === item.id}}" disabled="{{!!pendingActionId}}">删除</button>
+          <text wx:elif="{{item.deletionQueued}}" class="caption">待删除</text>
+        </view>
+      </block>
+      <button class="inline-button retry-button" bindtap="retryPending" loading="{{retrying}}" disabled="{{retrying}}">重试上传</button>
+    </view>
+
+    <view class="filters">
+      <picker mode="selector" range="{{typeOptions}}" range-key="name" value="{{typeIndex}}" bindchange="onTypeChange"><view class="filter-pill">{{typeOptions[typeIndex].name}}<text class="picker-arrow">⌄</text></view></picker>
+      <picker mode="date" fields="month" value="{{month}}" end="{{today}}" bindchange="onMonthChange"><view class="filter-pill">{{month}}<text class="picker-arrow">⌄</text></view></picker>
+    </view>
+    <view class="view-tabs">
+      <view class="view-tab {{view === 'detail' ? 'selected' : ''}}" bindtap="changeView" data-view="detail">明细</view>
+      <view class="view-tab {{view === 'stats' ? 'selected' : ''}}" bindtap="changeView" data-view="stats">统计</view>
+    </view>
+
+    <view wx:if="{{view === 'detail'}}">
+      <view class="date-filter-row">
+        <picker mode="date" value="{{selectedDate || month + '-01'}}" start="{{month + '-01'}}" end="{{monthEnd}}" bindchange="onDateChange"><text class="text-link">{{selectedDate || '选择某天'}} ⌄</text></picker>
+        <text wx:if="{{selectedDate}}" class="muted-link" bindtap="clearDate">查看整月 ×</text>
+        <text wx:else class="caption">北京时间自然日</text>
+      </view>
+      <view wx:if="{{loading}}" class="empty-state">正在读取功课…</view>
+      <view wx:elif="{{error}}" class="state-card error-card">
+        <text class="state-title">暂时无法读取</text><text class="state-message">{{error}}</text>
+        <view class="state-actions"><button class="outline-button" bindtap="refresh">重试</button><button class="outline-button" bindtap="authorize" loading="{{authorizing}}" disabled="{{authorizing}}">重新授权</button></view>
+        <text class="text-link binding-link" bindtap="openBinding">前往「我」核对学号绑定 ›</text>
+      </view>
+      <view wx:elif="{{loaded && !records.length}}" class="empty-state"><text class="empty-symbol">○</text><text>这{{selectedDate ? '一天' : '个月'}}还没有已上传的功课</text><text class="caption">每一份练习，都值得记录</text></view>
+      <view class="day-group" wx:for="{{groups}}" wx:for-item="group" wx:key="date">
+        <view class="day-heading"><text>{{group.date}}</text><text class="caption">{{group.records.length}} 条{{nextCursor ? '已载入' : ''}}</text></view>
+        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" bindtap="openDetail" data-key="{{record.key}}" hover-class="card-hover">
+          <view class="record-heading"><view><text class="record-name">{{record.typeName}}</text><text class="record-time">{{record.timeLabel}}</text></view><view><text class="record-amount">{{record.quantity}}</text><text class="record-unit">{{record.unit}}</text><text class="chevron">›</text></view></view>
+          <text wx:if="{{record.preview}}" class="record-preview">{{record.preview}}</text>
+          <text wx:if="{{record.mirrored}}" class="source-tag">来自静坐记录</text>
+        </view>
+      </view>
+      <view wx:if="{{records.length}}" class="list-footer"><button wx:if="{{nextCursor}}" class="inline-button" bindtap="loadMore" loading="{{loadingMore}}" disabled="{{loadingMore}}">加载更多</button><text wx:else class="caption">已显示当前筛选下全部记录</text></view>
+    </view>
+
+    <view wx:if="{{view === 'stats'}}">
+      <view wx:if="{{summaryLoading}}" class="empty-state">正在读取统计…</view>
+      <view wx:elif="{{summaryError}}" class="state-card"><text class="state-message">{{summaryError}}</text><button class="outline-button" bindtap="refresh">重试</button></view>
+      <block wx:elif="{{summary}}">
+        <view class="stats-card">
+          <text class="card-title">{{month}} 月度功课</text>
+          <view class="headline-stats"><view><text class="stat-number">{{recordCount}}</text><text class="caption">记录条数</text></view><view><text class="stat-number">{{practiceDays}}</text><text class="caption">功课天数</text></view></view>
+          <view class="metric-grid"><view wx:for="{{monthCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric"><text class="metric-name">{{item.name}}</text><view><text class="metric-value">{{item.value}}</text><text class="metric-unit">{{item.unit}}</text></view></view></view>
+          <text class="stats-note">功课天数按北京时间自然日期去重。分钟、次、件分别累计。</text>
+        </view>
+        <view wx:if="{{type !== 'all'}}" class="stats-card calendar-card">
+          <view class="card-heading"><text class="card-title">每日练习</text><text class="caption">{{typeOptions[typeIndex].unit}} / 日</text></view>
+          <view class="weekdays"><text>一</text><text>二</text><text>三</text><text>四</text><text>五</text><text>六</text><text>日</text></view>
+          <view class="calendar-week" wx:for="{{calendar}}" wx:for-item="week" wx:for-index="weekIndex" wx:key="weekIndex"><view class="calendar-cell {{day.active ? 'has-practice' : ''}} {{day.today ? 'is-today' : ''}} {{day.future ? 'future' : ''}}" wx:for="{{week}}" wx:for-item="day" wx:key="key" data-date="{{day.date}}" bindtap="selectCalendarDay"><text wx:if="{{!day.empty}}" class="calendar-day">{{day.day}}</text><text wx:if="{{day.active}}" class="calendar-value">{{day.value}}</text></view></view>
+          <text class="stats-note">点选日期查看当日明细。</text>
+        </view>
+        <view wx:else class="small-hint">选择一项功课，可查看每日完成量月历并下钻明细。</view>
+        <view wx:if="{{type !== 'all'}}" class="stats-card trend-card">
+          <view class="card-heading"><text class="card-title">每日完成量趋势</text><text class="caption">{{typeOptions[typeIndex].unit}} / 日</text></view>
+          <text class="caption">本月最高 {{trendMax}} {{typeOptions[typeIndex].unit}}</text>
+          <scroll-view scroll-x="{{true}}" class="trend-scroll" aria-label="{{month}}每日{{typeOptions[typeIndex].name}}完成量，左右滑动查看整月">
+            <view class="trend-chart" style="width: {{trendWidth}}rpx;">
+              <view class="trend-column" wx:for="{{trend}}" wx:key="date" data-date="{{item.date}}" bindtap="selectCalendarDay" aria-role="button" aria-label="{{item.date}}，{{item.value}}{{typeOptions[typeIndex].unit}}，点击查看当日明细">
+                <view class="trend-bar-area"><text wx:if="{{item.value}}" class="trend-value">{{item.label}}</text><view class="trend-bar {{!item.value ? 'trend-zero' : ''}}" style="height: {{item.height}}rpx;"></view></view>
+                <text class="trend-day">{{item.day}}</text>
+              </view>
+            </view>
+          </scroll-view>
+          <text class="stats-note">左右滑动查看整月，点选柱形查看当日明细。无记录日期记为 0。</text>
+        </view>
+        <view class="stats-card">
+          <text class="card-title">data 累计总览</text><text class="caption">当前功课筛选下，已上传记录的累计</text>
+          <view class="headline-stats"><view><text class="stat-number">{{allTimeRecordCount}}</text><text class="caption">记录条数</text></view><view><text class="stat-number">{{allTimePracticeDays}}</text><text class="caption">功课天数</text></view></view>
+          <view class="metric-grid"><view wx:for="{{allTimeCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric"><text class="metric-name">{{item.name}}</text><view><text class="metric-value">{{item.value}}</text><text class="metric-unit">{{item.unit}}</text></view></view></view>
+          <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。团队、勋章继续沿用原静坐统计。</text>
+        </view>
+      </block>
+    </view>
+  </block>
+</view>
+
+<view wx:if="{{showForm}}" class="modal">
+  <view class="modal-mask" bindtap="closeForm" catchtouchmove="noop"></view>
+  <view class="dialog" catchtap="noop">
+    <view class="dialog-header"><view><text class="dialog-title">{{formEditing ? '编辑' : '记录'}}{{formTypeName}}</text><text class="caption">日期和时间均为北京时间</text></view><button class="close-button" bindtap="closeForm" disabled="{{formBusy}}" aria-label="关闭功课表单">×</button></view>
+    <scroll-view class="dialog-scroll" scroll-y="{{true}}">
+      <view class="dialog-body">
+        <view wx:if="{{formType === 'kindness'}}" class="privacy-notice"><text>善事内容和感悟对已登录成员可见。</text><text>{{formEditing ? '修改会同步更新「做善事」，原件数及关联数据保持不变。' : '新建默认记一件，也会展示在「做善事」中。'}}</text></view>
+        <view class="field-row"><view class="field field-date"><text class="label">发生日期</text><picker mode="date" value="{{formDate}}" end="{{today}}" bindchange="onFormDate" disabled="{{formBusy || formPending}}"><view class="field-control">{{formDate}}<text class="picker-arrow">⌄</text></view></picker></view><view class="field field-time"><text class="label">发生时间</text><picker mode="time" value="{{formTime}}" bindchange="onFormTime" disabled="{{formBusy || formPending}}"><view class="field-control">{{formTime || '原记录无时间'}}<text class="picker-arrow">⌄</text></view></picker></view></view>
+        <text wx:if="{{formEditing && !formTime}}" class="caption field-hint">原记录仅有日期，请补充真实发生时间后保存。</text>
+        <view wx:if="{{formType !== 'kindness'}}" class="field"><text class="label">{{formType === 'instant' ? '完成次数' : '完成时长'}}</text><view class="field-control"><input class="amount-input" type="number" value="{{formValue}}" bindinput="onFormValue" placeholder="{{formType === 'instant' ? '1–1000000' : '1–1440'}}" disabled="{{formBusy || formPending}}" maxlength="7"/><text class="field-unit">{{formUnit}}</text></view><text class="caption field-hint">{{formType === 'instant' ? '请填写已完成的整数次数。' : '填写已完成的整数分钟数。'}}</text></view>
+        <view wx:else class="field"><text class="label">善事内容 <text class="required">必填</text></text><textarea class="textarea content-textarea" value="{{formContent}}" bindinput="onFormContent" maxlength="1000" placeholder="记录今天的一件善行" disabled="{{formBusy || formPending}}"/><text class="word-count">{{formContent.length}} / 1000</text><text wx:if="{{formEditing}}" class="caption">原记录 {{formValue}} 件，本次编辑保留件数。</text></view>
+        <view class="field"><text class="label">感悟 <text class="optional">选填</text></text><textarea class="textarea" value="{{formReflection}}" bindinput="onFormReflection" maxlength="{{formMaxReflection}}" placeholder="写下此刻的体会" disabled="{{formBusy || formPending}}"/><text class="word-count">{{formReflection.length}} / {{formMaxReflection}}</text></view>
+        <text wx:if="{{formError}}" class="form-error">{{formError}}</text>
+        <text wx:if="{{formPending}}" class="caption">已持久保存在本机。上传确认前保留本次内容，重试沿用同一条记录。</text>
+      </view>
+    </scroll-view>
+    <view class="dialog-footer"><button class="secondary-button" bindtap="closeForm" disabled="{{formBusy}}">{{formPending ? '稍后上传' : '取消'}}</button><button class="primary-button" bindtap="saveForm" loading="{{formBusy}}" disabled="{{formBusy}}">{{formPending ? '重试上传' : '保存功课'}}</button></view>
+  </view>
+</view>
+
+<view wx:if="{{detail}}" class="modal">
+  <view class="modal-mask" bindtap="closeDetail" catchtouchmove="noop"></view>
+  <view class="dialog" catchtap="noop">
+    <view class="dialog-header"><text class="dialog-title">{{detail.typeName}}</text><button class="close-button" bindtap="closeDetail" disabled="{{deleting}}" aria-label="关闭功课详情">×</button></view>
+    <scroll-view class="dialog-scroll" scroll-y="{{true}}"><view class="dialog-body">
+      <view class="detail-amount"><text>{{detail.quantity}}</text><text class="detail-unit">{{detail.unit}}</text></view>
+      <text class="detail-date">{{detail.recordDate}} · {{detail.timeLabel}}（北京时间）</text>
+      <view wx:if="{{detail.mirrored}}" class="privacy-notice"><text>来自静坐记录</text><text>请通过原静坐入口查看、更新感悟或删除，功课记录将单向同步。</text></view>
+      <view wx:if="{{detail.type === 'kindness'}}" class="privacy-notice"><text>内容与感悟对已登录成员可见；编辑、删除也会更新「做善事」。记录条数与善事件数分别统计。</text></view>
+      <view wx:if="{{detail.content}}" class="detail-section"><text class="label">善事内容</text><text class="detail-text" selectable="{{true}}">{{detail.content}}</text></view>
+      <view class="detail-section"><text class="label">感悟</text><text class="detail-text {{!detail.reflection ? 'muted' : ''}}" selectable="{{true}}">{{detail.reflection || '这次练习没有填写感悟'}}</text></view>
+    </view></scroll-view>
+    <view class="dialog-footer" wx:if="{{detail.type === 'sitting'}}"><button class="primary-button full-button" bindtap="openOriginalRecord">前往原静坐记录</button></view>
+    <view class="dialog-footer" wx:elif="{{detail.canEdit || detail.canDelete}}"><button wx:if="{{detail.canDelete}}" class="danger-button" bindtap="deleteDetail" loading="{{deleting}}" disabled="{{deleting}}">删除</button><button wx:if="{{detail.canEdit}}" class="primary-button" bindtap="editDetail" disabled="{{deleting}}">编辑功课</button></view>
+  </view>
+</view>
