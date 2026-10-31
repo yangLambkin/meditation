@@ -307,6 +307,53 @@ test('a complete source snapshot confirms a versionless delete without accessing
   assert.equal(queue.getPending().length, 0);
 });
 
+test('a versionless delete rejected by the old production API recovers manually after its deployment with the original identity', async () => {
+  const validationMessage = 'sourceVersion 须为可靠的源更新时间毫秒数字字符串，不能晚于当前时间';
+  const record = source({ updatedAt: undefined, createdAt: undefined });
+  const app = harness({ request(options) {
+    options.success({ statusCode: 400, data: { success: false, message: validationMessage } });
+  } });
+  let privateReads = 0;
+  app.wx.cloud.database = () => { privateReads++; throw new Error('private deletion receipt must not be read'); };
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  const task = mirror.beforeCloudMutation('meditationManager', {
+    type: 'deleteMeditationRecord', data: { recordId: record._id, localId: record.localId, timestamp: record.timestamp }
+  });
+  mirror.observeCloudResult(task, { result: { success: true, data: { recordId: record._id } } });
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 1);
+  const original = app.requests[0], pending = queue.getPending()[0];
+  assert.equal(original.url, `https://data.bijing.life/api/openapi/practices/sitting/sources/meditation/${record._id}`);
+  assert.equal(original.method, 'DELETE');
+  assert.deepEqual(clone(original.data), { operationId: task.requestId });
+  assert.equal(pending.status, 'blocked');
+  assert.equal(pending.lastError.code, 'HTTP_400');
+  assert.equal(pending.lastError.message, validationMessage);
+  assert.equal(pending.sourceId, record._id);
+  assert.equal(app.cloudRequests.length, 0);
+
+  const reopened = harness({ storage: app.storage, request(options) {
+    options.success({ statusCode: 200, data: { success: true, data: { deleted: true } } });
+  } });
+  reopened.wx.cloud.database = () => { privateReads++; throw new Error('private deletion receipt must not be read'); };
+  const reopenedQueue = reopened.load('practiceQueue.js');
+  await reopened.settle(reopened.load('practiceMirror.js').resume());
+  assert.equal(reopened.requests.length, 0, 'automatic recovery does not blindly retry validation failures');
+  assert.equal(reopenedQueue.getPending()[0].status, 'blocked');
+  await reopened.settle(reopenedQueue.flush({ manual: true }));
+  assert.equal(reopened.requests.length, 1);
+  const retried = reopened.requests[0];
+  assert.equal(retried.url, original.url);
+  assert.equal(retried.method, original.method);
+  assert.equal(retried.header['Idempotency-Key'], task.requestId);
+  assert.equal(retried.header['Idempotency-Key'], original.header['Idempotency-Key']);
+  assert.deepEqual(clone(retried.data), clone(original.data));
+  assert.equal(retried.data.operationId, retried.header['Idempotency-Key']);
+  assert.equal(reopened.cloudRequests.length, 0, 'confirmed deletion does not reread cloud records');
+  assert.equal(privateReads, 0);
+  assert.equal(reopenedQueue.getPending().length, 0);
+});
+
 test('a persisted delete with the old private-receipt error recovers after restart with its original request identity', async () => {
   const record = source({ updatedAt: undefined, createdAt: undefined }), app = harness();
   const queue = app.load('practiceQueue.js');
