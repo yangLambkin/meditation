@@ -60,6 +60,14 @@ async function request(path, { method = 'GET', payload, requestId, owner = auth.
     assertOwner(owner);
     const status = Number(result.statusCode), body = result.data;
     if (status === 401 && refresh === 0) { auth.clearSession(); continue; }
+    if (status === 401 && config.serviceAccessToken) {
+      throw error('AUTH_UNAVAILABLE', '功课服务暂时无法连接，请稍后重试，内容已保留', { status });
+    }
+    // 发布顺序允许小程序先遇到尚未部署的路由。仅非 OpenAPI 格式的
+    // 404 视为接口未就绪，真实记录不存在等业务 404 仍交由调用方处理。
+    if (status === 404 && (!body || typeof body !== 'object' || typeof body.success !== 'boolean')) {
+      throw error('API_UNAVAILABLE', '功课接口尚未就绪，待部署后自动重试，内容已保留', { status });
+    }
     if (status >= 200 && status < 300 && body && body.success === true && Object.prototype.hasOwnProperty.call(body, 'data')) return body.data;
     if (status >= 200 && status < 300 && (!body || body.success !== false)) {
       throw error('INVALID_RESPONSE', '功课请求未收到完整确认，已保留原请求以便重试', { status, retryable: true });

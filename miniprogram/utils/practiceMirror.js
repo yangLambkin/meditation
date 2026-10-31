@@ -4,7 +4,23 @@ const auth = require('./practiceAuth.js');
 const queue = require('./practiceQueue.js');
 const api = require('./practiceApi.js');
 let recovering = null;
+let recoveryRequested = false;
 let processing = Promise.resolve();
+
+function readSource(read) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => finish(reject, Object.assign(new Error('来源读取超时，已保留待核对，请稍后重试'),
+      { code: 'SOURCE_READ_TIMEOUT', retryable: true })), 5000);
+    Promise.resolve().then(read).then(value => finish(resolve, value), error => finish(reject, error));
+  });
+}
 
 function time(value) {
   if (value && typeof value === 'object') {
@@ -89,9 +105,9 @@ async function reflection(record, owner) {
     // 引用必须读取云端正文，不能把引用 ID 或可能过期的缓存当成正文。
     if (!wx.cloud || typeof wx.cloud.database !== 'function') throw Object.assign(new Error('体验正文尚未从云端确认'), { code: 'SOURCE_REFLECTION_UNRESOLVED' });
     const db = wx.cloud.database();
-    const response = cached && cached._id || !/^\d{13}$/.test(item)
-      ? await db.collection('experience_records').doc(cached && cached._id || item).get()
-      : await db.collection('experience_records').where({ _openid: owner.openid, timestamp: Number(item) }).get();
+    const response = await readSource(() => cached && cached._id || !/^\d{13}$/.test(item)
+      ? db.collection('experience_records').doc(cached && cached._id || item).get()
+      : db.collection('experience_records').where({ _openid: owner.openid, timestamp: Number(item) }).get());
     const value = Array.isArray(response.data) ? response.data.length === 1 && response.data[0] : response.data;
     if (!value || value._openid !== owner.openid || typeof value.text !== 'string') throw Object.assign(new Error('体验正文或归属尚未确认'), { code: 'SOURCE_REFLECTION_UNRESOLVED' });
     texts.push(value.text);
@@ -154,7 +170,7 @@ async function deletionVersion(task) {
   const fromSnapshot = sourceVersion(task.snapshot);
   if (fromSnapshot) return fromSnapshot;
   if (task.deletionId && wx.cloud && typeof wx.cloud.database === 'function') {
-    const response = await wx.cloud.database().collection('meditation_locks').doc(task.deletionId).get();
+    const response = await readSource(() => wx.cloud.database().collection('meditation_locks').doc(task.deletionId).get());
     const receipt = response && response.data;
     const identity = receipt && receipt.requestIdentity;
     const requestMatches = Array.isArray(identity) && (identity[0] === 'recordId' && identity[1] === task.sourceId ||
@@ -219,17 +235,24 @@ function observeCloudResult(intent, response) {
   } catch (error) { visibleWarning(error); }
 }
 function resume() {
+  // 前一轮读取期间原静坐又完成了一次写入，需要再读一次；旧读取的
+  // barrier 不包含新意图，不能把这次恢复触发静默丢掉。
+  recoveryRequested = true;
   if (recovering) return recovering;
   recovering = Promise.resolve().then(async () => {
-    if (config.sittingMirrorEnabled !== true) return queue.flush();
-    const owner = auth.getOwner();
-    if (!owner) return queue.flush();
-    if (queue.getPending().some(task => task.kind === 'mirror' && task.status === 'waiting_source')) {
-      const barrier = captureRecoveryBarrier(owner);
-      const response = await require('./cloudApi.js').getAllRecords();
-      if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) await acceptCloudSnapshot(response.data, owner, barrier);
-    }
-    return queue.flush();
+    let result;
+    do {
+      recoveryRequested = false;
+      const owner = auth.getOwner();
+      if (config.sittingMirrorEnabled === true && owner &&
+          queue.getPending().some(task => task.kind === 'mirror' && task.status === 'waiting_source')) {
+        const barrier = captureRecoveryBarrier(owner);
+        const response = await require('./cloudApi.js').getAllRecords();
+        if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) await acceptCloudSnapshot(response.data, owner, barrier);
+      }
+      result = await queue.flush();
+    } while (recoveryRequested);
+    return result;
   }).finally(() => { recovering = null; });
   return recovering;
 }

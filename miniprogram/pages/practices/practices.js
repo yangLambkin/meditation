@@ -278,7 +278,7 @@ Page({
     const task = this.data.pending.find(item => item.id === id);
     if (!task || !task.canDeletePending || this.data.pendingActionId) return;
     const owner = ownerKey();
-    wx.showModal({ title: '删除待上传记录', content: '这条记录可能已到达 data。系统会先确认原记录，再删除同一条记录；网络未恢复时，删除任务会保留在本机。',
+    wx.showModal({ title: '删除待上传记录', content: '这条记录可能已上传。系统会先确认原记录，再删除同一条记录；网络未恢复时，删除任务会保留在本机。',
       confirmText: '登记删除', confirmColor: '#b45f4e', success: result => { if (result.confirm) this.requestPendingDeletion(id, owner); } });
   },
   async requestPendingDeletion(id, owner) {

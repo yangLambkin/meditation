@@ -5,7 +5,7 @@
   </view>
 
   <view class="history-notice">
-    <text>展示已上传至 data 的功课，静坐历史尚未全部导入。</text>
+    <text>展示已上传的功课，静坐历史尚未全部导入。</text>
     <text class="text-link" bindtap="openOriginalHistory">原静坐完整历史 ›</text>
   </view>
   <view wx:if="{{!enabled}}" class="state-card">
@@ -47,7 +47,7 @@
       <view wx:if="{{loading}}" class="empty-state">正在读取功课…</view>
       <view wx:elif="{{error}}" class="state-card error-card">
         <text class="state-title">暂时无法读取</text><text class="state-message">{{error}}</text>
-        <view class="state-actions"><button class="outline-button" bindtap="refresh">重试</button><button class="outline-button" bindtap="authorize" loading="{{authorizing}}" disabled="{{authorizing}}">重新授权</button></view>
+        <view class="state-actions"><button class="outline-button" bindtap="refresh">重试</button></view>
         <text class="text-link binding-link" bindtap="openBinding">前往「我」核对学号绑定 ›</text>
       </view>
       <view wx:elif="{{loaded && !records.length}}" class="empty-state"><text class="empty-symbol">○</text><text>这{{selectedDate ? '一天' : '个月'}}还没有已上传的功课</text><text class="caption">每一份练习，都值得记录</text></view>
@@ -93,7 +93,7 @@
           <text class="stats-note">左右滑动查看整月，点选柱形查看当日明细。无记录日期记为 0。</text>
         </view>
         <view class="stats-card">
-          <text class="card-title">data 累计总览</text><text class="caption">当前功课筛选下，已上传记录的累计</text>
+          <text class="card-title">已上传功课累计</text><text class="caption">当前功课筛选下，已上传记录的累计</text>
           <view class="headline-stats"><view><text class="stat-number">{{allTimeRecordCount}}</text><text class="caption">记录条数</text></view><view><text class="stat-number">{{allTimePracticeDays}}</text><text class="caption">功课天数</text></view></view>
           <view class="metric-grid"><view wx:for="{{allTimeCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric"><text class="metric-name">{{item.name}}</text><view><text class="metric-value">{{item.value}}</text><text class="metric-unit">{{item.unit}}</text></view></view></view>
           <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。团队、勋章继续沿用原静坐统计。</text>
