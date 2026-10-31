@@ -1,7 +1,4 @@
 {
-  "usingComponents": {
-    "time-picker": "/components/time-picker/time-picker"
-  },
   "enablePullDownRefresh": true,
   "onReachBottomDistance": 100
 }

@@ -233,10 +233,12 @@
             </view>
             <view class="checkin-field checkin-time-field">
               <text class="checkin-label">时间</text>
-              <button class="checkin-picker checkin-time-trigger" bindtap="openCheckinTimePicker" disabled="{{checkinSubmitting}}" aria-label="选择时间，当前 {{checkinTime}}" hover-class="checkin-record-active">
-                <text>{{checkinTime < '02:00' ? '次日 ' : ''}}{{checkinTime}}</text>
-                <text class="checkin-picker-arrow">⌄</text>
-              </button>
+              <picker mode="time" value="{{checkinTime}}" bindtap="openCheckinTimePicker" bindchange="onCheckinTimeChange" bindcancel="closeCheckinTimePicker" disabled="{{checkinSubmitting}}" aria-label="选择时间，当前 {{checkinTime}}">
+                <view class="checkin-picker">
+                  <text>{{checkinTime < '02:00' ? '次日 ' : ''}}{{checkinTime}}</text>
+                  <text class="checkin-picker-arrow">⌄</text>
+                </view>
+              </picker>
             </view>
           </view>
           <view wx:if="{{checkinBackfillGrant}}" class="checkin-backfill-notice">
@@ -276,5 +278,4 @@
       </view>
     </view>
   </view>
-  <time-picker wx:if="{{showCheckinModal && showCheckinTimePicker}}" value="{{checkinTime}}" bindconfirm="onCheckinTimeChange" bindcancel="closeCheckinTimePicker" />
 </view>

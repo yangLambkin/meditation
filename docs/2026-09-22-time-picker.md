@@ -1,5 +1,7 @@
 # 记录静坐：分钟循环选择
 
+2026-11-01 更新：静坐时间已改为与走路觉察一致的微信原生 `picker mode="time"`，取消与确定按钮使用原生布局，避免自定义面板的底部操作区过低。日期仍使用原生选择器，补录权限和“次日”显示保持原规则。选择期间仍冻结自动时间刷新，取消保留原值，确认后写回；分钟滚动采用原生行为。以下为此前自定义循环选择器的实现记录。
+
 原入口使用微信原生 `picker mode="time"`。截图中分钟停在 59、下方留白，与原生控件的非循环行为一致；页面没有限制分钟范围。微信没有提供循环属性，因此开发者工具和不同手机上的原生交互可能不同，不能用单台设备的表现排除这个问题。
 
 参考：[picker](https://developers.weixin.qq.com/miniprogram/dev/component/picker.html)、[picker-view](https://developers.weixin.qq.com/miniprogram/dev/component/picker-view.html)。
