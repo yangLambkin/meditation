@@ -16,6 +16,10 @@
 
 按本次明确要求，**任何云函数均未修改**。小程序通过 `wx.request` 直连生产环境 `https://data.bijing.life/api/openapi/practices/...`。授权暂沿用放在包内的服务令牌，不实施方案中的绑定断言、个人凭证或登录改造。共享令牌与学号选择头不构成个人身份验证；了解此限制后再发布。集中配置在 `miniprogram/utils/practiceConfig.js`，`baseUrl` 只填域名，不包含网页路径 `/records`；该配置独立于旧静坐同步云函数的 `BIJING_API_BASE`。后续登录改造入口为 `practiceAuth.js`。
 
+## 明细页的当日统计
+
+明细页每个日期右侧提供「查看统计」，点击以简洁弹窗展示当天六类功课的累计量、记录条数及有记录的功课项数。分钟与次数沿用统计页口径，未练习项显示 0；只统计已上传记录。弹窗按所选日期单独请求全部功课汇总，不受列表的类型筛选、分页或本机隐藏入口设置影响。读取失败可单独重试，关闭弹窗、刷新、离开页面或切换账号后不会应用旧请求结果。
+
 ## 发布顺序
 
 1. 先发布 bijing-data 中的兼容 OpenAPI 和来源只读展示。DDL 新增 `practice_record_sources`、`practice_record_operations`，已维护在该仓库的 `bijing_data_ddl.sql`，应用会按现有模式初始化。接口说明见 bijing-data 的 `docs/openapi-practices.md`。

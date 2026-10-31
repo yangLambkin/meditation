@@ -640,6 +640,198 @@ test('monthly and cumulative statistics use each practice quantity while the all
   }
 });
 
+test('day statistics request complete all-practice totals independently of list filters and pagination', async () => {
+  const h = createPage({ hiddenTypes: ['kindness'],
+    feed: () => ({ records: [
+      { id: 6, type: 'walking', recordDate: '2026-10-30', durationMinutes: 2 }
+    ], nextCursor: 'more-for-the-same-day' }),
+    summary: params => params.date ? { recordCount: 19, totals: [
+      { type: 'sitting', totalValue: 91, recordCount: 3 },
+      { type: 'walking', totalValue: 42, recordCount: 4 },
+      { type: 'instant', totalValue: 17, recordCount: 5 },
+      { type: 'learning', totalValue: 63, recordCount: 2 },
+      { type: 'kindness', totalValue: 8, recordCount: 1 },
+      { type: 'clapping', totalValue: 29, recordCount: 4 }
+    ] } : { recordCount: 4, totals: [{ type: 'walking', totalValue: 42, recordCount: 4 }], daily: [], allTime: { totals: [] } }
+  });
+  h.page.setData({ type: 'walking', typeIndex: 2, selectedDate: '2026-10-30' });
+  await h.page.refresh();
+  const listBefore = plain({ records: h.page.data.records, groups: h.page.data.groups,
+    nextCursor: h.page.data.nextCursor, summary: h.page.data.summary, monthCards: h.page.data.monthCards });
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.deepEqual(h.calls.summary.at(-1), { month: '2026-10', type: 'all', date: '2026-10-30' });
+  assert.equal(h.calls.feed.length, 1);
+  assert.equal(h.page.data.dayStatsDate, '2026-10-30');
+  assert.equal(h.page.data.dayStatsLoading, false);
+  assert.equal(h.page.data.dayStatsRecordCount, 19);
+  assert.equal(h.page.data.dayStatsPracticeCount, 6);
+  assert.deepEqual(plain(h.page.data.dayStatsCards.map(({ type, value, unit, records }) => ({ type, value, unit, records }))), [
+    { type: 'sitting', value: 91, unit: '分钟', records: 3 },
+    { type: 'walking', value: 42, unit: '分钟', records: 4 },
+    { type: 'instant', value: 17, unit: '次', records: 5 },
+    { type: 'learning', value: 63, unit: '分钟', records: 2 },
+    { type: 'kindness', value: 8, unit: '次', records: 1 },
+    { type: 'clapping', value: 29, unit: '分钟', records: 4 }
+  ]);
+  assert.equal(h.page.data.typeOptions.some(item => item.type === 'kindness'), false);
+  assert.deepEqual(plain({ records: h.page.data.records, groups: h.page.data.groups,
+    nextCursor: h.page.data.nextCursor, summary: h.page.data.summary, monthCards: h.page.data.monthCards }), listBefore);
+  assert.equal(h.page.data.type, 'walking');
+  assert.equal(h.page.data.selectedDate, '2026-10-30');
+  assert.equal(h.page.data.view, 'detail');
+});
+
+test('day statistics zero-fill missing practices and count practices by completed quantity or record count', async () => {
+  const h = createPage({ summary: () => ({ recordCount: 1, totals: [
+    { type: 'walking', totalValue: 0, recordCount: 1 },
+    { type: 'instant', totalValue: 8, recordCount: 0 }
+  ] }) });
+  assert.equal(h.page.data.groups.length, 0);
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.equal(h.page.data.dayStatsCards.length, 6);
+  assert.equal(h.page.data.dayStatsPracticeCount, 2);
+  assert.equal(h.page.data.dayStatsRecordCount, 1);
+  for (const type of ['sitting', 'learning', 'kindness', 'clapping']) {
+    const card = h.page.data.dayStatsCards.find(item => item.type === type);
+    assert.equal(card.value, 0, type);
+    assert.equal(card.records, 0, type);
+  }
+  h.page.closeDayStats();
+  assert.equal(h.page.data.dayStatsDate, '');
+  assert.equal(h.page.data.dayStatsLoading, false);
+  assert.deepEqual(plain(h.page.data.dayStatsCards), []);
+});
+
+test('day statistics load independently, expose read failures and retry fresh data without reloading the list', async () => {
+  const response = deferred();
+  let request = 0;
+  const h = createPage({ summary: () => {
+    request++;
+    if (request === 1) return response.promise;
+    return { recordCount: 1, totals: [{ type: 'walking', totalValue: request * 10, recordCount: 1 }] };
+  } });
+  const monthlySummary = { totals: [{ type: 'walking', totalValue: 90 }] };
+  h.page.setData({ summary: monthlySummary, summaryError: '原月统计错误', error: '原明细错误' });
+  const opening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.equal(h.page.data.dayStatsDate, '2026-10-30');
+  assert.equal(h.page.data.dayStatsLoading, true);
+  response.reject(failure('NETWORK_ERROR', '当日统计网络异常'));
+  await opening;
+  assert.equal(h.page.data.dayStatsLoading, false);
+  assert.equal(h.page.data.dayStatsError, '当日统计网络异常');
+  assert.equal(h.page.data.dayStatsFailure.message, '当日统计网络异常');
+  assert.equal(h.page.data.dayStatsFailure.requiresBinding, false);
+  await h.page.retryDayStats();
+  assert.equal(h.page.data.dayStatsError, '');
+  assert.equal(h.page.data.dayStatsFailure, null);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 20);
+  h.page.closeDayStats();
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 30);
+  assert.deepEqual(h.calls.summary, Array(3).fill({ month: '2026-10', type: 'all', date: '2026-10-30' }));
+  assert.equal(h.calls.feed.length, 0);
+  assert.deepEqual(plain(h.page.data.summary), monthlySummary);
+  assert.equal(h.page.data.summaryError, '原月统计错误');
+  assert.equal(h.page.data.error, '原明细错误');
+});
+
+test('day statistics binding failures offer the existing account entry and service failures remain retryable', async () => {
+  for (const [code, requiresBinding] of [['AUTH_REQUIRED', true], ['API_UNAVAILABLE', false]]) {
+    const h = createPage({ summary: () => { throw failure(code, '读取失败'); } });
+    await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+    assert.equal(h.page.data.dayStatsFailure.requiresBinding, requiresBinding, code);
+    await h.page.retryDayStats();
+    assert.equal(h.calls.summary.length, requiresBinding ? 1 : 2, code);
+    assert.deepEqual(plain(h.calls.switchTab), requiresBinding ? [{ url: '/pages/me/me' }] : [], code);
+  }
+});
+
+test('day statistics reject invalid, impossible, future or out-of-month dates and disabled entry', async () => {
+  const h = createPage({ now: '2026-10-30T23:59:00+08:00' });
+  for (const date of ['', undefined, null, 20261030, {}, '2026-10-00', '2026-10-32', '2026-10-31',
+    '2026-09-30', '2026-11-01', '2026-10-3', '2026-10-30T00:00:00']) {
+    await h.page.openDayStats({ currentTarget: { dataset: { date } } });
+    assert.equal(h.page.data.dayStatsDate, '', String(date));
+  }
+  h.page.setData({ month: '2026-02' });
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-02-30' } } });
+  h.page.setData({ month: '2025-02' });
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2025-02-29' } } });
+  assert.equal(h.calls.summary.length, 0);
+  const disabled = createPage({ enabled: false });
+  await disabled.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.equal(disabled.calls.summary.length, 0);
+  assert.equal(disabled.page.data.dayStatsDate, '');
+});
+
+test('late day statistics success or failure cannot overwrite a newer date', async () => {
+  for (const lateFailure of [false, true]) {
+    const first = deferred(), second = deferred();
+    const h = createPage({ summary: params => params.date === '2026-10-29' ? first.promise : second.promise });
+    const oldOpening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-29' } } });
+    const newOpening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+    second.resolve({ recordCount: 2, totals: [{ type: 'walking', totalValue: 30, recordCount: 2 }] });
+    await newOpening;
+    const current = plain(h.page.data);
+    if (lateFailure) first.reject(failure('AUTH_REQUIRED', '迟到的旧日期错误'));
+    else first.resolve({ recordCount: 99, totals: [{ type: 'walking', totalValue: 999, recordCount: 99 }] });
+    await oldOpening;
+    assert.deepEqual(plain(h.page.data), current, lateFailure ? 'late failure' : 'late success');
+    assert.equal(h.page.data.dayStatsDate, '2026-10-30');
+  }
+});
+
+test('closing and reopening the same day invalidates the previous statistics request', async () => {
+  const first = deferred(), second = deferred();
+  let request = 0;
+  const h = createPage({ summary: () => ++request === 1 ? first.promise : second.promise });
+  const oldOpening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  h.page.closeDayStats();
+  const newOpening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  first.resolve({ recordCount: 99, totals: [{ type: 'walking', totalValue: 999 }] });
+  await oldOpening;
+  assert.equal(h.page.data.dayStatsLoading, true);
+  assert.deepEqual(plain(h.page.data.dayStatsCards), []);
+  second.resolve({ recordCount: 1, totals: [{ type: 'walking', totalValue: 10, recordCount: 1 }] });
+  await newOpening;
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 10);
+});
+
+test('closing, refreshing or hiding the page clears day statistics and ignores late request results', async () => {
+  for (const action of ['closeDayStats', 'refresh', 'onHide', 'onUnload']) {
+    for (const lateFailure of [false, true]) {
+      const response = deferred();
+      const h = createPage({ summary: params => params.date ? response.promise : { totals: [], daily: [], allTime: { totals: [] } } });
+      const opening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+      await h.page[action]();
+      assert.equal(h.page.data.dayStatsDate, '', action);
+      assert.equal(h.page.data.dayStatsLoading, false, action);
+      const closed = plain(h.page.data);
+      if (lateFailure) response.reject(failure('NETWORK_ERROR', '迟到的统计错误'));
+      else response.resolve({ recordCount: 99, totals: [{ type: 'walking', totalValue: 999 }] });
+      await opening;
+      assert.deepEqual(plain(h.page.data), closed, `${action}: ${lateFailure ? 'late failure' : 'late success'}`);
+    }
+  }
+});
+
+test('day statistics from a previous account or page generation cannot update the current state', async () => {
+  for (const change of ['owner', 'generation']) {
+    for (const lateFailure of [false, true]) {
+      const response = deferred();
+      const h = createPage({ summary: () => response.promise });
+      const opening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+      if (change === 'owner') h.changeOwner({ openid: 'oz-other', studentNumber: '002', bindingVersion: 'v2' });
+      else h.page._generation = (h.page._generation || 0) + 1;
+      const current = plain(h.page.data);
+      if (lateFailure) response.reject(failure('AUTH_REQUIRED', '旧账号统计错误'));
+      else response.resolve({ recordCount: 99, totals: [{ type: 'walking', totalValue: 999 }] });
+      await opening;
+      assert.deepEqual(plain(h.page.data), current, `${change}: ${lateFailure ? 'late failure' : 'late success'}`);
+    }
+  }
+});
+
 test('the all-practice calendar displays daily record counts without combining incompatible practice units', async () => {
   const h = createPage({ summary: () => ({ recordCount: 7, totals: [], daily: [
     { date: '2026-10-28', recordCount: 3, quantity: 500, total: 600,

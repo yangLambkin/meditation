@@ -42,8 +42,12 @@ button.view-tab.selected { color: #a68a57; background: #f5f1e8; font-weight: 600
 .date-filter-row { display: flex; align-items: center; justify-content: space-between; min-height: 88rpx; padding: 16rpx 4rpx 0; }
 .selected-date { color: #7a8493; font-size: 25rpx; }
 .day-group { margin-top: 22rpx; }
-.day-heading { font-size: 26rpx; font-weight: 500; padding: 0 4rpx 12rpx; }
+.day-heading { gap: 16rpx; font-size: 26rpx; font-weight: 500; padding: 0 4rpx 12rpx; }
+.day-heading-copy { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12rpx; flex: 1; min-width: 0; }
 .day-heading .caption { font-weight: normal; }
+button.day-stats-button { display: flex; align-items: center; flex-shrink: 0; gap: 10rpx; margin: 0; padding: 0 8rpx 0 16rpx; min-height: 64rpx; line-height: 64rpx; border-radius: 12rpx; background: transparent; color: #9c8050; font-size: 24rpx; font-weight: 500; }
+button.day-stats-button-hover { background: #f5f1e8; }
+.day-stats-arrow { color: #b29764; font-size: 30rpx; }
 .record-card { margin: 0 0 16rpx; padding: 28rpx; background: #fff; border-radius: 20rpx; border: 2rpx solid #f0f2f5; }
 .card-hover { background: #f7f4ee; }
 .record-name { color: #354152; font-size: 28rpx; font-weight: 600; }
@@ -127,6 +131,21 @@ button.close-button[disabled] { color: #b5bbc3; background: #f8fafc; }
 .close-icon::after { transform: translateY(-50%) rotate(-45deg); }
 .dialog-scroll { height: 680rpx; max-height: calc(88vh - 240rpx); min-height: 0; flex-shrink: 1; }
 .dialog-body { padding: 0 32rpx 28rpx; }
+.day-stats-dialog .dialog-header { align-items: center; padding-bottom: 20rpx; }
+.day-stats-date { display: block; margin-top: 6rpx; }
+.day-stats-scroll { height: 710rpx; max-height: calc(88vh - 156rpx); }
+.day-stats-scroll-compact { height: 360rpx; }
+.day-stats-body { padding: 0 32rpx 24rpx; }
+.day-stats-overview { display: flex; align-items: center; gap: 14rpx; padding: 18rpx 0 24rpx; color: #8c949e; font-size: 24rpx; line-height: 36rpx; }
+.day-stats-dot { color: #c8cdd3; }
+.day-stats-row { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; min-height: 88rpx; border-top: 1rpx solid #f0f2f5; }
+.day-stats-name { flex: 1; min-width: 0; color: #596273; font-size: 27rpx; }
+.day-stats-quantity { display: flex; align-items: baseline; gap: 10rpx; }
+.day-stats-value { color: #9c8050; font-size: 34rpx; font-weight: 600; font-variant-numeric: tabular-nums; }
+.day-stats-unit { min-width: 48rpx; color: #8c949e; font-size: 23rpx; }
+.day-stats-zero .day-stats-value, .day-stats-zero .day-stats-unit { color: #b5bbc3; }
+.day-stats-note { display: block; margin-top: 22rpx; color: #99a1ae; font-size: 22rpx; line-height: 34rpx; }
+.day-stats-state { padding: 64rpx 32rpx; text-align: center; color: #8c949e; font-size: 26rpx; line-height: 1.7; }
 .privacy-notice { margin: 12rpx 0 20rpx; padding: 18rpx 20rpx; color: #8a7145; background: #f7f2e8; border-radius: 12rpx; font-size: 23rpx; line-height: 1.65; }
 .privacy-notice > text { display: block; }
 .field-row { display: flex; gap: 18rpx; }

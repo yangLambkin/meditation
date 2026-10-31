@@ -139,6 +139,8 @@ Page({
     recordCount: 0, practiceDays: 0, selectedMonthTotal: 0, selectedMonthUnit: '条',
     overviewTotal: 0, overviewUnit: '', overviewLabel: '',
     allTimeRecordCount: 0, allTimePracticeDays: 0,
+    dayStatsDate: '', dayStatsLoading: false, dayStatsCards: [], dayStatsRecordCount: 0,
+    dayStatsPracticeCount: 0, dayStatsError: '', dayStatsFailure: null,
     pending: [], pendingCount: 0, retrying: false, showPending: false, pendingActionId: '',
     showForm: false, formType: 'walking', formTypeName: '走路觉察', formDate: '', formMinDate: '', formTime: '',
     formValue: '', formContent: '', formReflection: '', formUnit: '分钟', formRecordId: '',
@@ -187,6 +189,7 @@ Page({
   },
   onHide() {
     this._visible = false;
+    this.closeDayStats();
     // A shared entry may temporarily open a hidden tab; cached visits use the saved preference again.
     if (this.options && this.options.from === 'share') delete this.options.from;
     this.closeTypePicker();
@@ -204,6 +207,7 @@ Page({
   },
 
   async refresh() {
+    this.closeDayStats();
     if (!this.data.enabled) return;
     const generation = this._generation = (this._generation || 0) + 1;
     this.setData({ loading: true, error: '', summaryError: '', feedFailure: null, summaryFailure: null,
@@ -331,6 +335,49 @@ Page({
   },
   clearDate() { this.setData({ selectedDate: '' }); this.refresh(); },
   changeView(event) { this.setData({ view: event.currentTarget.dataset.view }); },
+  openDayStats(event) {
+    const date = event.currentTarget.dataset.date;
+    if (!this.data.enabled || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+        !date.startsWith(`${this.data.month}-`) || date > nowParts().date) return;
+    const timestamp = Date.parse(`${date}T00:00:00Z`);
+    if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) return;
+    if (this.data.dayStatsDate === date && this.data.dayStatsLoading) return;
+    this.setData({ dayStatsDate: date });
+    return this.loadDayStats(date);
+  },
+  async loadDayStats(date) {
+    const account = ownerKey();
+    const generation = this._generation;
+    const request = this._dayStatsRequest = (this._dayStatsRequest || 0) + 1;
+    const current = () => request === this._dayStatsRequest && generation === this._generation &&
+      account === ownerKey() && date === this.data.dayStatsDate;
+    this.setData({ dayStatsLoading: true, dayStatsCards: [], dayStatsRecordCount: 0,
+      dayStatsPracticeCount: 0, dayStatsError: '', dayStatsFailure: null });
+    try {
+      // A day's complete totals must include all practices, independent of feed filters and pagination.
+      const summary = unpack(await practiceApi.summary({ month: date.slice(0, 7), type: 'all', date }));
+      if (!current()) return;
+      const totals = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
+      const dayStatsCards = metricCards(totals);
+      this.setData({ dayStatsCards, dayStatsRecordCount: Number(totals.recordCount || totals.records || 0),
+        dayStatsPracticeCount: dayStatsCards.filter(card => card.records > 0 || card.value > 0).length });
+    } catch (error) {
+      if (current()) this.setData({ dayStatsError: message(error, '当天统计暂时无法读取，请稍后重试。'),
+        dayStatsFailure: readFailure(error, '当天统计暂时无法读取，请稍后重试。') });
+    } finally {
+      if (current()) this.setData({ dayStatsLoading: false });
+    }
+  },
+  closeDayStats() {
+    this._dayStatsRequest = (this._dayStatsRequest || 0) + 1;
+    this.setData({ dayStatsDate: '', dayStatsLoading: false, dayStatsCards: [], dayStatsRecordCount: 0,
+      dayStatsPracticeCount: 0, dayStatsError: '', dayStatsFailure: null });
+  },
+  retryDayStats() {
+    if (!this.data.dayStatsDate || this.data.dayStatsLoading || !this.data.enabled) return;
+    if (this.data.dayStatsFailure && this.data.dayStatsFailure.requiresBinding) return this.openBinding();
+    return this.loadDayStats(this.data.dayStatsDate);
+  },
   openOriginalHistory() { wx.navigateTo({ url: '/pages/checkinHistory/checkinHistory' }); },
   openOriginalRecord() {
     const record = this.data.detail;
