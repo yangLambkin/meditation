@@ -1,0 +1,39 @@
+<view wx:if="{{visible}}" class="practice-picker-overlay">
+  <view class="practice-picker-mask" bindtap="onClose" catchtouchmove="preventTouchMove"></view>
+  <view class="practice-picker-sheet" aria-role="dialog" aria-label="{{title}}">
+    <view class="practice-picker-handle-area" catchtouchmove="preventTouchMove"><view class="practice-picker-handle"></view></view>
+    <view class="practice-picker-header" catchtouchmove="preventTouchMove">
+      <view class="practice-picker-heading">
+        <text class="practice-picker-title">{{title}}</text>
+        <text wx:if="{{subtitle}}" class="practice-picker-subtitle">{{subtitle}}</text>
+      </view>
+      <button class="practice-picker-close" hover-class="practice-picker-close-hover" bindtap="onClose" aria-label="关闭功课选择"><view class="practice-picker-close-icon" aria-hidden="true"></view></button>
+    </view>
+    <scroll-view class="practice-picker-scroll" style="height: {{listHeight}}rpx;" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
+      <view class="practice-picker-options">
+        <button
+          wx:for="{{displayOptions}}"
+          wx:key="type"
+          class="practice-picker-option {{item.type === 'all' ? 'practice-picker-option-all' : ''}} {{selectedType === item.type ? 'practice-picker-option-selected' : ''}}"
+          hover-class="practice-picker-option-hover"
+          data-type="{{item.type}}"
+          bindtap="onSelect"
+          aria-label="{{item.name + '，' + item.hint + (selectedType === item.type ? '，已选中' : '')}}"
+        >
+          <view class="practice-picker-option-copy">
+            <text class="practice-picker-option-name">{{item.name}}</text>
+            <text class="practice-picker-option-hint">{{item.hint}}</text>
+          </view>
+          <view class="practice-picker-radio" aria-hidden="true"><view wx:if="{{selectedType === item.type}}" class="practice-picker-check"></view></view>
+        </button>
+      </view>
+      <view wx:if="{{!hasPracticeOptions}}" class="practice-picker-empty">
+        <text class="practice-picker-empty-title">暂无可选的单项功课</text>
+        <text class="practice-picker-empty-hint">在下方管理入口，开启常用功课后即可选择。</text>
+      </view>
+    </scroll-view>
+    <view class="practice-picker-footer" catchtouchmove="preventTouchMove">
+      <button class="practice-picker-settings" hover-class="practice-picker-settings-hover" bindtap="onSettings"><text>管理功课入口</text><view class="practice-picker-settings-arrow" aria-hidden="true"></view></button>
+    </view>
+  </view>
+</view>

@@ -71,6 +71,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
   };
   const modules = {
+    'practiceEntry.js': {},
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {}, acceptSavedRecord() {} },
     'cloudApi.js': { callCloudFunction: async () => ({ result: { success: true, data: { requests: [], nextCursor: '' } } }) },
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },
@@ -166,6 +167,34 @@ test('home completes immediately after the local save and blocks repeated taps',
   assert.equal(calls.record.length, 1);
   assert.equal(calls.toast.length, 1);
   assert.equal(calls.retry.length, 0);
+});
+
+test('a delayed submit after cancelling the form does not save or moderate its draft', async () => {
+  const { page, calls, setNow } = createPage();
+  page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
+  page.onCheckinExperienceInput({ detail: { value: '取消后保留的输入' } });
+  page.closeCheckinModal();
+  setNow('2026-09-17T08:25:39.123+08:00');
+  await page.submitCheckin();
+  assert.equal(page.data.showCheckinModal, false);
+  assert.equal(calls.record.length, 0);
+  assert.equal(calls.content.length, 0);
+  assert.equal(calls.refresh, 0);
+  assert.equal(calls.toast.length, 0);
+});
+
+test('a delayed submit after successful save cannot create another record after the tap cooldown', async () => {
+  const { page, calls, setNow } = createPage();
+  page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
+  await page.submitCheckin();
+  assert.equal(page.data.showCheckinModal, false);
+  setNow('2026-09-17T08:25:39.123+08:00');
+  await page.submitCheckin();
+  assert.equal(calls.record.length, 1);
+  assert.equal(calls.refresh, 1);
+  assert.equal(calls.toast.length, 1);
 });
 
 test('home retry forces the existing upload queue, refreshes status and blocks double taps', async () => {
@@ -554,7 +583,7 @@ test('refresh preserves explicitly edited date and time independently', () => {
 
 test('unedited date and time submit the actual current instant even after Beijing midnight', async () => {
   const { page, calls, setNow } = createPage({ now: '2026-09-17T23:59:30+08:00' });
-  page.refreshCheckinDefaults();
+  page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   setNow('2026-09-18T00:02:37.456+08:00');
   await page.submitCheckin();
@@ -573,7 +602,7 @@ test('unedited date and time submit the actual current instant even after Beijin
 
 test('manual date/time and experience are submitted together after text approval', async () => {
   const { page, calls } = createPage();
-  page.refreshCheckinDefaults();
+  page.openCheckinModal();
   change(page, 'Date', '2026-09-16');
   change(page, 'Time', '06:32');
   page.onCheckinDurationInput({ detail: { value: '35' } });
@@ -596,7 +625,7 @@ test('manual date/time and experience are submitted together after text approval
 test('duration must be an integer from one through 1440 minutes', async () => {
   for (const invalid of ['', '0', '-1', '1.5', '1441', 'invalid', 'Infinity']) {
     const { page, calls } = createPage();
-    page.refreshCheckinDefaults();
+    page.openCheckinModal();
     page.onCheckinDurationInput({ detail: { value: invalid } });
     await page.submitCheckin();
     assert.equal(calls.record.length, 0, invalid);
@@ -606,7 +635,7 @@ test('duration must be an integer from one through 1440 minutes', async () => {
   }
   for (const valid of ['1', '1440']) {
     const { page, calls } = createPage();
-    page.refreshCheckinDefaults();
+    page.openCheckinModal();
     page.onCheckinDurationInput({ detail: { value: valid } });
     await page.submitCheckin();
     assert.equal(calls.record.length, 1, valid);
@@ -626,7 +655,7 @@ test('impossible, malformed and future dates or times cannot be saved', async ()
     ['2026-09-17', '08:26']
   ]) {
     const { page, calls } = createPage();
-    page.refreshCheckinDefaults();
+    page.openCheckinModal();
     change(page, 'Date', date);
     change(page, 'Time', time);
     page.onCheckinDurationInput({ detail: { value: '7' } });
@@ -640,7 +669,7 @@ test('impossible, malformed and future dates or times cannot be saved', async ()
 
 test('rejected text preserves the draft and never writes a check-in', async () => {
   const { page, calls } = createPage({ checkText: () => false });
-  page.refreshCheckinDefaults();
+  page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   page.onCheckinExperienceInput({ detail: { value: '待修改的体验' } });
   await page.submitCheckin();
@@ -655,17 +684,25 @@ test('pending text approval locks submission and prevents duplicate check-ins', 
   let resolve;
   const pending = new Promise(done => { resolve = done; });
   const { page, calls } = createPage({ checkText: () => pending });
-  page.refreshCheckinDefaults();
+  page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   page.onCheckinExperienceInput({ detail: { value: '一次练习，一条记录' } });
+  const submissionId = page._checkinSubmissionId;
   const first = page.submitCheckin();
   assert.equal(page.data.checkinSubmitting, true);
-  await page.submitCheckin();
+  await Promise.all([page.submitCheckin(), page.submitCheckin(), page.submitCheckin()]);
+  page.closeCheckinModal();
+  page.openCheckinModal();
+  assert.equal(page.data.showCheckinModal, true);
+  assert.equal(page._checkinSubmissionId, submissionId);
+  assert.equal(page.data.checkinDuration, '7');
   assert.equal(calls.content.length, 1);
   assert.equal(calls.record.length, 0);
   resolve(true);
   await first;
   assert.equal(calls.record.length, 1);
+  assert.equal(calls.record[0][4].idempotencyKey, submissionId);
+  assert.equal(page.data.showCheckinModal, false);
   assert.equal(page.data.checkinSubmitting, false);
 });
 
@@ -676,7 +713,7 @@ test('storage and moderation errors preserve inputs, report failure and release 
     { checkText: () => { throw new Error('审核服务不可用'); } }
   ]) {
     const { page, calls } = createPage(settings);
-    page.refreshCheckinDefaults();
+    page.openCheckinModal();
     change(page, 'Date', '2026-09-16');
     change(page, 'Time', '06:32');
     page.onCheckinDurationInput({ detail: { value: '35' } });
@@ -693,15 +730,19 @@ test('storage and moderation errors preserve inputs, report failure and release 
   }
 });
 
-test('rapid taps with an empty experience save once and allow a later check-in', async () => {
+test('rapid taps with an empty experience save once and reopening allows a later check-in', async () => {
   const { page, calls, setNow } = createPage();
+  page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
   await page.submitCheckin();
   assert.equal(calls.record.length, 1);
   setNow('2026-09-17T08:25:39.123+08:00');
+  page.openCheckinModal();
+  page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
   assert.equal(calls.record.length, 2);
+  assert.notEqual(calls.record[0][4].idempotencyKey, calls.record[1][4].idempotencyKey);
 });
 
 test('details show every record from the latest three 02:00 days, grouped newest first', () => {
@@ -1045,13 +1086,19 @@ test('failed manual saves retry with the same identity while a fresh modal creat
   page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
+  assert.equal(page.data.showCheckinModal, true);
+  assert.equal(page.data.checkinSubmitting, false);
+  const retryId = page._checkinSubmissionId;
   setNow('2026-09-17T08:26:00+08:00');
   await page.submitCheckin();
   assert.equal(calls.record.length, 2);
   assert.equal(calls.record[0][4].idempotencyKey, calls.record[1][4].idempotencyKey);
+  assert.equal(calls.record[1][4].idempotencyKey, retryId);
+  assert.equal(page.data.showCheckinModal, false);
   setNow('2026-09-17T08:27:00+08:00');
   page.openCheckinModal();
   page.onCheckinDurationInput({ detail: { value: '7' } });
   await page.submitCheckin();
+  assert.equal(calls.record.length, 3);
   assert.notEqual(calls.record[1][4].idempotencyKey, calls.record[2][4].idempotencyKey);
 });

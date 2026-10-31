@@ -4,7 +4,23 @@ const auth = require('./practiceAuth.js');
 const queue = require('./practiceQueue.js');
 const api = require('./practiceApi.js');
 let recovering = null;
+let recoveryRequested = false;
 let processing = Promise.resolve();
+
+function readSource(read) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => finish(reject, Object.assign(new Error('来源读取超时，已保留待核对，请稍后重试'),
+      { code: 'SOURCE_READ_TIMEOUT', retryable: true })), 5000);
+    Promise.resolve().then(read).then(value => finish(resolve, value), error => finish(reject, error));
+  });
+}
 
 function time(value) {
   if (value && typeof value === 'object') {
@@ -89,9 +105,9 @@ async function reflection(record, owner) {
     // 引用必须读取云端正文，不能把引用 ID 或可能过期的缓存当成正文。
     if (!wx.cloud || typeof wx.cloud.database !== 'function') throw Object.assign(new Error('体验正文尚未从云端确认'), { code: 'SOURCE_REFLECTION_UNRESOLVED' });
     const db = wx.cloud.database();
-    const response = cached && cached._id || !/^\d{13}$/.test(item)
-      ? await db.collection('experience_records').doc(cached && cached._id || item).get()
-      : await db.collection('experience_records').where({ _openid: owner.openid, timestamp: Number(item) }).get();
+    const response = await readSource(() => cached && cached._id || !/^\d{13}$/.test(item)
+      ? db.collection('experience_records').doc(cached && cached._id || item).get()
+      : db.collection('experience_records').where({ _openid: owner.openid, timestamp: Number(item) }).get());
     const value = Array.isArray(response.data) ? response.data.length === 1 && response.data[0] : response.data;
     if (!value || value._openid !== owner.openid || typeof value.text !== 'string') throw Object.assign(new Error('体验正文或归属尚未确认'), { code: 'SOURCE_REFLECTION_UNRESOLVED' });
     texts.push(value.text);
@@ -150,20 +166,21 @@ async function prepareForSend(task) {
   queue.confirmSource(replacement.id, record._id, latest);
   return replacement;
 }
-async function deletionVersion(task) {
-  const fromSnapshot = sourceVersion(task.snapshot);
-  if (fromSnapshot) return fromSnapshot;
-  if (task.deletionId && wx.cloud && typeof wx.cloud.database === 'function') {
-    const response = await wx.cloud.database().collection('meditation_locks').doc(task.deletionId).get();
-    const receipt = response && response.data;
-    const identity = receipt && receipt.requestIdentity;
-    const requestMatches = Array.isArray(identity) && (identity[0] === 'recordId' && identity[1] === task.sourceId ||
-      identity[0] === 'localId' && identity[1] === task.identity.localId ||
-      identity[0] === 'timestamp' && identity[1] === task.snapshot.date && time(identity[2]) === time(task.identity.timestamp));
-    if (receipt && receipt.kind === 'deletion_receipt' && receipt.ownerOpenid === task.owner.openid &&
-        receipt.recordId === task.sourceId && requestMatches) return sourceVersion(receipt);
-  }
-  return '';
+function deletionPayload(task) {
+  // DELETE 按稳定源 ID 写永久删除标记，不依赖版本排序。
+  // 有原云版本时继续携带；缺少时省略，不能读取仅云函数可访问的锁集合。
+  const version = sourceVersion(task.snapshot);
+  return version ? { sourceVersion: version } : {};
+}
+function confirmDeletion(task, sourceId) {
+  const current = queue.getPending({ allOwners: true }).find(item => item.id === task.id && api.sameOwner(item.owner, task.owner));
+  if (!current) return;
+  const expectedId = current.sourceId || current.identity.recordId;
+  if (expectedId && expectedId !== sourceId) throw Object.assign(new Error('原静坐删除返回的记录标识尚未确认，已保留待核对'),
+    { code: 'SOURCE_ID_UNCONFIRMED' });
+  // 完整快照可能先于原删除回包确认了任务。首次确认后固定请求内容，
+  // 晚到回包不能用旧快照改变同一请求身份的版本，造成服务端幂等冲突。
+  if (current.status === 'waiting_source') queue.confirmSource(current.id, sourceId, deletionPayload(current));
 }
 function captureRecoveryBarrier(owner = auth.getOwner()) {
   if (!owner || config.sittingMirrorEnabled !== true) return [];
@@ -182,9 +199,8 @@ async function applySnapshot(records, owner, eligibleTaskIds) {
       if (task.operation === 'delete') {
         if (record) { queue.annotateSource(task.id, { snapshot: { ...task.snapshot, ...record } }); continue; }
         const sourceId = task.sourceId || task.identity.recordId;
-        const version = await deletionVersion(task);
-        if (!sourceId || !version) throw Object.assign(new Error('删除已登记，等待可靠来源 ID 和版本确认'), { code: 'SOURCE_VERSION_UNAVAILABLE' });
-        queue.confirmSource(task.id, sourceId, { sourceVersion: version });
+        if (!sourceId) throw Object.assign(new Error('删除已登记，等待原静坐记录标识确认'), { code: 'SOURCE_ID_UNAVAILABLE' });
+        confirmDeletion(task, sourceId);
         continue;
       }
       if (!record) continue;
@@ -212,24 +228,44 @@ function observeCloudResult(intent, response) {
   if (!result || result.success !== true) return;
   const intents = Array.isArray(intent) ? intent : [intent];
   try {
-    intents.forEach(task => queue.annotateSource(task.id, { cloudConfirmed: true,
-      ...(result.data && result.data.recordId && task.operation !== 'update' ? { sourceId: result.data.recordId } : {}),
-      ...(result.data && result.data.deletionId ? { deletionId: result.data.deletionId } : {}) }));
+    intents.forEach(task => {
+      const recordId = result.data && result.data.recordId;
+      if (task.operation === 'delete') {
+        const expectedId = task.sourceId || task.identity.recordId;
+        if (typeof recordId !== 'string' || !recordId.trim() || expectedId && expectedId !== recordId) {
+          queue.markSourceError(task.id, 'SOURCE_ID_UNCONFIRMED', '原静坐删除返回的记录标识尚未确认，已保留待核对');
+          return;
+        }
+        // 原删除成功已足够确认该稳定源 ID，直接走 OpenAPI，不再读取删除凭据。
+        confirmDeletion(task, recordId);
+        queue.annotateSource(task.id, { cloudConfirmed: true });
+        return;
+      }
+      queue.annotateSource(task.id, { cloudConfirmed: true,
+        ...(recordId && task.operation !== 'update' ? { sourceId: recordId } : {}) });
+    });
     Promise.resolve().then(() => resume()).catch(error => console.warn('原静坐已保存，功课镜像待恢复:', error && error.message));
   } catch (error) { visibleWarning(error); }
 }
 function resume() {
+  // 前一轮读取期间原静坐又完成了一次写入，需要再读一次；旧读取的
+  // barrier 不包含新意图，不能把这次恢复触发静默丢掉。
+  recoveryRequested = true;
   if (recovering) return recovering;
   recovering = Promise.resolve().then(async () => {
-    if (config.sittingMirrorEnabled !== true) return queue.flush();
-    const owner = auth.getOwner();
-    if (!owner) return queue.flush();
-    if (queue.getPending().some(task => task.kind === 'mirror' && task.status === 'waiting_source')) {
-      const barrier = captureRecoveryBarrier(owner);
-      const response = await require('./cloudApi.js').getAllRecords();
-      if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) await acceptCloudSnapshot(response.data, owner, barrier);
-    }
-    return queue.flush();
+    let result;
+    do {
+      recoveryRequested = false;
+      const owner = auth.getOwner();
+      if (config.sittingMirrorEnabled === true && owner &&
+          queue.getPending().some(task => task.kind === 'mirror' && task.status === 'waiting_source')) {
+        const barrier = captureRecoveryBarrier(owner);
+        const response = await require('./cloudApi.js').getAllRecords();
+        if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) await acceptCloudSnapshot(response.data, owner, barrier);
+      }
+      result = await queue.flush();
+    } while (recoveryRequested);
+    return result;
   }).finally(() => { recovering = null; });
   return recovering;
 }

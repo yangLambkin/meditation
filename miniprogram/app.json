@@ -4,6 +4,7 @@
     "pages/example/index",
     "pages/timer/timer",
     "pages/practices/practices",
+    "pages/practiceSettings/practiceSettings",
     "pages/recorder/recorder",
     "pages/daily/daily1",
     "pages/me/me",
@@ -60,8 +61,8 @@
       {
         "pagePath": "pages/practices/practices",
         "text": "记录",
-        "iconPath": "/images/icons/star.png",
-        "selectedIconPath": "/images/icons/star-active.png"
+        "iconPath": "/images/icons/practice-records.png",
+        "selectedIconPath": "/images/icons/practice-records-active.png"
       },
       {
         "pagePath": "pages/team/team",

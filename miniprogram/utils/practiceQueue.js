@@ -54,6 +54,16 @@ function enqueuePractice({ type, operation, recordId, payload, requestId }) {
   if (!['create', 'update', 'delete'].includes(operation)) throw failure('INVALID_OPERATION', '功课操作无效');
   const owner = ownerForTask(auth.getOwner()), request = requestId || id();
   const taskId = id();
+  if (operation === 'delete' && recordId) {
+    // 未确认的删除继续使用原操作身份；再次点击不能排入第二个 DELETE，
+    // 否则首个成功后，后一个会把同一记录的 404 留成永久失败任务。
+    const deletion = read().tasks.find(task => task.kind === 'practice' && task.type === type &&
+      task.operation === 'delete' && task.recordId === recordId && api.sameOwner(task.owner, owner));
+    if (deletion) {
+      if (JSON.stringify(deletion.payload) !== JSON.stringify(payload || {})) throw failure('DELETE_ALREADY_PENDING', '该记录已有删除请求等待确认，请保留原请求后重试');
+      return copy(deletion);
+    }
+  }
   let dependency;
   if (operation !== 'create') {
     if (!recordId) throw failure('RECORD_ID_REQUIRED', '尚未取得云端记录标识');
@@ -116,7 +126,7 @@ function cancel(taskId) {
 }
 function enabled(task) { return task.kind === 'mirror' ? config.sittingMirrorEnabled === true : config.practicesEnabled === true; }
 function paused(error) {
-  return ['AUTH_REQUIRED', 'AUTH_UNAVAILABLE', 'BINDING_INVALID', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'FEATURE_DISABLED'].includes(error && error.code) ||
+  return ['AUTH_REQUIRED', 'AUTH_UNAVAILABLE', 'API_UNAVAILABLE', 'BINDING_INVALID', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'FEATURE_DISABLED'].includes(error && error.code) ||
     error && [401, 403].includes(error.status);
 }
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -145,6 +155,9 @@ async function run({ manual = false } = {}) {
     if (!api.sameOwner(auth.getOwner(), owner)) break;
     let task = read().tasks.find(item => item.id === taskId);
     if (!task || !api.sameOwner(task.owner, owner)) continue;
+    // 等待原云操作的旁路意图尚不能发送，也不能永久挡住同来源后来已
+    // 确认的完整快照。实际 PUT 仍会发送前复核来源版本；旧意图继续保留。
+    if (task.kind === 'mirror' && task.status === 'waiting_source') continue;
     if (!enabled(task) || task.status === 'waiting_source' || task.dependsOn || blocked.has(task.entityKey) ||
         (task.nextRetryAt && task.nextRetryAt > Date.now()) || task.status === 'blocked' && !manual) {
       blocked.add(task.entityKey); continue;

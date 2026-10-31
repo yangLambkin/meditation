@@ -175,6 +175,15 @@
           <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
         </view>
       </view>
+      <view class="me-menu-row" bindtap="goToPracticeSettings" hover-class="me-menu-row-hover">
+        <view class="me-menu-leading">
+          <view class="me-menu-icon-wrap">
+            <image class="me-menu-icon" src="/images/icons/practice-records-active.svg" mode="aspectFit" />
+          </view>
+          <text class="me-menu-label">功课入口设置</text>
+        </view>
+        <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
+      </view>
       <view class="me-menu-row" bindtap="goToFeedbackPage" hover-class="me-menu-row-hover">
         <view class="me-menu-leading">
           <view class="me-menu-icon-wrap">
@@ -200,7 +209,7 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V2.10.18</text>
+        <text class="me-menu-note me-menu-version">V3.0.0</text>
       </view>
     </view>
     <text class="me-design-credit">Designed By Genxin</text>

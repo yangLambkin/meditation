@@ -41,6 +41,7 @@ function harness({ api, owner = 'oz-student', grants = [approved()], confirm = t
   };
   const application = { refreshSyncAlert: options => calls.alert.push(plain(options)), applySyncAlertDot() {} };
   const modules = {
+    'practiceEntry.js': {},
     'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句', watchDailyWisdom: () => () => {} },
     'contentSec.js': { async checkText(...args) { calls.content.push(args); return true; } },
     'checkin.js': {

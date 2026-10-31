@@ -59,6 +59,7 @@ function harness(kind, { account = 'oz-user', member = false, retry, dayRecords,
     stopPullDownRefresh() {}, pageScrollTo() {}
   };
   const modules = {
+    'practiceEntry.js': {},
     'bijingRecordSync.js': service,
     'checkin.js': {
       isUserLoggedIn: () => account.startsWith('oz'),

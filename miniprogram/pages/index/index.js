@@ -6,6 +6,7 @@ const dailyWisdom = require('../../utils/dailyWisdom.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const bijingRecordSync = require('../../utils/bijingRecordSync.js');
 const homeBackfill = require('../../utils/homeBackfill.js');
+const practiceEntry = require('../../utils/practiceEntry.js');
 
 function applySyncAlertDot() {
   const app = typeof getApp === 'function' ? getApp() : null;
@@ -57,21 +58,12 @@ Page({
   },
 
   openPracticePicker() {
-    wx.showActionSheet({
-      itemList: ['静坐觉察', '走路觉察', '即刻觉察', '熏习', '日行一善', '禅拍'],
-      success: result => {
-        if (result.tapIndex === 0) return this.openCheckinModal();
-        const types = ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clapping'];
-        const type = types[result.tapIndex];
-        if (!type) return;
-        wx.setStorageSync('practiceRecordEntry', type);
-        wx.switchTab({ url: '/pages/practices/practices' });
-      }
+    practiceEntry.choosePractice(type => {
+      if (type === 'sitting') return this.openCheckinModal();
+      try { wx.setStorageSync('practiceRecordEntry', type); }
+      catch (_) { wx.showToast({ title: '暂时无法打开功课，请重试', icon: 'none' }); return; }
+      wx.switchTab({ url: '/pages/practices/practices' });
     });
-  },
-
-  openPracticeRecords() {
-    wx.switchTab({ url: '/pages/practices/practices' });
   },
 
   openCheckinModal() {
@@ -154,7 +146,8 @@ Page({
   },
 
   async submitCheckin() {
-    if (this.data.checkinSubmitting || this.data.showCheckinTimePicker || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
+    // 保存或取消后，忽略界面尚未收起时排队的点击，避免用新身份重复写入。
+    if (!this.data.showCheckinModal || this.data.checkinSubmitting || this.data.showCheckinTimePicker || (this._lastCheckinSubmittedAt && Date.now() - this._lastCheckinSubmittedAt < 1000)) return;
     if (this._homeBackfillAccount !== undefined && this._homeBackfillAccount !== (wx.getStorageSync('userOpenId') || '')) {
       this.initHomeBackfill();
       wx.showToast({ title: '账号已切换，请重新填写记录', icon: 'none' });

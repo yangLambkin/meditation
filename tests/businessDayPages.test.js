@@ -24,6 +24,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
     clearInterval(id) { intervals.delete(id); }
   };
   const modules = {
+    'practiceEntry.js': {},
     'checkin.js': {
       getUserCheckinData: () => ({ dailyRecords }),
       getExperienceRecordsFromLocal: () => [],

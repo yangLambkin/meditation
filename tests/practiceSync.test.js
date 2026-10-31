@@ -7,13 +7,14 @@ const test = require('node:test');
 const OWNER = { openid: 'oz-practice-owner', studentNumber: 'B1234', bindingVersion: 'binding-v1' };
 const OCCURRED = Date.parse('2026-10-31T00:30:00+08:00');
 const UPDATED = Date.parse('2026-10-31T00:31:00+08:00');
+const DELETION_ID = `md_${'a'.repeat(64)}`;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function harness({ storage = new Map(), records = [], request, cloudCall, failStorage = false } = {}) {
   let owner = clone(OWNER), now = UPDATED + 1000, timerId = 0;
   const timers = new Map(), cache = {}, requests = [], cloudRequests = [], waits = [];
-  const config = { baseUrl: 'https://data.bijing.life', practicesEnabled: true, sittingMirrorEnabled: true };
+  const config = { baseUrl: 'https://data.bijing.life', practicesEnabled: true, sittingMirrorEnabled: true, serviceAccessToken: 'test-only-token' };
   const auth = { getOwner: () => clone(owner), getAccessToken: async () => 'test-only-token', clearSession() {} };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
@@ -260,19 +261,243 @@ test('an update acknowledgement cannot turn an older snapshot lacking the submit
   assert.equal(queue.getPending()[0].status, 'waiting_source');
 });
 
-test('deletion receipt uses its actual ownerOpenid, kind, request identity and server creation time', async () => {
+test('a successful original delete immediately mirrors without a source version or another source read', async () => {
+  const record = source({ updatedAt: undefined, createdAt: undefined });
+  const app = harness({ records: [record], cloudCall(options) {
+    if (options.data.type === 'deleteMeditationRecord') {
+      options.success({ result: { success: true, data: { recordId: record._id, deletionId: DELETION_ID } } });
+      return true;
+    }
+    if (options.data.type === 'getAllRecords') {
+      options.success({ result: { success: false, error: 'source read unavailable after deletion' } });
+      return true;
+    }
+    throw new Error(`unexpected cloud operation: ${options.data.type}`);
+  } });
+  app.storage.set('meditation_checkin_practice-local', { checkinRecords: { dailyRecords: { x: { records: [record] } } } });
+  let clientDatabaseReads = 0;
+  app.wx.cloud.database = () => {
+    clientDatabaseReads++;
+    throw new Error(`document.get:fail cannot find document with _id ${DELETION_ID}, please make sure that the document exists and you have the corresponding access permission`);
+  };
+  const result = await app.load('cloudApi.js').callCloudFunction('meditationManager', {
+    type: 'deleteMeditationRecord', data: { recordId: record._id, localId: record.localId, timestamp: record.timestamp }
+  });
+  assert.equal(result.result.success, true);
+  await app.settle(app.load('practiceQueue.js').flush());
+  assert.equal(clientDatabaseReads, 0);
+  assert.deepEqual(app.cloudRequests.map(options => options.data.type), ['deleteMeditationRecord']);
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].method, 'DELETE');
+  assert.match(app.requests[0].url, /sources\/meditation\/source-record$/);
+  assert.deepEqual(clone(app.requests[0].data), { operationId: app.requests[0].header['Idempotency-Key'] });
+  assert.equal(app.load('practiceQueue.js').getPending().length, 0);
+});
+
+test('a complete source snapshot confirms a versionless delete without accessing deletion receipts', async () => {
   const record = source({ updatedAt: undefined, createdAt: undefined }), app = harness();
   const queue = app.load('practiceQueue.js');
   const task = queue.enqueueSourceIntent({ operation: 'delete', identity: { recordId: record._id }, snapshot: record });
-  queue.annotateSource(task.id, { sourceId: record._id, deletionId: 'md-confirmed' });
-  app.wx.cloud.database = () => ({ collection: () => ({ doc: () => ({ get: async () => ({ data: {
-    kind: 'deletion_receipt', ownerOpenid: OWNER.openid, recordId: record._id,
-    requestIdentity: ['recordId', record._id], createdAt: UPDATED + 500
-  } }) }) }) });
+  app.wx.cloud.database = () => { throw new Error('deletion mirror must not read a private receipt'); };
   await app.settle(app.load('practiceMirror.js').resume());
   assert.equal(app.requests.length, 1);
   assert.equal(app.requests[0].method, 'DELETE');
+  assert.deepEqual(clone(app.requests[0].data), { operationId: task.requestId });
+  assert.deepEqual(app.cloudRequests.map(options => options.data.type), ['getAllRecords']);
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('a persisted delete with the old private-receipt error recovers after restart with its original request identity', async () => {
+  const record = source({ updatedAt: undefined, createdAt: undefined }), app = harness();
+  const queue = app.load('practiceQueue.js');
+  const task = queue.enqueueSourceIntent({ operation: 'delete', identity: { recordId: record._id }, snapshot: record });
+  queue.annotateSource(task.id, { cloudConfirmed: true, sourceId: record._id, deletionId: DELETION_ID });
+  queue.markSourceError(task.id, 'SOURCE_CONFIRMATION_FAILED', `document.get:fail cannot find document with _id ${DELETION_ID}`);
+  const reopened = harness({ storage: app.storage });
+  reopened.wx.cloud.database = () => { throw new Error('private receipt cannot be read by the client'); };
+  await reopened.settle(reopened.load('practiceMirror.js').resume());
+  assert.equal(reopened.requests.length, 1);
+  assert.equal(reopened.requests[0].method, 'DELETE');
+  assert.equal(reopened.requests[0].header['Idempotency-Key'], task.requestId);
+  assert.deepEqual(clone(reopened.requests[0].data), { operationId: task.requestId });
+  assert.deepEqual(reopened.cloudRequests.map(options => options.data.type), ['getAllRecords']);
+  assert.equal(reopened.load('practiceQueue.js').getPending().length, 0);
+});
+
+test('a late original delete acknowledgement preserves the version already sent with its idempotency key', async () => {
+  let deletion, firstPayload, available = false;
+  const record = source({ updatedAt: undefined, createdAt: undefined }), records = [record];
+  const app = harness({ records, cloudCall(options) {
+    if (options.data.type === 'deleteMeditationRecord') { deletion = options; return true; }
+    return false;
+  }, request(options) {
+    const body = JSON.stringify(options.data);
+    if (!firstPayload) firstPayload = body;
+    if (!available) options.fail({ errMsg: 'response lost after remote commit' });
+    else options.success(body === firstPayload
+      ? { statusCode: 200, data: { success: true, data: { deleted: true } } }
+      : { statusCode: 409, data: { success: false, code: 'REQUEST_ID_REUSED', error: 'same key different payload' } });
+  } });
+  app.storage.set('meditation_checkin_practice-local', { checkinRecords: { dailyRecords: { x: { records: [record] } } } });
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  const original = app.load('cloudApi.js').callCloudFunction('meditationManager', {
+    type: 'deleteMeditationRecord', data: { recordId: record._id }
+  });
+  const task = queue.getPending()[0];
+  records[0].updatedAt = UPDATED + 500;
+  await app.settle(mirror.acceptCloudSnapshot(records));
+  records.splice(0);
+  await app.settle(mirror.acceptCloudSnapshot([]));
   assert.equal(app.requests[0].data.sourceVersion, String(UPDATED + 500));
+  assert.equal(queue.getPending().length, 1);
+  available = true;
+  deletion.success({ result: { success: true, data: { recordId: record._id } } });
+  await original;
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 4);
+  assert.ok(app.requests.every(options => options.header['Idempotency-Key'] === task.requestId));
+  assert.ok(app.requests.every(options => JSON.stringify(options.data) === firstPayload));
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('a repeated delete acknowledgement cannot add a source version after a versionless DELETE was sent', async () => {
+  let firstPayload, available = false;
+  const app = harness({ request(options) {
+    const body = JSON.stringify(options.data);
+    if (!firstPayload) firstPayload = body;
+    if (!available) options.fail({ errMsg: 'response lost after remote commit' });
+    else options.success(body === firstPayload
+      ? { statusCode: 200, data: { success: true, data: { deleted: true } } }
+      : { statusCode: 409, data: { success: false, code: 'REQUEST_ID_REUSED', error: 'same key different payload' } });
+  } });
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  const task = queue.enqueueSourceIntent({ operation: 'delete', identity: { recordId: 'source-record' },
+    snapshot: source({ updatedAt: undefined, createdAt: undefined }) });
+  mirror.observeCloudResult(task, { result: { success: true, data: { recordId: 'source-record' } } });
+  await app.settle(queue.flush());
+  assert.deepEqual(clone(app.requests[0].data), { operationId: task.requestId });
+  // A source read already in flight can enrich the stored snapshot after sending.
+  queue.annotateSource(task.id, { snapshot: source({ updatedAt: UPDATED + 500 }) });
+  const repeated = mirror.beforeCloudMutation('meditationManager', {
+    type: 'deleteMeditationRecord', data: { recordId: 'source-record' }
+  });
+  assert.equal(repeated.id, task.id);
+  available = true;
+  mirror.observeCloudResult(repeated, { result: { success: true, data: { recordId: 'source-record' } } });
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 4);
+  assert.ok(app.requests.every(options => options.header['Idempotency-Key'] === task.requestId));
+  assert.ok(app.requests.every(options => JSON.stringify(options.data) === firstPayload));
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('an unconfirmed deletion whose source still exists remains waiting instead of deleting its mirror', async () => {
+  const record = source({ updatedAt: undefined, createdAt: undefined }), app = harness({ records: [record] });
+  const queue = app.load('practiceQueue.js');
+  const task = queue.enqueueSourceIntent({ operation: 'delete', identity: { recordId: record._id }, snapshot: record });
+  await app.settle(app.load('practiceMirror.js').resume());
+  assert.equal(app.requests.length, 0);
+  assert.equal(queue.getPending()[0].id, task.id);
+  assert.equal(queue.getPending()[0].status, 'waiting_source');
+});
+
+test('failed original deletes and successful acknowledgements for another source never authorize a mirror delete', async () => {
+  const outcomes = [
+    { success: false, code: 'DELETE_FAILED', error: 'delete unavailable' },
+    { success: true, data: { recordId: 'another-source' } },
+    { success: true, data: {} }
+  ];
+  for (const outcome of outcomes) {
+    const record = source({ updatedAt: undefined, createdAt: undefined });
+    const app = harness({ records: [record], cloudCall(options) {
+      if (options.data.type === 'deleteMeditationRecord') {
+        options.success({ result: outcome });
+        return true;
+      }
+      if (options.data.type === 'getAllRecords') {
+        options.success({ result: { success: false, error: 'source confirmation unavailable' } });
+        return true;
+      }
+      throw new Error(`unexpected cloud operation: ${options.data.type}`);
+    } });
+    await app.load('cloudApi.js').callCloudFunction('meditationManager', {
+      type: 'deleteMeditationRecord', data: { recordId: record._id }
+    });
+    await app.settle(app.load('practiceMirror.js').resume());
+    assert.equal(app.requests.length, 0, JSON.stringify(outcome));
+    const pending = app.load('practiceQueue.js').getPending()[0];
+    assert.equal(pending.sourceId, record._id, JSON.stringify(outcome));
+    assert.equal(pending.status, 'waiting_source', JSON.stringify(outcome));
+  }
+});
+
+test('unknown delete outcomes require a complete valid source snapshot before sending a mirror delete', async () => {
+  const snapshots = [
+    { success: false, error: 'read unavailable' },
+    { success: true, data: null },
+    { success: true, data: 'incomplete response' },
+    { success: true, data: [{}] },
+    { success: true, data: [null] },
+    { success: true, data: [source({ _openid: 'foreign-owner' })] }
+  ];
+  for (const snapshot of snapshots) {
+    const app = harness({ cloudCall(options) {
+      if (options.data.type !== 'getAllRecords') throw new Error(`unexpected cloud operation: ${options.data.type}`);
+      options.success({ result: snapshot });
+      return true;
+    } });
+    const queue = app.load('practiceQueue.js');
+    const task = queue.enqueueSourceIntent({ operation: 'delete', identity: { recordId: 'source-record' },
+      snapshot: source({ updatedAt: undefined, createdAt: undefined }) });
+    await app.settle(app.load('practiceMirror.js').resume());
+    assert.equal(app.requests.length, 0, JSON.stringify(snapshot));
+    assert.equal(queue.getPending()[0].id, task.id);
+    assert.equal(queue.getPending()[0].status, 'waiting_source', JSON.stringify(snapshot));
+  }
+});
+
+test('a complete snapshot cannot delete a mirror before its cloud source ID is known', async () => {
+  const app = harness(), queue = app.load('practiceQueue.js');
+  queue.enqueueSourceIntent({ operation: 'delete', identity: { localId: 'not-yet-backed-up' }, snapshot: {} });
+  await app.settle(app.load('practiceMirror.js').resume());
+  assert.equal(app.requests.length, 0);
+  assert.equal(queue.getPending()[0].status, 'waiting_source');
+});
+
+test('a late successful delete after switching accounts preserves the original owner and sends only after switching back', async () => {
+  let deletion;
+  const record = source({ updatedAt: undefined, createdAt: undefined });
+  const app = harness({ cloudCall(options) {
+    if (options.data.type === 'deleteMeditationRecord') {
+      deletion = options;
+      return true;
+    }
+    if (options.data.type === 'getAllRecords') {
+      options.success({ result: { success: false, error: 'source read unavailable' } });
+      return true;
+    }
+    throw new Error(`unexpected cloud operation: ${options.data.type}`);
+  } });
+  const saving = app.load('cloudApi.js').callCloudFunction('meditationManager', {
+    type: 'deleteMeditationRecord', data: { recordId: record._id }
+  });
+  const queue = app.load('practiceQueue.js'), original = queue.getPending()[0];
+  app.owner({ openid: 'other-wechat', studentNumber: 'OTHER', bindingVersion: 'other-binding' });
+  deletion.success({ result: { success: true, data: { recordId: record._id } } });
+  await saving;
+  await app.settle(queue.flush());
+  assert.equal(app.requests.length, 0);
+  const preserved = queue.getPending({ allOwners: true })[0];
+  assert.equal(preserved.owner.openid, OWNER.openid);
+  assert.equal(preserved.sourceId, record._id);
+  assert.equal(preserved.requestId, original.requestId);
+  app.owner(OWNER);
+  await app.settle(app.load('practiceMirror.js').resume());
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].method, 'DELETE');
+  assert.equal(app.requests[0].header['Idempotency-Key'], original.requestId);
+  assert.equal(app.requests[0].header['X-Expected-Student-Number'], OWNER.studentNumber);
+  assert.equal(queue.getPending().length, 0);
 });
 
 test('a pending mirror rechecks the source and sends the latest snapshot with a fresh operation identity', async () => {
@@ -349,4 +574,163 @@ test('a confirmed newer source version replaces older blocked PUTs while preserv
   const newer = queue.enqueueSourceIntent({ operation: 'update', identity: { recordId: 'source-record' }, snapshot: source() });
   queue.confirmSource(newer.id, 'source-record', { ...payload, sourceVersion: String(UPDATED + 100) });
   assert.deepEqual(clone(queue.getPending().map(task => task.id)), [deletion.id, newer.id]);
+});
+
+test('an undeployed HTML route pauses once and resumes automatically after deployment with the same identity', async () => {
+  let deployed = false;
+  const app = harness({ request(options) {
+    options.success(deployed ? { statusCode: 200, data: { success: true, data: { id: 'deployed-record' } } } :
+      { statusCode: 404, data: '<html>Not Found</html>' });
+  } });
+  const queue = app.load('practiceQueue.js');
+  const task = queue.enqueuePractice({ type: 'walking', operation: 'create', payload });
+  await app.settle(queue.flush());
+  assert.equal(app.requests.length, 1);
+  assert.equal(queue.getPending()[0].status, 'paused');
+  assert.equal(queue.getPending()[0].lastError.code, 'API_UNAVAILABLE');
+  deployed = true;
+  await app.settle(queue.flush());
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.requests[1].header['Idempotency-Key'], task.requestId);
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('a real OpenAPI record-not-found response stays blocked instead of being treated as deployment recovery', async () => {
+  const app = harness({ request(options) {
+    options.success({ statusCode: 404, data: { success: false, message: '记录不存在' } });
+  } });
+  const queue = app.load('practiceQueue.js');
+  queue.enqueuePractice({ type: 'walking', operation: 'delete', recordId: 'gone-record' });
+  await app.settle(queue.flush());
+  await app.settle(queue.flush());
+  assert.equal(app.requests.length, 1);
+  assert.equal(queue.getPending()[0].status, 'blocked');
+  assert.equal(queue.getPending()[0].lastError.code, 'HTTP_404');
+});
+
+test('repeating an unconfirmed delete reuses its persisted identity and sends only one deletion after recovery', async () => {
+  const app = harness({ request(options) { options.fail({ errMsg: 'response lost' }); } });
+  const queue = app.load('practiceQueue.js');
+  const first = queue.enqueuePractice({ type: 'walking', operation: 'delete', recordId: 'same-record', requestId: 'delete-one' });
+  await app.settle(queue.flush());
+  const repeated = queue.enqueuePractice({ type: 'walking', operation: 'delete', recordId: 'same-record', requestId: 'delete-two' });
+  assert.equal(repeated.id, first.id);
+  assert.equal(repeated.requestId, first.requestId);
+  assert.equal(queue.getPending().length, 1);
+  const reopened = harness({ storage: app.storage });
+  await reopened.settle(reopened.load('practiceQueue.js').flush());
+  assert.equal(reopened.requests.length, 1);
+  assert.equal(reopened.requests[0].method, 'DELETE');
+  assert.equal(reopened.requests[0].header['Idempotency-Key'], 'delete-one');
+  assert.equal(reopened.load('practiceQueue.js').getPending().length, 0);
+});
+
+test('an unresolved old source mutation does not block a later verified full snapshot of the same source', async () => {
+  const record = source({ experience: ['已确认的新体验'], updatedAt: UPDATED + 200 });
+  const app = harness({ records: [record] });
+  app.storage.set('meditation_checkin_practice-local', { checkinRecords: { dailyRecords: { x: { records: [record] } } } });
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  const earlier = mirror.beforeCloudMutation('meditationManager', { type: 'updateMeditationRecord', recordId: String(OCCURRED), experience: '未确认的旧体验' });
+  mirror.beforeCloudMutation('meditationManager', { type: 'updateMeditationRecord', recordId: String(OCCURRED), experience: '已确认的新体验' });
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].data.reflection, '已确认的新体验');
+  assert.equal(queue.getPending().length, 1);
+  assert.equal(queue.getPending()[0].id, earlier.id);
+  assert.equal(queue.getPending()[0].status, 'waiting_source');
+});
+
+test('a recovery trigger during an older source read performs a new round for newly persisted intentions', async () => {
+  let firstRead;
+  const initial = source(), latest = source({ _id: 'new-source', localId: 'new-local', timestamp: OCCURRED + 1 });
+  const app = harness({ records: [initial, latest], cloudCall(options) {
+    if (options.data.type === 'getAllRecords' && !firstRead) { firstRead = options; return true; }
+    return false;
+  } });
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  mirror.beforeCloudMutation('meditationManager', { type: 'recordMeditation', data: initial });
+  const recovering = mirror.resume();
+  await tick();
+  assert.ok(firstRead);
+  mirror.beforeCloudMutation('meditationManager', { type: 'recordMeditation', data: latest });
+  const secondTrigger = mirror.resume();
+  firstRead.success({ result: { success: true, data: [initial] } });
+  await app.settle(recovering);
+  await secondTrigger;
+  assert.deepEqual(app.requests.map(options => options.url.split('/').pop()).sort(), ['new-source', 'source-record']);
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('temporary service-token rejection pauses without asking the locally bound user to log into data', async () => {
+  const app = harness({ request(options) {
+    options.success({ statusCode: 401, data: { success: false, message: '未登录或登录已过期' } });
+  } });
+  const queue = app.load('practiceQueue.js');
+  queue.enqueuePractice({ type: 'walking', operation: 'create', payload });
+  await app.settle(queue.flush());
+  const task = queue.getPending()[0];
+  assert.equal(task.status, 'paused');
+  assert.equal(task.lastError.code, 'AUTH_UNAVAILABLE');
+  assert.match(task.lastError.message, /功课服务暂时无法连接/);
+  assert.doesNotMatch(task.lastError.message, /登录|授权/);
+});
+
+test('a late cloud save acknowledgement after the original timeout still recovers its mirror independently', async () => {
+  let upload;
+  const record = source(), app = harness({ records: [record], cloudCall(options) {
+    if (options.data.type === 'recordMeditation') { upload = options; return true; }
+    return false;
+  } });
+  const api = app.load('cloudApi.js'), mirror = app.load('practiceMirror.js');
+  await assert.rejects(app.settle(api.callCloudFunction('meditationManager', { type: 'recordMeditation', data: record })), { code: 'CLOUD_TIMEOUT' });
+  assert.equal(app.requests.length, 0);
+  upload.success({ result: { success: true, data: { recordId: record._id } } });
+  await tick();
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.load('practiceQueue.js').getPending().length, 0);
+});
+
+test('a cloud acknowledgement after switching account keeps the original mirror owner until that account returns', async () => {
+  let upload;
+  const record = source(), app = harness({ records: [record], cloudCall(options) {
+    if (options.data.type === 'recordMeditation') { upload = options; return true; }
+    return false;
+  } });
+  const api = app.load('cloudApi.js'), mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  const saving = api.callCloudFunction('meditationManager', { type: 'recordMeditation', data: record });
+  app.owner({ openid: 'other-wechat', studentNumber: 'OTHER', bindingVersion: 'other-binding' });
+  upload.success({ result: { success: true, data: { recordId: record._id } } });
+  await saving;
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 0);
+  assert.equal(queue.getPending({ allOwners: true })[0].owner.openid, OWNER.openid);
+  app.owner(OWNER);
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].header['X-Expected-Student-Number'], OWNER.studentNumber);
+  assert.equal(queue.getPending().length, 0);
+});
+
+test('hung source reflection reads release recovery and ignore late results so a later retry can complete', async () => {
+  const reference = 'a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4';
+  const record = source({ experience: [reference] }), app = harness({ records: [record] });
+  const unresolved = [];
+  let available = false;
+  app.wx.cloud.database = () => ({ collection: () => ({ doc: () => ({ get: () => available
+    ? Promise.resolve({ data: { _openid: OWNER.openid, text: '恢复后的云端体验' } })
+    : new Promise(resolve => unresolved.push(resolve)) }) }) });
+  const mirror = app.load('practiceMirror.js'), queue = app.load('practiceQueue.js');
+  mirror.beforeCloudMutation('meditationManager', { type: 'recordMeditation', data: record });
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 0);
+  assert.equal(queue.getPending()[0].lastError.code, 'SOURCE_READ_TIMEOUT');
+  unresolved.forEach(resolve => resolve({ data: { _openid: OWNER.openid, text: '迟到的旧正文' } }));
+  await tick();
+  assert.equal(app.requests.length, 0);
+  available = true;
+  await app.settle(mirror.resume());
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].data.reflection, '恢复后的云端体验');
+  assert.equal(queue.getPending().length, 0);
 });

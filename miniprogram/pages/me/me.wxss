@@ -1,6 +1,6 @@
 /* pages/me/me.wxss */
 page {
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 /* 功能列表：统一图标、行高与分隔线，跳转项显示箭头 */
@@ -109,9 +109,9 @@ page {
 .page {
   padding-bottom: 32rpx;
   background-color: #f8fafc;
-  overflow: hidden;
+  overflow-x: hidden;
   width: 100%;
-  height: 100%;
+  min-height: 100%;
 }
 .section {
   padding: 16rpx 48rpx;

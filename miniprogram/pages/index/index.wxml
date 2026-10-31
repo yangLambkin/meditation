@@ -84,11 +84,6 @@
       </view>
     </view>
 
-    <view class="home-practice-entry" bindtap="openPracticeRecords" hover-class="checkin-record-active">
-      <view><text class="home-practice-title">最近功课</text><text class="home-practice-caption">六类功课明细 · 月历 · 分项统计</text></view>
-      <view class="home-practice-link"><text>全部记录</text><view class="checkin-scope-arrow" aria-hidden="true"></view></view>
-    </view>
-
     <view class="checkin-history">
       <view class="checkin-history-heading">
         <text class="checkin-title">最近三天静坐</text>
@@ -274,7 +269,7 @@
       </scroll-view>
       <view class="checkin-dialog-actions">
         <button class="checkin-cancel" bindtap="closeCheckinModal" disabled="{{checkinSubmitting}}" hover-class="checkin-record-active">取消</button>
-        <button class="checkin-submit" bindtap="submitCheckin" loading="{{checkinSubmitting}}" disabled="{{checkinSubmitting}}" hover-class="checkin-submit-active">{{checkinBackfillGrant ? '保存本次补录' : '打卡记录'}}</button>
+        <button class="checkin-submit" bindtap="submitCheckin" loading="{{checkinSubmitting}}" disabled="{{checkinSubmitting}}" hover-class="checkin-submit-active">{{checkinSubmitting ? '正在保存' : checkinBackfillGrant ? '保存本次补录' : '打卡记录'}}</button>
       </view>
     </view>
   </view>

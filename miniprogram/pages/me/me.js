@@ -407,6 +407,10 @@ Page({
     });
   },
 
+  goToPracticeSettings() {
+    wx.navigateTo({ url: '/pages/practiceSettings/practiceSettings' });
+  },
+
   goToFeedbackPage() {
     wx.navigateTo({ url: '/pages/feedback/feedback' });
   },

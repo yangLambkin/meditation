@@ -53,6 +53,7 @@ function createPage({ records = [], dailyRecords: storedRecords, now = '2026-09-
     Page: page => { definition = page; },
     require(name) {
       const file = path.basename(name);
+      if (file === 'practiceEntry.js') return {};
       if (file === 'bijingRecordSync.js') return { getDayState: () => null, subscribe: () => () => {} };
       if (file === 'dailyWisdom.js') return { DEFAULT_QUOTE: '每日金句', watchDailyWisdom: () => () => {} };
       if (file === 'checkin.js') return checkinManager;

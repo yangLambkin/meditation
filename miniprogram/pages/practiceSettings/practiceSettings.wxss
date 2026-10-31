@@ -1,0 +1,18 @@
+page { background: #f8fafc; color: #354152; }
+.settings-page { padding: 36rpx 32rpx; padding-bottom: calc(48rpx + env(safe-area-inset-bottom)); }
+.settings-title { display: block; font-size: 34rpx; font-weight: 600; line-height: 1.5; }
+.settings-subtitle { display: block; margin-top: 12rpx; color: #99a1ae; font-size: 24rpx; line-height: 1.6; }
+.settings-card { margin-top: 32rpx; padding: 0 28rpx; border: 1rpx solid #edf0f3; border-radius: 24rpx; background: #fff; }
+.settings-card-heading { display: flex; align-items: center; justify-content: space-between; min-height: 80rpx; color: #8c949e; font-size: 24rpx; }
+.settings-count { color: #a68a57; }
+.entry-row { display: flex; align-items: center; justify-content: space-between; gap: 24rpx; min-height: 104rpx; border-top: 1rpx solid #f0f2f5; }
+.entry-name { flex: 1; min-width: 0; font-size: 28rpx; line-height: 1.5; }
+.settings-hint, .settings-footnote, .settings-empty-hint { display: block; color: #99a1ae; font-size: 23rpx; line-height: 1.7; }
+.settings-hint { margin: 26rpx 8rpx 0; }
+.settings-empty-hint { margin: 16rpx 8rpx 0; color: #a68a57; }
+.settings-footnote { margin-top: 20rpx; text-align: center; font-size: 22rpx; }
+.settings-error { margin-top: 24rpx; padding: 22rpx 24rpx; border-radius: 16rpx; background: #f7f1e7; color: #9c8050; font-size: 25rpx; line-height: 1.6; }
+.restore-button { width: 100%; margin: 32rpx 0 0; padding: 0 24rpx; border-radius: 16rpx; color: #a68a57; background: #f5f1e8; font-size: 28rpx; line-height: 80rpx; }
+.restore-disabled { color: #b8b3a8; background: #f0efec; }
+.retry-button { display: block; margin: 16rpx 0 0; padding: 0 24rpx; border-radius: 12rpx; color: #9c8050; background: #fff; font-size: 25rpx; line-height: 60rpx; }
+.restore-button::after, .retry-button::after { border: none; }
