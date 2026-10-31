@@ -1,5 +1,5 @@
-// These preferences control new-record entry points and practice filter choices.
-// Existing records, statistics and pending uploads keep their original scope.
+// These preferences control new-record entries, filter choices and daily-stat visibility.
+// Existing records, monthly/cumulative statistics and pending uploads keep their original scope.
 const STORAGE_PREFIX = 'practice_entry_preferences_v1';
 const RECORD_VISIBILITY_PREFIX = 'practice_records_visible_v1';
 const PRACTICES = Object.freeze([

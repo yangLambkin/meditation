@@ -358,8 +358,9 @@ Page({
       const summary = unpack(await practiceApi.summary({ month: date.slice(0, 7), type: 'all', date }));
       if (!current()) return;
       const totals = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
-      const dayStatsCards = metricCards(totals);
-      this.setData({ dayStatsCards, dayStatsRecordCount: Number(totals.recordCount || totals.records || 0),
+      const visibleTypes = new Set(practicePreferences.getVisiblePractices().map(item => item.type));
+      const dayStatsCards = metricCards(totals).filter(card => visibleTypes.has(card.type));
+      this.setData({ dayStatsCards, dayStatsRecordCount: dayStatsCards.reduce((sum, card) => sum + card.records, 0),
         dayStatsPracticeCount: dayStatsCards.filter(card => card.records > 0 || card.value > 0).length });
     } catch (error) {
       if (current()) this.setData({ dayStatsError: message(error, '当天统计暂时无法读取，请稍后重试。'),

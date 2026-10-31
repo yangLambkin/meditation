@@ -663,14 +663,13 @@ test('day statistics request complete all-practice totals independently of list 
   assert.equal(h.calls.feed.length, 1);
   assert.equal(h.page.data.dayStatsDate, '2026-10-30');
   assert.equal(h.page.data.dayStatsLoading, false);
-  assert.equal(h.page.data.dayStatsRecordCount, 19);
-  assert.equal(h.page.data.dayStatsPracticeCount, 6);
+  assert.equal(h.page.data.dayStatsRecordCount, 18);
+  assert.equal(h.page.data.dayStatsPracticeCount, 5);
   assert.deepEqual(plain(h.page.data.dayStatsCards.map(({ type, value, unit, records }) => ({ type, value, unit, records }))), [
     { type: 'sitting', value: 91, unit: '分钟', records: 3 },
     { type: 'walking', value: 42, unit: '分钟', records: 4 },
     { type: 'instant', value: 17, unit: '次', records: 5 },
     { type: 'learning', value: 63, unit: '分钟', records: 2 },
-    { type: 'kindness', value: 8, unit: '次', records: 1 },
     { type: 'clapping', value: 29, unit: '分钟', records: 4 }
   ]);
   assert.equal(h.page.data.typeOptions.some(item => item.type === 'kindness'), false);
@@ -679,6 +678,109 @@ test('day statistics request complete all-practice totals independently of list 
   assert.equal(h.page.data.type, 'walking');
   assert.equal(h.page.data.selectedDate, '2026-10-30');
   assert.equal(h.page.data.view, 'detail');
+});
+
+test('day statistics omit hidden practices and count only visible completed practices and records', async () => {
+  const h = createPage({ hiddenTypes: ['sitting', 'walking', 'kindness'], summary: () => ({ recordCount: 99, totals: [
+    { type: 'sitting', totalValue: 30, recordCount: 3 },
+    { type: 'walking', totalValue: 0, recordCount: 5 },
+    { type: 'instant', totalValue: 7, recordCount: 0 },
+    { type: 'learning', totalValue: 0, recordCount: 2 },
+    { type: 'kindness', totalValue: 4, recordCount: 4 }
+  ] }) });
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.deepEqual(plain(h.page.data.dayStatsCards.map(({ type, value, records }) => ({ type, value, records }))), [
+    { type: 'instant', value: 7, records: 0 },
+    { type: 'learning', value: 0, records: 2 },
+    { type: 'clapping', value: 0, records: 0 }
+  ]);
+  assert.equal(h.page.data.dayStatsRecordCount, 2);
+  assert.equal(h.page.data.dayStatsPracticeCount, 2);
+});
+
+test('day statistics reread hidden and restored practices when reopening the same date', async () => {
+  const h = createPage({ summary: () => ({ recordCount: 6, totals: [
+    { type: 'walking', totalValue: 20, recordCount: 2 },
+    { type: 'kindness', totalValue: 4, recordCount: 4 }
+  ] }) });
+  const event = { currentTarget: { dataset: { date: '2026-10-30' } } };
+  await h.page.openDayStats(event);
+  assert.equal(h.page.data.dayStatsCards.length, 6);
+  assert.equal(h.page.data.dayStatsRecordCount, 6);
+  assert.equal(h.page.data.dayStatsPracticeCount, 2);
+  h.page.closeDayStats();
+  h.preferences.saveHiddenTypes(['walking', 'kindness']);
+  await h.page.openDayStats(event);
+  assert.deepEqual(plain(h.page.data.dayStatsCards.map(item => item.type)), ['sitting', 'instant', 'learning', 'clapping']);
+  assert.equal(h.page.data.dayStatsRecordCount, 0);
+  assert.equal(h.page.data.dayStatsPracticeCount, 0);
+  h.page.closeDayStats();
+  h.preferences.saveHiddenTypes([]);
+  await h.page.openDayStats(event);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 20);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'kindness').value, 4);
+  assert.equal(h.page.data.dayStatsRecordCount, 6);
+  assert.equal(h.page.data.dayStatsPracticeCount, 2);
+  assert.equal(h.calls.summary.length, 3);
+});
+
+test('day statistics apply the latest visibility preferences when the request completes', async () => {
+  for (const restored of [false, true]) {
+    const response = deferred();
+    const h = createPage({ hiddenTypes: restored ? ['walking'] : [], summary: () => response.promise });
+    const opening = h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+    h.preferences.saveHiddenTypes(restored ? [] : ['walking']);
+    response.resolve({ recordCount: 3, totals: [{ type: 'walking', totalValue: 30, recordCount: 3 }] });
+    await opening;
+    assert.equal(h.page.data.dayStatsCards.some(item => item.type === 'walking'), restored);
+    assert.equal(h.page.data.dayStatsRecordCount, restored ? 3 : 0);
+    assert.equal(h.page.data.dayStatsPracticeCount, restored ? 1 : 0);
+  }
+});
+
+test('day statistics are empty with zero counts when every practice is hidden', async () => {
+  const h = createPage({ hiddenTypes: ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clapping'],
+    summary: () => ({ recordCount: 8, totals: [
+      { type: 'walking', totalValue: 30, recordCount: 3 },
+      { type: 'kindness', totalValue: 5, recordCount: 5 }
+    ] }) });
+  await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
+  assert.equal(h.page.data.dayStatsLoading, false);
+  assert.equal(h.page.data.dayStatsError, '');
+  assert.deepEqual(plain(h.page.data.dayStatsCards), []);
+  assert.equal(h.page.data.dayStatsRecordCount, 0);
+  assert.equal(h.page.data.dayStatsPracticeCount, 0);
+});
+
+test('day statistics use each account visibility settings without overwriting another account preferences', async () => {
+  const originalOwner = { openid: 'oz-owner', studentNumber: '001', bindingVersion: 'v1' };
+  const otherOwner = { openid: 'oz-other', studentNumber: '002', bindingVersion: 'v2' };
+  const h = createPage({ hiddenTypes: ['walking'], summary: () => ({ recordCount: 6, totals: [
+    { type: 'walking', totalValue: 20, recordCount: 2 },
+    { type: 'kindness', totalValue: 4, recordCount: 4 }
+  ] }) });
+  const event = { currentTarget: { dataset: { date: '2026-10-30' } } };
+  await h.page.openDayStats(event);
+  assert.equal(h.page.data.dayStatsCards.some(item => item.type === 'walking'), false);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'kindness').value, 4);
+  assert.equal(h.page.data.dayStatsRecordCount, 4);
+  h.page.closeDayStats();
+  h.changeOwner(otherOwner);
+  h.preferences.saveHiddenTypes(['kindness']);
+  await h.page.openDayStats(event);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 20);
+  assert.equal(h.page.data.dayStatsCards.some(item => item.type === 'kindness'), false);
+  assert.equal(h.page.data.dayStatsRecordCount, 2);
+  h.page.closeDayStats();
+  h.changeOwner(originalOwner);
+  await h.page.openDayStats(event);
+  assert.deepEqual(plain(h.preferences.getHiddenTypes()), ['walking']);
+  assert.equal(h.page.data.dayStatsCards.some(item => item.type === 'walking'), false);
+  assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'kindness').value, 4);
+  assert.equal(h.page.data.dayStatsRecordCount, 4);
+  h.page.closeDayStats();
+  h.changeOwner(otherOwner);
+  assert.deepEqual(plain(h.preferences.getHiddenTypes()), ['kindness']);
 });
 
 test('day statistics zero-fill missing practices and count practices by completed quantity or record count', async () => {

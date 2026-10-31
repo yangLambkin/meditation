@@ -23,7 +23,7 @@
   <view wx:if="{{error}}" class="settings-error"><text>{{error}}</text><button wx:if="{{!entries.length}}" size="mini" class="retry-button" bindtap="loadPreferences">重新读取</button></view>
 
   <block wx:if="{{entries.length}}">
-    <text class="settings-hint">关闭后，会从首页「记录功课」、记录页「＋记录功课」及类型筛选中隐藏。已有记录和统计仍可在「全部功课」中查看。</text>
+    <text class="settings-hint">关闭后，会从功课录入选项、类型筛选及当日统计中隐藏。已有记录、月度及累计统计仍可在「全部功课」中查看。</text>
     <text wx:if="{{!visibleCount}}" class="settings-empty-hint">当前已隐藏全部入口，可随时重新开启。</text>
     <button class="restore-button {{!hiddenCount ? 'restore-disabled' : ''}}" bindtap="restoreAll" disabled="{{!hiddenCount}}">显示全部功课</button>
     <text class="settings-footnote">修改后立即生效，设置按账号保存在当前设备。</text>
