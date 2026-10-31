@@ -209,7 +209,7 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V3.0.2</text>
+        <text class="me-menu-note me-menu-version">V3.0.3</text>
       </view>
     </view>
     <text class="me-design-credit">Designed By Genxin</text>

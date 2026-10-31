@@ -189,6 +189,7 @@ Page({
   },
   onHide() {
     this._visible = false;
+    this._recordActionsRequest = null;
     this.closeDayStats();
     // A shared entry may temporarily open a hidden tab; cached visits use the saved preference again.
     if (this.options && this.options.from === 'share') delete this.options.from;
@@ -572,6 +573,31 @@ Page({
     const record = this.data.records.find(item => item.key === event.currentTarget.dataset.key);
     if (record) { this._detailOwner = ownerKey(); this.setData({ detail: record }); }
   },
+  showRecordActions(event) {
+    if (this.data.deleting || this.data.formBusy) return;
+    const key = event.currentTarget.dataset.key;
+    const record = this.data.records.find(item => item.key === key);
+    if (!record) return;
+    const actions = [];
+    if (record.canEdit) actions.push({ text: '编辑功课', type: 'edit' });
+    if (record.canDelete) actions.push({ text: '删除记录', type: 'delete' });
+    if (!actions.length) { this.openDetail(event); return; }
+    const owner = ownerKey();
+    const request = this._recordActionsRequest = {};
+    wx.showActionSheet({
+      itemList: actions.map(action => action.text),
+      success: result => {
+        if (this._recordActionsRequest !== request) return;
+        if (owner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
+        const current = this.data.records.find(item => item.key === key);
+        const action = actions[result.tapIndex];
+        if (!current || !action || this.data.deleting || this.data.formBusy) return;
+        if (action.type === 'edit' && current.canEdit) this.openForm(current.type, current);
+        if (action.type === 'delete' && current.canDelete) this.deleteRecord(current, owner);
+      },
+      complete: () => { if (this._recordActionsRequest === request) this._recordActionsRequest = null; }
+    });
+  },
   closeDetail() { if (!this.data.deleting) this.setData({ detail: null }); },
   editDetail() {
     if (this._detailOwner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
@@ -579,9 +605,11 @@ Page({
     if (record && record.canEdit) this.openForm(record.type, record);
   },
   deleteDetail() {
-    const record = this.data.detail;
+    this.deleteRecord(this.data.detail, this._detailOwner);
+  },
+  deleteRecord(record, owner) {
     if (!record || !record.canDelete || this.data.deleting) return;
-    const owner = this._detailOwner;
+    if (owner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
     wx.showModal({ title: '删除这条功课？', content: record.type === 'kindness' ? '删除后也会更新「做善事」，该操作不可恢复。' : '删除后无法恢复，请确认。',
       confirmText: '删除', confirmColor: '#b45f4e', success: result => { if (result.confirm) this.confirmDelete(record, owner); } });
   },

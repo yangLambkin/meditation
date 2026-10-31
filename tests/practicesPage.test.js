@@ -1316,6 +1316,138 @@ test('date-only history does not invent a time and requires the user to select t
   assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-30 13:45:00');
 });
 
+test('long pressing a record can cancel its menu or open the populated editor without opening details', async () => {
+  const record = { id: 7, type: 'walking', recordDate: '2026-10-30',
+    occurredAt: '2026-10-30 13:45:24', durationMinutes: 18, reflection: '觉察脚步' };
+  const h = createPage({ feed: () => ({ records: [record] }) });
+  await h.page.refresh();
+  const event = { currentTarget: { dataset: { key: 'walking:7' } } };
+  h.page.showRecordActions(event);
+  const cancelled = h.calls.actionSheet;
+  assert.deepEqual(plain(cancelled.itemList), ['编辑功课', '删除记录']);
+  assert.equal(h.page.data.detail, null);
+  cancelled.complete({ errMsg: 'showActionSheet:fail cancel' });
+  cancelled.success({ tapIndex: 0 });
+  assert.equal(h.page.data.showForm, false);
+  assert.equal(h.calls.modal.length, 0);
+  assert.equal(h.calls.enqueue.length, 0);
+
+  h.page.showRecordActions(event);
+  h.calls.actionSheet.success({ tapIndex: 0 });
+  assert.equal(h.page.data.detail, null);
+  assert.equal(h.page.data.showForm, true);
+  assert.equal(h.page.data.formEditing, true);
+  assert.equal(h.page.data.formRecordId, 7);
+  assert.equal(h.page.data.formValue, '18');
+  assert.equal(h.page.data.formReflection, '觉察脚步');
+  assert.equal(h.page.data.formTime, '13:45');
+  assert.equal(h.calls.enqueue.length, 0);
+});
+
+test('long press deletion skips details and only queues the selected record after confirmation', async () => {
+  const h = createPage({ feed: () => ({ records: [{ id: 8, type: 'kindness',
+    recordDate: '2026-10-30', occurredAt: '2026-10-30 12:00:00', content: '帮助他人', quantity: 2 }] }) });
+  await h.page.refresh();
+  const event = { currentTarget: { dataset: { key: 'kindness:8' } } };
+  h.page.showRecordActions(event);
+  h.calls.actionSheet.success({ tapIndex: 1 });
+  assert.equal(h.page.data.detail, null);
+  assert.equal(h.calls.modal.length, 1);
+  assert.match(h.calls.modal[0].content, /做善事/);
+  assert.equal(h.calls.enqueue.length, 0);
+  h.calls.modal[0].success({ confirm: false });
+  assert.equal(h.calls.enqueue.length, 0);
+
+  h.page.showRecordActions(event);
+  h.calls.actionSheet.success({ tapIndex: 1 });
+  h.calls.modal[1].success({ confirm: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls.enqueue.length, 1);
+  assert.equal(h.calls.enqueue[0].operation, 'delete');
+  assert.equal(h.calls.enqueue[0].type, 'kindness');
+  assert.equal(h.calls.enqueue[0].recordId, 8);
+  assert.equal(h.calls.flush[0].manual, true);
+  assert.equal(h.page.data.deleting, false);
+});
+
+test('long press menus respect each available permission and read only records open details', async () => {
+  for (const [canEdit, canDelete, expected] of [
+    [true, false, ['编辑功课']], [false, true, ['删除记录']], [false, false, null]
+  ]) {
+    const h = createPage({ feed: () => ({ records: [{ id: 9, type: 'walking',
+      recordDate: '2026-10-30', durationMinutes: 10, canEdit, canDelete }] }) });
+    await h.page.refresh();
+    h.page.showRecordActions({ currentTarget: { dataset: { key: 'walking:9' } } });
+    if (expected) {
+      assert.deepEqual(plain(h.calls.actionSheet.itemList), expected);
+      h.calls.actionSheet.success({ tapIndex: 0 });
+      assert.equal(h.page.data.showForm, canEdit);
+      assert.equal(h.calls.modal.length, canDelete ? 1 : 0);
+      assert.equal(h.page.data.detail, null);
+    } else {
+      assert.equal(h.calls.actionSheet, undefined);
+      assert.equal(h.page.data.detail.id, 9);
+      assert.equal(h.page.data.showForm, false);
+      assert.equal(h.calls.modal.length, 0);
+    }
+    assert.equal(h.calls.enqueue.length, 0);
+  }
+});
+
+test('long press callbacks cannot edit or delete after the account or binding changes', async () => {
+  for (const tapIndex of [0, 1]) {
+    const h = createPage({ feed: () => ({ records: [{ id: 10, type: 'walking',
+      recordDate: '2026-10-30', durationMinutes: 10 }] }) });
+    await h.page.refresh();
+    h.page.showRecordActions({ currentTarget: { dataset: { key: 'walking:10' } } });
+    h.changeOwner({ openid: 'oz-new', studentNumber: '002', bindingVersion: 'v2' });
+    h.calls.actionSheet.success({ tapIndex });
+    assert.equal(h.page.data.showForm, false);
+    assert.equal(h.page.data.detail, null);
+    assert.equal(h.calls.modal.length, 0);
+    assert.equal(h.calls.enqueue.length, 0);
+  }
+});
+
+test('long press callbacks stop when the record disappears, loses permission or the page hides', async () => {
+  for (const invalidation of ['removed', 'permission', 'hidden']) {
+    for (const tapIndex of [0, 1]) {
+      const h = createPage({ feed: () => ({ records: [{ id: 11, type: 'walking',
+        recordDate: '2026-10-30', durationMinutes: 10 }] }) });
+      await h.page.refresh();
+      h.page.showRecordActions({ currentTarget: { dataset: { key: 'walking:11' } } });
+      if (invalidation === 'removed') h.page.setData({ records: [] });
+      else if (invalidation === 'permission') {
+        h.page.setData({ records: h.page.data.records.map(record => ({ ...record, canEdit: false, canDelete: false })) });
+      } else h.page.onHide();
+      h.calls.actionSheet.success({ tapIndex });
+      assert.equal(h.page.data.showForm, false, `${invalidation}: ${tapIndex}`);
+      assert.equal(h.page.data.detail, null, `${invalidation}: ${tapIndex}`);
+      assert.equal(h.calls.modal.length, 0, `${invalidation}: ${tapIndex}`);
+      assert.equal(h.calls.enqueue.length, 0, `${invalidation}: ${tapIndex}`);
+    }
+  }
+});
+
+test('opening another record menu invalidates an earlier menu callback', async () => {
+  const h = createPage({ feed: () => ({ records: [
+    { id: 12, type: 'walking', recordDate: '2026-10-30', durationMinutes: 10 },
+    { id: 13, type: 'walking', recordDate: '2026-10-30', durationMinutes: 20 }
+  ] }) });
+  await h.page.refresh();
+  h.page.showRecordActions({ currentTarget: { dataset: { key: 'walking:12' } } });
+  const previousMenu = h.calls.actionSheet;
+  h.page.showRecordActions({ currentTarget: { dataset: { key: 'walking:13' } } });
+  const currentMenu = h.calls.actionSheet;
+  assert.notEqual(currentMenu, previousMenu);
+  previousMenu.success({ tapIndex: 0 });
+  assert.equal(h.page.data.showForm, false);
+  assert.equal(h.calls.modal.length, 0);
+  currentMenu.success({ tapIndex: 0 });
+  assert.equal(h.page.data.formRecordId, 13);
+  assert.equal(h.page.data.formValue, '20');
+});
+
 test('meditation mirrors are read only and their original history uses the existing 02:00 business day', async () => {
   const h = createPage({ feed: () => ({ records: [{ id: 1, type: 'sitting', source: 'meditation', sourceRecordId: 'source-1', recordDate: '2026-10-31', occurredAt: '2026-10-31 00:30:00', durationMinutes: 20, canEdit: true, canDelete: true }] }) });
   await h.page.refresh();
@@ -1326,6 +1458,10 @@ test('meditation mirrors are read only and their original history uses the exist
   h.page.editDetail(); h.page.deleteDetail();
   assert.equal(h.page.data.showForm, false);
   assert.equal(h.calls.modal.length, 0);
+  h.page.closeDetail();
+  h.page.showRecordActions({ currentTarget: { dataset: { key: 'sitting:1' } } });
+  assert.equal(h.calls.actionSheet, undefined);
+  assert.equal(h.page.data.detail.id, 1);
   h.page.openOriginalRecord();
   assert.equal(h.calls.navigation[0].url, '/pages/history/history?date=2026-10-30');
 });

@@ -53,13 +53,14 @@
       <view wx:if="{{loading}}" class="empty-state">正在读取功课…</view>
       <template wx:elif="{{error}}" is="read-failure" data="{{failure: feedFailure, scope: 'feed'}}" />
       <view wx:elif="{{loaded && !records.length}}" class="empty-state"><text class="empty-symbol">○</text><text>这{{selectedDate ? '一天' : '个月'}}还没有已上传的功课</text><text class="caption">每一份练习，都值得记录</text></view>
+      <text wx:if="{{records.length && !loading && !error}}" class="records-hint">{{type === 'sitting' ? '点击查看详情，静坐记录请前往原记录管理' : '点击查看详情，长按卡片可编辑或删除'}}</text>
       <view class="day-group" wx:for="{{groups}}" wx:for-item="group" wx:key="date">
         <view class="day-heading">
           <view class="day-heading-copy"><text>{{group.date}}</text><text class="caption">{{group.records.length}} 条{{nextCursor ? '已载入' : ''}}</text></view>
           <button size="mini" class="day-stats-button" bindtap="openDayStats" data-date="{{group.date}}" hover-class="day-stats-button-hover" aria-label="{{'查看' + group.date + '的功课统计'}}">查看统计<text class="day-stats-arrow" aria-hidden="true">›</text></button>
         </view>
-        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" bindtap="openDetail" data-key="{{record.key}}" hover-class="card-hover">
-          <view class="record-heading"><view><text class="record-name">{{record.typeName}}</text><text class="record-time">{{record.timeLabel}}</text></view><view><text class="record-amount">{{record.quantity}}</text><text class="record-unit">{{record.unit}}</text><text class="chevron">›</text></view></view>
+        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" bindtap="openDetail" catchlongpress="showRecordActions" data-key="{{record.key}}" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + (record.canEdit || record.canDelete ? '，点击查看详情，长按管理记录' : '，点击查看详情')}}">
+          <view class="record-heading"><view><text class="record-name">{{record.typeName}}</text><text class="record-time">{{record.timeLabel}}</text></view><view><text class="record-amount">{{record.quantity}}</text><text class="record-unit">{{record.unit}}</text></view></view>
           <text wx:if="{{record.preview}}" class="record-preview">{{record.preview}}</text>
           <text wx:if="{{record.mirrored}}" class="source-tag">来自静坐记录</text>
         </view>
@@ -173,16 +174,16 @@
 
 <view wx:if="{{detail}}" class="modal">
   <view class="modal-mask" bindtap="closeDetail" catchtouchmove="noop"></view>
-  <view class="dialog" catchtap="noop">
+  <view class="dialog detail-dialog" catchtap="noop" aria-role="dialog" aria-label="{{detail.typeName + '详情'}}">
     <view class="dialog-header"><text class="dialog-title dialog-heading">{{detail.typeName}}</text><button size="mini" class="close-button" hover-class="close-button-hover" bindtap="closeDetail" disabled="{{deleting}}" aria-label="关闭功课详情"><view class="close-icon" aria-hidden="true"></view></button></view>
-    <scroll-view class="dialog-scroll" scroll-y="{{true}}"><view class="dialog-body">
+    <view class="detail-scroll"><view class="dialog-body">
       <view class="detail-amount"><text>{{detail.quantity}}</text><text class="detail-unit">{{detail.unit}}</text></view>
       <text class="detail-date">{{detail.recordDate}} · {{detail.timeLabel}}（北京时间）</text>
       <view wx:if="{{detail.mirrored}}" class="privacy-notice"><text>来自静坐记录</text><text>请通过原静坐入口查看、更新感悟或删除，功课记录将单向同步。</text></view>
       <view wx:if="{{detail.type === 'kindness'}}" class="privacy-notice"><text>内容与感悟对已登录成员可见；编辑、删除也会更新「做善事」。记录条数与善事件数分别统计。</text></view>
       <view wx:if="{{detail.content}}" class="detail-section"><text class="label">善事内容</text><text class="detail-text" selectable="{{true}}">{{detail.content}}</text></view>
       <view class="detail-section"><text class="label">感悟</text><text class="detail-text {{!detail.reflection ? 'muted' : ''}}" selectable="{{true}}">{{detail.reflection || '这次练习没有填写感悟'}}</text></view>
-    </view></scroll-view>
+    </view></view>
     <view class="dialog-footer" wx:if="{{detail.type === 'sitting'}}"><button class="primary-button full-button" bindtap="openOriginalRecord">前往原静坐记录</button></view>
     <view class="dialog-footer" wx:elif="{{detail.canEdit || detail.canDelete}}"><button wx:if="{{detail.canDelete}}" class="danger-button" bindtap="deleteDetail" loading="{{deleting}}" disabled="{{deleting}}">删除</button><button wx:if="{{detail.canEdit}}" class="primary-button" bindtap="editDetail" disabled="{{deleting}}">编辑功课</button></view>
   </view>
