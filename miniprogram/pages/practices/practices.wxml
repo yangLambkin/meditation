@@ -8,8 +8,11 @@
 
 <view class="practice-page practice-home">
   <view class="page-heading home-heading">
-    <view class="heading-copy"><text class="page-title">今天的功课</text><text class="home-date">{{todayLabel}}</text></view>
-    <button size="mini" class="add-button {{!enabled ? 'add-button-disabled' : ''}}" bindtap="choosePractice" disabled="{{!enabled}}" aria-label="记录一份功课">＋ 记录功课</button>
+    <view class="heading-copy">
+      <view class="home-title-row"><text class="page-title">今日功课</text><text class="home-date">{{todayLabel}}</text></view>
+      <text wx:if="{{enabled && homeCards.length}}" class="home-grid-hint">点击功课卡片，记录今日练习</text>
+    </view>
+    <button size="mini" class="add-button {{!enabled ? 'add-button-disabled' : ''}}" bindtap="choosePractice" disabled="{{!enabled}}" aria-label="记录一份功课">＋ 记录</button>
   </view>
 
   <view wx:if="{{!enabled}}" class="state-card">
@@ -21,7 +24,6 @@
   <block wx:else>
     <include src="practicePending.wxml" />
     <block wx:if="{{homeCards.length}}">
-      <text class="home-grid-hint">今日累计 · 点击功课即可记录</text>
       <view class="home-practice-grid {{homeCards.length === 1 ? 'home-practice-single' : homeCards.length === 2 || homeCards.length === 4 ? 'home-practice-pairs' : ''}}">
         <button class="home-practice-card {{item.value > 0 && !todayLoading && !todayError ? 'home-practice-done' : ''}}" wx:for="{{homeCards}}" wx:key="type" data-type="{{item.type}}" bindtap="openPracticeCard" hover-class="home-practice-hover" disabled="{{formBusy}}" aria-label="{{item.name + (todayLoading ? '，正在读取今日累计' : todayError ? '，今日累计暂时无法读取' : '，今日累计' + item.value + item.unit) + '，点击记录'}}">
           <text class="home-practice-name">{{item.name}}</text>
@@ -38,14 +40,14 @@
     </view>
 
     <view class="home-recent">
-      <view class="home-section-heading"><text class="home-section-title">{{homeRecentDays === 3 ? '最近三天' : '今天的记录'}}</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover">查看全部<text class="home-entry-arrow" aria-hidden="true">›</text></button></view>
+      <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover">查看全部<text class="home-entry-arrow" aria-hidden="true">›</text></button></view>
       <block wx:if="{{homeCards.length}}">
         <view wx:if="{{homeLoading}}" class="empty-state home-loading">正在读取最近记录…</view>
         <template wx:elif="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
         <block wx:else>
           <view class="home-day-group" wx:for="{{recentGroups}}" wx:for-item="group" wx:key="date">
             <view class="home-day-heading"><text class="home-day-label">{{group.label}}</text><text class="home-day-date">{{group.dateLabel}}</text></view>
-            <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text><text class="caption">点击上方功课，记下今天的练习</text></view>
+            <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text></view>
             <view wx:else class="home-record-list">
               <view class="home-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" data-key="{{record.key}}" bindtap="openDetail" catchlongpress="showRecordActions" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + '，点击查看详情'}}">
                 <view class="home-record-copy"><view class="home-record-heading"><text class="home-record-name">{{record.typeName}}</text><text class="home-record-time">{{record.timeLabel}}</text></view><text wx:if="{{record.preview}}" class="home-record-preview">{{record.preview}}</text></view>

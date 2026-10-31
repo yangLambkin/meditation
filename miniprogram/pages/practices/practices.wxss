@@ -5,10 +5,14 @@ button { font-weight: 500; }
 .page-heading, .record-heading, .card-heading, .day-heading, .dialog-header, .pending-heading, .pending-item { display: flex; justify-content: space-between; align-items: center; }
 .page-heading { gap: 20rpx; min-height: 76rpx; margin-bottom: 28rpx; }
 .heading-copy { flex: 1; min-width: 0; }
-.page-title { display: block; color: #354152; font-size: 36rpx; line-height: 1.4; font-weight: 600; }
-.home-heading { margin-bottom: 30rpx; }
-.home-date { display: block; margin-top: 8rpx; color: #99a1ae; font-size: 25rpx; line-height: 1.5; }
-.home-grid-hint { display: block; margin: 0 0 18rpx 2rpx; color: #99a1ae; font-size: 23rpx; line-height: 1.5; }
+.page-title, .home-section-title { display: block; color: #354152; font-size: 36rpx; line-height: 1.4; font-weight: 600; }
+.practice-home .home-heading { gap: 24rpx; min-height: 44px; margin-bottom: 24rpx; }
+.practice-home .home-heading .heading-copy { display: flex; flex-direction: column; gap: 6rpx; }
+.practice-home .home-title-row { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 16rpx; row-gap: 4rpx; }
+.practice-home .home-heading .page-title { white-space: nowrap; }
+.practice-home .home-date { color: #99a1ae; font-size: 24rpx; line-height: 1.5; white-space: nowrap; }
+.practice-home .home-heading .add-button { display: flex; align-items: center; justify-content: center; width: 152rpx; height: 80rpx; min-height: 44px; border-radius: 14rpx; font-size: 26rpx; line-height: 1.4; white-space: nowrap; }
+.practice-home .home-grid-hint { display: block; margin: 0; color: #99a1ae; font-size: 23rpx; line-height: 1.4; }
 .home-practice-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
 button.home-practice-card { display: flex; flex-direction: column; justify-content: space-between; width: calc((100% - 24rpx) / 3); min-width: 0; height: 174rpx; margin: 0; padding: 24rpx 18rpx; box-sizing: border-box; border: 2rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #354152; text-align: left; line-height: 1.4; }
 button.home-practice-done { border-color: #e5d9c2; background: #faf7f0; }
@@ -29,7 +33,6 @@ button.home-practice-hover { background: #f3eddf; }
 button.home-records-link { display: flex; align-items: center; flex-shrink: 0; width: auto; min-height: 64rpx; margin: 0; padding: 0 0 0 12rpx; border-radius: 12rpx; color: #9c8050; background: transparent; font-size: 24rpx; line-height: 64rpx; }
 .home-entry-arrow { margin-left: 12rpx; color: #b29764; font-size: 34rpx; }
 .home-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 16rpx; }
-.home-section-title { color: #354152; font-size: 30rpx; font-weight: 600; }
 .home-day-group + .home-day-group { margin-top: 28rpx; }
 .home-day-heading { display: flex; align-items: baseline; gap: 14rpx; margin: 0 4rpx 14rpx; }
 .home-day-label { color: #7a8493; font-size: 25rpx; font-weight: 500; }
@@ -46,7 +49,6 @@ button.home-records-link { display: flex; align-items: center; flex-shrink: 0; w
 .home-record-value { color: #9c8050; font-size: 31rpx; font-weight: 500; }
 .home-record-unit { color: #99a1ae; font-size: 21rpx; }
 .home-today-empty { padding: 34rpx 24rpx; border: 1rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #8c949e; font-size: 26rpx; text-align: center; line-height: 1.6; }
-.home-today-empty .caption { margin-top: 8rpx; }
 .home-footer-note { display: block; margin: 28rpx 0 0; color: #a1a8b2; font-size: 22rpx; text-align: center; line-height: 1.6; }
 .home-loading { padding-top: 48rpx; }
 .practice-home .pending-card { padding: 20rpx 24rpx; }

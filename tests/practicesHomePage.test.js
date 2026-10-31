@@ -67,20 +67,21 @@ test('home filters cards and recent records without allowing hidden first-page e
   assert.equal(h.calls.summary.length, 1);
 });
 
-test('a selected subset keeps the homepage focused on today while all six practices show three days', async () => {
-  const records = [record(1, 'kindness'), record(2, 'kindness', '2026-10-30'), record(3, 'kindness', '2026-10-29')];
+test('a selected subset and all six practices show the latest three days while excluding hidden or out-of-window records', async () => {
+  const records = [record(1, 'kindness'), record(2, 'kindness', '2026-10-30'), record(3, 'kindness', '2026-10-29'),
+    record(4, 'kindness', '2026-10-28'), record(5, 'kindness', '2026-11-01'), record(6, 'walking', '2026-10-30')];
   const subset = createHome({ hiddenTypes: ['walking'], feed: () => ({ records }) });
   await subset.page.refresh();
-  assert.equal(subset.page.data.homeRecentDays, 1);
-  assert.equal(subset.page.data.recentStart, '2026-10-31');
-  assert.deepEqual(subset.calls.feed, [{ startDate: '2026-10-31', endDate: '2026-10-31', type: 'all', limit: 100 }]);
-  assert.deepEqual(plain(subset.page.data.recentRecords.map(item => item.id)), [1]);
-  assert.deepEqual(plain(subset.page.data.recentGroups.map(item => item.date)), ['2026-10-31']);
+  assert.equal(subset.page.data.homeRecentDays, 3);
+  assert.equal(subset.page.data.recentStart, '2026-10-29');
+  assert.deepEqual(subset.calls.feed, [{ startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100 }]);
+  assert.deepEqual(plain(subset.page.data.recentRecords.map(item => item.id)), [1, 2, 3]);
+  assert.deepEqual(plain(subset.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
   const all = createHome({ feed: () => ({ records }) });
   await all.page.refresh();
   assert.equal(all.page.data.homeRecentDays, 3);
   assert.equal(all.page.data.recentStart, '2026-10-29');
-  assert.deepEqual(plain(all.page.data.recentRecords.map(item => item.id)), [1, 2, 3]);
+  assert.deepEqual(plain(all.page.data.recentRecords.map(item => item.id)), [1, 2, 3, 6]);
   assert.deepEqual(plain(all.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
 });
 
@@ -124,14 +125,16 @@ test('all-hidden home stays empty while the separate history keeps the original 
 });
 
 test('home uses Beijing dates across month, year and leap-day boundaries', async () => {
-  for (const [now, startDate, endDate] of [
-    ['2026-10-31T16:00:00Z', '2026-10-30', '2026-11-01'],
-    ['2026-12-31T16:00:00Z', '2026-12-30', '2027-01-01'],
-    ['2028-02-29T16:00:00Z', '2028-02-28', '2028-03-01'],
-    ['2027-02-28T15:59:59Z', '2027-02-26', '2027-02-28']
+  for (const [now, startDate, endDate, todayLabel] of [
+    ['2026-10-31T16:00:00Z', '2026-10-30', '2026-11-01', '11月1日'],
+    ['2026-12-31T16:00:00Z', '2026-12-30', '2027-01-01', '1月1日'],
+    ['2028-02-29T16:00:00Z', '2028-02-28', '2028-03-01', '3月1日'],
+    ['2027-02-28T15:59:59Z', '2027-02-26', '2027-02-28', '2月28日']
   ]) {
     const h = createHome({ now });
+    assert.equal(h.page.data.todayLabel, todayLabel, `onLoad: ${now}`);
     await h.page.refresh();
+    assert.equal(h.page.data.todayLabel, todayLabel, `refresh: ${now}`);
     assert.equal(h.page.data.today, endDate, now);
     assert.equal(h.page.data.recentStart, startDate, now);
     assert.deepEqual(h.calls.feed, [{ startDate, endDate, type: 'all', limit: 100 }], now);
@@ -142,11 +145,14 @@ test('home uses Beijing dates across month, year and leap-day boundaries', async
 test('refreshing or returning after midnight moves the home window to the new Beijing day', async () => {
   for (const action of ['refresh', 'onShow']) {
     const h = createHome({ now: '2026-12-31T23:59:59+08:00' });
+    assert.equal(h.page.data.todayLabel, '12月31日', `onLoad: ${action}`);
     await h.page.refresh();
+    assert.equal(h.page.data.todayLabel, '12月31日', `before midnight: ${action}`);
     h.advance(2000);
     await h.page[action]();
     await settle();
     assert.equal(h.page.data.today, '2027-01-01', action);
+    assert.equal(h.page.data.todayLabel, '1月1日', action);
     assert.equal(h.page.data.recentStart, '2026-12-30', action);
     assert.deepEqual(h.calls.feed.at(-1), { startDate: '2026-12-30', endDate: '2027-01-01', type: 'all', limit: 100 }, action);
     assert.deepEqual(h.calls.summary.at(-1), { startDate: '2027-01-01', endDate: '2027-01-01', type: 'all' }, action);
@@ -264,13 +270,15 @@ test('history navigation supports detail and statistics views', () => {
   assert.equal(createPage({ loadOptions: { view: 'invalid' } }).page.data.view, 'detail');
 });
 
-test('home template focuses on today with interactive cards and a combined history link', () => {
+test('home template shows interactive daily cards, a three-day records heading and a combined history link', () => {
   const home = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practices.wxml'), 'utf8');
   const app = JSON.parse(fs.readFileSync(path.join(__dirname, '../miniprogram/app.json'), 'utf8'));
   assert.ok(app.pages.includes('pages/practiceHistory/practiceHistory'));
   assert.match(home, /homeCards/);
   assert.match(home, /bindtap="openPracticeCard"/);
   assert.match(home, /recentGroups/);
+  assert.match(home, /<text class="home-section-title">最近三天记录<\/text>/);
+  assert.doesNotMatch(home, /今天的记录/);
   assert.match(home, /data-view="detail"[^>]*bindtap="openRecords"|bindtap="openRecords"[^>]*data-view="detail"/);
   assert.match(home, /查看全部/);
   assert.match(home, /<include\s+src="[^"]*practiceDialogs\.wxml"\s*\/>/);
@@ -313,7 +321,8 @@ test('home applies visibility changes made while its feed and totals are in flig
     assert.equal(h.page.data.recentRecords.some(item => item.type === 'walking'), restored);
     assert.equal(h.calls.feed.length, 2);
     assert.equal(h.calls.summary.length, 2);
-    assert.equal(h.calls.feed.at(-1).startDate, restored ? '2026-10-29' : '2026-10-31');
+    assert.equal(h.page.data.homeRecentDays, 3);
+    assert.equal(h.calls.feed.at(-1).startDate, '2026-10-29');
   }
 });
 
@@ -369,19 +378,21 @@ test('home failure actions use their own read scope to open binding or reload cu
   }
 });
 
-test('hiding a practice during a three-day read also narrows the returned recent detail to today', async () => {
+test('hiding a practice during a three-day read refreshes visible records without narrowing the date window', async () => {
   const feed = deferred();
   let requests = 0;
-  const h = createHome({ feed: () => ++requests === 1 ? feed.promise : { records: [record(3, 'kindness')] } });
+  const h = createHome({ feed: () => ++requests === 1 ? feed.promise : { records: [record(3, 'kindness'),
+    record(4, 'kindness', '2026-10-30'), record(5, 'kindness', '2026-10-29'),
+    record(6, 'walking', '2026-10-30'), record(7, 'kindness', '2026-10-28')] } });
   const refreshing = h.page.refresh();
   h.preferences.saveHiddenTypes(['walking']);
   feed.resolve({ records: [record(1, 'kindness'), record(2, 'kindness', '2026-10-30')] });
   await refreshing;
   await settle();
-  assert.equal(h.page.data.homeRecentDays, 1);
-  assert.equal(h.page.data.recentStart, '2026-10-31');
+  assert.equal(h.page.data.homeRecentDays, 3);
+  assert.equal(h.page.data.recentStart, '2026-10-29');
   assert.equal(h.calls.feed.length, 2);
-  assert.equal(h.calls.feed.at(-1).startDate, '2026-10-31');
-  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [3]);
-  assert.deepEqual(plain(h.page.data.recentGroups.map(item => item.date)), ['2026-10-31']);
+  assert.equal(h.calls.feed.at(-1).startDate, '2026-10-29');
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [3, 4, 5]);
+  assert.deepEqual(plain(h.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
 });

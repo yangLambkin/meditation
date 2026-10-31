@@ -232,7 +232,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     const generation = this._generation = (this._generation || 0) + 1;
     const timestamp = Date.now();
     const today = nowParts(timestamp).date;
-    const homeRecentDays = practicePreferences.getVisiblePractices().length === practicePreferences.PRACTICES.length ? 3 : 1;
+    const homeRecentDays = 3;
     const recentStart = nowParts(timestamp - (homeRecentDays - 1) * DAY_MS).date;
     const [, month, day] = today.split('-').map(Number);
     this._todayStats = null;
