@@ -33,9 +33,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function harness({ loggedIn = true, backup, remove, nested = false, cloud = [], read } = {}) {
+function harness({ loggedIn = true, online = true, backup, remove, nested = false, cloud = [], read } = {}) {
   let now = NOW;
   let failStorage = false;
+  let failSourceMarker = false;
   let nextTimer = 0;
   const timers = new Map();
   const cache = { dailyRecords: {}, monthlyStats: {}, userStats: {} };
@@ -88,9 +89,12 @@ function harness({ loggedIn = true, backup, remove, nested = false, cloud = [], 
       },
       clearTimeout(id) { timers.delete(id); },
       wx: {
+        getNetworkType: ({ success }) => success({ networkType: online ? 'wifi' : 'none' }),
         getStorageSync: key => clone(storage.get(key)),
         setStorageSync(key, value) {
           if (key === KEY && failStorage) throw new Error('device storage full');
+          if (key === KEY && failSourceMarker && Object.values((value.checkinRecords || value).dailyRecords || {})
+            .some(day => (day.records || []).some(record => record.syncSourceAttempted === true))) throw new Error('source marker storage failed');
           storage.set(key, clone(value));
         },
         removeStorageSync: key => storage.delete(key)
@@ -124,6 +128,7 @@ function harness({ loggedIn = true, backup, remove, nested = false, cloud = [], 
       await flush();
     },
     failStorage(value) { failStorage = value; },
+    failSourceMarker(value) { failSourceMarker = value; },
     data() { const stored = storage.get(KEY); return stored.checkinRecords || stored; },
     records() { return Object.values(this.data().dailyRecords).flatMap(day => day.records); },
     summary(manager = this.manager) { return clone(manager.getPendingSyncSummary()); }
@@ -314,12 +319,74 @@ for (const nested of [false, true]) {
     const record = app.records()[0];
     assert.equal(record.localId, result.localId);
     assert.equal(record.syncVersion, 1);
+    assert.equal(record.syncSourceAttempted, false);
     assert.equal(record.syncStatus, 'pending');
     assert.equal(record.syncOpenid, OPENID);
     assert.equal(record.timestamp, TIMESTAMP);
     assert.deepEqual(app.summary(), { total: 1, pending: 1, failed: 0 });
   });
 }
+
+test('offline backup preserves durable proof that its local sitting record never entered a source request', async () => {
+  const app = harness({ online: false });
+  save(app, 'offline-before-source');
+  const result = await app.manager.asyncBackupToCloud(12, [], [], TIMESTAMP, 'offline-before-source');
+  assert.equal(result.code, 'UPLOAD_PAUSED');
+  assert.equal(app.calls.backups.length, 0);
+  assert.equal(app.records()[0].syncSourceAttempted, false);
+  assert.equal(app.records()[0].syncStatus, 'failed');
+  assert.equal(app.records()[0].syncAttempts, 1);
+  const restarted = app.restart();
+  assert.equal(restarted.getPendingSyncSummary().total, 1);
+  assert.equal(app.records()[0].syncSourceAttempted, false);
+});
+
+test('source-attempt proof is persisted before the request and survives an interrupted upload restore', async () => {
+  const pending = deferred();
+  const app = harness({ backup: () => {
+    assert.equal(app.records()[0].syncSourceAttempted, true, 'even an unconfirmed source call must leave durable evidence');
+    return pending.promise;
+  } });
+  save(app, 'interrupted-source');
+  const upload = app.manager.asyncBackupToCloud(12, [], [], TIMESTAMP, 'interrupted-source');
+  await flush();
+  assert.equal(app.calls.backups.length, 1);
+  const restarted = app.restart();
+  restarted.getPendingSyncSummary();
+  assert.equal(app.records()[0].syncStatus, 'pending');
+  assert.equal(app.records()[0].syncAttempts, undefined);
+  assert.equal(app.records()[0].syncSourceAttempted, true);
+  const rebuilt = restarted.rebuildLocalCacheFromCloudRecords([app.records()[0]]);
+  assert.equal(Object.values(rebuilt.checkinRecords.dailyRecords)[0].records[0].syncSourceAttempted, true);
+  pending.resolve({ success: true, data: { recordId: 'late-cloud-source' } });
+  await upload;
+});
+
+test('legacy interrupted uploads never gain false never-sent evidence while restoring or rebuilding', () => {
+  const app = harness();
+  save(app, 'legacy-interrupted-source');
+  const stored = app.storage.get(KEY), record = Object.values(stored.dailyRecords)[0].records[0];
+  delete record.syncSourceAttempted;
+  record.syncStatus = 'uploading';
+  const restarted = app.restart();
+  restarted.getPendingSyncSummary();
+  assert.equal(app.records()[0].syncStatus, 'pending');
+  assert.equal(app.records()[0].syncAttempts, undefined);
+  assert.equal(app.records()[0].syncSourceAttempted, undefined);
+  const rebuilt = restarted.rebuildLocalCacheFromCloudRecords([app.records()[0]]);
+  assert.equal(Object.values(rebuilt.checkinRecords.dailyRecords)[0].records[0].syncSourceAttempted, undefined);
+});
+
+test('a source request cannot start when its attempted marker fails to persist', async () => {
+  const app = harness();
+  save(app, 'source-marker-storage-failure');
+  app.failSourceMarker(true);
+  const result = await settleWithRetries(app,
+    app.manager.asyncBackupToCloud(12, [], [], TIMESTAMP, 'source-marker-storage-failure'));
+  assert.equal(result.success, false);
+  assert.equal(app.calls.backups.length, 0);
+  assert.equal(app.records()[0].syncSourceAttempted, false);
+});
 
 test('missing-lock upload failure is durable while local completion and the original record survive', async () => {
   const app = harness({ backup: () => ({ success: false, code: 'DATABASE_COLLECTION_NOT_EXIST', error: 'meditation_locks 集合不存在' }) });

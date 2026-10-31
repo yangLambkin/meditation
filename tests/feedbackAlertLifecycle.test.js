@@ -33,6 +33,7 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
       }
     },
     require(module) {
+      if (module.endsWith('/practiceEntry.js')) return { recordsVisible: () => false };
       if (module.endsWith('/homeBackfill.js')) return { data: {}, methods: { initHomeBackfill() {}, stopHomeBackfill() {}, refreshBackfillSelection() {} } };
       if (module.endsWith('/bijingRecordSync.js')) return { getDayState: () => null, subscribe: () => () => {} };
       if (module.endsWith('/dailyWisdom.js')) return { DEFAULT_QUOTE: '', watchDailyWisdom: () => () => {} };

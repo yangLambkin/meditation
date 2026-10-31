@@ -11,10 +11,17 @@ const TYPES = [
 ];
 const TYPE_MAP = TYPES.reduce((map, item) => { map[item.type] = item; return map; }, {});
 const BEIJING_OFFSET = 8 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SHARE_TITLE = '功课记录 · 觉察日常，记录成长';
+const SHARE_IMAGE = '/images/practice-share.png';
+const TIMELINE_SHARE_IMAGE = '/images/practice-share-timeline.png';
 
 function nowParts(timestamp = Date.now()) {
   const value = new Date(timestamp + BEIJING_OFFSET).toISOString();
   return { date: value.slice(0, 10), time: value.slice(11, 16), occurredAt: value.slice(0, 19).replace('T', ' ') };
+}
+function formDateBounds(editing = false, timestamp = Date.now()) {
+  return { today: nowParts(timestamp).date, formMinDate: editing ? '' : nowParts(timestamp - DAY_MS).date };
 }
 function monthEnd(month) {
   const [year, monthNumber] = month.split('-').map(Number);
@@ -69,7 +76,8 @@ function metricCards(stats) {
   return TYPES.slice(1).map(meta => {
     const item = Array.isArray(byType) ? byType.find(row => row.type === meta.type) || {} : byType[meta.type] || {};
     const value = typeof item === 'number' ? item : item.totalValue ?? item.quantity ?? item.total ?? (meta.type === 'instant' ? item.count : meta.type === 'kindness' ? item.deedCount ?? item.totalCount : item.durationMinutes ?? item.totalDurationMinutes) ?? 0;
-    return { ...meta, value: Number(value) || 0, records: Number(item.recordCount || item.records || 0) };
+    return { ...meta, unit: meta.type === 'kindness' ? '次' : meta.unit,
+      value: Number(value) || 0, records: Number(item.recordCount || item.records || 0) };
   });
 }
 function quantityLabel(value) {
@@ -128,22 +136,26 @@ Page({
     typeOptions: [TYPES[0]], typeIndex: 0, type: 'all', showTypePicker: false, month: '', monthLabel: '', monthEnd: '', today: '', selectedDate: '', view: 'detail',
     records: [], groups: [], nextCursor: '', loading: false, loadingMore: false, loaded: false, error: '', feedFailure: null,
     summary: null, summaryError: '', summaryFailure: null, summaryLoading: false, monthCards: [], allTimeCards: [], calendar: [], trend: [], trendMax: 0, trendWidth: 0,
-    recordCount: 0, practiceDays: 0, selectedMonthTotal: 0, selectedMonthUnit: '件',
+    recordCount: 0, practiceDays: 0, selectedMonthTotal: 0, selectedMonthUnit: '条',
     overviewTotal: 0, overviewUnit: '', overviewLabel: '',
     allTimeRecordCount: 0, allTimePracticeDays: 0,
     pending: [], pendingCount: 0, retrying: false, showPending: false, pendingActionId: '',
-    showForm: false, formType: 'walking', formTypeName: '走路觉察', formDate: '', formTime: '',
+    showForm: false, formType: 'walking', formTypeName: '走路觉察', formDate: '', formMinDate: '', formTime: '',
     formValue: '', formContent: '', formReflection: '', formUnit: '分钟', formRecordId: '',
     formEditing: false, formBusy: false, formPending: false, formError: '', formMaxReflection: 5000,
     detail: null, deleting: false, enabled: true
   },
 
-  onLoad() {
+  onLoad(options = {}) {
+    this.options = options;
     const now = nowParts();
     const month = now.date.slice(0, 7);
-    this.setData({ month, monthLabel: monthLabel(month), monthEnd: now.date, today: now.date,
+    this.setData({ month, monthLabel: monthLabel(month), monthEnd: now.date, ...formDateBounds(),
       enabled: practiceConfig.practicesEnabled === true });
     this.refreshTypeOptions();
+    if (typeof wx.showShareMenu === 'function') {
+      wx.showShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] });
+    }
   },
   onShow() {
     this._visible = true;
@@ -155,13 +167,13 @@ Page({
     }
     this._owner = currentOwner;
     this.refreshTypeOptions();
-    this.setData({ today: nowParts().date, monthEnd: monthEnd(this.data.month) });
+    this.setData({ ...formDateBounds(this.data.formEditing), monthEnd: monthEnd(this.data.month) });
     if (this._unsubscribe) this._unsubscribe();
-    if (typeof practiceQueue.subscribe === 'function') this._unsubscribe = practiceQueue.subscribe(() => {
+    if (typeof practiceQueue.subscribe === 'function') this._unsubscribe = practiceQueue.subscribe(event => {
       if (!this._visible) return;
-      const before = this.data.pendingCount;
       this.refreshPending();
-      if (before && !this.data.pendingCount) this.refresh();
+      if (event && event.type === 'flush' && event.sent > 0 &&
+          practiceApi.sameOwner(event.owner, practiceAuth.getOwner())) this.refresh();
     });
     this.refreshPending();
     this.refresh();
@@ -173,10 +185,23 @@ Page({
       }
     }
   },
-  onHide() { this._visible = false; this.closeTypePicker(); if (this._unsubscribe) this._unsubscribe(); this._unsubscribe = null; },
+  onHide() {
+    this._visible = false;
+    // A shared entry may temporarily open a hidden tab; cached visits use the saved preference again.
+    if (this.options && this.options.from === 'share') delete this.options.from;
+    this.closeTypePicker();
+    if (this._unsubscribe) this._unsubscribe();
+    this._unsubscribe = null;
+  },
   onUnload() { this.onHide(); this._generation = (this._generation || 0) + 1; },
   async onPullDownRefresh() { try { await this.refresh(); } finally { wx.stopPullDownRefresh(); } },
   onReachBottom() { if (this.data.view === 'detail') this.loadMore(); },
+  onShareAppMessage() {
+    return { title: SHARE_TITLE, path: '/pages/practices/practices?from=share', imageUrl: SHARE_IMAGE };
+  },
+  onShareTimeline() {
+    return { title: SHARE_TITLE, query: 'from=share', imageUrl: TIMELINE_SHARE_IMAGE };
+  },
 
   async refresh() {
     if (!this.data.enabled) return;
@@ -213,15 +238,17 @@ Page({
       const month = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
       const allTime = summary.allTime || summary.cumulative || {};
       const monthCards = metricCards(month);
+      const allTimeCards = metricCards(allTime).map(card => ({ ...card,
+        monthValue: monthCards.find(item => item.type === card.type).value }));
       const selectedCard = monthCards.find(item => item.type === this.data.type);
       const recordCount = Number(month.recordCount || month.records || 0);
-      const overviewUnit = TYPE_MAP[this.data.type].unit;
-      this.setData({ summary, monthCards, allTimeCards: metricCards(allTime),
+      const overviewUnit = selectedCard && selectedCard.unit || '';
+      this.setData({ summary, monthCards, allTimeCards,
         recordCount, practiceDays: Number(month.practiceDays || month.days || 0),
         overviewTotal: selectedCard && selectedCard.value || 0,
-        overviewUnit, overviewLabel: overviewUnit === '次' ? '累计次数' : overviewUnit === '件' ? '累计件数' : overviewUnit === '分钟' ? '累计时间' : '',
+        overviewUnit, overviewLabel: overviewUnit === '次' ? '累计次数' : overviewUnit === '分钟' ? '累计时间' : '',
         selectedMonthTotal: this.data.type === 'all' ? recordCount : selectedCard && selectedCard.value || 0,
-        selectedMonthUnit: this.data.type === 'all' ? '件' : TYPE_MAP[this.data.type].unit,
+        selectedMonthUnit: this.data.type === 'all' ? '条' : overviewUnit,
         allTimeRecordCount: Number(allTime.recordCount || allTime.records || 0), allTimePracticeDays: Number(allTime.practiceDays || allTime.days || 0),
         calendar: makeCalendar(this.data.month, summary.daily, this.data.type, this.data.selectedDate),
         ...makeTrend(this.data.month, summary.daily, this.data.type), summaryError: '', summaryFailure: null });
@@ -391,7 +418,8 @@ Page({
   openForm(type, record) {
     if (!TYPE_MAP[type] || type === 'all' || type === 'sitting' || this.data.formBusy) return;
     if (!this.data.enabled) { wx.showToast({ title: '功课录入暂未启用', icon: 'none' }); return; }
-    const now = nowParts();
+    const timestamp = Date.now();
+    const now = nowParts(timestamp);
     this._formOwner = ownerKey();
     this._formRequestId = uniqueId();
     this._formTaskId = null;
@@ -403,14 +431,15 @@ Page({
       formValue: record ? String(quantity(record)) : '', formContent: record && record.content || '',
       formReflection: record && record.reflection || '', formRecordId: record && record.id || '',
       formEditing: !!record, formPending: false, formError: '', formMaxReflection: type === 'kindness' ? 1000 : 5000,
-      today: now.date });
+      ...formDateBounds(!!record, timestamp) });
   },
   closeForm() { if (!this.data.formBusy) this.setData({ showForm: false }); },
   noop() {},
+  refreshFormDates() { this.setData(formDateBounds(this.data.formEditing)); },
   onFormDate(event) {
     if (this.data.formBusy || this.data.formPending) return;
     this._formTimeEdited = true;
-    this.setData({ formDate: event.detail.value, formError: '' });
+    this.setData({ formDate: event.detail.value, formError: '', ...formDateBounds(this.data.formEditing) });
   },
   onFormTime(event) {
     if (this.data.formBusy || this.data.formPending) return;
@@ -422,14 +451,20 @@ Page({
   onFormReflection(event) { if (!this.data.formBusy && !this.data.formPending) this.setData({ formReflection: event.detail.value, formError: '' }); },
   formPayload() {
     const { formType: type, formDate: recordDate, formTime: time } = this.data;
+    const now = Date.now();
+    const bounds = formDateBounds(this.data.formEditing, now);
+    this.setData(bounds);
     const timestamp = Date.parse(`${recordDate}T${time}:00+08:00`);
     // 历史仅日期记录必须由用户补充真实时间，不能替换成打开表单的时间。
     if (this.data.formEditing && !this._formOccurredAt && !this._formTimeEdited) {
       throw new Error('原记录仅有日期，请选择真实发生时间后保存');
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || recordDate > nowParts().date ||
-        !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isFinite(timestamp) || timestamp > Date.now() || nowParts(timestamp).date !== recordDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || recordDate > bounds.today ||
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isFinite(timestamp) || timestamp > now || nowParts(timestamp).date !== recordDate) {
       throw new Error('请选择有效且不晚于当前的北京时间');
+    }
+    if (!this.data.formEditing && recordDate < bounds.formMinDate) {
+      throw new Error('只能记录今天和昨天的功课，请重新选择发生日期');
     }
     const occurredAt = !this._formTimeEdited && this._formOccurredAt || `${recordDate} ${time}:00`;
     const reflection = this.data.formReflection.trim();
@@ -456,7 +491,8 @@ Page({
       return;
     }
     let payload;
-    try { payload = this.formPayload(); }
+    // 已入队内容已冻结；跨日重试继续上传原任务，不能重新按新建日期范围校验。
+    try { if (!this._formTaskId) payload = this.formPayload(); }
     catch (error) { this.setData({ formError: message(error, '请核对填写内容') }); return; }
     this.setData({ formBusy: true, formError: '' });
     const formRequestId = this._formRequestId;

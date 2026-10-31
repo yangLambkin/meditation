@@ -8,8 +8,8 @@ const miniprogramPath = path.join(__dirname, '../miniprogram');
 const plain = value => JSON.parse(JSON.stringify(value));
 const SETTINGS_URL = '/pages/practiceSettings/practiceSettings';
 
-function harness() {
-  const storage = new Map([['userOpenId', 'owner-a']]);
+function harness({ recordsVisible = true } = {}) {
+  const storage = new Map([['userOpenId', 'owner-a'], ['practice_records_visible_v1:account:owner-a', recordsVisible]]);
   const readFailures = new Map(), writeFailures = new Map();
   const actionSheet = { failure: null, error: null };
   const calls = { sheets: [], modals: [], toast: [], navigateTo: [], switchTab: [], writes: [], chosen: [], forms: [], sitting: 0 };
@@ -260,4 +260,31 @@ test('the home entry does not navigate when its selected practice cannot be pers
   assert.equal(h.storage.has('practiceRecordEntry'), false);
   assert.equal(h.calls.switchTab.length, 0);
   assert.ok(h.calls.toast.length);
+});
+
+test('home defaults to a usable practice picker while an explicit false preference keeps it hidden', () => {
+  for (const initial of [false, undefined]) {
+    const h = harness({ recordsVisible: false });
+    if (initial === undefined) h.storage.delete('practice_records_visible_v1:account:owner-a');
+    const page = h.loadPage('index');
+    assert.equal(page.data.recordsVisible, true);
+    page.refreshRecordVisibility();
+    assert.equal(page.data.recordsVisible, initial !== false);
+    page.openPracticePicker();
+    assert.equal(h.entry.recordsVisible(), initial !== false);
+    assert.equal(h.calls.sheets.length, initial === false ? 0 : 1);
+    assert.equal(h.calls.modals.length, 0);
+    assertNoEntryAction(h);
+  }
+});
+
+test('home rereads record visibility before opening so a stale visible entry is inert', () => {
+  const h = harness();
+  const page = h.loadPage('index');
+  page.refreshRecordVisibility();
+  assert.equal(page.data.recordsVisible, true);
+  h.preferences.saveRecordsVisible(false);
+  page.openPracticePicker();
+  assert.equal(h.calls.sheets.length, 0);
+  assertNoEntryAction(h);
 });

@@ -12,10 +12,11 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function failure(code, message) { return Object.assign(new Error(message), { code }); }
-function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes = [] } = {}) {
-  let now = Date.parse('2026-10-31T00:30:37+08:00');
+function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes = [], queueFactory,
+  loadOptions = {}, shareMenuAvailable = true, now: initialNow = '2026-10-31T00:30:37+08:00' } = {}) {
+  let now = Date.parse(initialNow);
   let owner = { openid: 'oz-owner', studentNumber: '001', bindingVersion: 'v1' };
-  const tasks = [], calls = { feed: [], summary: [], enqueue: [], flush: [], toast: [], navigation: [], switchTab: [], modal: [], mirrorResume: 0 };
+  const tasks = [], calls = { feed: [], summary: [], enqueue: [], flush: [], toast: [], navigation: [], switchTab: [], modal: [], shareMenu: [], mirrorResume: 0 };
   const storage = { userOpenId: owner.openid };
   const subscribers = new Set();
   class Clock extends Date {
@@ -26,7 +27,7 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     feed: async params => { calls.feed.push(plain(params)); return feed ? feed(params) : { records: [], nextCursor: '' }; },
     summary: async params => { calls.summary.push(plain(params)); return summary ? summary(params) : { totals: [], recordCount: 0, practiceDays: 0, daily: [], allTime: { totals: [] } }; }
   };
-  const queue = {
+  let queue = {
     getPending: () => tasks.filter(task => task.owner.studentNumber === owner.studentNumber),
     enqueuePractice: options => {
       calls.enqueue.push(plain(options));
@@ -49,6 +50,7 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     showModal: value => calls.modal.push(value), showActionSheet: value => { calls.actionSheet = value; },
     stopPullDownRefresh() {}
   };
+  if (shareMenuAvailable) wx.showShareMenu = value => calls.shareMenu.push(plain(value));
   const preferencesModule = { exports: {} };
   const preferencesPath = path.join(__dirname, '../miniprogram/utils/practicePreferences.js');
   vm.runInNewContext(fs.readFileSync(preferencesPath, 'utf8'), {
@@ -62,15 +64,98 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     'practiceAuth.js': { getOwner: () => owner, authorize: async () => owner },
     'practiceMirror.js': { resume: async () => { calls.mirrorResume++; } },
     'practiceConfig.js': { practicesEnabled: enabled } };
+  if (queueFactory) {
+    queue = queueFactory({ wx, api, auth: modules['practiceAuth.js'], config: modules['practiceConfig.js'], Clock });
+    modules['practiceQueue.js'] = queue;
+  }
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require: name => { const module = modules[path.basename(name)]; assert.ok(module, name); return module; },
     Page: value => { definition = value; }, wx, Date: Clock, console
   }, { filename: pagePath });
   const page = { ...definition, data: structuredClone(definition.data), setData(data) { Object.assign(this.data, data); } };
-  page.onLoad();
+  page.onLoad(loadOptions);
   return { page, calls, tasks, storage, subscribers, queue, preferences,
     changeOwner(value) { owner = value; storage.userOpenId = value && value.openid; },
     advance(milliseconds) { now += milliseconds; } };
+}
+
+test('records enable native friend and timeline sharing with a bundled cover', () => {
+  const h = createPage();
+  assert.deepEqual(h.calls.shareMenu, [{ menus: ['shareAppMessage', 'shareTimeline'] }]);
+  const friend = plain(h.page.onShareAppMessage());
+  assert.equal(friend.path, '/pages/practices/practices?from=share');
+  assert.equal(friend.title, '功课记录 · 觉察日常，记录成长');
+  assert.equal(friend.imageUrl, '/images/practice-share.png');
+  const timeline = plain(h.page.onShareTimeline());
+  assert.deepEqual(timeline, {
+    title: friend.title, query: 'from=share', imageUrl: '/images/practice-share-timeline.png'
+  });
+  const cover = fs.readFileSync(path.join(__dirname, '../miniprogram', friend.imageUrl));
+  assert.equal(cover.subarray(1, 4).toString(), 'PNG');
+  assert.equal(cover.readUInt32BE(16), 500);
+  assert.equal(cover.readUInt32BE(20), 400);
+  const timelineCover = fs.readFileSync(path.join(__dirname, '../miniprogram', timeline.imageUrl));
+  assert.equal(timelineCover.subarray(1, 4).toString(), 'PNG');
+  assert.equal(timelineCover.readUInt32BE(16), 400);
+  assert.equal(timelineCover.readUInt32BE(20), 400);
+});
+
+test('sharing an entry never serializes the sender records, account or current filters', () => {
+  const h = createPage();
+  h.preferences.saveRecordsVisible(false);
+  h.page.setData({ type: 'kindness', month: '2026-09', selectedDate: '2026-09-18', view: 'stats',
+    records: [{ id: 'private-record', reflection: 'private-reflection' }],
+    detail: { content: 'private-content' }, formReflection: 'private-draft', pendingCount: 7 });
+  const before = plain(h.storage);
+  const friend = plain(h.page.onShareAppMessage({ from: 'menu' }));
+  assert.deepEqual(friend, plain(createPage().page.onShareAppMessage({ from: 'menu' })));
+  assert.deepEqual(plain(h.page.onShareTimeline()), plain(createPage().page.onShareTimeline()));
+  assert.deepEqual(plain(h.storage), before);
+  assert.equal(h.calls.feed.length, 0);
+  assert.equal(h.calls.summary.length, 0);
+  assert.equal(h.calls.enqueue.length, 0);
+});
+
+test('a shared entry is temporary and does not change account preferences or other query parameters', () => {
+  const h = createPage({ loadOptions: { from: 'share', unrelated: 'preserved' } });
+  h.preferences.saveRecordsVisible(false);
+  h.page.onHide();
+  assert.deepEqual(plain(h.page.options), { unrelated: 'preserved' });
+  assert.equal(h.preferences.getRecordsVisible(), false);
+  const normal = createPage({ loadOptions: { from: 'other' } });
+  normal.page.onHide();
+  assert.equal(normal.page.options.from, 'other');
+});
+
+test('records still open on clients without showShareMenu and have no in-page share button', () => {
+  const h = createPage({ shareMenuAvailable: false });
+  assert.deepEqual(h.calls.shareMenu, []);
+  assert.equal(h.page.data.month, '2026-10');
+  const wxml = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practices.wxml'), 'utf8');
+  assert.doesNotMatch(wxml, /open-type\s*=\s*["']share["']|share-button/);
+});
+
+function persistedQueue(writes = {}) {
+  return ({ wx, api, auth, config, Clock }) => {
+    const modules = { 'practiceAuth.js': auth,
+      'practiceConfig.js': { ...config, sittingMirrorEnabled: true },
+      'practiceMirror.js': { prepareForSend: async () => null } };
+    function load(name) {
+      if (modules[name]) return modules[name];
+      const module = { exports: {} };
+      const filename = path.join(__dirname, '../miniprogram/utils', name);
+      vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+        module, exports: module.exports, wx, Date: Clock, console, setTimeout, clearTimeout,
+        require: dependency => load(path.basename(dependency))
+      }, { filename });
+      modules[name] = module.exports;
+      return module.exports;
+    }
+    const queueApi = load('practiceApi.js');
+    Object.assign(queueApi, api, writes);
+    api.sameOwner = queueApi.sameOwner;
+    return load('practiceQueue.js');
+  };
 }
 
 test('feed and summary start without a failure or a legacy error message', () => {
@@ -515,7 +600,7 @@ test('month labels use the selected calendar month and reject future months with
   assert.equal(h.calls.summary.length, requestCounts.summary);
 });
 
-test('the selected month total uses record count for all types and the matching metric and unit for each practice', async () => {
+test('monthly and cumulative statistics use each practice quantity while the all-practice calendar counts records', async () => {
   const totals = [
     { type: 'sitting', totalValue: 91, recordCount: 3 },
     { type: 'walking', durationMinutes: 42, recordCount: 4 },
@@ -524,12 +609,15 @@ test('the selected month total uses record count for all types and the matching 
     { type: 'kindness', deedCount: 8, recordCount: 7 },
     { type: 'clapping', total: 29, recordCount: 8 }
   ];
+  const expectations = [
+    [0, 'all', 33, '条'], [1, 'sitting', 91, '分钟'], [2, 'walking', 42, '分钟'],
+    [3, 'instant', 17, '次'], [4, 'learning', 63, '分钟'], [5, 'kindness', 8, '次'], [6, 'clapping', 29, '分钟']
+  ];
+  const allTimeTotals = expectations.slice(1).map(([, type, value]) => ({ type, totalValue: value * 10, recordCount: 40 }));
   const h = createPage({ summary: () => ({ recordCount: 33, totals,
-    daily: [{ date: '2026-10-30', recordCount: 33, totals }], allTime: { totals: [] } }) });
-  for (const [typeIndex, type, expected, unit] of [
-    [0, 'all', 33, '件'], [1, 'sitting', 91, '分钟'], [2, 'walking', 42, '分钟'],
-    [3, 'instant', 17, '次'], [4, 'learning', 63, '分钟'], [5, 'kindness', 8, '件'], [6, 'clapping', 29, '分钟']
-  ]) {
+    daily: [{ date: '2026-10-30', recordCount: 33, totals }],
+    allTime: { recordCount: 240, totals: allTimeTotals } }) });
+  for (const [typeIndex, type, expected, unit] of expectations) {
     h.page.setData({ typeIndex, type });
     await h.page.refresh();
     assert.equal(h.page.data.selectedMonthTotal, expected, type);
@@ -539,6 +627,15 @@ test('the selected month total uses record count for all types and the matching 
     assert.equal(day.valueLabel, String(expected), type);
     if (type !== 'all') {
       assert.equal(h.page.data.selectedMonthTotal, h.page.data.monthCards.find(item => item.type === type).value, type);
+      assert.equal(h.page.data.overviewUnit, unit, type);
+      assert.equal(h.page.data.overviewLabel, unit === '次' ? '累计次数' : '累计时间', type);
+    }
+    for (const [, practiceType, monthValue, practiceUnit] of expectations.slice(1)) {
+      const card = h.page.data.allTimeCards.find(item => item.type === practiceType);
+      assert.equal(card.monthValue, monthValue, `${type}: ${practiceType} monthly quantity`);
+      assert.equal(card.value, monthValue * 10, `${type}: ${practiceType} cumulative quantity`);
+      assert.equal(card.unit, practiceUnit, `${type}: ${practiceType} unit`);
+      assert.notEqual(card.value, card.records, `${type}: ${practiceType} quantity differs from record count`);
     }
   }
 });
@@ -617,7 +714,7 @@ test('calendar quantity labels retain small values and compact large daily total
   }
 });
 
-test('statistics show record counts for all practices and keep completion quantities for individual practices', () => {
+test('statistics show monthly and cumulative quantities below the calendar and label calendar records as entries', () => {
   const page = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practices.wxml'), 'utf8');
   assert.doesNotMatch(page, /更多统计|showMoreStats|toggleMoreStats|more-stats-toggle|calendar-marker|calendar-title|calendar-total/);
   assert.match(page, /每日完成量趋势/);
@@ -629,14 +726,15 @@ test('statistics show record counts for all practices and keep completion quanti
   assert.match(amount[0], /\+/);
   assert.match(amount[0], /!day\.future/);
   assert.match(amount[0], /day\.value\s*>\s*0/);
-  assert.match(amount[0], /type === 'all' \? '件' : ''/);
-  assert.doesNotMatch(amount[0], /selectedMonthUnit|分钟|次|条|—/);
-  const monthOverview = page.slice(page.indexOf('class="stats-card practice-overview-card"'), page.indexOf('class="month-overview"'));
-  assert.match(monthOverview, /本月记录件数/);
-  assert.match(monthOverview, /item\.records/);
-  assert.doesNotMatch(monthOverview, /item\.value|item\.unit/);
-  assert.match(page, /type === 'all' \? item\.records : item\.value/);
-  assert.match(page, /type === 'all' \? '件' : item\.unit/);
+  assert.match(amount[0], /type === 'all' \? '条' : ''/);
+  assert.doesNotMatch(amount[0], /selectedMonthUnit|分钟|次|件|—/);
+  assert.doesNotMatch(page, /practice-overview-card|本月记录件数|记录件数|item\.records/);
+  assert.match(page, /wx:if="{{type !== 'all'}}" class="month-overview"/);
+  const cumulative = page.slice(page.indexOf('已上传功课累计'));
+  assert.match(cumulative, /class="metric-value">{{item\.value}}/);
+  assert.match(cumulative, /class="metric-unit">{{item\.unit}}/);
+  assert.match(cumulative, /wx:if="{{type === 'all'}}" class="metric-month">本月 {{item\.monthValue}} {{item\.unit}}/);
+  assert.match(page, /本月最高 {{trendMax}} {{overviewUnit}}/);
   assert.match(page, /aria-label="{{[^"\n]*day\.value\s*\+\s*selectedMonthUnit/);
   assert.match(page, /day\.level/);
   assert.match(page, /周一[\s\S]*?周二[\s\S]*?周三[\s\S]*?周四[\s\S]*?周五[\s\S]*?周六[\s\S]*?周日/);
@@ -718,6 +816,93 @@ test('cancelled practice forms cannot enqueue a record through a delayed confirm
   assert.equal(h.calls.flush.length, 0);
 });
 
+test('all five manual practices default to today and save yesterday with the chosen Beijing time', async () => {
+  for (const type of ['walking', 'instant', 'learning', 'kindness', 'clapping']) {
+    const h = createPage();
+    h.page.openForm(type);
+    assert.equal(h.page.data.formDate, '2026-10-31', type);
+    assert.equal(h.page.data.formMinDate, '2026-10-30', type);
+    assert.equal(h.page.data.today, '2026-10-31', type);
+    h.page.onFormDate({ detail: { value: '2026-10-30' } });
+    h.page.onFormTime({ detail: { value: '23:59' } });
+    h.page.onFormReflection({ detail: { value: '昨日功课' } });
+    if (type === 'kindness') h.page.onFormContent({ detail: { value: '帮助他人' } });
+    else h.page.onFormValue({ detail: { value: '7' } });
+    await h.page.saveForm();
+    assert.equal(h.calls.enqueue.length, 1, type);
+    assert.equal(h.calls.enqueue[0].operation, 'create', type);
+    assert.deepEqual(h.calls.enqueue[0].payload, {
+      recordDate: '2026-10-30', occurredAt: '2026-10-30 23:59:00', reflection: '昨日功课',
+      ...(type === 'kindness' ? { content: '帮助他人' } : type === 'instant' ? { count: 7 } : { durationMinutes: 7 })
+    }, type);
+    assert.equal(h.page.data.showForm, false, type);
+  }
+  const wxml = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practices.wxml'), 'utf8');
+  const datePicker = wxml.match(/<picker\b[^>]*bindchange="onFormDate"[^>]*>/);
+  assert.ok(datePicker, 'the occurrence date has a picker');
+  assert.match(datePicker[0], /start="{{formMinDate}}"/);
+  assert.match(datePicker[0], /end="{{today}}"/);
+});
+
+test('new practice rejects dates before yesterday and future dates before enqueueing', async () => {
+  const h = createPage();
+  h.page.openForm('walking');
+  h.page.onFormValue({ detail: { value: '7' } });
+  h.page.onFormDate({ detail: { value: '2026-10-29' } });
+  await h.page.saveForm();
+  assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/);
+  h.page.onFormDate({ detail: { value: '2026-11-01' } });
+  await h.page.saveForm();
+  assert.match(h.page.data.formError, /北京时间/);
+  assert.equal(h.calls.enqueue.length, 0);
+  assert.equal(h.calls.flush.length, 0);
+  assert.equal(h.page.data.showForm, true);
+});
+
+test('the two-day window follows Beijing calendar boundaries across months, years and leap days', async () => {
+  for (const [today, yesterday, older] of [
+    ['2026-11-01', '2026-10-31', '2026-10-30'],
+    ['2027-01-01', '2026-12-31', '2026-12-30'],
+    ['2028-03-01', '2028-02-29', '2028-02-28'],
+    ['2027-03-01', '2027-02-28', '2027-02-27']
+  ]) {
+    const h = createPage({ now: `${today}T00:00:07+08:00` });
+    h.page.openForm('walking');
+    assert.equal(h.page.data.formDate, today, today);
+    assert.equal(h.page.data.formMinDate, yesterday, today);
+    assert.equal(h.page.data.today, today, today);
+    h.page.onFormValue({ detail: { value: '7' } });
+    h.page.onFormDate({ detail: { value: older } });
+    h.page.onFormTime({ detail: { value: '23:59' } });
+    await h.page.saveForm();
+    assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/, today);
+    assert.equal(h.calls.enqueue.length, 0, today);
+    h.page.onFormDate({ detail: { value: yesterday } });
+    await h.page.saveForm();
+    assert.equal(h.calls.enqueue.length, 1, today);
+    assert.equal(h.calls.enqueue[0].payload.occurredAt, `${yesterday} 23:59:00`, today);
+  }
+});
+
+test('an unqueued draft expires at the next Beijing midnight and can select the new yesterday', async () => {
+  const h = createPage({ now: '2026-10-31T23:59:37+08:00' });
+  h.page.openForm('walking');
+  h.page.onFormValue({ detail: { value: '7' } });
+  h.page.onFormDate({ detail: { value: '2026-10-30' } });
+  h.page.onFormTime({ detail: { value: '12:45' } });
+  h.advance(24 * 1000);
+  await h.page.saveForm();
+  assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/);
+  assert.equal(h.page.data.formMinDate, '2026-10-31');
+  assert.equal(h.page.data.today, '2026-11-01');
+  assert.equal(h.page.data.formDate, '2026-10-30');
+  assert.equal(h.page.data.formValue, '7');
+  assert.equal(h.calls.enqueue.length, 0);
+  h.page.onFormDate({ detail: { value: '2026-10-31' } });
+  await h.page.saveForm();
+  assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-31 12:45:00');
+});
+
 test('a failed local enqueue releases confirmation and retries with the original request identity', async () => {
   let attempts = 0;
   const h = createPage({ enqueue: (options, tasks, owner) => {
@@ -739,9 +924,14 @@ test('a failed local enqueue releases confirmation and retries with the original
   assert.equal(h.page.data.showForm, false);
 });
 
-test('new practice keeps first-open Beijing date, original seconds and one identity across failed retries', async () => {
+test('queued practice keeps its Beijing date, original seconds and identity when retried after the two-day window', async () => {
   let attempts = 0;
-  const h = createPage({ flush: tasks => { if (++attempts === 1) { tasks[0].lastError = { message: '网络中断' }; return { success: false }; } tasks.splice(0); return { success: true }; } });
+  const uploads = [];
+  const h = createPage({ flush: tasks => {
+    uploads.push(plain(tasks[0]));
+    if (++attempts === 1) { tasks[0].lastError = { message: '网络中断' }; return { success: false }; }
+    tasks.splice(0); return { success: true };
+  } });
   h.page.openForm('walking');
   assert.equal(h.page.data.formDate, '2026-10-31');
   assert.equal(h.page.data.formTime, '00:30');
@@ -755,11 +945,19 @@ test('new practice keeps first-open Beijing date, original seconds and one ident
   assert.equal(h.page.data.formError, '网络中断');
   assert.equal(h.calls.enqueue[0].payload.recordDate, '2026-10-31');
   assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-31 00:30:37');
+  h.advance(3 * 24 * 60 * 60 * 1000);
+  h.page.onFormDate({ detail: { value: '2026-11-04' } });
+  h.page.onFormTime({ detail: { value: '12:00' } });
   h.page.onFormValue({ detail: { value: '20' } });
+  assert.equal(h.page.data.formDate, '2026-10-31');
+  assert.equal(h.page.data.formTime, '00:30');
   assert.equal(h.page.data.formValue, '15');
   await h.page.saveForm();
   assert.equal(h.calls.enqueue.length, 1);
   assert.equal(h.calls.flush.length, 2);
+  for (const key of ['id', 'requestId', 'owner', 'payload']) {
+    assert.deepEqual(uploads[1][key], uploads[0][key], key);
+  }
   assert.equal(h.page.data.showForm, false);
 });
 
@@ -794,6 +992,22 @@ test('editing kindness preserves its original deed quantity by excluding quantit
   assert.equal(submitted.operation, 'update');
   assert.equal(submitted.recordId, 7);
   assert.deepEqual(submitted.payload, { recordDate: '2026-10-30', occurredAt: '2026-10-30 20:15:24', reflection: '', content: '更新善行内容' });
+});
+
+test('editing older history has no lower date bound and preserves the original occurrence time', async () => {
+  const h = createPage();
+  h.page.openForm('walking', { id: 4, type: 'walking', recordDate: '2025-01-15',
+    occurredAt: '2025-01-15 13:45:24', durationMinutes: 15 });
+  assert.equal(h.page.data.formMinDate, '');
+  h.page.onFormValue({ detail: { value: '20' } });
+  await h.page.saveForm();
+  assert.equal(h.calls.enqueue.length, 1);
+  assert.equal(h.calls.enqueue[0].operation, 'update');
+  assert.equal(h.calls.enqueue[0].recordId, 4);
+  assert.deepEqual(h.calls.enqueue[0].payload, { recordDate: '2025-01-15',
+    occurredAt: '2025-01-15 13:45:24', durationMinutes: 20, reflection: '' });
+  h.page.openForm('walking');
+  assert.equal(h.page.data.formMinDate, '2026-10-30');
 });
 
 test('date-only history does not invent a time and requires the user to select the real clock time', async () => {
@@ -851,6 +1065,107 @@ test('account switches during upload cannot announce success or clear another ac
   await save;
   assert.equal(h.calls.toast.length, 0);
   assert.equal(h.tasks.length, 1);
+});
+
+test('confirmed background creates, updates and deletes refresh records and statistics while another task waits', async () => {
+  for (const operation of ['create', 'update', 'delete']) {
+    const record = { id: 7, type: 'walking', recordDate: '2026-10-30', durationMinutes: 12 };
+    let records = operation === 'create' ? [] : [record];
+    const started = deferred(), complete = deferred();
+    const method = operation === 'delete' ? 'remove' : operation;
+    const h = createPage({
+      feed: () => ({ records }),
+      summary: () => ({ totals: [{ type: 'walking', recordCount: records.length,
+        totalValue: records.reduce((total, item) => total + item.durationMinutes, 0) }], recordCount: records.length }),
+      queueFactory: persistedQueue({ [method]: async () => {
+        started.resolve();
+        await complete.promise;
+        records = operation === 'delete' ? [] : [{ ...record, durationMinutes: 18 }];
+        return { id: record.id };
+      } })
+    });
+    const waiting = h.queue.enqueueSourceIntent({ operation: 'update', identity: { recordId: 'waiting-source' }, snapshot: {} });
+    h.queue.enqueuePractice({ type: 'walking', operation, ...(operation === 'create' ? {} : { recordId: record.id }),
+      payload: {}, requestId: `background-${operation}` });
+    h.page.onShow();
+    await new Promise(resolve => setImmediate(resolve));
+    const upload = h.queue.flush();
+    await started.promise;
+    h.queue.annotateSource(waiting.id, { sourceCheckedAt: 123 });
+    assert.equal(h.calls.feed.length, 1, `${operation}: sending and annotation writes do not reload`);
+    assert.equal(h.calls.summary.length, 1, operation);
+    complete.resolve();
+    const result = await upload;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.sent, 1, operation);
+    assert.equal(h.page.data.pendingCount, 1, operation);
+    assert.equal(h.calls.feed.length, 2, operation);
+    assert.equal(h.calls.summary.length, 2, operation);
+    assert.deepEqual(plain(h.page.data.records.map(item => item.durationMinutes)), operation === 'delete' ? [] : [18], operation);
+    assert.equal(h.page.data.recordCount, operation === 'delete' ? 0 : 1, operation);
+    assert.equal(h.page.data.monthCards.find(item => item.type === 'walking').value, operation === 'delete' ? 0 : 18, operation);
+    h.page.onHide();
+  }
+});
+
+test('queue cancellations and failed background batches update pending state without reloading reads', async () => {
+  const h = createPage({ queueFactory: persistedQueue({ create: async () => { throw failure('INVALID_INPUT', '无法保存'); } }) });
+  const cancelled = h.queue.enqueuePractice({ type: 'walking', operation: 'create', payload: {}, requestId: 'cancelled' });
+  h.page.onShow();
+  await new Promise(resolve => setImmediate(resolve));
+  h.queue.cancel(cancelled.id);
+  assert.equal(h.page.data.pendingCount, 0);
+  assert.equal(h.calls.feed.length, 1, 'cancel-only notification must not reload');
+  h.queue.enqueuePractice({ type: 'walking', operation: 'create', payload: {}, requestId: 'rejected' });
+  const result = await h.queue.flush();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(result.sent, 0);
+  assert.equal(h.page.data.pendingCount, 1);
+  assert.match(h.page.data.pending[0].stateText, /无法保存/);
+  assert.equal(h.calls.feed.length, 1);
+  assert.equal(h.calls.summary.length, 1);
+  h.page.onHide();
+});
+
+test('one successful background batch reloads once even when several operations complete', async () => {
+  let confirmed = 0;
+  const h = createPage({ queueFactory: persistedQueue({ create: async () => ({ id: ++confirmed }) }) });
+  for (const requestId of ['batch-one', 'batch-two']) {
+    h.queue.enqueuePractice({ type: 'walking', operation: 'create', payload: {}, requestId });
+  }
+  h.page.onShow();
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await h.queue.flush();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(result.sent, 2);
+  assert.equal(h.page.data.pendingCount, 0);
+  assert.equal(h.calls.feed.length, 2);
+  assert.equal(h.calls.summary.length, 2);
+  h.page.onHide();
+});
+
+test('background completion cannot refresh a hidden page or another account or binding', async () => {
+  for (const change of ['hide', 'openid', 'bindingVersion']) {
+    const started = deferred(), complete = deferred();
+    const h = createPage({ queueFactory: persistedQueue({ create: async () => {
+      started.resolve(); await complete.promise; return { id: 1 };
+    } }) });
+    h.queue.enqueuePractice({ type: 'walking', operation: 'create', payload: {}, requestId: 'old-owner' });
+    h.page.onShow();
+    await new Promise(resolve => setImmediate(resolve));
+    const upload = h.queue.flush();
+    await started.promise;
+    if (change === 'hide') h.page.onHide();
+    else h.changeOwner({ openid: change === 'openid' ? 'oz-other' : 'oz-owner', studentNumber: '001',
+      bindingVersion: change === 'bindingVersion' ? 'v2' : 'v1' });
+    complete.resolve();
+    const result = await upload;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.sent, 1, change);
+    assert.equal(h.calls.feed.length, 1, change);
+    assert.equal(h.calls.summary.length, 1, change);
+    h.page.onHide();
+  }
 });
 
 test('feature disabled performs no requests and the page lifecycle replaces queue subscriptions', async () => {

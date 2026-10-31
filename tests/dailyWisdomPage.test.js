@@ -37,7 +37,7 @@ function createPage(name, dailyWisdom) {
   let definition;
   let nextTimer = 0;
   const modules = {
-    'practiceEntry.js': {},
+    'practiceEntry.js': { recordsVisible: () => false },
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },
     'homeBackfill.js': { data: {}, methods: { initHomeBackfill() {}, stopHomeBackfill() {}, refreshBackfillSelection() {} } },
     'avatar.js': require('../miniprogram/utils/avatar.js'),

@@ -72,8 +72,11 @@
           <image class="meditation-btn-icon" src="/images/icons/timer-start.svg" mode="aspectFit" />
           <text class="meditation-btn-text">开始静坐</text>
         </button>
-        <button class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openPracticePicker" hover-class="checkin-record-active">
+        <button wx:if="{{recordsVisible}}" class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openPracticePicker" hover-class="checkin-record-active">
           <text class="meditation-btn-text">记录功课</text>
+        </button>
+        <button wx:else class="weui-btn meditation-btn meditation-btn-secondary" bindtap="openCheckinModal" hover-class="checkin-record-active">
+          <text class="meditation-btn-text">记录静坐</text>
         </button>
       </view>
 

@@ -89,7 +89,7 @@ function createApp({ online = false, uploadPending = false, uploadDelay = 0, mod
     }
   };
   const dependencies = new Map([
-    ['practiceEntry.js', {}],
+    ['practiceEntry.js', { recordsVisible: () => false }],
     ['cloudApi.js', api],
     ['badgeManager.js', { checkBadgeUnlock: () => ({ hasNewUnlock: false }) }],
     ['dailyWisdom.js', { DEFAULT_QUOTE: '' }]

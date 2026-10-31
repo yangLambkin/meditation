@@ -24,7 +24,7 @@ function choosePractice(onChoose) {
     return false;
   };
   if (!choices.length) {
-    wx.showModal({ title: '功课入口已全部隐藏', content: '可以在「功课入口设置」中重新开启需要的功课。',
+    wx.showModal({ title: '功课入口已全部隐藏', content: '可以在「记录设置」中重新开启需要的功课。',
       confirmText: '去设置', success: result => { if (result.confirm && stillCurrent()) openSettings(); } });
     return;
   }
@@ -39,4 +39,4 @@ function choosePractice(onChoose) {
   }
 }
 
-module.exports = { choosePractice, openSettings };
+module.exports = { choosePractice, openSettings, recordsVisible: preferences.getRecordsVisible };

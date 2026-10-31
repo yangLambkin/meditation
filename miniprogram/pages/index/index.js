@@ -31,6 +31,7 @@ Page({
     userNickname: '觉察者', // 用户昵称，默认为"觉察者"
     wisdomQuote: '"' + dailyWisdom.DEFAULT_QUOTE + '"', // 每日一言金句
     hasUserInfo: false, // 是否已获取用户信息
+    recordsVisible: true,
     checkinDate: '',
     checkinTime: '',
     minCheckinDate: '',
@@ -58,12 +59,19 @@ Page({
   },
 
   openPracticePicker() {
+    if (!practiceEntry.recordsVisible()) return;
     practiceEntry.choosePractice(type => {
       if (type === 'sitting') return this.openCheckinModal();
       try { wx.setStorageSync('practiceRecordEntry', type); }
       catch (_) { wx.showToast({ title: '暂时无法打开功课，请重试', icon: 'none' }); return; }
       wx.switchTab({ url: '/pages/practices/practices' });
     });
+  },
+
+  refreshRecordVisibility() {
+    this.setData({ recordsVisible: practiceEntry.recordsVisible() });
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.refreshTabBars === 'function') app.refreshTabBars();
   },
 
   openCheckinModal() {
@@ -732,6 +740,7 @@ Page({
    * 检查用户信息状态（简化版本）
    */
   checkUserInfoStatus: function(shouldNavigate = false) {
+    this.refreshRecordVisibility();
     console.log('检查用户信息状态，是否跳转:', shouldNavigate);
     console.log('当前页面数据 - hasUserInfo:', this.data.hasUserInfo, 'userNickname:', this.data.userNickname);
     
@@ -1541,6 +1550,7 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    this.refreshRecordVisibility();
     this.initHomeBackfill();
     this.watchBijingRecordSync();
     // 记录页选择静坐后继续使用原手动录入流程。

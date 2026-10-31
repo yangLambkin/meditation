@@ -24,7 +24,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
     clearInterval(id) { intervals.delete(id); }
   };
   const modules = {
-    'practiceEntry.js': {},
+    'practiceEntry.js': { recordsVisible: () => false },
     'checkin.js': {
       getUserCheckinData: () => ({ dailyRecords }),
       getExperienceRecordsFromLocal: () => [],
@@ -45,7 +45,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
   function load(request) {
     const name = path.basename(request).replace(/(?:\.js)?$/, '.js');
     if (modules[name]) return modules[name];
-    assert.ok(['dateUtil.js', 'homeCheckin.js', 'homeBackfill.js', 'bijingRecordSync.js', 'heatmap.js', 'profileCache.js', 'avatar.js'].includes(name), request);
+    assert.ok(['dateUtil.js', 'homeCheckin.js', 'homeBackfill.js', 'bijingRecordSync.js', 'heatmap.js', 'profileCache.js', 'avatar.js', 'practicePreferences.js'].includes(name), request);
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils', name), 'utf8'), {
       module, require: load, ...clock, wx, console: quiet

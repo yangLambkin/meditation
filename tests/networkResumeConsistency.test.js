@@ -130,7 +130,7 @@ function harness({ loggedIn = true, online = true, missingLocks = false, uploadD
         if (name.endsWith('/bijingRecordSync.js')) return bijingRecordSync;
         if (name.endsWith('/dailyWisdom.js')) return { DEFAULT_QUOTE: '', watchDailyWisdom: () => () => {} };
         if (name.endsWith('/contentSec.js')) return contentSec;
-        if (name.endsWith('/practiceEntry.js')) return {};
+        if (name.endsWith('/practiceEntry.js')) return { recordsVisible: () => false };
         throw new Error(`Unexpected home dependency: ${name}`);
       }
     });

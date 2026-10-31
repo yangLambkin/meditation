@@ -385,7 +385,7 @@ function pageHarness(options = {}) {
     static now() { return NOW; }
   }
   const silentConsole = { log() {}, warn() {}, error() {} };
-  const modules = { 'checkin.js': app.manager, 'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句' }, 'contentSec.js': {}, 'cloudApi.js': {}, 'practiceEntry.js': {} };
+  const modules = { 'checkin.js': app.manager, 'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句' }, 'contentSec.js': {}, 'cloudApi.js': {}, 'practiceEntry.js': { recordsVisible: () => false } };
   function loadModule(name) {
     const filename = path.basename(name);
     if (modules[filename]) return modules[filename];

@@ -7,6 +7,10 @@ page { background: #f8fafc; color: #354152; }
 .settings-count { color: #a68a57; }
 .entry-row { display: flex; align-items: center; justify-content: space-between; gap: 24rpx; min-height: 104rpx; border-top: 1rpx solid #f0f2f5; }
 .entry-name { flex: 1; min-width: 0; font-size: 28rpx; line-height: 1.5; }
+.visibility-row { border-top: none; padding: 24rpx 0; }
+.entry-copy { flex: 1; min-width: 0; }
+.entry-copy .entry-name { display: block; }
+.entry-description { display: block; margin-top: 8rpx; color: #99a1ae; font-size: 23rpx; line-height: 1.6; }
 .settings-hint, .settings-footnote, .settings-empty-hint { display: block; color: #99a1ae; font-size: 23rpx; line-height: 1.7; }
 .settings-hint { margin: 26rpx 8rpx 0; }
 .settings-empty-hint { margin: 16rpx 8rpx 0; color: #a68a57; }

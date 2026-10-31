@@ -54,6 +54,10 @@ function createPage({ now = '2026-09-17T04:05:00+08:00', loggedIn = true, bound 
   });
   const mocks = {
     '../../utils/profileCache.js': profileCacheModule.exports,
+    '../../utils/practicePreferences.js': {
+      currentAccountKey: () => storage.userOpenId,
+      getRecordsVisible: () => false
+    },
     '../../utils/badgeManager': {},
     '../../utils/checkin.js': {
       isUserLoggedIn: () => isLoggedIn,

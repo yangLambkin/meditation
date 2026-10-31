@@ -1,11 +1,30 @@
 // Transitional cache writer: keep legacy readers consistent until ProfileRepository
 // replaces these keys. Async callers capture the account before starting work.
+const confirmedBijingBindings = new Map();
+
 function currentAccount() {
   return wx.getStorageSync('userOpenId') || '';
 }
 
 function isCurrentAccount(expectedAccount) {
   return currentAccount() === expectedAccount;
+}
+
+// A confirmed server binding can outlive a failed local write in this process.
+// It only blocks stale persisted identities; callers still need matching caches.
+function rememberBijingBinding(binding, expectedAccount = currentAccount()) {
+  if (!isCurrentAccount(expectedAccount)) return;
+  confirmedBijingBindings.set(expectedAccount, {
+    bijingBound: binding.bijingBound,
+    bijingStudentNumber: binding.bijingStudentNumber,
+    bijingBindingVersion: binding.bijingBindingVersion
+  });
+}
+
+function getConfirmedBijingBinding(expectedAccount = currentAccount()) {
+  if (!isCurrentAccount(expectedAccount)) return null;
+  const binding = confirmedBijingBindings.get(expectedAccount);
+  return binding ? { ...binding } : null;
 }
 
 function readProfile() {
@@ -123,7 +142,8 @@ function migratePending(fromAccount, toAccount) {
 }
 
 module.exports = {
-  currentAccount, isCurrentAccount, readProfile, updateProfile, confirmedPatch,
+  currentAccount, isCurrentAccount, rememberBijingBinding, getConfirmedBijingBinding,
+  readProfile, updateProfile, confirmedPatch,
   pendingSnapshot, pendingPatch, beginProfileRequest, stageProfile, currentRequestPatch, acknowledgePending,
   discardPendingFields, migratePending
 };

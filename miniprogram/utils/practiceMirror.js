@@ -142,7 +142,7 @@ async function recordPayload(record, owner) {
 async function prepareForSend(task) {
   if (task.operation === 'delete') return null;
   api.assertOwner(task.owner);
-  const response = await require('./cloudApi.js').getAllRecords();
+  const response = await require('./cloudApi.js').getAllRecords({ observePracticeSnapshot: false });
   api.assertOwner(task.owner);
   if (!response.success || !validSnapshot(response.data, task.owner)) throw Object.assign(new Error('发送镜像前未能完整核对来源及账号，已保留待办'), { code: 'SOURCE_READ_UNAVAILABLE', retryable: true });
   const candidates = response.data.filter(record => record._id === task.sourceId && (!record._openid || record._openid === task.owner.openid));
@@ -180,7 +180,7 @@ function confirmDeletion(task, sourceId) {
     { code: 'SOURCE_ID_UNCONFIRMED' });
   // 完整快照可能先于原删除回包确认了任务。首次确认后固定请求内容，
   // 晚到回包不能用旧快照改变同一请求身份的版本，造成服务端幂等冲突。
-  if (current.status === 'waiting_source') queue.confirmSource(current.id, sourceId, deletionPayload(current));
+  if (current.status === 'waiting_source') return queue.confirmSource(current.id, sourceId, deletionPayload(current));
 }
 function captureRecoveryBarrier(owner = auth.getOwner()) {
   if (!owner || config.sittingMirrorEnabled !== true) return [];
@@ -190,6 +190,7 @@ function captureRecoveryBarrier(owner = auth.getOwner()) {
 async function applySnapshot(records, owner, eligibleTaskIds) {
   if (!api.sameOwner(owner, auth.getOwner()) || !validSnapshot(records, owner)) return;
   const tasks = queue.getPending().filter(task => task.kind === 'mirror' && task.status === 'waiting_source' && eligibleTaskIds.includes(task.id));
+  const confirmedIds = [];
   for (const task of tasks) {
     if (!api.sameOwner(task.owner, owner)) continue;
     try {
@@ -197,10 +198,19 @@ async function applySnapshot(records, owner, eligibleTaskIds) {
       if (candidates.length > 1) throw Object.assign(new Error('来源记录身份不唯一，等待核对'), { code: 'SOURCE_AMBIGUOUS' });
       const record = candidates[0];
       if (task.operation === 'delete') {
-        if (record) { queue.annotateSource(task.id, { snapshot: { ...task.snapshot, ...record } }); continue; }
+        if (record) {
+          queue.annotateSource(task.id, { sourceId: record._id, identity: { ...task.identity, recordId: record._id },
+            snapshot: { ...task.snapshot, ...record } });
+          continue;
+        }
         const sourceId = task.sourceId || task.identity.recordId;
-        if (!sourceId) throw Object.assign(new Error('删除已登记，等待原静坐记录标识确认'), { code: 'SOURCE_ID_UNAVAILABLE' });
-        confirmDeletion(task, sourceId);
+        if (!sourceId) {
+          // 恢复已删除本机记录留下的待办；完整来源读取与队列中的未决写入
+          // 一并核对，只有从未产生云端来源的本机删除才无需发送镜像。
+          if (queue.discardLocalSourceDeletion(task.id, owner)) continue;
+          throw Object.assign(new Error('删除已登记，等待原静坐记录标识确认'), { code: 'SOURCE_ID_UNAVAILABLE' });
+        }
+        if (confirmDeletion(task, sourceId)) confirmedIds.push(task.id);
         continue;
       }
       if (!record) continue;
@@ -208,13 +218,27 @@ async function applySnapshot(records, owner, eligibleTaskIds) {
       if (task.snapshot.requiresDeletionVersion) throw Object.assign(new Error('原独立体验删除未提供静坐变更版本，需核对后同步'), { code: 'SOURCE_VERSION_UNAVAILABLE' });
       const payload = await recordPayload(record, owner);
       if (!api.sameOwner(owner, auth.getOwner())) return;
-      queue.confirmSource(task.id, record._id, payload);
+      const confirmed = queue.confirmSource(task.id, record._id, payload);
+      if (confirmed && confirmed.status === 'pending') confirmedIds.push(task.id);
     } catch (error) {
       try { queue.markSourceError(task.id, error.code || 'SOURCE_CONFIRMATION_FAILED', error.message || '来源待确认'); }
       catch (storageError) { visibleWarning(storageError); }
     }
   }
-  return queue.flush();
+  // 发送前复核来源也会经过云端读取回调；没有新确认的来源时，不能再
+  // 启动一轮发送，否则失败任务会通过自己的复核读取不断触发重试。
+  if (confirmedIds.length) {
+    const result = await queue.flush();
+    // 已运行的发送轮次可能尚未包含刚确认的新记录；只补发这些未尝试
+    // 的来源，不重新发送同轮已失败的旧任务。
+    const unsentIds = queue.getPending().filter(task => confirmedIds.includes(task.id) &&
+      task.status === 'pending' && task.attempts === 0).map(task => task.id);
+    if (unsentIds.length) {
+      const followup = await queue.flush({ taskIds: unsentIds, onlyUnattempted: true });
+      return { ...followup, sent: result.sent + followup.sent };
+    }
+    return result;
+  }
 }
 function acceptCloudSnapshot(records, owner = auth.getOwner(), eligibleTaskIds = captureRecoveryBarrier(owner)) {
   if (config.sittingMirrorEnabled !== true || !owner) return Promise.resolve();
@@ -225,8 +249,15 @@ function acceptCloudSnapshot(records, owner = auth.getOwner(), eligibleTaskIds =
 function observeCloudResult(intent, response) {
   if (!intent) return;
   const result = response && response.result;
-  if (!result || result.success !== true) return;
   const intents = Array.isArray(intent) ? intent : [intent];
+  if (result && result.success === false && result.code === 'RECORD_NOT_FOUND') {
+    try {
+      intents.filter(task => task.operation === 'delete')
+        .forEach(task => queue.discardLocalSourceDeletion(task.id, task.owner));
+    } catch (error) { visibleWarning(error); }
+    return;
+  }
+  if (!result || result.success !== true) return;
   try {
     intents.forEach(task => {
       const recordId = result.data && result.data.recordId;
@@ -257,13 +288,17 @@ function resume() {
     do {
       recoveryRequested = false;
       const owner = auth.getOwner();
+      let snapshotResult;
       if (config.sittingMirrorEnabled === true && owner &&
           queue.getPending().some(task => task.kind === 'mirror' && task.status === 'waiting_source')) {
         const barrier = captureRecoveryBarrier(owner);
-        const response = await require('./cloudApi.js').getAllRecords();
-        if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) await acceptCloudSnapshot(response.data, owner, barrier);
+        const response = await require('./cloudApi.js').getAllRecords({ observePracticeSnapshot: false });
+        if (response.success && Array.isArray(response.data) && api.sameOwner(owner, auth.getOwner())) {
+          snapshotResult = await acceptCloudSnapshot(response.data, owner, barrier);
+        }
       }
-      result = await queue.flush();
+      // 新确认的来源已在 applySnapshot 中发送，不重复执行同一轮失败任务。
+      result = snapshotResult === undefined ? await queue.flush() : snapshotResult;
     } while (recoveryRequested);
     return result;
   }).finally(() => { recovering = null; });

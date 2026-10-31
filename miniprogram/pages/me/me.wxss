@@ -107,7 +107,8 @@ page {
   margin-left: 34rpx;
 }
 .page {
-  padding-bottom: 32rpx;
+  padding-bottom: calc(32rpx + 50px);
+  padding-bottom: calc(32rpx + 50px + env(safe-area-inset-bottom));
   background-color: #f8fafc;
   overflow-x: hidden;
   width: 100%;

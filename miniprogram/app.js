@@ -36,6 +36,7 @@ App({
 
   onShow() {
     this._timerForeground = true;
+    this.refreshTabBars();
     if (this._countdownSession) this._countdownSession.appShow();
     if (!wx.cloud) return;
     this.resumePracticeRecords();
@@ -78,8 +79,34 @@ App({
     catch (error) { return ''; }
   },
   setSyncAlertDot(visible) {
+    this.forEachTabBar(bar => {
+      if (typeof bar.setMeAlert === 'function') bar.setMeAlert(visible);
+    });
     const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
     if (typeof action === 'function') action.call(wx, { index: 4, fail() {} });
+  },
+  registerTabBar(bar) {
+    if (!this._tabBars) this._tabBars = new Set();
+    this._tabBars.add(bar);
+  },
+  unregisterTabBar(bar) {
+    if (this._tabBars) this._tabBars.delete(bar);
+  },
+  forEachTabBar(callback) {
+    // Cached tab pages can be absent from the navigation stack. Update their
+    // own bars now so the next switch cannot reveal an older four/five layout.
+    const bars = new Set(this._tabBars || []);
+    const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+    pages.forEach(page => {
+      const bar = typeof page.getTabBar === 'function' ? page.getTabBar() : null;
+      if (bar) bars.add(bar);
+    });
+    bars.forEach(bar => callback(bar));
+  },
+  refreshTabBars() {
+    this.forEachTabBar(bar => {
+      if (typeof bar.refresh === 'function') bar.refresh();
+    });
   },
   getSyncAlertState({ includeBackfill = false } = {}) {
     const state = this._syncAlertState || {};

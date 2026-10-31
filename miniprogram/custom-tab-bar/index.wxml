@@ -1,0 +1,11 @@
+<view class="tab-bar">
+  <view class="tab-bar-items">
+    <view wx:for="{{tabs}}" wx:key="pagePath" class="tab-bar-item {{selectedPath === item.pagePath ? 'is-selected' : ''}}" data-page-path="{{item.pagePath}}" bindtap="onTabTap" aria-role="button" aria-label="{{item.text}}" aria-selected="{{selectedPath === item.pagePath}}">
+      <view class="tab-bar-icon-wrap">
+        <image class="tab-bar-icon" src="{{selectedPath === item.pagePath ? item.selectedIconPath : item.iconPath}}" mode="aspectFit" />
+        <view wx:if="{{item.pagePath === 'pages/me/me' && hasMeAlert}}" class="tab-bar-alert-dot" aria-label="有未读提醒" />
+      </view>
+      <text class="tab-bar-label">{{item.text}}</text>
+    </view>
+  </view>
+</view>

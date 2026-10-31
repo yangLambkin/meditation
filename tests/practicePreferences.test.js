@@ -8,6 +8,9 @@ const preferencesPath = path.join(__dirname, '../miniprogram/utils/practicePrefe
 const PREFIX = 'practice_entry_preferences_v1';
 const accountKey = openid => `${PREFIX}:account:${encodeURIComponent(openid)}`;
 const GUEST_KEY = `${PREFIX}:guest`;
+const RECORDS_PREFIX = 'practice_records_visible_v1';
+const recordsKey = openid => openid === undefined || openid === null || openid === ''
+  ? `${RECORDS_PREFIX}:guest` : `${RECORDS_PREFIX}:account:${encodeURIComponent(openid)}`;
 const PRACTICES = [
   { type: 'sitting', name: '静坐觉察', unit: '分钟' },
   { type: 'walking', name: '走路觉察', unit: '分钟' },
@@ -198,4 +201,95 @@ test('all six practices may be hidden and later restored together', () => {
   assert.deepEqual(plain(h.preferences.getVisiblePractices()), []);
   h.preferences.saveHiddenTypes([]);
   assert.deepEqual(plain(h.preferences.getVisiblePractices()), PRACTICES);
+});
+
+test('records start visible for accounts and guests without changing existing practice preferences', () => {
+  const h = createPreferences();
+  h.preferences.saveHiddenTypes(['walking']);
+  const writesBefore = h.writes.length;
+  for (const openid of ['oz-owner', 'oz-other', undefined, null, '', 'guest']) {
+    h.changeAccount(openid);
+    assert.equal(h.preferences.getRecordsVisible(), true, String(openid));
+  }
+  assert.equal(h.writes.length, writesBefore);
+  assert.deepEqual(h.storage.get(accountKey('oz-owner')), ['walking']);
+});
+
+test('record visibility persists synchronously per account and guest across reloads', () => {
+  const h = createPreferences();
+  for (const [openid, visible] of [['oz-owner', true], ['账户:/ %', true], [undefined, true], ['guest', false]]) {
+    h.changeAccount(openid);
+    assert.equal(h.preferences.saveRecordsVisible(visible), visible);
+    assert.equal(h.storage.get(recordsKey(openid)), visible);
+  }
+  for (const [openid, visible] of [['oz-owner', true], ['oz-other', true], ['账户:/ %', true], [null, true], ['', true], ['guest', false]]) {
+    h.changeAccount(openid);
+    assert.equal(h.preferences.getRecordsVisible(), visible, String(openid));
+  }
+  const reloaded = createPreferences({ storage: h.storage });
+  assert.equal(reloaded.preferences.getRecordsVisible(), true);
+  assert.equal(reloaded.preferences.saveRecordsVisible(false), false);
+  assert.equal(createPreferences({ storage: h.storage }).preferences.getRecordsVisible(), false);
+});
+
+test('only explicit boolean false hides records and the saved value is reread', () => {
+  const h = createPreferences();
+  for (const cached of [undefined, null, '', 1, 'true', 'false', [], {}, { visible: true }]) {
+    h.storage.set(recordsKey('oz-owner'), cached);
+    assert.equal(h.preferences.getRecordsVisible(), true);
+    assert.deepEqual(h.storage.get(recordsKey('oz-owner')), cached);
+  }
+  h.storage.set(recordsKey('oz-owner'), false);
+  assert.equal(h.preferences.getRecordsVisible(), false);
+  h.storage.set(recordsKey('oz-owner'), true);
+  assert.equal(h.preferences.getRecordsVisible(), true);
+  assert.equal(h.writes.length, 0);
+  for (const value of [undefined, null, false, 1, 'true', [], {}]) {
+    assert.equal(h.preferences.saveRecordsVisible(value), false);
+    assert.equal(h.storage.get(recordsKey('oz-owner')), false);
+  }
+});
+
+test('record visibility is independent from hidden practice entries in both directions', () => {
+  const h = createPreferences();
+  h.preferences.saveHiddenTypes(TYPES);
+  assert.equal(h.preferences.getRecordsVisible(), true);
+  h.preferences.saveRecordsVisible(false);
+  assert.deepEqual(plain(h.preferences.getHiddenTypes()), TYPES);
+  h.preferences.saveHiddenTypes([]);
+  assert.equal(h.preferences.getRecordsVisible(), false);
+  h.preferences.saveRecordsVisible(true);
+  assert.deepEqual(plain(h.preferences.getVisiblePractices()), PRACTICES);
+});
+
+test('unreadable or invalid accounts keep records hidden and cannot overwrite guest visibility', () => {
+  const h = createPreferences();
+  h.storage.set(recordsKey(undefined), true);
+  h.storage.set(recordsKey('oz-owner'), true);
+  h.readFailures.set('userOpenId', new Error('账号缓存无法读取'));
+  assert.equal(h.preferences.getRecordsVisible(), false);
+  assert.throws(() => h.preferences.saveRecordsVisible(false), /账号缓存/);
+  h.readFailures.clear();
+  for (const openid of [false, 12, {}, ['oz-owner']]) {
+    h.changeAccount(openid);
+    assert.equal(h.preferences.getRecordsVisible(), false);
+    assert.throws(() => h.preferences.saveRecordsVisible(false), { code: 'INVALID_ACCOUNT' });
+  }
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.reads.includes(recordsKey(undefined)), false);
+  assert.equal(h.storage.get(recordsKey(undefined)), true);
+  assert.equal(h.storage.get(recordsKey('oz-owner')), true);
+});
+
+test('record visibility read and write failures preserve the saved preference', () => {
+  const h = createPreferences();
+  h.preferences.saveRecordsVisible(true);
+  h.readFailures.set(recordsKey('oz-owner'), new Error('偏好缓存无法读取'));
+  assert.equal(h.preferences.getRecordsVisible(), false);
+  assert.equal(h.storage.get(recordsKey('oz-owner')), true);
+  h.readFailures.clear();
+  h.writeFailures.set(recordsKey('oz-owner'), new Error('本机存储已满'));
+  assert.throws(() => h.preferences.saveRecordsVisible(false), /存储已满/);
+  assert.equal(h.preferences.getRecordsVisible(), true);
+  assert.equal(h.storage.has(recordsKey(undefined)), false);
 });

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fffdf8"/>
+      <stop offset="1" stop-color="#f7f1e5"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="#faf7f0"/>
+  <circle cx="361" cy="20" r="139" fill="#f5efe3"/>
+  <circle cx="200" cy="215" r="93" fill="#efe5d2"/>
+  <circle cx="200" cy="215" r="106" fill="none" stroke="#e8deca"/>
+
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
+    <text x="200" y="67" fill="#354152" font-size="36" font-weight="600" letter-spacing="2">功课记录</text>
+    <text x="200" y="101" fill="#9c8050" font-size="18">觉察日常 · 记录成长</text>
+    <text x="200" y="362" fill="#8a795a" font-size="17">每一份练习，都值得记录</text>
+  </g>
+
+  <g transform="translate(138 137) rotate(7 65 78)">
+    <rect x="12" y="10" width="113" height="150" rx="14" fill="#e4d7be"/>
+    <rect x="3" y="1" width="113" height="150" rx="14" fill="url(#paper)" stroke="#b29764" stroke-width="4"/>
+    <path d="M26 3v146" fill="none" stroke="#dfd2b8" stroke-width="2"/>
+    <g fill="none" stroke="#b29764" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-5 32h17M-5 62h17M-5 92h17M-5 122h17"/>
+      <path d="M44 36h49M44 58h49M44 80h30" stroke-width="3"/>
+      <path d="m66 112 10 10 22-23"/>
+    </g>
+  </g>
+  <path d="M66 333h268" stroke="#e4dac6"/>
+  <circle cx="292" cy="157" r="5" fill="#c7b58f"/>
+  <circle cx="104" cy="269" r="3" fill="#c7b58f"/>
+</svg>

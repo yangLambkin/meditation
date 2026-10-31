@@ -71,7 +71,7 @@ function createPage({ now = '2026-09-17T08:25:37.123+08:00', dailyRecords = {}, 
     stopPullDownRefresh: () => { calls.stopPullDownRefresh++; }
   };
   const modules = {
-    'practiceEntry.js': {},
+    'practiceEntry.js': { recordsVisible: () => false },
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {}, acceptSavedRecord() {} },
     'cloudApi.js': { callCloudFunction: async () => ({ result: { success: true, data: { requests: [], nextCursor: '' } } }) },
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },

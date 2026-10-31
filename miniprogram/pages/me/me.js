@@ -19,6 +19,18 @@ function bijingBindingStatus(profile) {
   };
 }
 
+function bindingMatchesProfile(binding, account) {
+  try {
+    const profileBinding = bijingBindingStatus(profileCache.readProfile());
+    if (!Object.keys(profileBinding).every(key => profileBinding[key] === binding[key])) return false;
+    const confirmed = typeof profileCache.getConfirmedBijingBinding === 'function'
+      ? profileCache.getConfirmedBijingBinding(account) : null;
+    return !confirmed || Object.keys(profileBinding).every(key => confirmed[key] === binding[key]);
+  } catch (_) {
+    return false;
+  }
+}
+
 Page({
   data: {
     userNickname: '觉察者', // 用户昵称
@@ -159,11 +171,15 @@ Page({
   saveBijingStatusCache(binding, account) {
     if (!profileCache.isCurrentAccount(account)) return;
     const cached = { account, updatedAt: Date.now(), binding: bijingBindingStatus(binding) };
+    if (typeof profileCache.rememberBijingBinding === 'function') {
+      profileCache.rememberBijingBinding(cached.binding, account);
+    }
     this._bijingStatusCache = cached;
     try {
       wx.setStorageSync(`bijingStatus_${account}`, cached);
     } catch (error) {
       // 本机存储不可用时仍保留当前页面的缓存，不影响已经完成的云端操作。
+      this._bijingStatusCache = { ...cached, updatedAt: 0 };
       console.error('保存必经之路状态缓存失败:', error);
     }
   },
@@ -214,7 +230,9 @@ Page({
     if (cached) {
       this.applyBijingStatus(bijingBindingStatus(cached.binding));
       const age = Date.now() - cached.updatedAt;
-      if (!force && cached.updatedAt > 0 && age >= 0 && age < BIJING_STATUS_CACHE_TTL_MS) return;
+      // 两份缓存不一致时须重新向服务端确认，不能用展示缓存覆盖账号资料。
+      if (!force && cached.updatedAt > 0 && age >= 0 && age < BIJING_STATUS_CACHE_TTL_MS &&
+          bindingMatchesProfile(cached.binding, openid)) return;
     }
     const context = this.bijingContext();
     const pending = this._bijingStatusRequest;
@@ -244,6 +262,12 @@ Page({
           this.isBijingContextCurrent(context) && requestId === this._bijingStatusRequestId) {
         const binding = bijingBindingStatus(profile);
         this.saveBijingStatusCache(binding, context.account);
+        try {
+          // 仅合并本次确认的绑定字段，保留昵称、头像及其他未完成的资料修改。
+          profileCache.updateProfile(binding, context.account);
+        } catch (error) {
+          console.error('必经绑定已确认，本机资料缓存更新失败:', error);
+        }
         this.applyBijingStatus(binding, { confirmed: true });
       }
     } catch (e) {

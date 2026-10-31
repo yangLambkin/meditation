@@ -1,6 +1,6 @@
 /* 暖金色 Hero 呼应首页，列表延续浅灰页底与白色卡片。 */
 page { background-color: #f8fafc; color: #354152; }
-.team-page { padding: 0 28rpx calc(48rpx + env(safe-area-inset-bottom)); min-height: 100vh; box-sizing: border-box; }
+.team-page { padding: 0 28rpx calc(48rpx + 50px); padding-bottom: calc(48rpx + 50px + env(safe-area-inset-bottom)); min-height: 100vh; box-sizing: border-box; }
 button { margin: 0; font-weight: 500; }
 button::after { border: none; }
 .team-hero { position: relative; overflow: hidden; margin: 0 -28rpx; padding: 48rpx 42rpx 36rpx; background-color: #b29764; color: #ffffff; }

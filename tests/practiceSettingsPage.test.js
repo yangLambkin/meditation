@@ -9,14 +9,18 @@ const preferencesPath = path.join(__dirname, '../miniprogram/utils/practicePrefe
 const PREFIX = 'practice_entry_preferences_v1';
 const keyFor = openid => openid === undefined || openid === null || openid === ''
   ? `${PREFIX}:guest` : `${PREFIX}:account:${encodeURIComponent(openid)}`;
+const recordsKeyFor = openid => keyFor(openid).replace(PREFIX, 'practice_records_visible_v1');
 const TYPES = ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clapping'];
 const plain = value => JSON.parse(JSON.stringify(value));
 const changeEvent = (type, value) => ({ currentTarget: { dataset: { type } }, detail: { value } });
 
-function createPage({ openid = 'oz-owner', hiddenTypes } = {}) {
+function createPage({ openid = 'oz-owner', hiddenTypes, recordsVisible } = {}) {
   const storage = new Map([['userOpenId', openid]]);
   if (hiddenTypes !== undefined) storage.set(keyFor(openid), structuredClone(hiddenTypes));
+  if (recordsVisible !== undefined) storage.set(recordsKeyFor(openid), recordsVisible);
   const reads = [], writes = [], updates = [], toast = [];
+  const appCalls = { refreshTabBars: 0 };
+  const app = { refreshTabBars() { appCalls.refreshTabBars++; } };
   const readFailures = new Map(), writeFailures = new Map();
   const wx = {
     getStorageSync(key) {
@@ -38,12 +42,12 @@ function createPage({ openid = 'oz-owner', hiddenTypes } = {}) {
     let definition;
     vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
       require(name) { assert.equal(name, '../../utils/practicePreferences.js'); return preferences; },
-      Page(value) { definition = value; }, wx, console
+      Page(value) { definition = value; }, getApp: () => app, wx, console
     }, { filename: pagePath });
     return { ...definition, data: structuredClone(definition.data),
       setData(value) { updates.push(plain(value)); Object.assign(this.data, value); } };
   }
-  return { page: openPage(), openPage, storage, preferences, reads, writes, updates, toast, readFailures, writeFailures,
+  return { page: openPage(), openPage, storage, preferences, reads, writes, updates, toast, readFailures, writeFailures, appCalls,
     changeAccount(value) {
       if (value === undefined) storage.delete('userOpenId');
       else storage.set('userOpenId', value);
@@ -59,6 +63,7 @@ test('onShow renders all default practice entries with their metadata and no sto
   assert.deepEqual(visibleTypes(h.page), TYPES);
   assert.equal(h.page.data.visibleCount, 6);
   assert.equal(h.page.data.hiddenCount, 0);
+  assert.equal(h.page.data.recordsVisible, true);
   assert.equal(h.page.data.error, '');
   assert.equal(h.writes.length, 0);
 });
@@ -99,8 +104,8 @@ test('switch changes persist immediately and reopening the page preserves both d
   assert.equal(openedAgain.data.hiddenCount, 0);
 });
 
-test('restoreAll saves the empty hidden selection and restores every switch', () => {
-  const h = createPage({ hiddenTypes: ['sitting', 'kindness', 'clapping'] });
+test('restoreAll restores every practice switch while retaining the disabled record visibility setting', () => {
+  const h = createPage({ hiddenTypes: ['sitting', 'kindness', 'clapping'], recordsVisible: false });
   h.page.onShow();
   h.page.restoreAll();
   assert.deepEqual(h.storage.get(keyFor('oz-owner')), []);
@@ -108,10 +113,33 @@ test('restoreAll saves the empty hidden selection and restores every switch', ()
   assert.equal(h.page.data.visibleCount, 6);
   assert.equal(h.page.data.hiddenCount, 0);
   assert.equal(h.page.data.error, '');
+  assert.equal(h.page.data.recordsVisible, false);
+  assert.equal(h.storage.get(recordsKeyFor('oz-owner')), false);
   assert.deepEqual(h.toast, [{ title: '已显示全部功课', icon: 'success' }]);
   const reopened = h.openPage();
   reopened.onShow();
   assert.deepEqual(visibleTypes(reopened), TYPES);
+  assert.equal(reopened.data.recordsVisible, false);
+});
+
+test('practice entries stay editable while records are hidden and survive toggling the master setting', () => {
+  const h = createPage({ hiddenTypes: ['walking'], recordsVisible: false });
+  h.page.onShow();
+  assert.equal(h.page.data.recordsVisible, false);
+  assert.deepEqual(visibleTypes(h.page), TYPES.filter(type => type !== 'walking'));
+  h.page.onEntryChange(changeEvent('kindness', false));
+  assert.deepEqual(h.storage.get(keyFor('oz-owner')), ['walking', 'kindness']);
+  assert.equal(h.page.data.recordsVisible, false);
+  assert.equal(h.storage.get(recordsKeyFor('oz-owner')), false);
+  h.page.onRecordVisibilityChange({ detail: { value: true } });
+  assert.deepEqual(visibleTypes(h.page), TYPES.filter(type => !['walking', 'kindness'].includes(type)));
+  assert.deepEqual(h.storage.get(keyFor('oz-owner')), ['walking', 'kindness']);
+  assert.equal(h.page.data.recordsVisible, true);
+  assert.equal(h.appCalls.refreshTabBars, 1);
+  const reopened = h.openPage();
+  reopened.onShow();
+  assert.equal(reopened.data.recordsVisible, true);
+  assert.deepEqual(visibleTypes(reopened), TYPES.filter(type => !['walking', 'kindness'].includes(type)));
 });
 
 test('all practice switches may be turned off and stay off after reopening', () => {
@@ -203,6 +231,7 @@ test('unreadable account storage shows a page error without loading or writing g
   h.readFailures.set('userOpenId', new Error('账号信息不可读'));
   h.page.onShow();
   assert.deepEqual(plain(h.page.data.entries), []);
+  assert.equal(h.page.data.recordsVisible, false);
   assert.match(h.page.data.error, /读取|重试/);
   h.page.onEntryChange(changeEvent('walking', false));
   h.page.restoreAll();

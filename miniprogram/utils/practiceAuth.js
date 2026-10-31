@@ -1,6 +1,13 @@
 const config = require('./practiceConfig.js');
+const profileCache = require('./profileCache.js');
 
 function failure(code, message) { return Object.assign(new Error(message), { code }); }
+
+function sameBinding(left, right) {
+  return left.bijingBound === right.bijingBound && (!left.bijingBound ||
+    String(left.bijingStudentNumber || '').trim().toUpperCase() === String(right.bijingStudentNumber || '').trim().toUpperCase() &&
+    String(left.bijingBindingVersion || '') === String(right.bijingBindingVersion || ''));
+}
 
 // This is local queue ownership, not server-verified personal authorization.
 // All new requests pass through this module so login can replace the shared
@@ -17,9 +24,9 @@ function getOwner() {
       ? cached.binding : profile;
     // A partially saved bind/unbind must pause rather than reuse an old owner.
     if (binding !== profile && typeof profile.bijingBound === 'boolean' &&
-        (profile.bijingBound !== binding.bijingBound || profile.bijingBound &&
-        (String(profile.bijingStudentNumber || '').trim().toUpperCase() !== String(binding.bijingStudentNumber || '').trim().toUpperCase() ||
-          String(profile.bijingBindingVersion || '') !== String(binding.bijingBindingVersion || '')))) return null;
+        !sameBinding(profile, binding)) return null;
+    const confirmed = profileCache.getConfirmedBijingBinding(openid);
+    if (confirmed && !sameBinding(binding, confirmed)) return null;
     if (binding.bijingBound !== true || typeof binding.bijingStudentNumber !== 'string' ||
         !binding.bijingStudentNumber.trim()) return null;
     return { openid, studentNumber: binding.bijingStudentNumber.trim().toUpperCase(),

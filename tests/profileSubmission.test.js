@@ -24,6 +24,7 @@ function createPage(name = 'profile', options = {}) {
     } }
   };
   const mocks = {
+    '../../utils/practicePreferences.js': { currentAccountKey: () => 'profile-test-account', getRecordsVisible: () => false },
     '../../utils/contentSec.js': { checkText: options.checkText || (async () => options.safe !== false), checkImage: options.checkImage || (async () => options.imageResult || null) },
     '../../utils/badgeManager.js': { migrateBadges: () => { calls.migrations++; } },
     '../../utils/badgeManager': {}, '../../utils/checkin.js': { isUserLoggedIn: () => true },

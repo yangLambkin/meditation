@@ -1122,7 +1122,7 @@ const checkinManager = {
       // 添加详细记录（格式与本地打卡记录一致）
       localData.checkinRecords.dailyRecords[dateStr].records.push({
         // 重建缓存也必须保留未确认记录的补传状态，不能把它们变成历史脏数据。
-        ...Object.fromEntries(['syncVersion', 'syncStatus', 'syncOpenid', 'syncAttempts',
+        ...Object.fromEntries(['syncVersion', 'syncStatus', 'syncOpenid', 'syncAttempts', 'syncSourceAttempted',
           'syncNextRetryAt', 'syncBlocked', 'syncError', 'syncErrorCode', 'syncLegacyRecovery', 'syncIgnored']
           .filter(key => record[key] !== undefined).map(key => [key, record[key]])),
         ...(record._openid ? { syncOpenid: record._openid } : {}),
@@ -1559,6 +1559,8 @@ const checkinManager = {
     const newRecord = {
       localId: metadata.idempotencyKey || `record_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       syncVersion: 1,
+      // 明确记录从未进入来源请求；旧记录缺少此字段时不能推断为未发送。
+      syncSourceAttempted: false,
       syncStatus: activeUploads.has(backupKey(this.getUserId(), recordTimestamp, metadata.idempotencyKey)) ? 'uploading' : 'pending',
       syncOpenid: currentUploadOpenid(),
       source: metadata.source,
@@ -1695,6 +1697,12 @@ const checkinManager = {
         }
         try {
           uploadNetwork.assertUninterrupted(uploadNetworkVersion);
+          // 与是否绑定/开启镜像无关；请求前先记录可能已发送，未知回包或重开
+          // 后仍不能把该来源当成从未上传。落盘失败时不发出本次请求。
+          if (managed && !updateStoredUpload(userId, localId, record => { record.syncSourceAttempted = true; })) {
+            result = { success: false, code: 'RECORD_NOT_FOUND', error: '本地记录已移除' };
+            break;
+          }
           result = await awaitUploadUntil(cloudApi.recordMeditation(...args,
             { ...metadata, uploadDeadlineAt, uploadNetworkVersion }), uploadDeadlineAt);
           if (!result || (result.success && !(result.data && typeof result.data.recordId === 'string' && result.data.recordId.trim()))) {

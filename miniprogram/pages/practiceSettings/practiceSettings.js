@@ -1,7 +1,7 @@
 const preferences = require('../../utils/practicePreferences.js');
 
 Page({
-  data: { entries: [], visibleCount: 6, hiddenCount: 0, error: '' },
+  data: { recordsVisible: true, entries: [], visibleCount: 6, hiddenCount: 0, error: '' },
 
   onShow() { this.loadPreferences(); },
 
@@ -9,10 +9,30 @@ Page({
     try {
       this._account = preferences.currentAccountKey();
       this.showPreferences(preferences.getHiddenTypes());
+      this.setData({ recordsVisible: preferences.getRecordsVisible() });
     } catch (_) {
       this._account = null;
-      this.setData({ entries: [], error: '暂时无法读取设置，请稍后重试。' });
+      this.setData({ recordsVisible: false, entries: [], error: '暂时无法读取设置，请稍后重试。' });
     }
+  },
+
+  onRecordVisibilityChange(event) {
+    const previous = this.data.recordsVisible;
+    this.setData({ recordsVisible: event.detail.value === true });
+    try {
+      if (!this._account || this._account !== preferences.currentAccountKey()) {
+        this.loadPreferences();
+        wx.showToast({ title: '账号已变化，请重新设置', icon: 'none' });
+        return;
+      }
+      this.setData({ recordsVisible: preferences.saveRecordsVisible(event.detail.value === true), error: '' });
+    } catch (_) {
+      this.setData({ recordsVisible: previous, error: '设置未能保存，请重试。' });
+      wx.showToast({ title: '设置未能保存，请重试', icon: 'none' });
+      return;
+    }
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.refreshTabBars === 'function') app.refreshTabBars();
   },
 
   showPreferences(hiddenTypes) {

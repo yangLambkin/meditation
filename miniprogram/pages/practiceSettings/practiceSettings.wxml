@@ -1,6 +1,17 @@
 <view class="settings-page">
-  <text class="settings-title">我的功课入口</text>
-  <text class="settings-subtitle">选择常用的功课，让每次记录更简洁。</text>
+  <text class="settings-title">记录设置</text>
+  <text class="settings-subtitle">管理记录入口，选择常用的功课。</text>
+
+  <view wx:if="{{entries.length}}" class="settings-card">
+    <view class="entry-row visibility-row">
+      <view class="entry-copy">
+        <text class="entry-name">显示记录</text>
+        <text class="entry-description">显示底部「记录」和首页「记录功课」入口。静坐记录的保存与同步不受影响。</text>
+      </view>
+      <switch color="#b29764" checked="{{recordsVisible}}" bindchange="onRecordVisibilityChange" aria-label="显示记录" />
+    </view>
+  </view>
+  <text wx:if="{{entries.length && !recordsVisible}}" class="settings-hint">记录入口已隐藏，以下功课选择会保留，重新开启后继续使用。</text>
 
   <view wx:if="{{entries.length}}" class="settings-card">
     <view class="settings-card-heading"><text>显示的功课</text><text class="settings-count">{{visibleCount}} / {{entries.length}}</text></view>

@@ -68,14 +68,7 @@
       <view wx:if="{{summaryLoading}}" class="empty-state">正在读取统计…</view>
       <template wx:elif="{{summaryError}}" is="read-failure" data="{{failure: summaryFailure, scope: 'summary'}}" />
       <block wx:elif="{{summary}}">
-        <view wx:if="{{type === 'all'}}" class="stats-card practice-overview-card">
-          <view class="practice-overview-header"><text>功课名称</text><text>本月记录件数</text></view>
-          <view wx:for="{{monthCards}}" wx:key="type" class="practice-overview-row">
-            <text class="practice-overview-name">{{item.name}}</text>
-            <view><text class="practice-overview-value">{{item.records}}</text><text class="practice-overview-unit">件</text></view>
-          </view>
-        </view>
-        <view wx:else class="month-overview">
+        <view wx:if="{{type !== 'all'}}" class="month-overview">
           <view class="overview-stat"><text class="caption">功课名称</text><view class="overview-value"><text class="overview-name">{{typeOptions[typeIndex].name}}</text></view></view>
           <view class="overview-stat"><text class="caption">{{overviewLabel}}</text><view class="overview-value"><text class="stat-number">{{overviewTotal}}</text><text class="stat-unit">{{overviewUnit}}</text></view></view>
         </view>
@@ -85,21 +78,21 @@
           <view class="calendar-week" wx:for="{{calendar}}" wx:for-item="week" wx:for-index="weekIndex" wx:key="weekIndex">
             <view class="calendar-cell {{day.active ? 'has-practice' : ''}} {{day.selected ? 'calendar-selected' : ''}} {{day.today ? 'is-today' : ''}} {{day.future ? 'future' : ''}}" wx:for="{{week}}" wx:for-item="day" wx:key="key" data-date="{{day.date}}" bindtap="selectCalendarDay" hover-class="{{!day.empty && !day.future ? 'calendar-cell-hover' : 'none'}}" aria-role="{{!day.empty && !day.future ? 'button' : ''}}" aria-label="{{day.empty ? '' : day.future ? day.date + '，尚未到来' : day.date + '，当天累计' + day.value + selectedMonthUnit + '，点击查看当日明细'}}">
               <text wx:if="{{!day.empty}}" class="calendar-day calendar-level-{{day.level}}">{{day.day}}</text>
-              <text wx:if="{{!day.empty}}" class="calendar-amount">{{!day.future && day.value > 0 ? '+' + day.valueLabel + (type === 'all' ? '件' : '') : ''}}</text>
+              <text wx:if="{{!day.empty}}" class="calendar-amount">{{!day.future && day.value > 0 ? '+' + day.valueLabel + (type === 'all' ? '条' : '') : ''}}</text>
             </view>
           </view>
           <view class="calendar-footer">
             <view class="calendar-legend" aria-label="颜色越深表示当天累计越多"><text>少</text><view class="calendar-swatch calendar-level-1"></view><view class="calendar-swatch calendar-level-2"></view><view class="calendar-swatch calendar-level-3"></view><view class="calendar-swatch calendar-level-4"></view><view class="calendar-swatch calendar-level-5"></view><text>多</text></view>
-            <text class="calendar-hint">{{type === 'all' ? '记录件数 · 点击日期查看详情' : '点击日期查看详情'}}</text>
+            <text class="calendar-hint">{{type === 'all' ? '记录条数 · 点击日期查看详情' : '点击日期查看详情'}}</text>
           </view>
         </view>
 
         <view wx:if="{{type !== 'all'}}" class="stats-card trend-card">
-          <view class="card-heading"><text class="card-title">每日完成量趋势</text><text class="caption">{{typeOptions[typeIndex].unit}} / 日</text></view>
-          <text class="caption">本月最高 {{trendMax}} {{typeOptions[typeIndex].unit}}</text>
+          <view class="card-heading"><text class="card-title">每日完成量趋势</text><text class="caption">{{overviewUnit}} / 日</text></view>
+          <text class="caption">本月最高 {{trendMax}} {{overviewUnit}}</text>
           <scroll-view scroll-x="{{true}}" class="trend-scroll" aria-label="{{month}}每日{{typeOptions[typeIndex].name}}完成量，左右滑动查看整月">
             <view class="trend-chart" style="width: {{trendWidth}}rpx;">
-              <view class="trend-column" wx:for="{{trend}}" wx:key="date" data-date="{{item.date}}" bindtap="selectCalendarDay" aria-role="button" aria-label="{{item.date}}，{{item.value}}{{typeOptions[typeIndex].unit}}，点击查看当日明细">
+              <view class="trend-column" wx:for="{{trend}}" wx:key="date" data-date="{{item.date}}" bindtap="selectCalendarDay" aria-role="button" aria-label="{{item.date}}，{{item.value}}{{overviewUnit}}，点击查看当日明细">
                 <view class="trend-bar-area"><text wx:if="{{item.value}}" class="trend-value">{{item.label}}</text><view class="trend-bar {{!item.value ? 'trend-zero' : ''}}" style="height: {{item.height}}rpx;"></view></view>
                 <text class="trend-day">{{item.day}}</text>
               </view>
@@ -109,8 +102,14 @@
         </view>
         <view class="stats-card">
           <text class="card-title">已上传功课累计</text><text class="caption">当前功课筛选下，已上传记录的累计</text>
-          <view class="headline-stats"><view><text class="stat-number">{{allTimePracticeDays}}</text><text class="caption">功课天数</text></view><view><text class="stat-number">{{allTimeRecordCount}}</text><text class="caption">{{type === 'all' ? '记录件数' : '记录条数'}}</text></view></view>
-          <view class="metric-grid"><view wx:for="{{allTimeCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric"><text class="metric-name">{{item.name}}</text><view><text class="metric-value">{{type === 'all' ? item.records : item.value}}</text><text class="metric-unit">{{type === 'all' ? '件' : item.unit}}</text></view></view></view>
+          <view class="headline-stats"><view><text class="stat-number">{{allTimePracticeDays}}</text><text class="caption">功课天数</text></view><view><text class="stat-number">{{allTimeRecordCount}}</text><text class="caption">记录条数</text></view></view>
+          <view class="metric-grid">
+            <view wx:for="{{allTimeCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric">
+              <text class="metric-name">{{item.name}}</text>
+              <view><text class="metric-value">{{item.value}}</text><text class="metric-unit">{{item.unit}}</text></view>
+              <text wx:if="{{type === 'all'}}" class="metric-month">本月 {{item.monthValue}} {{item.unit}}</text>
+            </view>
+          </view>
           <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。团队、勋章继续沿用原静坐统计。</text>
         </view>
       </block>
@@ -131,7 +130,8 @@
     <scroll-view class="dialog-scroll" scroll-y="{{true}}">
       <view class="dialog-body">
         <view wx:if="{{formType === 'kindness'}}" class="privacy-notice"><text>善事内容和感悟对已登录成员可见。</text><text>{{formEditing ? '修改会同步更新「做善事」，原件数及关联数据保持不变。' : '新建默认记一件，也会展示在「做善事」中。'}}</text></view>
-        <view class="field-row"><view class="field field-date"><text class="label">发生日期</text><picker mode="date" value="{{formDate}}" end="{{today}}" bindchange="onFormDate" disabled="{{formBusy || formPending}}"><view class="field-control">{{formDate}}<text class="picker-arrow">⌄</text></view></picker></view><view class="field field-time"><text class="label">发生时间</text><picker mode="time" value="{{formTime}}" bindchange="onFormTime" disabled="{{formBusy || formPending}}"><view class="field-control">{{formTime || '原记录无时间'}}<text class="picker-arrow">⌄</text></view></picker></view></view>
+        <view class="field-row"><view class="field field-date"><text class="label">发生日期</text><picker mode="date" value="{{formDate}}" start="{{formMinDate}}" end="{{today}}" bindtap="refreshFormDates" bindchange="onFormDate" disabled="{{formBusy || formPending}}"><view class="field-control">{{formDate}}<text class="picker-arrow">⌄</text></view></picker></view><view class="field field-time"><text class="label">发生时间</text><picker mode="time" value="{{formTime}}" bindchange="onFormTime" disabled="{{formBusy || formPending}}"><view class="field-control">{{formTime || '原记录无时间'}}<text class="picker-arrow">⌄</text></view></picker></view></view>
+        <text wx:if="{{!formEditing}}" class="caption field-hint">可记录今天和昨天的功课。</text>
         <text wx:if="{{formEditing && !formTime}}" class="caption field-hint">原记录仅有日期，请补充真实发生时间后保存。</text>
         <view wx:if="{{formType !== 'kindness'}}" class="field"><text class="label">{{formType === 'instant' ? '完成次数' : '完成时长'}}</text><view class="field-control"><input class="amount-input" type="number" value="{{formValue}}" bindinput="onFormValue" disabled="{{formBusy || formPending}}" maxlength="7"/><text class="field-unit">{{formUnit}}</text></view><text class="caption field-hint">{{formType === 'instant' ? '请填写已完成的整数次数。' : '填写已完成的整数分钟数。'}}</text></view>
         <view wx:else class="field"><text class="label">善事内容 <text class="required">必填</text></text><textarea class="textarea content-textarea" value="{{formContent}}" bindinput="onFormContent" maxlength="1000" placeholder="记录今天的一件善行" disabled="{{formBusy || formPending}}"/><text class="word-count">{{formContent.length}} / 1000</text><text wx:if="{{formEditing}}" class="caption">原记录 {{formValue}} 件，本次编辑保留件数。</text></view>

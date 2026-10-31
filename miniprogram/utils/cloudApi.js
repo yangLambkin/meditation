@@ -61,7 +61,9 @@ const cloudApi = {
   callCloudFunction: function(functionName, data, options = {}) {
     const account = recordAccount(functionName, data);
     // 原网络写入前先持久化意图，晚到的成功回包也必须独立观察。
-    const practiceContext = beginPracticeObservation(functionName, data);
+    const sourceVerification = functionName === 'meditationManager' && data && data.type === 'getAllRecords' &&
+      options.observePracticeSnapshot === false;
+    const practiceContext = sourceVerification ? null : beginPracticeObservation(functionName, data);
     const isUpload = data && ((functionName === 'meditationManager' && data.type === 'recordMeditation') ||
       (functionName === 'contentSecCheck' && data.type === 'text' && options.isUpload === true));
     const timeoutMs = isUpload ? UPLOAD_TIMEOUT_MS : CLOUD_REQUEST_TIMEOUT_MS;
@@ -302,7 +304,7 @@ const cloudApi = {
   },
 
   // 获取所有记录
-  getAllRecords: async function() {
+  getAllRecords: async function(options = {}) {
     try {
       // 获取当前用户的微信openid
       const userOpenId = wx.getStorageSync('userOpenId');
@@ -310,7 +312,7 @@ const cloudApi = {
       const result = await this.callCloudFunction('meditationManager', {
         type: 'getAllRecords',
         openid: userOpenId
-      });
+      }, { observePracticeSnapshot: options.observePracticeSnapshot !== false });
 
       if (result.result.success) {
         return {
