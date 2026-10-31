@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "功课明细与统计",
+  "navigationBarBackgroundColor": "#F6F6F6",
+  "backgroundColor": "#f8fafc",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 120,
+  "usingComponents": {
+    "practice-picker": "/components/practice-picker/practice-picker"
+  }
+}

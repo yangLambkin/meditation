@@ -54,15 +54,23 @@ function harness({ recordsVisible = true } = {}) {
       'practiceApi.js': {}, 'practiceQueue.js': {}, 'practiceAuth.js': { getOwner: () => ({ openid: storage.get('userOpenId') }) },
       'practiceConfig.js': { practicesEnabled: true }
     };
+    function pageRequire(name) {
+      const base = path.basename(name);
+      if (['practicePreferences.js', 'practiceEntry.js'].includes(base)) return loadModule(base);
+      if (base === 'practicePage.js') {
+        const filename = path.join(miniprogramPath, 'pages/practices/practicePage.js');
+        const module = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+          module, exports: module.exports, require: pageRequire, wx, console, Date
+        }, { filename });
+        return module.exports;
+      }
+      assert.ok(Object.hasOwn(stubs, base), `Unexpected page dependency: ${name}`);
+      return stubs[base];
+    }
     const filename = path.join(miniprogramPath, 'pages', pageName, `${pageName}.js`);
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-      require(name) {
-        const base = path.basename(name);
-        if (['practicePreferences.js', 'practiceEntry.js'].includes(base)) return loadModule(base);
-        assert.ok(Object.hasOwn(stubs, base), `Unexpected page dependency: ${name}`);
-        return stubs[base];
-      },
-      Page(value) { definition = value; }, wx, console, Date
+      require: pageRequire, Page(value) { definition = value; }, wx, console, Date
     }, { filename });
     return { ...definition, data: structuredClone(definition.data),
       setData(values) { Object.assign(this.data, values); },
@@ -91,7 +99,7 @@ function assertNoEntryAction(h) {
 }
 
 test('native picker failures show a retry hint without invoking an entry action', () => {
-  for (const pageName of [null, 'index', 'practices']) {
+  for (const pageName of [null, 'index', 'practices', 'practiceHistory']) {
     const h = harness();
     h.actionSheet.failure = { errMsg: 'showActionSheet:fail api unavailable' };
     assert.doesNotThrow(() => openEntry(h, pageName));
@@ -105,7 +113,7 @@ test('native picker failures show a retry hint without invoking an entry action'
 });
 
 test('cancelling the native picker stays quiet without invoking an entry action', () => {
-  for (const pageName of [null, 'index', 'practices']) {
+  for (const pageName of [null, 'index', 'practices', 'practiceHistory']) {
     const h = harness();
     h.actionSheet.failure = { errMsg: 'showActionSheet:fail cancel' };
     assert.doesNotThrow(() => openEntry(h, pageName));
@@ -116,7 +124,7 @@ test('cancelling the native picker stays quiet without invoking an entry action'
 });
 
 test('synchronous native picker errors show a retry hint without invoking an entry action', () => {
-  for (const pageName of [null, 'index', 'practices']) {
+  for (const pageName of [null, 'index', 'practices', 'practiceHistory']) {
     const h = harness();
     h.actionSheet.error = new Error('native picker unavailable');
     assert.doesNotThrow(() => openEntry(h, pageName));
@@ -238,16 +246,18 @@ test('the home entry stores kindness and opens records when kindness is the firs
   assert.equal(h.calls.sitting, 0);
 });
 
-test('the records entry opens the kindness form when kindness is the first visible choice', () => {
-  const h = harness();
-  h.preferences.saveHiddenTypes(['sitting', 'walking', 'instant', 'learning']);
-  const page = h.loadPage('practices');
-  page.choosePractice();
-  assert.deepEqual(plain(h.calls.sheets.at(-1).itemList), ['日行一善', '禅拍']);
-  h.calls.sheets.at(-1).success({ tapIndex: 0 });
-  assert.deepEqual(h.calls.forms, ['kindness']);
-  assert.equal(h.calls.sitting, 0);
-  assert.equal(h.calls.switchTab.length, 0);
+test('both records screens open the kindness form when kindness is the first visible choice', () => {
+  for (const pageName of ['practices', 'practiceHistory']) {
+    const h = harness();
+    h.preferences.saveHiddenTypes(['sitting', 'walking', 'instant', 'learning']);
+    const page = h.loadPage(pageName);
+    page.choosePractice();
+    assert.deepEqual(plain(h.calls.sheets.at(-1).itemList), ['日行一善', '禅拍']);
+    h.calls.sheets.at(-1).success({ tapIndex: 0 });
+    assert.deepEqual(h.calls.forms, ['kindness']);
+    assert.equal(h.calls.sitting, 0);
+    assert.equal(h.calls.switchTab.length, 0);
+  }
 });
 
 test('the home entry does not navigate when its selected practice cannot be persisted', () => {

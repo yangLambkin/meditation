@@ -1,0 +1,115 @@
+<template name="read-failure">
+  <view class="state-card error-card">
+    <image class="state-icon" src="/images/icons/info.svg" aria-hidden="true" />
+    <text class="state-title">{{failure.title}}</text>
+    <text class="state-message">{{failure.message}}</text>
+    <button size="mini" class="outline-button state-button" bindtap="handleReadFailure" data-scope="{{scope}}">{{failure.actionText}}</button>
+  </view>
+</template>
+
+<view class="practice-page">
+  <view class="page-heading">
+    <view class="heading-copy"><text class="page-title">功课记录</text></view>
+  </view>
+
+  <view wx:if="{{!enabled}}" class="state-card">
+    <text class="state-title">功课记录准备中</text>
+    <text class="state-message">这里即将支持更多功课的记录与统计。现在可以继续记录静坐。</text>
+    <button class="outline-button" bindtap="openSittingForm">记录静坐</button>
+  </view>
+
+  <block wx:if="{{enabled}}">
+    <include src="../practices/practicePending.wxml" />
+
+    <view class="records-toolbar">
+      <view class="view-tabs">
+        <button size="mini" class="view-tab {{view === 'detail' ? 'selected' : ''}}" bindtap="changeView" data-view="detail" aria-label="功课明细">明细</button>
+        <button size="mini" class="view-tab {{view === 'stats' ? 'selected' : ''}}" bindtap="changeView" data-view="stats" aria-label="功课统计">统计</button>
+      </view>
+      <view class="filters">
+        <button class="filter-pill type-filter {{type !== 'all' ? 'type-filter-active' : ''}}" bindtap="openTypePicker" hover-class="filter-pill-hover" aria-label="{{'筛选功课类型，当前' + typeOptions[typeIndex].name}}" aria-expanded="{{showTypePicker}}"><text>{{typeOptions[typeIndex].name}}</text><view class="filter-chevron" aria-hidden="true"></view></button>
+        <picker mode="date" fields="month" value="{{month}}" end="{{today}}" bindchange="onMonthChange" aria-label="筛选月份"><view class="filter-pill"><text>{{monthLabel}}</text><view class="filter-chevron" aria-hidden="true"></view></view></picker>
+      </view>
+    </view>
+
+    <view wx:if="{{view === 'detail'}}">
+      <view wx:if="{{selectedDate && !loading && !error}}" class="date-filter-row">
+        <text class="selected-date">{{selectedDate}}</text>
+        <button size="mini" class="inline-button" bindtap="clearDate">查看整月</button>
+      </view>
+      <view wx:if="{{loading}}" class="empty-state">正在读取功课…</view>
+      <template wx:elif="{{error}}" is="read-failure" data="{{failure: feedFailure, scope: 'feed'}}" />
+      <view wx:elif="{{loaded && !records.length}}" class="empty-state"><text class="empty-symbol">○</text><text>这{{selectedDate ? '一天' : '个月'}}还没有已上传的功课</text><text class="caption">每一份练习，都值得记录</text></view>
+      <text wx:if="{{records.length && !loading && !error}}" class="records-hint">{{type === 'sitting' ? '长按查看详情，静坐记录请前往原记录管理' : '长按卡片可编辑或删除'}}</text>
+      <view class="day-group" wx:for="{{groups}}" wx:for-item="group" wx:key="date">
+        <view class="day-heading">
+          <view class="day-heading-copy"><text>{{group.date}}</text><text class="caption">{{group.records.length}} 条{{nextCursor ? '已载入' : ''}}</text></view>
+          <button size="mini" class="day-stats-button" bindtap="openDayStats" data-date="{{group.date}}" hover-class="day-stats-button-hover" aria-label="{{'查看' + group.date + '的功课统计'}}">查看统计<text class="day-stats-arrow" aria-hidden="true">›</text></button>
+        </view>
+        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" catchlongpress="showRecordActions" data-key="{{record.key}}" hover-class="card-hover" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + (record.canEdit || record.canDelete ? '，长按管理记录' : '，长按查看详情')}}">
+          <view class="record-heading"><view><text class="record-name">{{record.typeName}}</text><text class="record-time">{{record.timeLabel}}</text></view><view><text class="record-amount">{{record.quantity}}</text><text class="record-unit">{{record.unit}}</text></view></view>
+          <text wx:if="{{record.preview}}" class="record-preview">{{record.preview}}</text>
+          <text wx:if="{{record.mirrored}}" class="source-tag">来自静坐记录</text>
+        </view>
+      </view>
+      <view wx:if="{{records.length}}" class="list-footer"><button wx:if="{{nextCursor}}" class="inline-button" bindtap="loadMore" loading="{{loadingMore}}" disabled="{{loadingMore}}">加载更多</button><text wx:else class="caption">已显示当前筛选下全部记录</text></view>
+    </view>
+
+    <view wx:if="{{view === 'stats'}}">
+      <view wx:if="{{summaryLoading}}" class="empty-state">正在读取统计…</view>
+      <template wx:elif="{{summaryError}}" is="read-failure" data="{{failure: summaryFailure, scope: 'summary'}}" />
+      <block wx:elif="{{summary}}">
+        <view wx:if="{{type !== 'all'}}" class="month-overview">
+          <view class="overview-stat"><text class="caption">功课名称</text><view class="overview-value"><text class="overview-name">{{typeOptions[typeIndex].name}}</text></view></view>
+          <view class="overview-stat"><text class="caption">{{overviewLabel}}</text><view class="overview-value"><text class="stat-number">{{overviewTotal}}</text><text class="stat-unit">{{overviewUnit}}</text></view></view>
+        </view>
+
+        <view class="stats-card calendar-card">
+          <view class="weekdays"><text>周一</text><text>周二</text><text>周三</text><text>周四</text><text>周五</text><text>周六</text><text>周日</text></view>
+          <view class="calendar-week" wx:for="{{calendar}}" wx:for-item="week" wx:for-index="weekIndex" wx:key="weekIndex">
+            <view class="calendar-cell {{day.active ? 'has-practice' : ''}} {{day.selected ? 'calendar-selected' : ''}} {{day.today ? 'is-today' : ''}} {{day.future ? 'future' : ''}}" wx:for="{{week}}" wx:for-item="day" wx:key="key" data-date="{{day.date}}" bindtap="selectCalendarDay" hover-class="{{!day.empty && !day.future ? 'calendar-cell-hover' : 'none'}}" aria-role="{{!day.empty && !day.future ? 'button' : ''}}" aria-label="{{day.empty ? '' : day.future ? day.date + '，尚未到来' : day.date + '，当天累计' + day.value + selectedMonthUnit + '，点击查看当日明细'}}">
+              <text wx:if="{{!day.empty}}" class="calendar-day calendar-level-{{day.level}}">{{day.day}}</text>
+              <text wx:if="{{!day.empty}}" class="calendar-amount">{{!day.future && day.value > 0 ? '+' + day.valueLabel + (type === 'all' ? '条' : '') : ''}}</text>
+            </view>
+          </view>
+          <view class="calendar-footer">
+            <view class="calendar-legend" aria-label="颜色越深表示当天累计越多"><text>少</text><view class="calendar-swatch calendar-level-1"></view><view class="calendar-swatch calendar-level-2"></view><view class="calendar-swatch calendar-level-3"></view><view class="calendar-swatch calendar-level-4"></view><view class="calendar-swatch calendar-level-5"></view><text>多</text></view>
+            <text class="calendar-hint">{{type === 'all' ? '记录条数 · 点击日期查看详情' : '点击日期查看详情'}}</text>
+          </view>
+        </view>
+
+        <view wx:if="{{type !== 'all'}}" class="stats-card trend-card">
+          <view class="card-heading"><text class="card-title">每日完成量趋势</text><text class="caption">{{overviewUnit}} / 日</text></view>
+          <text class="caption">本月最高 {{trendMax}} {{overviewUnit}}</text>
+          <scroll-view scroll-x="{{true}}" class="trend-scroll" aria-label="{{month}}每日{{typeOptions[typeIndex].name}}完成量，左右滑动查看整月">
+            <view class="trend-chart" style="width: {{trendWidth}}rpx;">
+              <view class="trend-column" wx:for="{{trend}}" wx:key="date" data-date="{{item.date}}" bindtap="selectCalendarDay" aria-role="button" aria-label="{{item.date}}，{{item.value}}{{overviewUnit}}，点击查看当日明细">
+                <view class="trend-bar-area"><text wx:if="{{item.value}}" class="trend-value">{{item.label}}</text><view class="trend-bar {{!item.value ? 'trend-zero' : ''}}" style="height: {{item.height}}rpx;"></view></view>
+                <text class="trend-day">{{item.day}}</text>
+              </view>
+            </view>
+          </scroll-view>
+          <text class="stats-note">左右滑动查看整月，点选柱形查看当日明细。无记录日期记为 0。</text>
+        </view>
+        <view class="stats-card">
+          <text class="card-title">已上传功课累计</text><text class="caption">当前功课筛选下，已上传记录的累计</text>
+          <view class="headline-stats"><view><text class="stat-number">{{allTimePracticeDays}}</text><text class="caption">功课天数</text></view><view><text class="stat-number">{{allTimeRecordCount}}</text><text class="caption">记录条数</text></view></view>
+          <view class="metric-grid">
+            <view wx:for="{{allTimeCards}}" wx:key="type" wx:if="{{type === 'all' || type === item.type}}" class="metric">
+              <text class="metric-name">{{item.name}}</text>
+              <view><text class="metric-value">{{item.value}}</text><text class="metric-unit">{{item.unit}}</text></view>
+              <text wx:if="{{type === 'all'}}" class="metric-month">本月 {{item.monthValue}} {{item.unit}}</text>
+            </view>
+          </view>
+          <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。团队、勋章继续沿用原静坐统计。</text>
+        </view>
+      </block>
+    </view>
+  </block>
+  <view wx:if="{{type === 'sitting'}}" class="history-notice">
+    <view class="history-copy"><text class="history-title">以往的静坐记录</text><text class="history-caption">静坐历史尚未全部导入，可在原记录中查看。</text></view>
+    <view class="history-entry" bindtap="openOriginalHistory" hover-class="card-hover" aria-role="button" aria-label="查看原静坐完整历史"><text>查看</text><text class="history-arrow">›</text></view>
+  </view>
+</view>
+
+<include src="../practices/practiceDialogs.wxml" />

@@ -4,6 +4,7 @@
     "pages/example/index",
     "pages/timer/timer",
     "pages/practices/practices",
+    "pages/practiceHistory/practiceHistory",
     "pages/practiceSettings/practiceSettings",
     "pages/recorder/recorder",
     "pages/daily/daily1",

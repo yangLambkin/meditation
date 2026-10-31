@@ -1,0 +1,2 @@
+@import "../practices/practices.wxss";
+.practice-page { padding-bottom: calc(48rpx + env(safe-area-inset-bottom)); }

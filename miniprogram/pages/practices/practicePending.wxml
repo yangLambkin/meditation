@@ -1,0 +1,13 @@
+    <view wx:if="{{pendingCount}}" class="pending-card">
+      <view class="pending-heading" bindtap="togglePending"><text>{{pendingCount}} 条功课记录待上传</text><text>{{showPending ? '收起' : '查看'}} ›</text></view>
+      <text wx:if="{{screen === 'history' || showPending}}" class="caption">静坐原记录保存结果不受影响。待上传记录不计入下方统计。</text>
+      <block wx:if="{{showPending}}">
+        <view class="pending-item" wx:for="{{pending}}" wx:key="id">
+          <view><text class="pending-name">{{item.typeName}} · {{item.dateLabel}}</text><text class="caption">{{item.operation === 'delete' ? '删除 · ' : item.operation === 'update' ? '更新 · ' : ''}}{{item.stateText}}</text></view>
+          <button wx:if="{{item.canCancel}}" class="inline-button" data-id="{{item.id}}" bindtap="cancelPending">取消</button>
+          <button wx:elif="{{item.canDeletePending}}" class="inline-button pending-delete" data-id="{{item.id}}" bindtap="deletePending" loading="{{pendingActionId === item.id}}" disabled="{{!!pendingActionId}}">删除</button>
+          <text wx:elif="{{item.deletionQueued}}" class="caption">待删除</text>
+        </view>
+      </block>
+      <button wx:if="{{screen === 'history' || showPending}}" class="inline-button retry-button" bindtap="retryPending" loading="{{retrying}}" disabled="{{retrying}}">重试上传</button>
+    </view>

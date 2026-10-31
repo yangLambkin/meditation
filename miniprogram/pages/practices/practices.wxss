@@ -6,6 +6,51 @@ button { font-weight: 500; }
 .page-heading { gap: 20rpx; min-height: 76rpx; margin-bottom: 28rpx; }
 .heading-copy { flex: 1; min-width: 0; }
 .page-title { display: block; color: #354152; font-size: 36rpx; line-height: 1.4; font-weight: 600; }
+.home-heading { margin-bottom: 30rpx; }
+.home-date { display: block; margin-top: 8rpx; color: #99a1ae; font-size: 25rpx; line-height: 1.5; }
+.home-grid-hint { display: block; margin: 0 0 18rpx 2rpx; color: #99a1ae; font-size: 23rpx; line-height: 1.5; }
+.home-practice-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
+button.home-practice-card { display: flex; flex-direction: column; justify-content: space-between; width: calc((100% - 24rpx) / 3); min-width: 0; height: 174rpx; margin: 0; padding: 24rpx 18rpx; box-sizing: border-box; border: 2rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #354152; text-align: left; line-height: 1.4; }
+button.home-practice-done { border-color: #e5d9c2; background: #faf7f0; }
+button.home-practice-hover { background: #f3eddf; }
+.home-practice-pairs .home-practice-card { width: calc((100% - 12rpx) / 2); }
+.home-practice-single .home-practice-card { flex-direction: row; align-items: center; width: 100%; height: 130rpx; padding: 24rpx; }
+.home-practice-single .home-practice-amount { width: auto; }
+.home-practice-name { display: block; font-size: 25rpx; font-weight: 500; white-space: nowrap; }
+.home-practice-amount { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 6rpx; width: 100%; }
+.home-practice-value { color: #9c8050; font-size: 43rpx; font-weight: 600; font-variant-numeric: tabular-nums; }
+.home-practice-unit { color: #99a1ae; font-size: 21rpx; font-weight: normal; }
+.home-stats-status { display: block; padding: 14rpx 2rpx 0; color: #99a1ae; font-size: 22rpx; }
+.home-stats-error { display: flex; align-items: center; gap: 12rpx; padding: 10rpx 0 0 2rpx; color: #a0855b; font-size: 23rpx; line-height: 1.6; }
+.home-stats-error > text { flex: 1; min-width: 0; }
+.home-stats-error .inline-button { flex-shrink: 0; padding-right: 2rpx; }
+.home-no-practices { margin-top: 0; }
+.home-recent { margin-top: 32rpx; }
+button.home-records-link { display: flex; align-items: center; flex-shrink: 0; width: auto; min-height: 64rpx; margin: 0; padding: 0 0 0 12rpx; border-radius: 12rpx; color: #9c8050; background: transparent; font-size: 24rpx; line-height: 64rpx; }
+.home-entry-arrow { margin-left: 12rpx; color: #b29764; font-size: 34rpx; }
+.home-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 16rpx; }
+.home-section-title { color: #354152; font-size: 30rpx; font-weight: 600; }
+.home-day-group + .home-day-group { margin-top: 28rpx; }
+.home-day-heading { display: flex; align-items: baseline; gap: 14rpx; margin: 0 4rpx 14rpx; }
+.home-day-label { color: #7a8493; font-size: 25rpx; font-weight: 500; }
+.home-day-date { color: #a1a8b2; font-size: 22rpx; }
+.home-record-list { overflow: hidden; border: 1rpx solid #edf0f3; border-radius: 20rpx; background: #fff; }
+.home-record { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; min-height: 98rpx; margin: 0 24rpx; padding: 22rpx 0; box-sizing: border-box; }
+.home-record + .home-record { border-top: 1rpx solid #f0f2f5; }
+.home-record-copy { flex: 1; min-width: 0; }
+.home-record-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 14rpx; }
+.home-record-name { color: #596273; font-size: 27rpx; font-weight: 500; }
+.home-record-time { color: #a1a8b2; font-size: 22rpx; }
+.home-record-preview { display: block; overflow: hidden; margin-top: 10rpx; color: #99a1ae; font-size: 24rpx; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+.home-record-quantity { flex-shrink: 0; display: flex; align-items: baseline; gap: 8rpx; }
+.home-record-value { color: #9c8050; font-size: 31rpx; font-weight: 500; }
+.home-record-unit { color: #99a1ae; font-size: 21rpx; }
+.home-today-empty { padding: 34rpx 24rpx; border: 1rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #8c949e; font-size: 26rpx; text-align: center; line-height: 1.6; }
+.home-today-empty .caption { margin-top: 8rpx; }
+.home-footer-note { display: block; margin: 28rpx 0 0; color: #a1a8b2; font-size: 22rpx; text-align: center; line-height: 1.6; }
+.home-loading { padding-top: 48rpx; }
+.practice-home .pending-card { padding: 20rpx 24rpx; }
+.practice-home .pending-heading { margin-bottom: 0; }
 button.add-button { flex: none; width: 208rpx; min-width: 0; height: 76rpx; margin: 0; padding: 0; line-height: 76rpx; background: #b29764; border-radius: 16rpx; color: #fff; font-size: 27rpx; }
 button.add-button-disabled { color: #fff; background: #cbbda3; }
 .history-notice { display: flex; align-items: center; gap: 20rpx; margin-top: 28rpx; padding: 24rpx 4rpx; border-top: 1rpx solid #e9ecf0; }
