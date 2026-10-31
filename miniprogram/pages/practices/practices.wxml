@@ -53,13 +53,13 @@
       <view wx:if="{{loading}}" class="empty-state">正在读取功课…</view>
       <template wx:elif="{{error}}" is="read-failure" data="{{failure: feedFailure, scope: 'feed'}}" />
       <view wx:elif="{{loaded && !records.length}}" class="empty-state"><text class="empty-symbol">○</text><text>这{{selectedDate ? '一天' : '个月'}}还没有已上传的功课</text><text class="caption">每一份练习，都值得记录</text></view>
-      <text wx:if="{{records.length && !loading && !error}}" class="records-hint">{{type === 'sitting' ? '点击查看详情，静坐记录请前往原记录管理' : '点击查看详情，长按卡片可编辑或删除'}}</text>
+      <text wx:if="{{records.length && !loading && !error}}" class="records-hint">{{type === 'sitting' ? '长按查看详情，静坐记录请前往原记录管理' : '长按卡片可编辑或删除'}}</text>
       <view class="day-group" wx:for="{{groups}}" wx:for-item="group" wx:key="date">
         <view class="day-heading">
           <view class="day-heading-copy"><text>{{group.date}}</text><text class="caption">{{group.records.length}} 条{{nextCursor ? '已载入' : ''}}</text></view>
           <button size="mini" class="day-stats-button" bindtap="openDayStats" data-date="{{group.date}}" hover-class="day-stats-button-hover" aria-label="{{'查看' + group.date + '的功课统计'}}">查看统计<text class="day-stats-arrow" aria-hidden="true">›</text></button>
         </view>
-        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" bindtap="openDetail" catchlongpress="showRecordActions" data-key="{{record.key}}" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + (record.canEdit || record.canDelete ? '，点击查看详情，长按管理记录' : '，点击查看详情')}}">
+        <view class="record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" catchlongpress="showRecordActions" data-key="{{record.key}}" hover-class="card-hover" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + (record.canEdit || record.canDelete ? '，长按管理记录' : '，长按查看详情')}}">
           <view class="record-heading"><view><text class="record-name">{{record.typeName}}</text><text class="record-time">{{record.timeLabel}}</text></view><view><text class="record-amount">{{record.quantity}}</text><text class="record-unit">{{record.unit}}</text></view></view>
           <text wx:if="{{record.preview}}" class="record-preview">{{record.preview}}</text>
           <text wx:if="{{record.mirrored}}" class="source-tag">来自静坐记录</text>
@@ -159,7 +159,7 @@
       <view class="dialog-body">
         <view wx:if="{{formType === 'kindness'}}" class="privacy-notice"><text>善事内容和感悟对已登录成员可见。</text><text>{{formEditing ? '修改会同步更新「做善事」，原件数及关联数据保持不变。' : '新建默认记一件，也会展示在「做善事」中。'}}</text></view>
         <view class="field-row"><view class="field field-date"><text class="label">发生日期</text><picker mode="date" value="{{formDate}}" start="{{formMinDate}}" end="{{today}}" bindtap="refreshFormDates" bindchange="onFormDate" disabled="{{formBusy || formPending}}"><view class="field-control">{{formDate}}<text class="picker-arrow">⌄</text></view></picker></view><view class="field field-time"><text class="label">发生时间</text><picker mode="time" value="{{formTime}}" bindchange="onFormTime" disabled="{{formBusy || formPending}}"><view class="field-control">{{formTime || '原记录无时间'}}<text class="picker-arrow">⌄</text></view></picker></view></view>
-        <text wx:if="{{!formEditing}}" class="caption field-hint">可记录今天和昨天的功课。</text>
+        <text wx:if="{{!formEditing}}" class="caption field-hint">可补录最近14天（含今天）的功课。</text>
         <text wx:if="{{formEditing && !formTime}}" class="caption field-hint">原记录仅有日期，请补充真实发生时间后保存。</text>
         <view wx:if="{{formType !== 'kindness'}}" class="field"><text class="label">{{formType === 'instant' ? '完成次数' : '完成时长'}}</text><view class="field-control"><input class="amount-input" type="number" value="{{formValue}}" bindinput="onFormValue" disabled="{{formBusy || formPending}}" maxlength="7"/><text class="field-unit">{{formUnit}}</text></view><text class="caption field-hint">{{formType === 'instant' ? '请填写已完成的整数次数。' : '填写已完成的整数分钟数。'}}</text></view>
         <view wx:else class="field"><text class="label">善事内容 <text class="required">必填</text></text><textarea class="textarea content-textarea" value="{{formContent}}" bindinput="onFormContent" maxlength="1000" placeholder="记录今天的一件善行" disabled="{{formBusy || formPending}}"/><text class="word-count">{{formContent.length}} / 1000</text><text wx:if="{{formEditing}}" class="caption">原记录 {{formValue}} 件，本次编辑保留件数。</text></view>

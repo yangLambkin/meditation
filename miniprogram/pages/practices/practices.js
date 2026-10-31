@@ -12,6 +12,7 @@ const TYPES = [
 const TYPE_MAP = TYPES.reduce((map, item) => { map[item.type] = item; return map; }, {});
 const BEIJING_OFFSET = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FORM_DATE_WINDOW_DAYS = 14;
 const SHARE_TITLE = '功课记录 · 觉察日常，记录成长';
 const SHARE_IMAGE = '/images/practice-share.png';
 const TIMELINE_SHARE_IMAGE = '/images/practice-share-timeline.png';
@@ -21,7 +22,8 @@ function nowParts(timestamp = Date.now()) {
   return { date: value.slice(0, 10), time: value.slice(11, 16), occurredAt: value.slice(0, 19).replace('T', ' ') };
 }
 function formDateBounds(editing = false, timestamp = Date.now()) {
-  return { today: nowParts(timestamp).date, formMinDate: editing ? '' : nowParts(timestamp - DAY_MS).date };
+  return { today: nowParts(timestamp).date,
+    formMinDate: editing ? '' : nowParts(timestamp - (FORM_DATE_WINDOW_DAYS - 1) * DAY_MS).date };
 }
 function monthEnd(month) {
   const [year, monthNumber] = month.split('-').map(Number);
@@ -513,7 +515,7 @@ Page({
       throw new Error('请选择有效且不晚于当前的北京时间');
     }
     if (!this.data.formEditing && recordDate < bounds.formMinDate) {
-      throw new Error('只能记录今天和昨天的功课，请重新选择发生日期');
+      throw new Error('只能记录最近14天（含今天）的功课，请重新选择发生日期');
     }
     const occurredAt = !this._formTimeEdited && this._formOccurredAt || `${recordDate} ${time}:00`;
     const reflection = this.data.formReflection.trim();

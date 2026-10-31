@@ -118,9 +118,9 @@
             <text class="bijing-bound-tip">已绑定学号：{{bijingStudentNumber}}</text>
             <view class="bijing-text-action bijing-unbind {{bijingUnbinding || bijingSyncing ? 'is-busy' : ''}}" catchtap="unbindBijing">{{bijingUnbinding ? '解绑中…' : '解绑'}}</view>
           </view>
-          <view class="bijing-actions">
+          <view class="bijing-actions bijing-record-actions">
+            <button wx:if="{{bijingStudentNumber}}" class="bijing-btn-sm bijing-heatmap-btn" catchtap="openBijingHeatmap">查看静坐热力图</button>
             <view wx:if="{{bijingShowManualSync}}" class="bijing-btn-sm bijing-manual-btn {{bijingSyncing || bijingUnbinding ? 'is-syncing' : ''}}" catchtap="syncBijingNow">{{bijingSyncing ? '同步中...' : '手动同步'}}</view>
-            <button wx:if="{{bijingStudentNumber}}" class="bijing-btn-sm bijing-heatmap-btn" catchtap="openBijingHeatmap">查看热力图</button>
           </view>
           <text wx:if="{{bijingLastSync}}" class="bijing-last">{{bijingLastSync}}</text>
         </block>
@@ -209,7 +209,7 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V3.0.3</text>
+        <text class="me-menu-note me-menu-version">V3.0.5</text>
       </view>
     </view>
     <text class="me-design-credit">Designed By Genxin</text>

@@ -1110,23 +1110,23 @@ test('cancelled practice forms cannot enqueue a record through a delayed confirm
   assert.equal(h.calls.flush.length, 0);
 });
 
-test('all five manual practices default to today and save yesterday with the chosen Beijing time', async () => {
+test('all five manual practices default to today and accept the earliest of the latest 14 Beijing calendar days', async () => {
   for (const type of ['walking', 'instant', 'learning', 'kindness', 'clapping']) {
     const h = createPage();
     h.page.openForm(type);
     assert.equal(h.page.data.formDate, '2026-10-31', type);
-    assert.equal(h.page.data.formMinDate, '2026-10-30', type);
+    assert.equal(h.page.data.formMinDate, '2026-10-18', type);
     assert.equal(h.page.data.today, '2026-10-31', type);
-    h.page.onFormDate({ detail: { value: '2026-10-30' } });
+    h.page.onFormDate({ detail: { value: '2026-10-18' } });
     h.page.onFormTime({ detail: { value: '23:59' } });
-    h.page.onFormReflection({ detail: { value: '昨日功课' } });
+    h.page.onFormReflection({ detail: { value: '两周内补录功课' } });
     if (type === 'kindness') h.page.onFormContent({ detail: { value: '帮助他人' } });
     else h.page.onFormValue({ detail: { value: '7' } });
     await h.page.saveForm();
     assert.equal(h.calls.enqueue.length, 1, type);
     assert.equal(h.calls.enqueue[0].operation, 'create', type);
     assert.deepEqual(h.calls.enqueue[0].payload, {
-      recordDate: '2026-10-30', occurredAt: '2026-10-30 23:59:00', reflection: '昨日功课',
+      recordDate: '2026-10-18', occurredAt: '2026-10-18 23:59:00', reflection: '两周内补录功课',
       ...(type === 'kindness' ? { content: '帮助他人' } : type === 'instant' ? { count: 7 } : { durationMinutes: 7 })
     }, type);
     assert.equal(h.page.data.showForm, false, type);
@@ -1138,63 +1138,79 @@ test('all five manual practices default to today and save yesterday with the cho
   assert.match(datePicker[0], /end="{{today}}"/);
 });
 
-test('new practice rejects dates before yesterday and future dates before enqueueing', async () => {
-  const h = createPage();
-  h.page.openForm('walking');
-  h.page.onFormValue({ detail: { value: '7' } });
-  h.page.onFormDate({ detail: { value: '2026-10-29' } });
-  await h.page.saveForm();
-  assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/);
-  h.page.onFormDate({ detail: { value: '2026-11-01' } });
-  await h.page.saveForm();
-  assert.match(h.page.data.formError, /北京时间/);
-  assert.equal(h.calls.enqueue.length, 0);
-  assert.equal(h.calls.flush.length, 0);
-  assert.equal(h.page.data.showForm, true);
+test('all five manual practices reject one day outside the 14-day window and future dates before enqueueing', async () => {
+  for (const type of ['walking', 'instant', 'learning', 'kindness', 'clapping']) {
+    const h = createPage();
+    h.page.openForm(type);
+    if (type === 'kindness') h.page.onFormContent({ detail: { value: '帮助他人' } });
+    else h.page.onFormValue({ detail: { value: '7' } });
+    h.page.onFormDate({ detail: { value: '2026-10-17' } });
+    await h.page.saveForm();
+    assert.match(h.page.data.formError, /最近14天.*含今天/, type);
+    h.page.onFormDate({ detail: { value: '2026-11-01' } });
+    await h.page.saveForm();
+    assert.match(h.page.data.formError, /北京时间/, type);
+    assert.equal(h.calls.enqueue.length, 0, type);
+    assert.equal(h.calls.flush.length, 0, type);
+    assert.equal(h.page.data.showForm, true, type);
+  }
 });
 
-test('the two-day window follows Beijing calendar boundaries across months, years and leap days', async () => {
-  for (const [today, yesterday, older] of [
-    ['2026-11-01', '2026-10-31', '2026-10-30'],
-    ['2027-01-01', '2026-12-31', '2026-12-30'],
-    ['2028-03-01', '2028-02-29', '2028-02-28'],
-    ['2027-03-01', '2027-02-28', '2027-02-27']
+test('the 14-day window follows Beijing calendar boundaries across months, years and leap days', async () => {
+  for (const [today, earliest, expired] of [
+    ['2026-11-01', '2026-10-19', '2026-10-18'],
+    ['2027-01-01', '2026-12-19', '2026-12-18'],
+    ['2028-03-01', '2028-02-17', '2028-02-16'],
+    ['2027-03-01', '2027-02-16', '2027-02-15'],
+    ['2028-03-13', '2028-02-29', '2028-02-28']
   ]) {
     const h = createPage({ now: `${today}T00:00:07+08:00` });
     h.page.openForm('walking');
     assert.equal(h.page.data.formDate, today, today);
-    assert.equal(h.page.data.formMinDate, yesterday, today);
+    assert.equal(h.page.data.formMinDate, earliest, today);
     assert.equal(h.page.data.today, today, today);
     h.page.onFormValue({ detail: { value: '7' } });
-    h.page.onFormDate({ detail: { value: older } });
+    h.page.onFormDate({ detail: { value: expired } });
     h.page.onFormTime({ detail: { value: '23:59' } });
     await h.page.saveForm();
-    assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/, today);
+    assert.match(h.page.data.formError, /最近14天.*含今天/, today);
     assert.equal(h.calls.enqueue.length, 0, today);
-    h.page.onFormDate({ detail: { value: yesterday } });
+    h.page.onFormDate({ detail: { value: earliest } });
     await h.page.saveForm();
     assert.equal(h.calls.enqueue.length, 1, today);
-    assert.equal(h.calls.enqueue[0].payload.occurredAt, `${yesterday} 23:59:00`, today);
+    assert.equal(h.calls.enqueue[0].payload.occurredAt, `${earliest} 23:59:00`, today);
   }
 });
 
-test('an unqueued draft expires at the next Beijing midnight and can select the new yesterday', async () => {
-  const h = createPage({ now: '2026-10-31T23:59:37+08:00' });
-  h.page.openForm('walking');
-  h.page.onFormValue({ detail: { value: '7' } });
-  h.page.onFormDate({ detail: { value: '2026-10-30' } });
-  h.page.onFormTime({ detail: { value: '12:45' } });
-  h.advance(24 * 1000);
-  await h.page.saveForm();
-  assert.match(h.page.data.formError, /今天.*昨天|昨天.*今天/);
-  assert.equal(h.page.data.formMinDate, '2026-10-31');
-  assert.equal(h.page.data.today, '2026-11-01');
-  assert.equal(h.page.data.formDate, '2026-10-30');
-  assert.equal(h.page.data.formValue, '7');
-  assert.equal(h.calls.enqueue.length, 0);
-  h.page.onFormDate({ detail: { value: '2026-10-31' } });
-  await h.page.saveForm();
-  assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-31 12:45:00');
+test('unqueued drafts expire at the next Beijing midnight while keeping every field for correction', async () => {
+  for (const type of ['walking', 'instant', 'learning', 'kindness', 'clapping']) {
+    const h = createPage({ now: '2026-10-31T23:59:37+08:00' });
+    h.page.openForm(type);
+    if (type === 'kindness') h.page.onFormContent({ detail: { value: '帮助他人' } });
+    else h.page.onFormValue({ detail: { value: '7' } });
+    h.page.onFormReflection({ detail: { value: '保留草稿感悟' } });
+    h.page.onFormDate({ detail: { value: '2026-10-18' } });
+    h.page.onFormTime({ detail: { value: '12:45' } });
+    h.advance(24 * 1000);
+    await h.page.saveForm();
+    assert.match(h.page.data.formError, /最近14天.*含今天/, type);
+    assert.equal(h.page.data.formMinDate, '2026-10-19', type);
+    assert.equal(h.page.data.today, '2026-11-01', type);
+    assert.equal(h.page.data.formDate, '2026-10-18', type);
+    assert.equal(h.page.data.formTime, '12:45', type);
+    assert.equal(h.page.data.formValue, type === 'kindness' ? '' : '7', type);
+    assert.equal(h.page.data.formContent, type === 'kindness' ? '帮助他人' : '', type);
+    assert.equal(h.page.data.formReflection, '保留草稿感悟', type);
+    assert.equal(h.page.data.showForm, true, type);
+    assert.equal(h.page.data.formPending, false, type);
+    assert.equal(h.page.data.formBusy, false, type);
+    assert.equal(h.calls.enqueue.length, 0, type);
+    assert.equal(h.calls.flush.length, 0, type);
+    h.page.onFormDate({ detail: { value: '2026-10-19' } });
+    await h.page.saveForm();
+    assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-19 12:45:00', type);
+    assert.equal(h.calls.enqueue[0].payload.reflection, '保留草稿感悟', type);
+  }
 });
 
 test('a failed local enqueue releases confirmation and retries with the original request identity', async () => {
@@ -1218,7 +1234,7 @@ test('a failed local enqueue releases confirmation and retries with the original
   assert.equal(h.page.data.showForm, false);
 });
 
-test('queued practice keeps its Beijing date, original seconds and identity when retried after the two-day window', async () => {
+test('queued practice keeps its Beijing date, original seconds and identity when retried after the 14-day window', async () => {
   let attempts = 0;
   const uploads = [];
   const h = createPage({ flush: tasks => {
@@ -1239,8 +1255,8 @@ test('queued practice keeps its Beijing date, original seconds and identity when
   assert.equal(h.page.data.formError, '网络中断');
   assert.equal(h.calls.enqueue[0].payload.recordDate, '2026-10-31');
   assert.equal(h.calls.enqueue[0].payload.occurredAt, '2026-10-31 00:30:37');
-  h.advance(3 * 24 * 60 * 60 * 1000);
-  h.page.onFormDate({ detail: { value: '2026-11-04' } });
+  h.advance(14 * 24 * 60 * 60 * 1000);
+  h.page.onFormDate({ detail: { value: '2026-11-15' } });
   h.page.onFormTime({ detail: { value: '12:00' } });
   h.page.onFormValue({ detail: { value: '20' } });
   assert.equal(h.page.data.formDate, '2026-10-31');
@@ -1301,7 +1317,7 @@ test('editing older history has no lower date bound and preserves the original o
   assert.deepEqual(h.calls.enqueue[0].payload, { recordDate: '2025-01-15',
     occurredAt: '2025-01-15 13:45:24', durationMinutes: 20, reflection: '' });
   h.page.openForm('walking');
-  assert.equal(h.page.data.formMinDate, '2026-10-30');
+  assert.equal(h.page.data.formMinDate, '2026-10-18');
 });
 
 test('date-only history does not invent a time and requires the user to select the real clock time', async () => {

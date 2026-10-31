@@ -345,19 +345,27 @@ page {
 .bijing-btn-sm:active {
   background-color: #8c7345;
 }
-.bijing-actions .bijing-manual-btn,
-.bijing-actions .bijing-heatmap-btn {
+.bijing-record-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.bijing-record-actions .bijing-btn-sm {
   box-sizing: border-box;
-  flex: 0 0 192rpx;
-  width: 192rpx;
+  flex: 0 0 auto;
   height: 72rpx;
   margin: 0;
-  padding: 0 20rpx;
+  padding: 0 24rpx;
+  white-space: nowrap;
+}
+.bijing-heatmap-btn {
+  width: auto;
+  min-width: 232rpx;
 }
 .bijing-heatmap-btn::after {
   border: none;
 }
 .bijing-manual-btn {
+  width: 192rpx;
   border: 2rpx solid #c9b68f;
   background-color: #ffffff;
   color: #8c7345;
