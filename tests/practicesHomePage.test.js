@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { plain, deferred, failure, createPage } = require('./helpers/practicePage');
+const { plain, deferred, failure, createPage, persistedQueue } = require('./helpers/practicePage');
 
 const createHome = options => createPage({ ...options, screen: 'home' });
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -11,6 +11,238 @@ const types = ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clappin
 const record = (id, type = 'walking', recordDate = '2026-10-31') => ({
   id, type, recordDate, durationMinutes: 2, count: 1, content: '帮助他人',
   occurredAt: `${recordDate} 09:00:00`
+});
+
+function observeData(page) {
+  const snapshots = [];
+  const setData = page.setData;
+  page.setData = function (data) {
+    setData.call(this, data);
+    snapshots.push(plain(this.data));
+  };
+  return snapshots;
+}
+
+function assertRetainedHome(snapshots, values, recordIds, label) {
+  assert.ok(snapshots.length, `${label}: observable updates`);
+  for (const data of snapshots) {
+    assert.equal(data.todayLoaded, true, `${label}: today's loaded state must remain available`);
+    assert.equal(data.homeLoaded, true, `${label}: recent records must remain available`);
+    assert.ok(values.includes(data.homeCards.find(item => item.type === 'walking')?.value), `${label}: no transient zero total`);
+    assert.equal(data.recentRecords.length, 1, `${label}: no transient empty feed`);
+    assert.ok(recordIds.includes(data.recentRecords[0].id), `${label}: only complete feed results`);
+    assert.equal(data.recentGroups.flatMap(group => group.records).length, 1, `${label}: no transient empty groups`);
+  }
+}
+
+test('first home reads distinguish pending totals and records from successful empty results', async () => {
+  const feed = deferred(), summary = deferred();
+  const h = createHome({ feed: () => feed.promise, summary: () => summary.promise });
+  assert.equal(h.page.data.todayLoaded, false);
+  assert.equal(h.page.data.homeLoaded, false);
+  const refreshing = h.page.refresh();
+  assert.equal(h.page.data.todayLoading, true);
+  assert.equal(h.page.data.homeLoading, true);
+  assert.equal(h.page.data.todayLoaded, false);
+  assert.equal(h.page.data.homeLoaded, false);
+  summary.resolve({ totals: [] });
+  await settle();
+  assert.equal(h.page.data.todayLoaded, true, 'all-zero totals are a successful result');
+  assert.equal(h.page.data.homeLoaded, false, 'the recent feed is still pending');
+  assert.ok(h.page.data.homeCards.every(card => card.value === 0));
+  feed.resolve({ records: [] });
+  await refreshing;
+  assert.equal(h.page.data.homeLoaded, true, 'an empty recent feed is a successful result');
+  assert.equal(h.page.data.todayLoading, false);
+  assert.equal(h.page.data.homeLoading, false);
+});
+
+test('same-day refresh and tab return retain loaded totals and records in every rendered update', async () => {
+  for (const action of ['refresh', 'onShow']) {
+    const feed = deferred(), summary = deferred();
+    let reloading = false;
+    const h = createHome({
+      feed: () => reloading ? feed.promise : { records: [record(1)] },
+      summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
+    });
+    h.page.onShow();
+    await settle();
+    if (action === 'onShow') h.page.onHide();
+    reloading = true;
+    const snapshots = observeData(h.page);
+    const refreshing = h.page[action]();
+    assert.equal(h.calls.feed.length, 2, `${action}: still revalidate the recent feed`);
+    assert.equal(h.calls.summary.length, 2, `${action}: still revalidate today's totals`);
+    assert.equal(h.page.data.homeLoading, true, action);
+    assert.equal(h.page.data.todayLoading, true, action);
+    assertRetainedHome(snapshots, [20], [1], `${action}: pending`);
+    summary.resolve({ totals: [{ type: 'walking', totalValue: 28 }] });
+    await settle();
+    assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 28, action);
+    assert.equal(h.page.data.recentRecords[0].id, 1, 'the feed remains visible until its replacement completes');
+    feed.resolve({ records: [record(2)] });
+    await refreshing;
+    await settle();
+    assertRetainedHome(snapshots, [20, 28], [1, 2], action);
+    assert.equal(h.page.data.recentRecords[0].id, 2, action);
+    assert.equal(h.page.data.homeLoading, false, action);
+    assert.equal(h.page.data.todayLoading, false, action);
+    h.page.onHide();
+  }
+});
+
+test('a refresh retains the complete previous feed until every replacement page arrives', async () => {
+  const secondPage = deferred();
+  let reloading = false;
+  const h = createHome({
+    feed: params => !reloading ? { records: [record(1)] } : params.cursor ? secondPage.promise : {
+      records: [record(2)], nextCursor: 'replacement-page-2'
+    },
+    summary: () => ({ totals: [{ type: 'walking', totalValue: 20 }] })
+  });
+  await h.page.refresh();
+  reloading = true;
+  const refreshing = h.page.refresh();
+  await settle();
+  assert.equal(h.page.data.homeLoaded, true);
+  assert.equal(h.page.data.homeLoading, true);
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [1]);
+  secondPage.resolve({ records: [record(3)] });
+  await refreshing;
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [2, 3]);
+  assert.equal(h.page.data.homeLoaded, true);
+});
+
+test('tab return immediately filters cached all-practice results using the latest visibility preferences', async () => {
+  const feed = deferred(), summary = deferred();
+  let reloading = false;
+  const h = createHome({ hiddenTypes: ['walking'],
+    feed: () => reloading ? feed.promise : { records: [record(1), record(2, 'kindness')] },
+    summary: () => reloading ? summary.promise : { totals: [
+      { type: 'walking', totalValue: 20 }, { type: 'kindness', totalValue: 3 }
+    ] }
+  });
+  h.page.onShow();
+  await settle();
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.type)), ['kindness']);
+  h.page.onHide();
+  h.preferences.saveHiddenTypes(['kindness']);
+  reloading = true;
+  h.page.onShow();
+  assert.equal(h.page.data.homeCards.some(item => item.type === 'kindness'), false);
+  assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 20, 'restored cards use previously loaded totals');
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [1], 'restored practices use the complete cached feed');
+  assert.equal(h.page.data.todayLoaded, true);
+  assert.equal(h.page.data.homeLoaded, true);
+  assert.equal(h.calls.feed.length, 2);
+  assert.equal(h.calls.summary.length, 2);
+  feed.resolve({ records: [record(3)] });
+  summary.resolve({ totals: [{ type: 'walking', totalValue: 25 }] });
+  await settle();
+  assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 25);
+  assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [3]);
+  h.page.onHide();
+});
+
+test('failed background reads retain loaded data while first-load failures stay unloaded', async () => {
+  const feed = deferred(), summary = deferred();
+  let reloading = false;
+  const h = createHome({
+    feed: () => reloading ? feed.promise : { records: [record(1)] },
+    summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
+  });
+  await h.page.refresh();
+  reloading = true;
+  const snapshots = observeData(h.page);
+  const refreshing = h.page.refresh();
+  feed.reject(failure('NETWORK_ERROR', '最近记录暂时离线'));
+  summary.reject(failure('REQUEST_TIMEOUT', '今日统计暂时离线'));
+  await refreshing;
+  assertRetainedHome(snapshots, [20], [1], 'failed revalidation');
+  assert.equal(h.page.data.homeError, '最近记录暂时离线');
+  assert.equal(h.page.data.todayError, '今日统计暂时离线');
+  assert.equal(h.page.data.homeLoading, false);
+  assert.equal(h.page.data.todayLoading, false);
+  const first = createHome({
+    feed: () => { throw failure('NETWORK_ERROR', '首次明细失败'); },
+    summary: () => { throw failure('NETWORK_ERROR', '首次统计失败'); }
+  });
+  await first.page.refresh();
+  assert.equal(first.page.data.homeLoaded, false);
+  assert.equal(first.page.data.todayLoaded, false);
+  assert.equal(first.page.data.homeError, '首次明细失败');
+  assert.equal(first.page.data.todayError, '首次统计失败');
+});
+
+test('a new Beijing day, account or binding invalidates loaded home data before replacement reads finish', async () => {
+  for (const change of ['day', 'account', 'binding']) {
+    for (const action of ['refresh', 'onShow']) {
+      const feed = deferred(), summary = deferred();
+      let reloading = false;
+      const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+        feed: () => reloading ? feed.promise : { records: [record(1)] },
+        summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
+      });
+      h.page.onShow();
+      await settle();
+      assert.equal(h.page.data.todayLoaded, true);
+      assert.equal(h.page.data.homeLoaded, true);
+      if (action === 'onShow') h.page.onHide();
+      if (change === 'day') h.advance(2000);
+      else h.changeOwner({ openid: change === 'account' ? 'oz-other' : 'oz-owner',
+        studentNumber: change === 'account' ? '002' : '001', bindingVersion: 'v2' });
+      reloading = true;
+      const refreshing = h.page[action]();
+      const label = `${change}: ${action}`;
+      assert.equal(h.page.data.todayLoaded, false, label);
+      assert.equal(h.page.data.homeLoaded, false, label);
+      assert.ok(h.page.data.homeCards.every(card => card.value === 0), `${label}: old totals cannot be shown`);
+      assert.deepEqual(plain(h.page.data.recentRecords), [], `${label}: old records cannot be shown`);
+      assert.equal(h.page.data.recentGroups.flatMap(group => group.records).length, 0, label);
+      assert.equal(h.page.data.todayLoading, true, label);
+      assert.equal(h.page.data.homeLoading, true, label);
+      feed.resolve({ records: [record(2, 'walking', h.page.data.today)] });
+      summary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
+      await refreshing;
+      await settle();
+      assert.equal(h.page.data.todayLoaded, true, label);
+      assert.equal(h.page.data.homeLoaded, true, label);
+      assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 4, label);
+      assert.equal(h.page.data.recentRecords[0].id, 2, label);
+      h.page.onHide();
+    }
+  }
+});
+
+test('a confirmed persisted queue upload revalidates the visible home without clearing existing values', async () => {
+  const feed = deferred(), summary = deferred();
+  let reloading = false;
+  const h = createHome({
+    feed: () => reloading ? feed.promise : { records: [record(1)] },
+    summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] },
+    queueFactory: persistedQueue({ create: async () => ({ id: 2 }) })
+  });
+  h.page.onShow();
+  await settle();
+  reloading = true;
+  const snapshots = observeData(h.page);
+  h.queue.enqueuePractice({ type: 'walking', operation: 'create', payload: {}, requestId: 'home-background-create' });
+  const result = await h.queue.flush();
+  await settle();
+  assert.equal(result.sent, 1);
+  assert.equal(h.page.data.pendingCount, 0);
+  assert.equal(h.calls.feed.length, 2);
+  assert.equal(h.calls.summary.length, 2);
+  assert.equal(h.page.data.todayLoading, true);
+  assert.equal(h.page.data.homeLoading, true);
+  assertRetainedHome(snapshots, [20], [1], 'confirmed background upload: pending');
+  feed.resolve({ records: [record(2)] });
+  summary.resolve({ totals: [{ type: 'walking', totalValue: 28 }] });
+  await settle();
+  assertRetainedHome(snapshots, [20, 28], [1, 2], 'confirmed background upload');
+  assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 28);
+  assert.equal(h.page.data.recentRecords[0].id, 2);
+  h.page.onHide();
 });
 
 // Today's cards must come from complete server totals, even while the recent feed is paging.
@@ -395,4 +627,129 @@ test('hiding a practice during a three-day read refreshes visible records withou
   assert.equal(h.calls.feed.at(-1).startDate, '2026-10-29');
   assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [3, 4, 5]);
   assert.deepEqual(plain(h.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
+});
+
+test('crossing midnight in a practice picker replaces in-flight reads and rejects the previous day results', async () => {
+  for (const action of ['openTypePicker', 'onTypeChange']) {
+    const oldFeed = deferred(), oldSummary = deferred(), newFeed = deferred(), newSummary = deferred();
+    let reloading = false;
+    const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+      feed: params => !reloading ? { records: [record(1)] }
+        : params.endDate === '2026-10-31' ? oldFeed.promise : newFeed.promise,
+      summary: params => !reloading ? { totals: [{ type: 'walking', totalValue: 20 }] }
+        : params.endDate === '2026-10-31' ? oldSummary.promise : newSummary.promise
+    });
+    h.page.onShow();
+    await settle();
+    if (action === 'onTypeChange') h.page.openTypePicker();
+    reloading = true;
+    const oldRefreshing = h.page.refresh();
+    h.advance(2000);
+    const snapshots = observeData(h.page);
+    h.page[action]({ detail: { type: 'all' } });
+    const pending = plain(h.page.data);
+    oldFeed.resolve({ records: [record(99)] });
+    oldSummary.resolve({ totals: [{ type: 'walking', totalValue: 999 }] });
+    await oldRefreshing;
+    await settle();
+    const afterOldResults = plain(h.page.data);
+    newFeed.resolve({ records: [record(2, 'walking', '2026-11-01')] });
+    newSummary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
+    await settle();
+    assert.equal(pending.today, '2026-11-01', action);
+    assert.equal(pending.todayLoaded, false, action);
+    assert.equal(pending.homeLoaded, false, action);
+    assert.equal(h.calls.feed.filter(params => params.endDate === '2026-11-01').length, 1, `${action}: starts a new-day feed`);
+    assert.equal(h.calls.summary.filter(params => params.endDate === '2026-11-01').length, 1, `${action}: starts new-day totals`);
+    assert.equal(afterOldResults.todayLoaded, false, `${action}: old totals cannot mark today loaded`);
+    assert.equal(afterOldResults.homeLoaded, false, `${action}: old feed cannot mark the new window loaded`);
+    assert.ok(snapshots.every(data => !data.homeCards.some(card => card.value === 999)), `${action}: previous-day totals never render`);
+    assert.ok(snapshots.every(data => !data.recentRecords.some(item => item.id === 99)), `${action}: stale records never render`);
+    assert.equal(h.page.data.todayLoaded, true, action);
+    assert.equal(h.page.data.homeLoaded, true, action);
+    assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 4, action);
+    assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [2], action);
+    h.page.onHide();
+  }
+});
+
+test('a practice picker opened after midnight starts new-day reads even when no request is in flight', async () => {
+  for (const action of ['openTypePicker', 'onTypeChange']) {
+    const feed = deferred(), summary = deferred();
+    let reloading = false;
+    const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+      feed: () => reloading ? feed.promise : { records: [record(1)] },
+      summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
+    });
+    h.page.onShow();
+    await settle();
+    if (action === 'onTypeChange') h.page.openTypePicker();
+    h.advance(2000);
+    reloading = true;
+    h.page[action]({ detail: { type: 'all' } });
+    const pending = plain(h.page.data);
+    feed.resolve({ records: [record(2, 'walking', '2026-11-01')] });
+    summary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
+    await settle();
+    assert.equal(pending.today, '2026-11-01', action);
+    assert.equal(pending.todayLoaded, false, action);
+    assert.equal(pending.homeLoaded, false, action);
+    assert.equal(pending.todayLoading, true, action);
+    assert.equal(pending.homeLoading, true, action);
+    assert.equal(h.calls.feed.length, 2, action);
+    assert.equal(h.calls.feed.at(-1).endDate, '2026-11-01', action);
+    assert.equal(h.calls.summary.length, 2, action);
+    assert.equal(h.calls.summary.at(-1).endDate, '2026-11-01', action);
+    assert.equal(h.page.data.todayLoaded, true, `${action}: new totals complete instead of staying unloaded`);
+    assert.equal(h.page.data.homeLoaded, true, `${action}: new feed completes instead of staying unloaded`);
+    assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 4, action);
+    assert.deepEqual(plain(h.page.data.recentRecords.map(item => item.id)), [2], action);
+    h.page.onHide();
+  }
+});
+
+test('authorization failures invalidate previously loaded home data', async () => {
+  for (const code of ['AUTH_REQUIRED', 'ACCOUNT_CHANGED', 'BINDING_INVALID', 'IDENTITY_MISMATCH']) {
+    let denied = false;
+    const h = createHome({
+      feed: () => { if (denied) throw failure(code, '账号权限失效'); return { records: [record(1)] }; },
+      summary: () => { if (denied) throw failure(code, '账号权限失效'); return { totals: [{ type: 'walking', totalValue: 20 }] }; }
+    });
+    await h.page.refresh();
+    assert.equal(h.page.data.homeLoaded, true, code);
+    assert.equal(h.page.data.todayLoaded, true, code);
+    denied = true;
+    await h.page.refresh();
+    assert.equal(h.page.data.homeLoaded, false, code);
+    assert.equal(h.page.data.todayLoaded, false, code);
+    assert.deepEqual(plain(h.page.data.recentRecords), [], code);
+    assert.equal(h.page.data.recentGroups.flatMap(group => group.records).length, 0, code);
+    assert.ok(h.page.data.homeCards.every(card => card.value === 0), code);
+    assert.equal(h.page.data.homeFailure.requiresBinding, true, code);
+    assert.equal(h.page.data.todayFailure.requiresBinding, true, code);
+    assert.equal(h.page.data.homeLoading, false, code);
+    assert.equal(h.page.data.todayLoading, false, code);
+  }
+});
+
+test('an unreadable current account cannot reuse confirmed home data or start unscoped reads', async () => {
+  const h = createHome({
+    feed: () => ({ records: [record(1)] }),
+    summary: () => ({ totals: [{ type: 'walking', totalValue: 20 }] })
+  });
+  await h.page.refresh();
+  assert.equal(h.page.data.homeLoaded, true);
+  assert.equal(h.page.data.todayLoaded, true);
+  h.storage.userOpenId = { invalid: 'account-storage-value' };
+  await h.page.refresh();
+  assert.equal(h.calls.feed.length, 1);
+  assert.equal(h.calls.summary.length, 1);
+  assert.equal(h.page.data.homeLoaded, false);
+  assert.equal(h.page.data.todayLoaded, false);
+  assert.deepEqual(plain(h.page.data.recentRecords), []);
+  assert.ok(h.page.data.homeCards.every(card => card.value === 0));
+  assert.match(h.page.data.homeError, /账号信息无法读取/);
+  assert.match(h.page.data.todayError, /账号信息无法读取/);
+  assert.equal(h.page.data.homeLoading, false);
+  assert.equal(h.page.data.todayLoading, false);
 });

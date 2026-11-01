@@ -25,13 +25,13 @@
     <include src="practicePending.wxml" />
     <block wx:if="{{homeCards.length}}">
       <view class="home-practice-grid {{homeCards.length === 1 ? 'home-practice-single' : homeCards.length === 2 || homeCards.length === 4 ? 'home-practice-pairs' : ''}}">
-        <button class="home-practice-card {{item.value > 0 && !todayLoading && !todayError ? 'home-practice-done' : ''}}" wx:for="{{homeCards}}" wx:key="type" data-type="{{item.type}}" bindtap="openPracticeCard" hover-class="home-practice-hover" disabled="{{formBusy}}" aria-label="{{item.name + (todayLoading ? '，正在读取今日累计' : todayError ? '，今日累计暂时无法读取' : '，今日累计' + item.value + item.unit) + '，点击记录'}}">
+        <button class="home-practice-card {{item.value > 0 && todayLoaded ? 'home-practice-done' : ''}}" wx:for="{{homeCards}}" wx:key="type" data-type="{{item.type}}" bindtap="openPracticeCard" hover-class="home-practice-hover" disabled="{{formBusy}}" aria-label="{{item.name + (todayLoaded ? '，今日累计' + item.value + item.unit + (todayError ? '，刷新失败，显示上次结果' : '') : todayError ? '，今日累计暂时无法读取' : '，正在读取今日累计') + '，点击记录'}}">
           <text class="home-practice-name">{{item.name}}</text>
-          <view class="home-practice-amount"><text class="home-practice-value">{{todayLoading || todayError ? '—' : item.valueLabel}}</text><text class="home-practice-unit">{{item.unit}}</text></view>
+          <view class="home-practice-amount"><text class="home-practice-value">{{todayLoaded ? item.valueLabel : '—'}}</text><text class="home-practice-unit">{{item.unit}}</text></view>
         </button>
       </view>
-      <text wx:if="{{todayLoading}}" class="home-stats-status">正在读取今日累计…</text>
-      <view wx:elif="{{todayError}}" class="home-stats-error"><text>{{todayFailure.message}}</text><button class="inline-button" bindtap="handleReadFailure" data-scope="today">{{todayFailure.actionText}}</button></view>
+      <text wx:if="{{todayLoading && !todayLoaded && !todayError}}" class="home-stats-status">正在读取今日累计…</text>
+      <view wx:elif="{{todayError}}" class="home-stats-error"><text>{{todayLoaded ? '刷新失败，显示上次结果。' : ''}}{{todayFailure.message}}</text><button class="inline-button" bindtap="handleReadFailure" data-scope="today">{{todayFailure.actionText}}</button></view>
     </block>
     <view wx:else class="state-card home-no-practices">
       <text class="state-title">选择今天要做的功课</text>
@@ -42,9 +42,10 @@
     <view class="home-recent">
       <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover">查看全部<text class="home-entry-arrow" aria-hidden="true">›</text></button></view>
       <block wx:if="{{homeCards.length}}">
-        <view wx:if="{{homeLoading}}" class="empty-state home-loading">正在读取最近记录…</view>
-        <template wx:elif="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
-        <block wx:else>
+        <view wx:if="{{homeLoading && !homeLoaded && !homeError}}" class="empty-state home-loading">正在读取最近记录…</view>
+        <template wx:if="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
+        <block wx:if="{{homeLoaded}}">
+          <text wx:if="{{homeError}}" class="caption">刷新失败，以下为上次读取的记录</text>
           <view class="home-day-group" wx:for="{{recentGroups}}" wx:for-item="group" wx:key="date">
             <view class="home-day-heading"><text class="home-day-label">{{group.label}}</text><text class="home-day-date">{{group.dateLabel}}</text></view>
             <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text></view>

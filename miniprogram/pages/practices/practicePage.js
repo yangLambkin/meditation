@@ -38,6 +38,10 @@ function monthLabel(month) {
 function unpack(value) { return value && value.success !== undefined ? value.data || {} : value || {}; }
 function ownerKey() { return JSON.stringify(practiceAuth.getOwner() || null); }
 function visiblePracticeKey() { return JSON.stringify(practicePreferences.getVisiblePractices().map(item => item.type)); }
+function homeContextKey(today) {
+  try { return JSON.stringify([practicePreferences.currentAccountKey(), ownerKey(), today]); }
+  catch (_) { return null; }
+}
 function message(error, fallback) { return error && (error.userMessage || error.message) || fallback; }
 function readFailure(error, fallback) {
   const code = error && error.code;
@@ -137,8 +141,8 @@ function uniqueId() { return `practice_${Date.now()}_${Math.random().toString(36
 module.exports = function createPracticePage(screen = 'home') { return {
   data: {
     screen, homeCards: [], recentRecords: [], recentGroups: [], recentStart: '', todayLabel: '', homeRecentDays: 3,
-    homeLoading: false, homeError: '', homeFailure: null,
-    todayLoading: false, todayError: '', todayFailure: null,
+    homeLoading: false, homeLoaded: false, homeError: '', homeFailure: null,
+    todayLoading: false, todayLoaded: false, todayError: '', todayFailure: null,
     typeOptions: [TYPES[0]], typeIndex: 0, type: 'all', showTypePicker: false, month: '', monthLabel: '', monthEnd: '', today: '', selectedDate: '', view: 'detail',
     records: [], groups: [], nextCursor: '', loading: false, loadingMore: false, loaded: false, error: '', feedFailure: null,
     summary: null, summaryError: '', summaryFailure: null, summaryLoading: false, monthCards: [], allTimeCards: [], calendar: [], trend: [], trendMax: 0, trendWidth: 0,
@@ -229,26 +233,44 @@ module.exports = function createPracticePage(screen = 'home') { return {
     await Promise.all([this.loadFeed(generation), this.loadSummary(generation)]);
   },
   async refreshHome() {
-    const generation = this._generation = (this._generation || 0) + 1;
-    const timestamp = Date.now();
-    const today = nowParts(timestamp).date;
-    const homeRecentDays = 3;
-    const recentStart = nowParts(timestamp - (homeRecentDays - 1) * DAY_MS).date;
-    const [, month, day] = today.split('-').map(Number);
-    this._todayStats = null;
-    this._homeFeedRecords = [];
-    this._homePreferenceKey = visiblePracticeKey();
-    this.setData({ today, recentStart, homeRecentDays, todayLabel: `${month}月${day}日`,
-      records: [], recentRecords: [], recentGroups: [],
-      homeLoading: true, homeError: '', homeFailure: null,
-      todayLoading: true, todayError: '', todayFailure: null });
     this.refreshTypeOptions();
+    const generation = this._generation = (this._generation || 0) + 1;
+    const { today, recentStart } = this.data;
+    this._homePreferenceKey = visiblePracticeKey();
+    this.setData({ homeLoading: true, homeError: '', homeFailure: null,
+      todayLoading: true, todayError: '', todayFailure: null });
     this.refreshPending();
+    if (!this._homeContextKey) {
+      const failure = readFailure(null, '当前账号信息无法读取，请稍后重试');
+      this.setData({ homeLoading: false, todayLoading: false,
+        homeError: failure.message, homeFailure: failure, todayError: failure.message, todayFailure: failure });
+      return;
+    }
     if (!this.data.homeCards.length) {
       this.setData({ homeLoading: false, todayLoading: false });
       return;
     }
     await Promise.all([this.loadHomeFeed(generation, recentStart, today), this.loadTodaySummary(generation, today)]);
+  },
+  syncHomeContext() {
+    const timestamp = Date.now();
+    const today = nowParts(timestamp).date;
+    const context = homeContextKey(today);
+    if (context && context === this._homeContextKey) return false;
+    // Reuse only this account/binding's current Beijing day. A refresh keeps
+    // confirmed values visible until their replacements have arrived.
+    this._homeContextKey = context;
+    this._generation = (this._generation || 0) + 1;
+    const homeRecentDays = 3;
+    const recentStart = nowParts(timestamp - (homeRecentDays - 1) * DAY_MS).date;
+    const [, month, day] = today.split('-').map(Number);
+    this._todayStats = null;
+    this._homeFeedRecords = [];
+    this.setData({ today, recentStart, homeRecentDays, todayLabel: `${month}月${day}日`,
+      records: [], recentRecords: [], recentGroups: [],
+      homeLoaded: false, homeError: '', homeFailure: null,
+      todayLoaded: false, todayError: '', todayFailure: null });
+    return true;
   },
   updateHomeCards() {
     const visible = new Set(practicePreferences.getVisiblePractices().map(item => item.type));
@@ -257,7 +279,10 @@ module.exports = function createPracticePage(screen = 'home') { return {
     catch (_) { this._homeCardAccount = null; }
     const homeCards = metricCards(this._todayStats).filter(card => visible.has(card.type))
       .map(card => ({ ...card, valueLabel: quantityLabel(card.value) }));
-    this.setData({ homeCards });
+    const todayLoaded = this._todayStats !== null;
+    if (JSON.stringify(homeCards) !== JSON.stringify(this.data.homeCards) || todayLoaded !== this.data.todayLoaded) {
+      this.setData({ homeCards, todayLoaded });
+    }
   },
   updateHomeRecords(records) {
     const visible = new Set(practicePreferences.getVisiblePractices().map(item => item.type));
@@ -275,7 +300,8 @@ module.exports = function createPracticePage(screen = 'home') { return {
   },
   homeRequestCurrent(generation, account) {
     if (generation !== this._generation || account !== ownerKey()) return false;
-    if (this._homePreferenceKey !== visiblePracticeKey()) {
+    if (!this._homeContextKey) return false;
+    if (this._homeContextKey !== homeContextKey(nowParts().date) || this._homePreferenceKey !== visiblePracticeKey()) {
       this.refreshHome();
       return false;
     }
@@ -303,10 +329,16 @@ module.exports = function createPracticePage(screen = 'home') { return {
       } while (cursor);
       this._homeFeedRecords = records;
       this.updateHomeRecords(records);
-      this.setData({ homeError: '', homeFailure: null });
+      this.setData({ homeLoaded: true, homeError: '', homeFailure: null });
     } catch (error) {
-      if (current()) this.setData({ homeError: message(error, '最近记录暂时无法读取，请重试'),
-        homeFailure: readFailure(error, '最近记录暂时无法读取，请稍后重试。') });
+      if (current()) {
+        const homeFailure = readFailure(error, '最近记录暂时无法读取，请稍后重试。');
+        if (homeFailure.requiresBinding) {
+          this._homeFeedRecords = [];
+          this.setData({ homeLoaded: false, records: [], recentRecords: [], recentGroups: [] });
+        }
+        this.setData({ homeError: message(error, '最近记录暂时无法读取，请重试'), homeFailure });
+      }
     } finally {
       if (current()) this.setData({ homeLoading: false });
     }
@@ -321,8 +353,11 @@ module.exports = function createPracticePage(screen = 'home') { return {
       this.updateHomeCards();
       this.setData({ todayError: '', todayFailure: null });
     } catch (error) {
-      if (current()) this.setData({ todayError: message(error, '今日累计暂时无法读取，请重试'),
-        todayFailure: readFailure(error, '今日累计暂时无法读取，请稍后重试。') });
+      if (current()) {
+        const todayFailure = readFailure(error, '今日累计暂时无法读取，请稍后重试。');
+        if (todayFailure.requiresBinding) { this._todayStats = null; this.updateHomeCards(); }
+        this.setData({ todayError: message(error, '今日累计暂时无法读取，请重试'), todayFailure });
+      }
     } finally {
       if (current()) this.setData({ todayLoading: false });
     }
@@ -407,8 +442,12 @@ module.exports = function createPracticePage(screen = 'home') { return {
     const changed = selectedIndex < 0;
     this.setData({ typeOptions, typeIndex: changed ? 0 : selectedIndex,
       ...(changed ? { type: 'all', selectedDate: '' } : {}) });
-    if (screen === 'home') this.updateHomeCards();
-    return changed;
+    const homeContextChanged = screen === 'home' && this.syncHomeContext();
+    if (screen === 'home') {
+      this.updateHomeCards();
+      if (this.data.homeLoaded) this.updateHomeRecords(this._homeFeedRecords);
+    }
+    return changed || homeContextChanged;
   },
   openTypePicker() {
     if (!this.data.enabled || this.data.showTypePicker) return;
