@@ -7,6 +7,63 @@ const { plain, deferred, failure, createPage, persistedQueue } = require('./help
 const historyTemplate = () => fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practiceHistory/practiceHistory.wxml'), 'utf8');
 const dialogsTemplate = () => fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practiceDialogs.wxml'), 'utf8');
 
+test('history defaults to the practice month before 02:00 and uses that day for statistics limits', async () => {
+  for (const [now, expectedMonth, expectedDay] of [
+    ['2026-11-01T01:59:59+08:00', '2026-10', '2026-10-31'],
+    ['2027-01-01T01:59:59+08:00', '2026-12', '2026-12-31'],
+    ['2028-03-01T01:59:59+08:00', '2028-02', '2028-02-29'],
+    ['2026-11-01T02:00:00+08:00', '2026-11', '2026-11-01']
+  ]) {
+    const h = createPage({ now });
+    assert.equal(h.page.data.month, expectedMonth, now);
+    assert.equal(h.page.data.monthEnd, expectedDay, now);
+    assert.equal(h.page.data.displayToday, expectedDay, now);
+    assert.equal(h.page.data.today, now.slice(0, 10), now);
+    await h.page.refresh();
+    assert.deepEqual(h.calls.feed[0], { dayStartHour: 2, month: expectedMonth, type: 'all' }, now);
+    assert.deepEqual(h.calls.summary[0], { dayStartHour: 2, month: expectedMonth, type: 'all' }, now);
+    assert.equal(h.page.data.calendar.flat().find(day => day.date === expectedDay).today, true, now);
+  }
+});
+
+test('history groups by display dates while editing keeps original dates and seconds', async () => {
+  const records = [
+    { id: 1, type: 'walking', recordDate: '2026-11-01', occurredAt: '2026-11-01 01:15:24', durationMinutes: 12 },
+    { id: 2, type: 'walking', recordDate: '2026-10-31', occurredAt: '2026-10-31 01:15:24', durationMinutes: 15 },
+    { id: 3, type: 'walking', recordDate: '2026-10-31', occurredAt: null, durationMinutes: 20 }
+  ];
+  const original = plain(records);
+  const h = createPage({ now: '2026-11-01T01:30:00+08:00', feed: () => ({ records }) });
+  await h.page.refresh();
+  assert.deepEqual(plain(h.page.data.groups.map(group => [group.date, group.records.map(item => item.id)])), [
+    ['2026-10-31', [1, 3]], ['2026-10-30', [2]]
+  ]);
+  h.page.openDetail({ currentTarget: { dataset: { key: 'walking:1' } } });
+  h.page.editDetail();
+  assert.equal(h.page.data.formDate, '2026-11-01');
+  assert.equal(h.page.data.formTime, '01:15');
+  h.page.onFormValue({ detail: { value: '18' } });
+  await h.page.saveForm();
+  assert.deepEqual(h.calls.enqueue[0].payload, { recordDate: '2026-11-01', occurredAt: '2026-11-01 01:15:24', durationMinutes: 18, reflection: '' });
+  assert.deepEqual(records, original);
+});
+
+test('before 02:00 the actual calendar day remains unavailable as a statistics day', async () => {
+  const h = createPage({ now: '2026-11-04T01:59:59+08:00', summary: () => ({ totals: [], daily: [], allTime: { totals: [] } }) });
+  await h.page.refresh();
+  const day = h.page.data.calendar.flat().find(item => item.date === '2026-11-04');
+  assert.equal(day.future, true);
+  const count = h.calls.feed.length + h.calls.summary.length;
+  h.page.selectDay('2026-11-04');
+  h.page.openDayStats({ currentTarget: { dataset: { date: '2026-11-04' } } });
+  assert.equal(h.calls.feed.length + h.calls.summary.length, count);
+  assert.equal(h.page.data.selectedDate, '');
+  h.page.openForm('walking');
+  assert.equal(h.page.data.formDate, '2026-11-04');
+  assert.equal(h.page.data.today, '2026-11-04');
+  assert.equal(h.page.data.displayToday, '2026-11-03');
+});
+
 test('records enable native friend and timeline sharing with a bundled cover', () => {
   const h = createPage();
   assert.deepEqual(h.calls.shareMenu, [{ menus: ['shareAppMessage', 'shareTimeline'] }]);
@@ -109,14 +166,14 @@ test('record filter indices refer to the displayed options after hidden practice
   assert.equal(h.page.data.typeIndex, 1);
   assert.equal(h.page.data.selectedDate, '');
   assert.equal(h.page.data.showTypePicker, false);
-  assert.deepEqual(h.calls.feed, [{ month: '2026-10', type: 'kindness' }]);
-  assert.deepEqual(h.calls.summary, [{ month: '2026-10', type: 'kindness' }]);
+  assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, month: '2026-10', type: 'kindness' }]);
+  assert.deepEqual(h.calls.summary, [{ dayStartHour: 2, month: '2026-10', type: 'kindness' }]);
   h.page.openTypePicker();
   h.page.onTypeChange({ detail: { type: 'clapping' } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.page.data.type, 'clapping');
   assert.equal(h.page.data.typeIndex, 2);
-  assert.deepEqual(h.calls.feed.at(-1), { month: '2026-10', type: 'clapping' });
+  assert.deepEqual(h.calls.feed.at(-1), { dayStartHour: 2, month: '2026-10', type: 'clapping' });
 });
 
 test('hiding the active practice resets the record filter to all before the next page refresh', async () => {
@@ -129,8 +186,8 @@ test('hiding the active practice resets the record filter to all before the next
   assert.equal(h.page.data.typeIndex, 0);
   assert.equal(h.page.data.selectedDate, '');
   assert.equal(h.page.data.view, 'stats');
-  assert.deepEqual(h.calls.feed, [{ month: '2026-10', type: 'all' }]);
-  assert.deepEqual(h.calls.summary, [{ month: '2026-10', type: 'all' }]);
+  assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, month: '2026-10', type: 'all' }]);
+  assert.deepEqual(h.calls.summary, [{ dayStartHour: 2, month: '2026-10', type: 'all' }]);
   h.page.onHide();
 });
 
@@ -145,8 +202,8 @@ test('opening a filter after hiding its active practice reloads all records with
   assert.equal(h.page.data.typeIndex, 0);
   assert.equal(h.page.data.selectedDate, '');
   assert.equal(h.page.data.typeOptions.some(item => item.type === 'walking'), false);
-  assert.deepEqual(h.calls.feed, [{ month: '2026-10', type: 'all' }]);
-  assert.deepEqual(h.calls.summary, [{ month: '2026-10', type: 'all' }]);
+  assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, month: '2026-10', type: 'all' }]);
+  assert.deepEqual(h.calls.summary, [{ dayStartHour: 2, month: '2026-10', type: 'all' }]);
 });
 
 test('returning under another account uses that account settings without overwriting the previous ones', async () => {
@@ -189,7 +246,7 @@ test('all-hidden filters retain the all view and preserve hidden history, statis
   assert.equal(h.tasks.length, 1);
   assert.equal(h.calls.enqueue.length, 0);
   assert.equal(h.calls.flush.length, 0);
-  assert.deepEqual(h.calls.feed, [{ month: '2026-10', type: 'all' }]);
+  assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, month: '2026-10', type: 'all' }]);
   h.page.onHide();
 });
 
@@ -461,8 +518,9 @@ test('records use a single server feed cursor and whole-range summary instead of
   await h.page.loadMore();
   assert.equal(h.page.data.records.length, 3);
   assert.equal(h.page.data.records[2].quantity, 4);
-  assert.equal(h.page.data.groups.length, 2);
-  assert.deepEqual(h.calls.feed, [{ month: '2026-10', type: 'all' }, { month: '2026-10', type: 'all', cursor: 'stable-cursor-1' }]);
+  assert.equal(h.page.data.groups.length, 1);
+  assert.equal(h.page.data.groups[0].date, '2026-10-30', 'the 00:15 record belongs to the previous day');
+  assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, month: '2026-10', type: 'all' }, { dayStartHour: 2, month: '2026-10', type: 'all', cursor: 'stable-cursor-1' }]);
   assert.equal(h.page.data.recordCount, 55);
 });
 
@@ -483,7 +541,7 @@ test('type calendar shows server daily quantities and a selected day requests th
   h.page.selectDay(day.date);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.page.data.view, 'detail');
-  assert.deepEqual(h.calls.feed.at(-1), { month: '2026-10', type: 'walking', date: '2026-10-30' });
+  assert.deepEqual(h.calls.feed.at(-1), { dayStartHour: 2, month: '2026-10', type: 'walking', date: '2026-10-30' });
   h.page.onMonthChange({ detail: { value: '2026-11' } });
   assert.equal(h.page.data.month, '2026-10');
 });
@@ -564,7 +622,7 @@ test('day statistics request complete all-practice totals independently of list 
   const listBefore = plain({ records: h.page.data.records, groups: h.page.data.groups,
     nextCursor: h.page.data.nextCursor, summary: h.page.data.summary, monthCards: h.page.data.monthCards });
   await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
-  assert.deepEqual(h.calls.summary.at(-1), { month: '2026-10', type: 'all', date: '2026-10-30' });
+  assert.deepEqual(h.calls.summary.at(-1), { dayStartHour: 2, month: '2026-10', type: 'all', date: '2026-10-30' });
   assert.equal(h.calls.feed.length, 1);
   assert.equal(h.page.data.dayStatsDate, '2026-10-30');
   assert.equal(h.page.data.dayStatsLoading, false);
@@ -735,7 +793,7 @@ test('day statistics load independently, expose read failures and retry fresh da
   h.page.closeDayStats();
   await h.page.openDayStats({ currentTarget: { dataset: { date: '2026-10-30' } } });
   assert.equal(h.page.data.dayStatsCards.find(item => item.type === 'walking').value, 30);
-  assert.deepEqual(h.calls.summary, Array(3).fill({ month: '2026-10', type: 'all', date: '2026-10-30' }));
+  assert.deepEqual(h.calls.summary, Array(3).fill({ dayStartHour: 2, month: '2026-10', type: 'all', date: '2026-10-30' }));
   assert.equal(h.calls.feed.length, 0);
   assert.deepEqual(plain(h.page.data.summary), monthlySummary);
   assert.equal(h.page.data.summaryError, '原月统计错误');
@@ -885,14 +943,14 @@ test('clearing the selected day reloads the full month feed for the current prac
   ] }) });
   h.page.setData({ type: 'walking', typeIndex: 2, selectedDate: '2026-10-30', view: 'detail' });
   await h.page.refresh();
-  assert.deepEqual(h.calls.feed.at(-1), { month: '2026-10', type: 'walking', date: '2026-10-30' });
+  assert.deepEqual(h.calls.feed.at(-1), { dayStartHour: 2, month: '2026-10', type: 'walking', date: '2026-10-30' });
   const previousReads = h.calls.feed.length;
   h.page.clearDate();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.page.data.selectedDate, '');
   assert.equal(h.page.data.view, 'detail');
   assert.equal(h.calls.feed.length, previousReads + 1);
-  assert.deepEqual(h.calls.feed.at(-1), { month: '2026-10', type: 'walking' });
+  assert.deepEqual(h.calls.feed.at(-1), { dayStartHour: 2, month: '2026-10', type: 'walking' });
   assert.equal(h.page.data.records[0].recordDate, '2026-10-02');
 });
 
@@ -1142,7 +1200,7 @@ test('a failed local enqueue releases confirmation and retries with the original
 test('queued practice keeps its Beijing date, original seconds and identity when retried after the 14-day window', async () => {
   let attempts = 0;
   const uploads = [];
-  const h = createPage({ flush: tasks => {
+  const h = createPage({ now: '2026-10-31T00:30:37+08:00', flush: tasks => {
     uploads.push(plain(tasks[0]));
     if (++attempts === 1) { tasks[0].lastError = { message: '网络中断' }; return { success: false }; }
     tasks.splice(0); return { success: true };
@@ -1177,7 +1235,7 @@ test('queued practice keeps its Beijing date, original seconds and identity when
 });
 
 test('manual quantity and future or impossible Beijing times never enter the queue', async () => {
-  const h = createPage();
+  const h = createPage({ now: '2026-10-31T00:30:37+08:00' });
   for (const type of ['walking', 'learning', 'clapping', 'instant']) {
     h.page.openForm(type);
     for (const value of ['0', '-1', '1.5', '01', type === 'instant' ? '1000001' : '1441']) {

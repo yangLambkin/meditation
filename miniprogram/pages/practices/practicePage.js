@@ -4,6 +4,7 @@ const practiceAuth = require('../../utils/practiceAuth.js');
 const practiceConfig = require('../../utils/practiceConfig.js');
 const practiceEntry = require('../../utils/practiceEntry.js');
 const practicePreferences = require('../../utils/practicePreferences.js');
+const practiceDay = require('../../utils/practiceDay.js');
 
 const TYPES = [
   { type: 'all', name: '全部功课', unit: '' },
@@ -29,7 +30,8 @@ function monthEnd(month) {
   const [year, monthNumber] = month.split('-').map(Number);
   const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   const end = `${month}-${String(lastDay).padStart(2, '0')}`;
-  return end < nowParts().date ? end : nowParts().date;
+  const today = practiceDay.getPracticeDate();
+  return end < today ? end : today;
 }
 function monthLabel(month) {
   const [year, monthNumber] = month.split('-');
@@ -63,20 +65,20 @@ function decorate(record) {
   const source = record.source;
   const mirrored = !!(record.sourceRecordId || source === 'meditation' || source && (source.system === 'meditation' || source.sourceSystem === 'meditation'));
   const occurredAt = typeof record.occurredAt === 'string' ? record.occurredAt.replace('T', ' ') : '';
-  return { ...record, key: `${record.type}:${record.id}`, typeName: meta.name, unit: meta.unit,
+  return { ...record, displayDate: practiceDay.getRecordDisplayDate(record),
+    key: `${record.type}:${record.id}`, typeName: meta.name, unit: meta.unit,
     quantity: quantity(record), timeLabel: occurredAt ? occurredAt.slice(11, 16) : '未记录时间',
     occurredAt, mirrored, canEdit: record.type !== 'sitting' && record.canEdit !== false,
     canDelete: record.type !== 'sitting' && record.canDelete !== false,
     preview: (record.content || record.reflection || '').slice(0, 100) };
 }
 function groupsFor(records) {
-  const groups = [];
+  const byDate = new Map();
   records.forEach(record => {
-    let group = groups[groups.length - 1];
-    if (!group || group.date !== record.recordDate) { group = { date: record.recordDate, records: [] }; groups.push(group); }
-    group.records.push(record);
+    if (!byDate.has(record.displayDate)) byDate.set(record.displayDate, { date: record.displayDate, records: [] });
+    byDate.get(record.displayDate).records.push(record);
   });
-  return groups;
+  return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 function metricCards(stats) {
   const byType = stats && (stats.totals || stats.byType || stats.types || stats.totalsByType) || {};
@@ -98,7 +100,7 @@ function makeCalendar(month, daily, type, selectedDate) {
   const rows = [];
   const byDate = {};
   (Array.isArray(daily) ? daily : []).forEach(item => { byDate[item.date || item.recordDate] = item; });
-  const today = nowParts().date;
+  const today = practiceDay.getPracticeDate();
   for (let i = 0; i < Math.ceil((leading + length) / 7) * 7; i++) {
     if (i % 7 === 0) rows.push([]);
     const day = i - leading + 1;
@@ -143,7 +145,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     screen, homeCards: [], recentRecords: [], recentGroups: [], recentStart: '', todayLabel: '', homeRecentDays: 3,
     homeLoading: false, homeLoaded: false, homeError: '', homeFailure: null,
     todayLoading: false, todayLoaded: false, todayError: '', todayFailure: null,
-    typeOptions: [TYPES[0]], typeIndex: 0, type: 'all', showTypePicker: false, month: '', monthLabel: '', monthEnd: '', today: '', selectedDate: '', view: 'detail',
+    typeOptions: [TYPES[0]], typeIndex: 0, type: 'all', showTypePicker: false, month: '', monthLabel: '', monthEnd: '', today: '', displayToday: '', selectedDate: '', view: 'detail',
     records: [], groups: [], nextCursor: '', loading: false, loadingMore: false, loaded: false, error: '', feedFailure: null,
     summary: null, summaryError: '', summaryFailure: null, summaryLoading: false, monthCards: [], allTimeCards: [], calendar: [], trend: [], trendMax: 0, trendWidth: 0,
     recordCount: 0, practiceDays: 0, selectedMonthTotal: 0, selectedMonthUnit: '条',
@@ -160,10 +162,10 @@ module.exports = function createPracticePage(screen = 'home') { return {
 
   onLoad(options = {}) {
     this.options = options;
-    const now = nowParts();
-    const month = now.date.slice(0, 7);
-    this.setData({ month, monthLabel: monthLabel(month), monthEnd: now.date, ...formDateBounds(),
-      todayLabel: `${Number(now.date.slice(5, 7))}月${Number(now.date.slice(8, 10))}日`,
+    const displayToday = practiceDay.getPracticeDate();
+    const month = displayToday.slice(0, 7);
+    this.setData({ month, monthLabel: monthLabel(month), monthEnd: displayToday, displayToday, ...formDateBounds(),
+      todayLabel: `${Number(displayToday.slice(5, 7))}月${Number(displayToday.slice(8, 10))}日`,
       view: screen === 'history' && options.view === 'stats' ? 'stats' : 'detail',
       enabled: practiceConfig.practicesEnabled === true });
     this.refreshTypeOptions();
@@ -182,8 +184,15 @@ module.exports = function createPracticePage(screen = 'home') { return {
         error: '', summaryError: '', feedFailure: null, summaryFailure: null });
     }
     this._owner = currentOwner;
+    this.syncDisplayDate();
     this.refreshTypeOptions();
     this.setData({ ...formDateBounds(this.data.formEditing), monthEnd: monthEnd(this.data.month) });
+    if (this._stopPracticeDayWatch) this._stopPracticeDayWatch();
+    this._stopPracticeDayWatch = practiceDay.watchPracticeDate(() => {
+      if (!this._visible) return;
+      this.syncDisplayDate();
+      this.refresh();
+    });
     if (this._unsubscribe) this._unsubscribe();
     if (typeof practiceQueue.subscribe === 'function') this._unsubscribe = practiceQueue.subscribe(event => {
       if (!this._visible) return;
@@ -203,6 +212,8 @@ module.exports = function createPracticePage(screen = 'home') { return {
   },
   onHide() {
     this._visible = false;
+    if (this._stopPracticeDayWatch) this._stopPracticeDayWatch();
+    this._stopPracticeDayWatch = null;
     this._generation = (this._generation || 0) + 1;
     this._recordActionsRequest = null;
     this.closeDayStats();
@@ -225,6 +236,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
   async refresh() {
     this.closeDayStats();
     if (!this.data.enabled || this._visible === false) return;
+    this.syncDisplayDate();
     if (screen === 'home') return this.refreshHome();
     const generation = this._generation = (this._generation || 0) + 1;
     this.setData({ loading: true, error: '', summaryError: '', feedFailure: null, summaryFailure: null,
@@ -233,9 +245,10 @@ module.exports = function createPracticePage(screen = 'home') { return {
     await Promise.all([this.loadFeed(generation), this.loadSummary(generation)]);
   },
   async refreshHome() {
+    this.syncDisplayDate();
     this.refreshTypeOptions();
     const generation = this._generation = (this._generation || 0) + 1;
-    const { today, recentStart } = this.data;
+    const { displayToday: today, recentStart } = this.data;
     this._homePreferenceKey = visiblePracticeKey();
     this.setData({ homeLoading: true, homeError: '', homeFailure: null,
       todayLoading: true, todayError: '', todayFailure: null });
@@ -252,21 +265,32 @@ module.exports = function createPracticePage(screen = 'home') { return {
     }
     await Promise.all([this.loadHomeFeed(generation, recentStart, today), this.loadTodaySummary(generation, today)]);
   },
+  syncDisplayDate() {
+    const displayToday = practiceDay.getPracticeDate();
+    const previousToday = this.data.displayToday;
+    if (previousToday === displayToday) return;
+    // 跟随当前月份跨月；主动查看的历史月份保持不变。
+    const followMonth = this.data.month === previousToday.slice(0, 7);
+    const month = followMonth ? displayToday.slice(0, 7) : this.data.month;
+    this.setData({ displayToday, month, monthLabel: monthLabel(month), monthEnd: monthEnd(month),
+      ...(followMonth && month !== this.data.month ? { selectedDate: '' } : {}),
+      ...formDateBounds(this.data.formEditing) });
+  },
   syncHomeContext() {
     const timestamp = Date.now();
-    const today = nowParts(timestamp).date;
+    const today = practiceDay.getPracticeDate(timestamp);
     const context = homeContextKey(today);
     if (context && context === this._homeContextKey) return false;
-    // Reuse only this account/binding's current Beijing day. A refresh keeps
+    // Reuse only this account/binding's current practice day. A refresh keeps
     // confirmed values visible until their replacements have arrived.
     this._homeContextKey = context;
     this._generation = (this._generation || 0) + 1;
     const homeRecentDays = 3;
-    const recentStart = nowParts(timestamp - (homeRecentDays - 1) * DAY_MS).date;
+    const recentStart = practiceDay.getPracticeDate(timestamp - (homeRecentDays - 1) * DAY_MS);
     const [, month, day] = today.split('-').map(Number);
     this._todayStats = null;
     this._homeFeedRecords = [];
-    this.setData({ today, recentStart, homeRecentDays, todayLabel: `${month}月${day}日`,
+    this.setData({ displayToday: today, recentStart, homeRecentDays, todayLabel: `${month}月${day}日`,
       records: [], recentRecords: [], recentGroups: [],
       homeLoaded: false, homeError: '', homeFailure: null,
       todayLoaded: false, todayError: '', todayFailure: null });
@@ -287,21 +311,21 @@ module.exports = function createPracticePage(screen = 'home') { return {
   updateHomeRecords(records) {
     const visible = new Set(practicePreferences.getVisiblePractices().map(item => item.type));
     const recentRecords = records.filter(record => visible.has(record.type) &&
-      record.recordDate >= this.data.recentStart && record.recordDate <= this.data.today);
-    const today = this.data.today;
+      record.displayDate >= this.data.recentStart && record.displayDate <= this.data.displayToday);
+    const today = this.data.displayToday;
     const dates = Array.from({ length: this.data.homeRecentDays }, (_, index) =>
       nowParts(Date.parse(`${today}T00:00:00+08:00`) - index * DAY_MS).date);
     const recentGroups = dates.map((date, index) => ({ date,
       label: ['今天', '昨天', '前天'][index],
       dateLabel: `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`,
-      records: recentRecords.filter(record => record.recordDate === date)
+      records: recentRecords.filter(record => record.displayDate === date)
     })).filter((group, index) => index === 0 || group.records.length);
     this.setData({ records: recentRecords, recentRecords, recentGroups });
   },
   homeRequestCurrent(generation, account) {
     if (generation !== this._generation || account !== ownerKey()) return false;
     if (!this._homeContextKey) return false;
-    if (this._homeContextKey !== homeContextKey(nowParts().date) || this._homePreferenceKey !== visiblePracticeKey()) {
+    if (this._homeContextKey !== homeContextKey(practiceDay.getPracticeDate()) || this._homePreferenceKey !== visiblePracticeKey()) {
       this.refreshHome();
       return false;
     }
@@ -317,7 +341,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
       // first page and conceal visible records on a later page.
       do {
         if (!current()) return;
-        const result = unpack(await practiceApi.feed({ startDate, endDate, type: 'all', limit: 100,
+        const result = unpack(await practiceApi.feed({ startDate, endDate, type: 'all', dayStartHour: 2, limit: 100,
           ...(cursor ? { cursor } : {}) }));
         if (!current()) return;
         (result.records || []).map(decorate).forEach(record => {
@@ -347,7 +371,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     const account = ownerKey();
     const current = () => this.homeRequestCurrent(generation, account);
     try {
-      const summary = unpack(await practiceApi.summary({ startDate: today, endDate: today, type: 'all' }));
+      const summary = unpack(await practiceApi.summary({ startDate: today, endDate: today, type: 'all', dayStartHour: 2 }));
       if (!current()) return;
       this._todayStats = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
       this.updateHomeCards();
@@ -386,7 +410,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
   async loadFeed(generation, cursor) {
     const account = ownerKey();
     try {
-      const result = unpack(await practiceApi.feed({ month: this.data.month, type: this.data.type,
+      const result = unpack(await practiceApi.feed({ month: this.data.month, type: this.data.type, dayStartHour: 2,
         ...(this.data.selectedDate ? { date: this.data.selectedDate } : {}), ...(cursor ? { cursor } : {}) }));
       if (generation !== this._generation || account !== ownerKey()) return;
       const newRecords = (result.records || []).map(decorate);
@@ -405,7 +429,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     const account = ownerKey();
     this.setData({ summaryLoading: true });
     try {
-      const summary = unpack(await practiceApi.summary({ month: this.data.month, type: this.data.type }));
+      const summary = unpack(await practiceApi.summary({ month: this.data.month, type: this.data.type, dayStartHour: 2 }));
       if (generation !== this._generation || account !== ownerKey()) return;
       const month = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
       const allTime = summary.allTime || summary.cumulative || {};
@@ -495,14 +519,14 @@ module.exports = function createPracticePage(screen = 'home') { return {
   },
   onMonthChange(event) {
     const month = event.detail.value.slice(0, 7);
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month > nowParts().date.slice(0, 7)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month > practiceDay.getPracticeDate().slice(0, 7)) return;
     this.setData({ month, monthLabel: monthLabel(month), monthEnd: monthEnd(month), selectedDate: '' });
     this.refresh();
   },
   onDateChange(event) { this.selectDay(event.detail.value); },
   selectCalendarDay(event) { this.selectDay(event.currentTarget.dataset.date); },
   selectDay(date) {
-    if (!date || !date.startsWith(`${this.data.month}-`) || date > nowParts().date) return;
+    if (!date || !date.startsWith(`${this.data.month}-`) || date > practiceDay.getPracticeDate()) return;
     this.setData({ selectedDate: date, view: 'detail' });
     this.refresh();
   },
@@ -511,7 +535,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
   openDayStats(event) {
     const date = event.currentTarget.dataset.date;
     if (!this.data.enabled || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-        !date.startsWith(`${this.data.month}-`) || date > nowParts().date) return;
+        !date.startsWith(`${this.data.month}-`) || date > practiceDay.getPracticeDate()) return;
     const timestamp = Date.parse(`${date}T00:00:00Z`);
     if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) return;
     if (this.data.dayStatsDate === date && this.data.dayStatsLoading) return;
@@ -528,7 +552,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
       dayStatsPracticeCount: 0, dayStatsError: '', dayStatsFailure: null });
     try {
       // A day's complete totals must include all practices, independent of feed filters and pagination.
-      const summary = unpack(await practiceApi.summary({ month: date.slice(0, 7), type: 'all', date }));
+      const summary = unpack(await practiceApi.summary({ month: date.slice(0, 7), type: 'all', date, dayStartHour: 2 }));
       if (!current()) return;
       const totals = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
       const visibleTypes = new Set(practicePreferences.getVisiblePractices().map(item => item.type));

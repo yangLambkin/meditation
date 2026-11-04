@@ -12,7 +12,7 @@ function deferred() {
 }
 function failure(code, message) { return Object.assign(new Error(message), { code }); }
 function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes = [], queueFactory,
-  screen = 'history', loadOptions = {}, shareMenuAvailable = true, now: initialNow = '2026-10-31T00:30:37+08:00' } = {}) {
+  screen = 'history', loadOptions = {}, shareMenuAvailable = true, now: initialNow = '2026-10-31T12:30:37+08:00' } = {}) {
   let now = Date.parse(initialNow);
   let owner = { openid: 'oz-owner', studentNumber: '001', bindingVersion: 'v1' };
   const tasks = [], calls = { feed: [], summary: [], enqueue: [], flush: [], toast: [], navigation: [], switchTab: [], modal: [], shareMenu: [], mirrorResume: 0 };
@@ -22,6 +22,14 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
   }
+  const timers = new Map();
+  let nextTimer = 0;
+  const setTimer = (callback, delay) => {
+    const id = ++nextTimer;
+    timers.set(id, { callback, at: now + delay });
+    return id;
+  };
+  const clearTimer = id => timers.delete(id);
   const api = {
     feed: async params => { calls.feed.push(plain(params)); return feed ? feed(params) : { records: [], nextCursor: '' }; },
     summary: async params => { calls.summary.push(plain(params)); return summary ? summary(params) : { totals: [], recordCount: 0, practiceDays: 0, daily: [], allTime: { totals: [] } }; }
@@ -63,6 +71,20 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     'practiceAuth.js': { getOwner: () => owner, authorize: async () => owner },
     'practiceMirror.js': { resume: async () => { calls.mirrorResume++; } },
     'practiceConfig.js': { practicesEnabled: enabled } };
+  function loadDateModule(name) {
+    if (modules[name]) return modules[name];
+    assert.ok(['practiceDay.js', 'dateUtil.js'].includes(name), name);
+    const dateModule = { exports: {} };
+    const dateModulePath = path.join(__dirname, '../../miniprogram/utils', name);
+    vm.runInNewContext(fs.readFileSync(dateModulePath, 'utf8'), {
+      module: dateModule, exports: dateModule.exports, Date: Clock,
+      setTimeout: setTimer, clearTimeout: clearTimer,
+      require: dependency => loadDateModule(path.basename(dependency))
+    }, { filename: dateModulePath });
+    modules[name] = dateModule.exports;
+    return dateModule.exports;
+  }
+  loadDateModule('practiceDay.js');
   if (queueFactory) {
     queue = queueFactory({ wx, api, auth: modules['practiceAuth.js'], config: modules['practiceConfig.js'], Clock });
     modules['practiceQueue.js'] = queue;
@@ -71,14 +93,21 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     module: pageModule, exports: pageModule.exports,
     require: name => { const module = modules[path.basename(name)]; assert.ok(module, name); return module; },
-    Page: value => { definition = value; }, wx, Date: Clock, console
+    Page: value => { definition = value; }, wx, Date: Clock, console,
+    setTimeout: setTimer, clearTimeout: clearTimer
   }, { filename: pagePath });
   definition = pageModule.exports(screen);
   const page = { ...definition, data: structuredClone(definition.data), setData(data) { Object.assign(this.data, data); } };
   page.onLoad(loadOptions);
   return { page, calls, tasks, storage, subscribers, queue, preferences,
     changeOwner(value) { owner = value; storage.userOpenId = value && value.openid; },
-    advance(milliseconds) { now += milliseconds; } };
+    advance(milliseconds) { now += milliseconds; },
+    runDueTimers() {
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= now && timers.delete(id)) timer.callback();
+      }
+    },
+    timerCount: () => timers.size };
 }
 
 function persistedQueue(writes = {}) {

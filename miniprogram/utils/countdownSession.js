@@ -1,3 +1,5 @@
+const { isExplicitTimerExit } = require('./timerInterruption');
+
 const SCHEMA_VERSION = 2;
 const MAX_SECONDS = 24 * 60 * 60;
 const MAX_DIAGNOSTICS = 200;
@@ -116,6 +118,7 @@ function createCountdownSessionController({
       elapsedTime: seconds, remainingTime: Math.max(0, (state && state.totalTime || 0) - seconds),
       status: state && state.status || 'idle', terminalReason: state && state.terminalReason || null,
       runtimeId, foregroundEpoch, revision, foreground, recoveryEnabled,
+      interrupted: !foreground && active(),
       pendingCompletion: pendingCompletion ? { ...pendingCompletion } : null, completionNotice
     };
   }
@@ -388,15 +391,38 @@ function createCountdownSessionController({
 
   function appShow() {
     if (disposed) return getSnapshot();
-    if (!foreground) { foreground = true; foregroundEpoch += 1; diagnose('app_show'); }
+    if (!foreground) {
+      foreground = true;
+      foregroundEpoch += 1;
+      diagnose('app_show');
+      // The native ticker may have been suspended throughout a call. Reconcile
+      // the original deadline before installing a fresh foreground ticker.
+      advance('restore');
+      ensureTimers();
+    }
     return getSnapshot();
   }
 
-  function appHide() {
+  function appHide(options = {}) {
     if (disposed) return null;
     deferredCompletionEvent = null;
-    if (foreground) { foreground = false; diagnose('app_hide'); }
-    return terminate('app_hide', { silent: true });
+    const wasForeground = foreground;
+    if (foreground) {
+      foreground = false;
+      diagnose('app_hide', { reason: options && options.reason,
+        explicitExit: isExplicitTimerExit(options) });
+    }
+    if (isExplicitTimerExit(options)) return terminate('app_hide', { silent: true });
+    if (!wasForeground) return null;
+    // A system interruption is not a completed sitting. Persist its boundary
+    // now, because background timers and later lifecycle callbacks may not run.
+    // Duplicate hides must not move this cold-start recovery checkpoint forward.
+    if (active()) {
+      state.elapsedTime = elapsed();
+      persist();
+    }
+    clearTimers();
+    return null;
   }
 
   function markCompletionSaved(sessionId) {

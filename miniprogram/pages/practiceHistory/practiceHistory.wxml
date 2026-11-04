@@ -9,7 +9,7 @@
 
 <view class="practice-page">
   <view class="page-heading">
-    <view class="heading-copy"><text class="page-title">功课记录</text></view>
+    <view class="heading-copy"><text class="page-title">功课记录</text><text wx:if="{{enabled}}" class="caption">每日按北京时间 02:00 至次日 02:00 统计</text></view>
   </view>
 
   <view wx:if="{{!enabled}}" class="state-card">
@@ -28,7 +28,7 @@
       </view>
       <view class="filters">
         <button class="filter-pill type-filter {{type !== 'all' ? 'type-filter-active' : ''}}" bindtap="openTypePicker" hover-class="filter-pill-hover" aria-label="{{'筛选功课类型，当前' + typeOptions[typeIndex].name}}" aria-expanded="{{showTypePicker}}"><text>{{typeOptions[typeIndex].name}}</text><view class="filter-chevron" aria-hidden="true"></view></button>
-        <picker mode="date" fields="month" value="{{month}}" end="{{today}}" bindchange="onMonthChange" aria-label="筛选月份"><view class="filter-pill"><text>{{monthLabel}}</text><view class="filter-chevron" aria-hidden="true"></view></view></picker>
+        <picker mode="date" fields="month" value="{{month}}" end="{{displayToday}}" bindchange="onMonthChange" aria-label="筛选月份"><view class="filter-pill"><text>{{monthLabel}}</text><view class="filter-chevron" aria-hidden="true"></view></view></picker>
       </view>
     </view>
 

@@ -4,6 +4,9 @@ const checkinManager = require('./utils/checkin.js');
 App({
   onLaunch: function () {
     this._timerForeground = true;
+    this._timerHideOptions = null;
+    this._timerAudioInterrupted = false;
+    this.setupTimerAudioInterruption();
     if (!wx.cloud) {
       console.error("请使用 2.2.3 或以上的基础库以使用云能力");
       return;
@@ -36,6 +39,7 @@ App({
 
   onShow() {
     this._timerForeground = true;
+    this._timerHideOptions = null;
     this.refreshTabBars();
     if (this._countdownSession) this._countdownSession.appShow();
     if (!wx.cloud) return;
@@ -53,12 +57,25 @@ App({
     return Promise.all([refresh, upload]);
   },
 
-  onHide() {
+  onHide(options = {}) {
     this._timerForeground = false;
-    // 先结束倒计时；页面卸载或提醒清理失败都不能遗漏真正退出。
-    if (this._countdownSession) this._countdownSession.appHide();
+    this._timerHideOptions = options || {};
+    // 保留完整切后台原因，由计时控制器区分明确退出与来电等临时中断。
+    if (this._countdownSession) this._countdownSession.appHide(this._timerHideOptions);
     this._syncAlertVisible = false;
     this.clearSyncAlert();
+  },
+
+  setupTimerAudioInterruption() {
+    if (this._timerAudioInterruptionReady) return;
+    this._timerAudioInterruptionReady = true;
+    // 音频占用和静坐会话相互独立；中断结束后才允许计时页恢复声音。
+    if (typeof wx.onAudioInterruptionBegin === 'function') {
+      wx.onAudioInterruptionBegin(() => { this._timerAudioInterrupted = true; });
+    }
+    if (typeof wx.onAudioInterruptionEnd === 'function') {
+      wx.onAudioInterruptionEnd(() => { this._timerAudioInterrupted = false; });
+    }
   },
 
   getCountdownSession() {
@@ -69,7 +86,7 @@ App({
         api: wx,
         recordCheckin: (...args) => checkinManager.recordCheckin(...args)
       });
-      if (this._timerForeground === false) this._countdownSession.appHide();
+      if (this._timerForeground === false) this._countdownSession.appHide(this._timerHideOptions || {});
     }
     return this._countdownSession;
   },

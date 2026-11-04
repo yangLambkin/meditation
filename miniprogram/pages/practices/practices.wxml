@@ -11,6 +11,7 @@
     <view class="heading-copy">
       <view class="home-title-row"><text class="page-title">今日功课</text><text class="home-date">{{todayLabel}}</text></view>
       <text wx:if="{{enabled && homeCards.length}}" class="home-grid-hint">点击功课卡片，记录今日练习</text>
+      <text wx:if="{{enabled}}" class="home-grid-hint">每日 02:00 至次日 02:00 统计</text>
     </view>
     <button size="mini" class="add-button {{!enabled ? 'add-button-disabled' : ''}}" bindtap="choosePractice" disabled="{{!enabled}}" aria-label="记录一份功课">＋ 记录</button>
   </view>

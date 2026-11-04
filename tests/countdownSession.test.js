@@ -94,14 +94,14 @@ test('foreground countdown survives page detach and reattach with the same ident
   assert.equal(h.records.length, 0, 'normal completion waits for the existing confirmation flow');
 });
 
-test('app hide ends at actual minutes even after every page has detached and immediate return never revives it', () => {
+test('explicit app exit ends at actual minutes even after every page has detached and immediate return never revives it', () => {
   for (const seconds of [65, 125]) {
     const h = harness();
     h.start();
     h.advance(seconds * 1000);
     const queuedTick = h.dropTicker();
     h.detach();
-    h.controller.appHide();
+    h.controller.appHide({ reason: 0 });
     assert.equal(h.snapshot().status, 'exited');
     assert.equal(h.records.length, 1);
     assert.equal(h.records[0][0], Math.floor(seconds / 60));
@@ -111,11 +111,147 @@ test('app hide ends at actual minutes even after every page has detached and imm
     h.controller.appShow();
     queuedTick();
     h.controller.attach(() => {});
-    h.controller.appHide();
+    h.controller.appHide({ reason: 0 });
     h.advance(600000);
     assert.equal(h.snapshot().isRunning, false);
     assert.equal(h.records.length, 1);
     assert.equal(h.timers.size, 0);
+  }
+});
+
+test('system and unclassified interruptions retain one countdown and include ringing time on return', () => {
+  for (const options of [{ reason: 2 }, { reason: 3 }, undefined, null, {}]) {
+    const h = harness();
+    h.start();
+    h.advance(65000);
+    const oldCallbacks = [...h.timers.values()].map(item => item.callback);
+    h.controller.appHide(options);
+    assert.equal(h.snapshot().status, 'running');
+    assert.equal(h.snapshot().interrupted, true);
+    assert.equal(h.storage.get('timerState').elapsedTime, 65);
+    assert.equal(h.storage.get('timerState').saveTime, INITIAL_TIME + 65000);
+    assert.equal(h.records.length, 0);
+    assert.equal(h.snapshot().pendingCompletion, null);
+    assert.equal(h.timers.size, 0, 'no background ticker is required');
+    h.advance(45000);
+    oldCallbacks.forEach(callback => callback());
+    assert.equal(h.events.filter(item => item.event.type === 'complete').length, 0);
+    h.controller.appShow();
+    const eventsAfterShow = h.events.length;
+    oldCallbacks.forEach(callback => callback());
+    assert.equal(h.events.length, eventsAfterShow, 'pre-interruption callbacks stay invalid after return');
+    assert.equal(h.snapshot().sessionId, 'session-one');
+    assert.equal(h.snapshot().elapsedTime, 110);
+    assert.equal(h.snapshot().remainingTime, 310);
+    assert.equal(h.snapshot().interrupted, false);
+    assert.equal(h.records.length, 0);
+    assert.equal([...h.timers.values()].filter(item => item.delay === 1000).length, 1);
+    h.advance(1000);
+    assert.equal(h.events.at(-1).snapshot.elapsedTime, 111);
+  }
+});
+
+test('repeated interruption callbacks preserve the original recovery boundary and never save a record', () => {
+  const h = harness();
+  h.start(); h.advance(65500);
+  h.controller.appHide({ reason: 3 });
+  const firstCheckpoint = structuredClone(h.storage.get('timerState'));
+  h.jump(45000);
+  h.controller.appHide({ reason: 2 });
+  h.controller.appHide();
+  h.controller.tick();
+  assert.deepEqual(h.storage.get('timerState'), firstCheckpoint);
+  assert.equal(h.records.length, 0);
+  assert.equal(h.timers.size, 0);
+  h.controller.appShow();
+  h.controller.appShow();
+  assert.equal(h.snapshot().elapsedTime, 110);
+  assert.equal([...h.timers.values()].filter(item => item.delay === 1000).length, 1);
+});
+
+test('an interrupted paused countdown stays paused and excludes the call when manually resumed', () => {
+  const h = harness();
+  h.start(); h.advance(65000); h.controller.pause();
+  const pauseTimestamp = h.snapshot().pauseTimestamp;
+  h.controller.appHide({ reason: 3 });
+  h.advance(90000);
+  h.controller.appShow();
+  assert.equal(h.snapshot().status, 'paused');
+  assert.equal(h.snapshot().elapsedTime, 65);
+  assert.equal(h.snapshot().pauseTimestamp, pauseTimestamp);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.records.length, 0);
+  h.controller.resume(); h.advance(1000);
+  assert.equal(h.snapshot().elapsedTime, 66);
+  assert.equal(h.snapshot().totalPausedTime, 90000);
+});
+
+test('a countdown reaching its deadline during an interruption completes once at its original end', () => {
+  const h = harness();
+  h.start(120); h.advance(65000);
+  h.controller.appHide({ reason: 3 });
+  h.advance(90000);
+  assert.equal(h.snapshot().status, 'running', 'background wall time waits for foreground reconciliation');
+  assert.equal(h.records.length, 0);
+  assert.equal(h.events.filter(item => item.event.type === 'complete').length, 0);
+  h.controller.appShow();
+  h.controller.appShow(); h.controller.tick();
+  assert.equal(h.snapshot().status, 'completed');
+  assert.equal(h.snapshot().pendingCompletion.duration, 2);
+  assert.equal(h.snapshot().pendingCompletion.endedAt, INITIAL_TIME + 120000);
+  assert.equal(h.events.filter(item => item.event.type === 'complete').length, 1);
+  assert.equal(h.records.length, 0, 'completion retains the normal confirmation flow');
+  assert.equal(h.timers.size, 0);
+});
+
+test('a completed interrupted countdown with no page delivers its completion once when a page attaches', () => {
+  const h = harness();
+  h.start(120); h.advance(65000); h.detach();
+  h.controller.appHide({ reason: 3 });
+  h.advance(90000); h.controller.appShow();
+  const events = [];
+  const detach = h.controller.attach((snapshot, event) => events.push({ snapshot, event }));
+  assert.equal(events[0].event.type, 'complete');
+  assert.equal(events[0].snapshot.pendingCompletion.endedAt, INITIAL_TIME + 120000);
+  detach();
+  h.controller.attach((snapshot, event) => events.push({ snapshot, event }));
+  assert.equal(events.at(-1).event.type, 'restore');
+  assert.equal(events.filter(item => item.event.type === 'complete').length, 1);
+});
+
+test('cold startup after a system interruption settles only the persisted hide boundary', () => {
+  for (const paused of [false, true]) {
+    const h = harness();
+    h.start(); h.advance(65000);
+    if (paused) h.controller.pause();
+    h.controller.appHide({ reason: 3 });
+    h.advance(3600000);
+    h.controller.appHide({ reason: 3 });
+    const reopened = harness({ initialStorage: h.data(), initialTime: h.now() });
+    assert.equal(reopened.snapshot().status, 'exited');
+    assert.equal(reopened.snapshot().elapsedTime, 65);
+    assert.equal(reopened.records.length, 1);
+    assert.equal(reopened.records[0][0], 1);
+    assert.equal(reopened.records[0][3], INITIAL_TIME + 65000);
+    reopened.controller.appShow(); reopened.controller.tick();
+    assert.equal(reopened.records.length, 1);
+    assert.equal(reopened.timers.size, 0);
+  }
+});
+
+test('an explicit exit after a protected interruption still ends the session and saves once', () => {
+  for (const reason of [0, 1]) {
+    const h = harness();
+    h.start(); h.advance(65000);
+    h.controller.appHide({ reason: 3 });
+    h.advance(30000);
+    h.controller.appHide({ reason });
+    assert.equal(h.snapshot().status, 'exited');
+    assert.equal(h.records.length, 1);
+    assert.equal(h.records[0][0], 1);
+    assert.equal(h.records[0][3], INITIAL_TIME + 95000);
+    h.controller.appShow(); h.controller.appHide({ reason });
+    assert.equal(h.records.length, 1);
   }
 });
 
@@ -126,7 +262,7 @@ test('terminal state is durable before record saving or an exit listener can fai
     assert.equal(h.snapshot().isRunning, false);
     h.controller.appShow();
     h.controller.tick();
-    h.controller.appHide();
+    h.controller.appHide({ reason: 0 });
     return { success: true };
   } });
   h.controller.attach((snapshot, event) => {
@@ -137,7 +273,7 @@ test('terminal state is durable before record saving or an exit listener can fai
   });
   h.start();
   h.advance(125000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   assert.equal(h.records.length, 1);
   assert.equal(h.snapshot().status, 'exited');
   assert.ok(h.storage.get('timerDiagnostics').some(item => item.type === 'listener_error'));
@@ -193,13 +329,13 @@ test('pause excludes elapsed wall time and queued running callbacks cannot resum
   assert.equal(h.snapshot().pendingCompletion.endedAt, INITIAL_TIME + 480000);
 });
 
-test('app hide while paused records only the running portion and never automatically resumes', () => {
+test('explicit app exit while paused records only the running portion and never automatically resumes', () => {
   const h = harness();
   h.start();
   h.advance(125000);
   h.controller.pause();
   h.advance(3600000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   h.controller.appShow();
   h.controller.resume();
   assert.equal(h.records.length, 1);
@@ -217,7 +353,7 @@ test('manual finish preserves the short draft and repeated finish, hide, and lat
   assert.equal(completion.duration, 2);
   assert.equal(h.events.at(-1).event.reason, 'manual');
   assert.equal(h.controller.finish('manual'), null);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   h.controller.appShow();
   queued.forEach(callback => callback());
   assert.equal(h.records.length, 0);
@@ -235,7 +371,7 @@ test('reset, mode change, and duration change are terminal cancellations with no
     h.advance(125000);
     const queued = [...h.timers.values()].map(item => item.callback);
     h.controller.cancel(reason);
-    h.controller.appHide();
+    h.controller.appHide({ reason: 0 });
     h.controller.appShow();
     queued.forEach(callback => callback());
     assert.equal(h.snapshot().status, 'cancelled');
@@ -252,8 +388,8 @@ test('normal completion and app exit racing at the deadline produce at most one 
     const h = harness();
     h.start(60);
     h.jump(60000);
-    if (exitFirst) { h.controller.appHide(); h.controller.tick(); }
-    else { h.controller.tick(); h.controller.appHide(); }
+    if (exitFirst) { h.controller.appHide({ reason: 0 }); h.controller.tick(); }
+    else { h.controller.tick(); h.controller.appHide({ reason: 0 }); }
     assert.equal(h.records.length, exitFirst ? 1 : 0);
     assert.equal(h.events.filter(item => ['complete', 'exit'].includes(item.event.type)).length, 1);
     const completion = h.events.find(item => ['complete', 'exit'].includes(item.event.type)).event.completion;
@@ -266,7 +402,7 @@ test('silent save failure keeps the completion draft while the session remains i
   const h = harness({ recordCheckin: () => ({ success: false }) });
   h.start();
   h.advance(125000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   assert.equal(h.snapshot().status, 'exited');
   assert.equal(h.snapshot().pendingCompletion.duration, 2);
   assert.equal(h.storage.get('timerPendingCompletion').sessionId, 'session-one');
@@ -354,7 +490,7 @@ test('a sub-minute countdown completes without a draft and exit below one minute
   assert.equal(h.records.length, 0);
   assert.equal(h.start(420, 'second'), true);
   h.advance(59000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   assert.equal(h.records.length, 0);
   assert.equal(h.snapshot().pendingCompletion, null);
   assert.match(h.snapshot().completionNotice, /不足1分钟/);
@@ -380,7 +516,7 @@ test('recovery can be disabled without changing actual exit or normal completion
   h.controller.setRecoveryEnabled(false);
   assert.equal([...h.timers.values()].filter(item => item.delay === 5000).length, 0);
   h.advance(65000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   assert.equal(h.records[0][0], 1);
   h.controller.appShow();
   h.controller.setRecoveryEnabled(true);
@@ -582,7 +718,7 @@ test('app hide discards a deferred completion cue even when immediately returnin
   h.start(60);
   h.detach();
   h.advance(60000);
-  h.controller.appHide();
+  h.controller.appHide({ reason: 0 });
   h.controller.appShow();
   const events = [];
   h.controller.attach((snapshot, event) => events.push(event.type));

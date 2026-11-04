@@ -4,13 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function createApp({ cloud = true } = {}) {
+function createApp({ cloud = true, audioEvents = false } = {}) {
   let app;
-  const calls = { modules: [], factories: [], events: [], records: [] };
+  const calls = { modules: [], factories: [], events: [], records: [], hides: [], audioBegin: [], audioEnd: [] };
   const recordResult = { success: true };
   const api = cloud ? { cloud: { init() {} } } : {};
+  if (audioEvents) {
+    api.onAudioInterruptionBegin = callback => calls.audioBegin.push(callback);
+    api.onAudioInterruptionEnd = callback => calls.audioEnd.push(callback);
+  }
   const controller = {
-    appHide() {
+    appHide(options) {
+      calls.hides.push(options);
       calls.events.push({ type: 'timer-hide', foreground: app._timerForeground });
     },
     appShow() {
@@ -151,4 +156,57 @@ test('reminder refresh failures cannot prevent countdown foreground processing',
   assert.throws(() => app.onShow(), /alert refresh failed/);
   assert.equal(app._timerForeground, true);
   assert.deepEqual(calls.events, [{ type: 'timer-show', foreground: true }]);
+});
+
+test('app hide forwards every background reason and all additional options without interpreting them', () => {
+  const { app, calls } = createApp();
+  app.onLaunch();
+  app.getCountdownSession();
+  for (const reason of [0, 1, 2, 3]) {
+    const options = { reason, extra: 'forward unchanged' };
+    app.onHide(options);
+    assert.equal(calls.hides.at(-1), options);
+    assert.equal(app._timerHideOptions, options);
+  }
+  app.onHide();
+  assert.equal(calls.hides.at(-1).reason, undefined);
+  assert.notEqual(calls.hides.at(-1), calls.hides.at(-2));
+});
+
+test('a controller first created while interrupted receives the original background options', () => {
+  const { app, calls } = createApp();
+  app.onLaunch();
+  const options = { reason: 3, extra: 'call interruption' };
+  app.onHide(options);
+  app.getCountdownSession();
+  app.getCountdownSession();
+  assert.deepEqual(calls.hides, [options]);
+  app.onShow();
+  assert.equal(app._timerHideOptions, null);
+});
+
+test('audio interruptions are tracked once without loading or ending a countdown, including without cloud', () => {
+  for (const cloud of [true, false]) {
+    const { app, calls } = createApp({ cloud, audioEvents: true });
+    app.onLaunch();
+    app.setupTimerAudioInterruption();
+    assert.equal(calls.audioBegin.length, 1);
+    assert.equal(calls.audioEnd.length, 1);
+    assert.equal(app._timerAudioInterrupted, false);
+    calls.audioBegin[0]();
+    assert.equal(app._timerAudioInterrupted, true);
+    assert.equal(calls.factories.length, 0);
+    app.getCountdownSession();
+    calls.audioEnd[0]();
+    assert.equal(app._timerAudioInterrupted, false);
+    assert.deepEqual(calls.events, []);
+    assert.equal(calls.hides.length, 0);
+  }
+});
+
+test('older runtimes without audio interruption events can still initialize timing', () => {
+  const { app, controller } = createApp({ cloud: false });
+  app.onLaunch();
+  assert.equal(app._timerAudioInterrupted, false);
+  assert.equal(app.getCountdownSession(), controller);
 });

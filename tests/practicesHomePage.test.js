@@ -13,6 +13,83 @@ const record = (id, type = 'walking', recordDate = '2026-10-31') => ({
   occurredAt: `${recordDate} 09:00:00`
 });
 
+test('home groups records from 02:00 through the next 02:00 without changing occurrence dates', async () => {
+  const records = [
+    { ...record(1, 'walking', '2026-11-01'), occurredAt: '2026-11-01 01:59:59' },
+    { ...record(2), occurredAt: '2026-10-31 02:00:00' },
+    { ...record(3), occurredAt: '2026-10-31 01:59:59' },
+    record(4, 'walking', '2026-10-30'),
+    { ...record(5, 'walking', '2026-10-29'), occurredAt: '2026-10-29 02:00:00' },
+    { ...record(6, 'walking', '2026-10-29'), occurredAt: '2026-10-29 01:59:59' },
+    { ...record(7, 'walking', '2026-11-01'), occurredAt: '2026-11-01 02:00:00' },
+    { ...record(8), occurredAt: null }
+  ];
+  const original = plain(records);
+  const h = createHome({ now: '2026-11-01T01:59:59+08:00', feed: () => ({ records }) });
+  await h.page.refresh();
+  assert.equal(h.page.data.today, '2026-11-01', 'form bounds keep the actual Beijing date');
+  assert.equal(h.page.data.displayToday, '2026-10-31');
+  assert.equal(h.page.data.todayLabel, '10月31日');
+  assert.equal(h.page.data.recentStart, '2026-10-29');
+  assert.deepEqual(plain(h.page.data.recentGroups.map(group => [group.date, group.records.map(item => item.id)])), [
+    ['2026-10-31', [1, 2, 8]], ['2026-10-30', [3, 4]], ['2026-10-29', [5]]
+  ]);
+  const earlyRecord = h.page.data.recentRecords.find(item => item.id === 1);
+  assert.equal(earlyRecord.displayDate, '2026-10-31');
+  assert.equal(earlyRecord.recordDate, '2026-11-01');
+  assert.equal(earlyRecord.occurredAt, '2026-11-01 01:59:59');
+  assert.deepEqual(records, original, 'server records are not rewritten');
+  assert.equal(h.calls.enqueue.length, 0);
+});
+
+test('midnight keeps the same practice-day cache while form dates advance to the actual date', async () => {
+  const response = deferred();
+  let reloading = false;
+  const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+    feed: () => reloading ? response.promise : { records: [record(1)] },
+    summary: () => reloading ? response.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
+  });
+  await h.page.refresh();
+  h.advance(2000);
+  reloading = true;
+  const refreshing = h.page.refresh();
+  assert.equal(h.page.data.displayToday, '2026-10-31');
+  assert.equal(h.page.data.homeLoaded, true);
+  assert.equal(h.page.data.todayLoaded, true);
+  assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 20);
+  h.page.openForm('walking');
+  assert.equal(h.page.data.today, '2026-11-01');
+  assert.equal(h.page.data.formDate, '2026-11-01');
+  assert.equal(h.page.data.formTime, '00:00');
+  assert.equal(h.page.data.displayToday, '2026-10-31', 'opening a form cannot change the statistics day');
+  response.resolve({ records: [record(1)], totals: [{ type: 'walking', totalValue: 20 }] });
+  await refreshing;
+  assert.equal(h.calls.feed.at(-1).endDate, '2026-10-31');
+  assert.equal(h.calls.summary.at(-1).endDate, '2026-10-31');
+});
+
+test('visible home refreshes at 02:00 and cancels its day watcher when hidden', async () => {
+  const h = createHome({ now: '2026-11-01T01:59:59+08:00' });
+  h.page.onShow();
+  await settle();
+  assert.equal(h.page.data.displayToday, '2026-10-31');
+  assert.equal(h.timerCount(), 1);
+  h.advance(1000);
+  h.runDueTimers();
+  await settle();
+  assert.equal(h.page.data.displayToday, '2026-11-01');
+  assert.equal(h.page.data.todayLabel, '11月1日');
+  assert.equal(h.calls.feed.length, 2);
+  assert.equal(h.calls.summary.length, 2);
+  assert.equal(h.calls.summary.at(-1).endDate, '2026-11-01');
+  h.page.onHide();
+  assert.equal(h.timerCount(), 0);
+  h.advance(24 * 60 * 60 * 1000);
+  h.runDueTimers();
+  await settle();
+  assert.equal(h.calls.summary.length, 2);
+});
+
 function observeData(page) {
   const snapshots = [];
   const setData = page.setData;
@@ -174,12 +251,12 @@ test('failed background reads retain loaded data while first-load failures stay 
   assert.equal(first.page.data.todayError, '首次统计失败');
 });
 
-test('a new Beijing day, account or binding invalidates loaded home data before replacement reads finish', async () => {
+test('a new practice day, account or binding invalidates loaded home data before replacement reads finish', async () => {
   for (const change of ['day', 'account', 'binding']) {
     for (const action of ['refresh', 'onShow']) {
       const feed = deferred(), summary = deferred();
       let reloading = false;
-      const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+      const h = createHome({ now: '2026-11-01T01:59:59+08:00',
         feed: () => reloading ? feed.promise : { records: [record(1)] },
         summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
       });
@@ -201,7 +278,7 @@ test('a new Beijing day, account or binding invalidates loaded home data before 
       assert.equal(h.page.data.recentGroups.flatMap(group => group.records).length, 0, label);
       assert.equal(h.page.data.todayLoading, true, label);
       assert.equal(h.page.data.homeLoading, true, label);
-      feed.resolve({ records: [record(2, 'walking', h.page.data.today)] });
+      feed.resolve({ records: [record(2, 'walking', h.page.data.displayToday)] });
       summary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
       await refreshing;
       await settle();
@@ -246,7 +323,7 @@ test('a confirmed persisted queue upload revalidates the visible home without cl
 });
 
 // Today's cards must come from complete server totals, even while the recent feed is paging.
-test('home requests today totals independently of the latest three calendar days and fills all six cards', async () => {
+test('home requests today totals independently of the latest three practice days and fills all six cards', async () => {
   const secondPage = deferred();
   const h = createHome({
     feed: params => params.cursor ? secondPage.promise : {
@@ -260,10 +337,10 @@ test('home requests today totals independently of the latest three calendar days
   });
   const refreshing = h.page.refresh();
   await settle();
-  assert.deepEqual(h.calls.summary, [{ startDate: '2026-10-31', endDate: '2026-10-31', type: 'all' }]);
+  assert.deepEqual(h.calls.summary, [{ dayStartHour: 2, startDate: '2026-10-31', endDate: '2026-10-31', type: 'all' }]);
   assert.deepEqual(h.calls.feed, [
-    { startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100 },
-    { startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100, cursor: 'recent-page-2' }
+    { dayStartHour: 2, startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100 },
+    { dayStartHour: 2, startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100, cursor: 'recent-page-2' }
   ]);
   assert.deepEqual(plain(h.page.data.homeCards.map(item => item.type)), types);
   assert.equal(h.page.data.homeCards.find(item => item.type === 'walking').value, 125);
@@ -306,7 +383,7 @@ test('a selected subset and all six practices show the latest three days while e
   await subset.page.refresh();
   assert.equal(subset.page.data.homeRecentDays, 3);
   assert.equal(subset.page.data.recentStart, '2026-10-29');
-  assert.deepEqual(subset.calls.feed, [{ startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100 }]);
+  assert.deepEqual(subset.calls.feed, [{ dayStartHour: 2, startDate: '2026-10-29', endDate: '2026-10-31', type: 'all', limit: 100 }]);
   assert.deepEqual(plain(subset.page.data.recentRecords.map(item => item.id)), [1, 2, 3]);
   assert.deepEqual(plain(subset.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
   const all = createHome({ feed: () => ({ records }) });
@@ -358,36 +435,36 @@ test('all-hidden home stays empty while the separate history keeps the original 
 
 test('home uses Beijing dates across month, year and leap-day boundaries', async () => {
   for (const [now, startDate, endDate, todayLabel] of [
-    ['2026-10-31T16:00:00Z', '2026-10-30', '2026-11-01', '11月1日'],
-    ['2026-12-31T16:00:00Z', '2026-12-30', '2027-01-01', '1月1日'],
-    ['2028-02-29T16:00:00Z', '2028-02-28', '2028-03-01', '3月1日'],
+    ['2026-10-31T18:00:00Z', '2026-10-30', '2026-11-01', '11月1日'],
+    ['2026-12-31T18:00:00Z', '2026-12-30', '2027-01-01', '1月1日'],
+    ['2028-02-29T18:00:00Z', '2028-02-28', '2028-03-01', '3月1日'],
     ['2027-02-28T15:59:59Z', '2027-02-26', '2027-02-28', '2月28日']
   ]) {
     const h = createHome({ now });
     assert.equal(h.page.data.todayLabel, todayLabel, `onLoad: ${now}`);
     await h.page.refresh();
     assert.equal(h.page.data.todayLabel, todayLabel, `refresh: ${now}`);
-    assert.equal(h.page.data.today, endDate, now);
+    assert.equal(h.page.data.displayToday, endDate, now);
     assert.equal(h.page.data.recentStart, startDate, now);
-    assert.deepEqual(h.calls.feed, [{ startDate, endDate, type: 'all', limit: 100 }], now);
-    assert.deepEqual(h.calls.summary, [{ startDate: endDate, endDate, type: 'all' }], now);
+    assert.deepEqual(h.calls.feed, [{ dayStartHour: 2, startDate, endDate, type: 'all', limit: 100 }], now);
+    assert.deepEqual(h.calls.summary, [{ dayStartHour: 2, startDate: endDate, endDate, type: 'all' }], now);
   }
 });
 
-test('refreshing or returning after midnight moves the home window to the new Beijing day', async () => {
+test('refreshing or returning after 02:00 moves the home window to the new practice day', async () => {
   for (const action of ['refresh', 'onShow']) {
-    const h = createHome({ now: '2026-12-31T23:59:59+08:00' });
+    const h = createHome({ now: '2027-01-01T01:59:59+08:00' });
     assert.equal(h.page.data.todayLabel, '12月31日', `onLoad: ${action}`);
     await h.page.refresh();
-    assert.equal(h.page.data.todayLabel, '12月31日', `before midnight: ${action}`);
+    assert.equal(h.page.data.todayLabel, '12月31日', `before 02:00: ${action}`);
     h.advance(2000);
     await h.page[action]();
     await settle();
     assert.equal(h.page.data.today, '2027-01-01', action);
     assert.equal(h.page.data.todayLabel, '1月1日', action);
     assert.equal(h.page.data.recentStart, '2026-12-30', action);
-    assert.deepEqual(h.calls.feed.at(-1), { startDate: '2026-12-30', endDate: '2027-01-01', type: 'all', limit: 100 }, action);
-    assert.deepEqual(h.calls.summary.at(-1), { startDate: '2027-01-01', endDate: '2027-01-01', type: 'all' }, action);
+    assert.deepEqual(h.calls.feed.at(-1), { dayStartHour: 2, startDate: '2026-12-30', endDate: '2027-01-01', type: 'all', limit: 100 }, action);
+    assert.deepEqual(h.calls.summary.at(-1), { dayStartHour: 2, startDate: '2027-01-01', endDate: '2027-01-01', type: 'all' }, action);
     h.page.onHide();
   }
 });
@@ -629,11 +706,11 @@ test('hiding a practice during a three-day read refreshes visible records withou
   assert.deepEqual(plain(h.page.data.recentGroups.map(item => item.date)), ['2026-10-31', '2026-10-30', '2026-10-29']);
 });
 
-test('crossing midnight in a practice picker replaces in-flight reads and rejects the previous day results', async () => {
+test('crossing 02:00 in a practice picker replaces in-flight reads and rejects the previous day results', async () => {
   for (const action of ['openTypePicker', 'onTypeChange']) {
     const oldFeed = deferred(), oldSummary = deferred(), newFeed = deferred(), newSummary = deferred();
     let reloading = false;
-    const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+    const h = createHome({ now: '2026-11-01T01:59:59+08:00',
       feed: params => !reloading ? { records: [record(1)] }
         : params.endDate === '2026-10-31' ? oldFeed.promise : newFeed.promise,
       summary: params => !reloading ? { totals: [{ type: 'walking', totalValue: 20 }] }
@@ -656,7 +733,7 @@ test('crossing midnight in a practice picker replaces in-flight reads and reject
     newFeed.resolve({ records: [record(2, 'walking', '2026-11-01')] });
     newSummary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
     await settle();
-    assert.equal(pending.today, '2026-11-01', action);
+    assert.equal(pending.displayToday, '2026-11-01', action);
     assert.equal(pending.todayLoaded, false, action);
     assert.equal(pending.homeLoaded, false, action);
     assert.equal(h.calls.feed.filter(params => params.endDate === '2026-11-01').length, 1, `${action}: starts a new-day feed`);
@@ -673,11 +750,11 @@ test('crossing midnight in a practice picker replaces in-flight reads and reject
   }
 });
 
-test('a practice picker opened after midnight starts new-day reads even when no request is in flight', async () => {
+test('a practice picker opened after 02:00 starts new-day reads even when no request is in flight', async () => {
   for (const action of ['openTypePicker', 'onTypeChange']) {
     const feed = deferred(), summary = deferred();
     let reloading = false;
-    const h = createHome({ now: '2026-10-31T23:59:59+08:00',
+    const h = createHome({ now: '2026-11-01T01:59:59+08:00',
       feed: () => reloading ? feed.promise : { records: [record(1)] },
       summary: () => reloading ? summary.promise : { totals: [{ type: 'walking', totalValue: 20 }] }
     });
@@ -691,7 +768,7 @@ test('a practice picker opened after midnight starts new-day reads even when no 
     feed.resolve({ records: [record(2, 'walking', '2026-11-01')] });
     summary.resolve({ totals: [{ type: 'walking', totalValue: 4 }] });
     await settle();
-    assert.equal(pending.today, '2026-11-01', action);
+    assert.equal(pending.displayToday, '2026-11-01', action);
     assert.equal(pending.todayLoaded, false, action);
     assert.equal(pending.homeLoaded, false, action);
     assert.equal(pending.todayLoading, true, action);

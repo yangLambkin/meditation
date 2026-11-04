@@ -18,7 +18,7 @@
         <view class="day-stats-row {{!item.value ? 'day-stats-zero' : ''}}" wx:for="{{dayStatsCards}}" wx:key="type">
           <text class="day-stats-name">{{item.name}}</text><view class="day-stats-quantity"><text class="day-stats-value">{{item.value}}</text><text class="day-stats-unit">{{item.unit}}</text></view>
         </view>
-        <text class="day-stats-note">北京时间 · 仅统计已显示功课的已上传记录</text>
+        <text class="day-stats-note">北京时间 02:00 至次日 02:00 · 仅统计已显示功课的已上传记录</text>
       </view>
     </scroll-view>
   </view>
