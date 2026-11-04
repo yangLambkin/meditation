@@ -1,0 +1,9 @@
+<template name="practice-record-card">
+  <view class="practice-record-card" data-key="{{record.key}}" bindtap="openDetail" catchlongpress="showRecordActions" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + '，点击查看详情' + (record.canEdit || record.canDelete ? '，长按管理记录' : '')}}">
+    <view class="practice-record-copy">
+      <view class="practice-record-heading"><text class="practice-record-name">{{record.typeName}}</text><text class="practice-record-time">{{record.timeLabel}}</text></view>
+      <text wx:if="{{record.preview}}" class="practice-record-preview">{{record.preview}}</text>
+    </view>
+    <view class="practice-record-quantity"><text class="practice-record-value">{{record.quantity}}</text><text class="practice-record-unit">{{record.unit}}</text></view>
+  </view>
+</template>

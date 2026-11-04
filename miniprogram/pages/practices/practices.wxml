@@ -1,3 +1,5 @@
+<import src="practiceRecord.wxml" />
+
 <template name="read-failure">
   <view class="state-card error-card">
     <text class="state-title">{{failure.title}}</text>
@@ -11,7 +13,6 @@
     <view class="heading-copy">
       <view class="home-title-row"><text class="page-title">今日功课</text><text class="home-date">{{todayLabel}}</text></view>
       <text wx:if="{{enabled && homeCards.length}}" class="home-grid-hint">点击功课卡片，记录今日练习</text>
-      <text wx:if="{{enabled}}" class="home-grid-hint">每日 02:00 至次日 02:00 统计</text>
     </view>
     <button size="mini" class="add-button {{!enabled ? 'add-button-disabled' : ''}}" bindtap="choosePractice" disabled="{{!enabled}}" aria-label="记录一份功课">＋ 记录</button>
   </view>
@@ -41,7 +42,7 @@
     </view>
 
     <view class="home-recent">
-      <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover">查看全部<text class="home-entry-arrow" aria-hidden="true">›</text></button></view>
+      <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover"><text>查看全部</text><view class="home-entry-arrow" aria-hidden="true"></view></button></view>
       <block wx:if="{{homeCards.length}}">
         <view wx:if="{{homeLoading && !homeLoaded && !homeError}}" class="empty-state home-loading">正在读取最近记录…</view>
         <template wx:if="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
@@ -51,11 +52,8 @@
           <view class="home-day-group" wx:for="{{recentGroups}}" wx:for-item="group" wx:key="date">
             <view class="home-day-heading"><text class="home-day-label">{{group.label}}</text><text class="home-day-date">{{group.dateLabel}}</text></view>
             <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text></view>
-            <view wx:else class="home-record-list">
-              <view class="home-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" data-key="{{record.key}}" bindtap="openDetail" catchlongpress="showRecordActions" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + '，点击查看详情' + (record.canEdit || record.canDelete ? '，长按管理记录' : '')}}">
-                <view class="home-record-copy"><view class="home-record-heading"><text class="home-record-name">{{record.typeName}}</text><text class="home-record-time">{{record.timeLabel}}</text></view><text wx:if="{{record.preview}}" class="home-record-preview">{{record.preview}}</text></view>
-                <view class="home-record-quantity"><text class="home-record-value">{{record.quantity}}</text><text class="home-record-unit">{{record.unit}}</text></view>
-              </view>
+            <view wx:else class="practice-record-list">
+              <template is="practice-record-card" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" data="{{record: record}}" />
             </view>
           </view>
           <text wx:if="{{recentRecords.length}}" class="home-footer-note">更早的记录，可在明细中查看</text>

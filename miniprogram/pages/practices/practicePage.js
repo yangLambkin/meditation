@@ -14,6 +14,7 @@ const TYPE_MAP = TYPES.reduce((map, item) => { map[item.type] = item; return map
 const BEIJING_OFFSET = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FORM_DATE_WINDOW_DAYS = 14;
+const RECORD_PREVIEW_LENGTH = 30;
 const SHARE_TITLE = '功课记录 · 觉察日常，记录成长';
 const SHARE_IMAGE = '/images/practice-share.png';
 const TIMELINE_SHARE_IMAGE = '/images/practice-share-timeline.png';
@@ -60,6 +61,12 @@ function readFailure(error, fallback) {
 function quantity(record) {
   return Number(record.type === 'instant' ? record.count : record.type === 'kindness' ? record.quantity || record.deedCount || 1 : record.durationMinutes) || 0;
 }
+function recordPreview(record) {
+  const reflection = (record.reflection || '').trim();
+  const text = (reflection || record.content || '').replace(/\s+/g, ' ').trim();
+  const characters = Array.from(text);
+  return characters.slice(0, RECORD_PREVIEW_LENGTH).join('') + (characters.length > RECORD_PREVIEW_LENGTH ? '…' : '');
+}
 function decorate(record) {
   const meta = TYPE_MAP[record.type] || TYPE_MAP.sitting;
   const source = record.source;
@@ -74,7 +81,7 @@ function decorate(record) {
     timeLabel: isNextDay ? `次日${Number(clockTimeLabel.slice(0, 2))}${clockTimeLabel.slice(2)}` : clockTimeLabel,
     occurredAt, mirrored, canEdit: record.type !== 'sitting' && record.canEdit !== false,
     canDelete: record.type !== 'sitting' && record.canDelete !== false,
-    preview: (record.content || record.reflection || '').slice(0, 100) };
+    preview: recordPreview(record) };
 }
 function groupsFor(records) {
   const byDate = new Map();
@@ -776,6 +783,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     if (record) { this._detailOwner = ownerKey(); this.setData({ detail: record }); }
   },
   showRecordActions(event) {
+    if (!event || event.type !== 'longpress') return;
     if (this.data.deleting || this.data.formBusy) return;
     const key = event.currentTarget.dataset.key;
     const record = this.data.records.find(item => item.key === key);
