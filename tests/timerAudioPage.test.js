@@ -450,10 +450,30 @@ test('timer pages rebuilt during a call keep the session and its original hide c
       const fresh = h.recreatePage();
       assert.equal(fresh.sessionId, sessionId);
       assert.equal(h.records.length, 0);
+      assert.equal(fresh.data.showStartButton, paused);
+      assert.equal(fresh.data.showPauseButton, !paused);
+      assert.equal(fresh.data.showStopButton, true);
+      assert.equal(fresh.data.showResetButton, true);
+      assert.equal(fresh.data.displayTime, isCountdown ? (paused ? '05:55' : '05:10') : (paused ? '01:05' : '01:50'));
       h.emitApp('show'); fresh.onShow(); h.emitAudio('end'); h.advance(1000);
       assert.equal(fresh.data.isRunning, !paused);
       assert.equal(fresh.data.isPaused, paused);
       assert.equal(fresh.data.elapsedTime, paused ? 65 : 111);
+      assert.equal(fresh.data.displayTime, isCountdown ? (paused ? '05:55' : '05:09') : (paused ? '01:05' : '01:51'));
+      if (!paused) {
+        fresh.pauseTimer();
+        assert.equal(fresh.data.isPaused, true);
+        assert.equal(fresh.data.showStartButton, true);
+      }
+      fresh.startTimer();
+      assert.equal(fresh.data.isRunning, true);
+      assert.equal(fresh.data.showPauseButton, true);
+      h.advance(1000);
+      assert.equal(fresh.data.elapsedTime, paused ? 66 : 112);
+      fresh.handleStop();
+      assert.equal(fresh.data.isRunning, false);
+      assert.equal(fresh.data.showStopButton, false);
+      assert.equal(fresh.data.completionDuration, 1);
       assert.equal(h.records.length, 0);
     }
   }

@@ -783,6 +783,8 @@ Page({
         this.syncTimerTime();
         if (this.data.isRunning) this.createForegroundTimer();
       }
+      this.updateDisplay();
+      this.updateButtonStates();
       return;
     }
     // 进程回收后只结算最后检查点，不补算关闭时间。
