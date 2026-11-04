@@ -33,6 +33,7 @@ button.home-practice-hover { background: #f3eddf; }
 button.home-records-link { display: flex; align-items: center; flex-shrink: 0; width: auto; min-height: 64rpx; margin: 0; padding: 0 0 0 12rpx; border-radius: 12rpx; color: #9c8050; background: transparent; font-size: 24rpx; line-height: 64rpx; }
 .home-entry-arrow { margin-left: 12rpx; color: #b29764; font-size: 34rpx; }
 .home-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 16rpx; }
+.home-records-hint { margin: 0 4rpx 20rpx; }
 .home-day-group + .home-day-group { margin-top: 28rpx; }
 .home-day-heading { display: flex; align-items: baseline; gap: 14rpx; margin: 0 4rpx 14rpx; }
 .home-day-label { color: #7a8493; font-size: 25rpx; font-weight: 500; }

@@ -65,9 +65,13 @@ function decorate(record) {
   const source = record.source;
   const mirrored = !!(record.sourceRecordId || source === 'meditation' || source && (source.system === 'meditation' || source.sourceSystem === 'meditation'));
   const occurredAt = typeof record.occurredAt === 'string' ? record.occurredAt.replace('T', ' ') : '';
-  return { ...record, displayDate: practiceDay.getRecordDisplayDate(record),
+  const displayDate = practiceDay.getRecordDisplayDate(record);
+  const clockTimeLabel = occurredAt ? occurredAt.slice(11, 16) : '未记录时间';
+  const isNextDay = occurredAt.slice(0, 10) > displayDate && clockTimeLabel < '02:00';
+  return { ...record, displayDate,
     key: `${record.type}:${record.id}`, typeName: meta.name, unit: meta.unit,
-    quantity: quantity(record), timeLabel: occurredAt ? occurredAt.slice(11, 16) : '未记录时间',
+    quantity: quantity(record), clockTimeLabel,
+    timeLabel: isNextDay ? `次日${Number(clockTimeLabel.slice(0, 2))}${clockTimeLabel.slice(2)}` : clockTimeLabel,
     occurredAt, mirrored, canEdit: record.type !== 'sitting' && record.canEdit !== false,
     canDelete: record.type !== 'sitting' && record.canDelete !== false,
     preview: (record.content || record.reflection || '').slice(0, 100) };

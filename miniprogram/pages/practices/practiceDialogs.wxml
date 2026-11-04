@@ -51,13 +51,13 @@
     <view class="dialog-header"><text class="dialog-title dialog-heading">{{detail.typeName}}</text><button size="mini" class="close-button" hover-class="close-button-hover" bindtap="closeDetail" disabled="{{deleting}}" aria-label="关闭功课详情"><view class="close-icon" aria-hidden="true"></view></button></view>
     <view class="detail-scroll"><view class="dialog-body">
       <view class="detail-amount"><text>{{detail.quantity}}</text><text class="detail-unit">{{detail.unit}}</text></view>
-      <text class="detail-date">{{detail.recordDate}} · {{detail.timeLabel}}（北京时间）</text>
+      <text class="detail-date">{{detail.recordDate}} · {{detail.clockTimeLabel}}（北京时间）</text>
       <view wx:if="{{detail.mirrored}}" class="privacy-notice"><text>来自静坐记录</text><text>请通过原静坐入口查看、更新感悟或删除，功课记录将单向同步。</text></view>
       <view wx:if="{{detail.type === 'kindness'}}" class="privacy-notice"><text>内容与感悟对已登录成员可见；编辑、删除也会更新「做善事」。记录条数与善事件数分别统计。</text></view>
       <view wx:if="{{detail.content}}" class="detail-section"><text class="label">善事内容</text><text class="detail-text" selectable="{{true}}">{{detail.content}}</text></view>
       <view class="detail-section"><text class="label">感悟</text><text class="detail-text {{!detail.reflection ? 'muted' : ''}}" selectable="{{true}}">{{detail.reflection || '这次练习没有填写感悟'}}</text></view>
     </view></view>
     <view class="dialog-footer" wx:if="{{detail.type === 'sitting'}}"><button class="primary-button full-button" bindtap="openOriginalRecord">前往原静坐记录</button></view>
-    <view class="dialog-footer" wx:elif="{{detail.canEdit || detail.canDelete}}"><button wx:if="{{detail.canDelete}}" class="danger-button" bindtap="deleteDetail" loading="{{deleting}}" disabled="{{deleting}}">删除</button><button wx:if="{{detail.canEdit}}" class="primary-button" bindtap="editDetail" disabled="{{deleting}}">编辑功课</button></view>
+    <view class="dialog-footer" wx:elif="{{detail.canEdit || detail.canDelete}}"><text class="caption">关闭详情后，长按记录可{{detail.canEdit && detail.canDelete ? '编辑或删除' : detail.canEdit ? '编辑' : '删除'}}</text></view>
   </view>
 </view>

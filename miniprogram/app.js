@@ -62,6 +62,7 @@ App({
     this._timerHideOptions = options || {};
     // 保留完整切后台原因，由计时控制器区分明确退出与来电等临时中断。
     if (this._countdownSession) this._countdownSession.appHide(this._timerHideOptions);
+    this.finishDetachedCountup(this._timerHideOptions);
     this._syncAlertVisible = false;
     this.clearSyncAlert();
   },
@@ -89,6 +90,44 @@ App({
       if (this._timerForeground === false) this._countdownSession.appHide(this._timerHideOptions || {});
     }
     return this._countdownSession;
+  },
+
+  // 正计时页因中断卸载后，由 App 接管明确退出，直到新页面接回会话。
+  finishDetachedCountup(options) {
+    const sessionId = this._detachedCountupSessionId;
+    if (!sessionId) return;
+    const { isExplicitTimerExit } = require('./utils/timerInterruption');
+    if (!isExplicitTimerExit(options)) return;
+    const state = wx.getStorageSync('timerState');
+    if (!state || state.sessionId !== sessionId || state.runtimeId !== this._timerRuntimeId
+      || state.isCountdown !== false || state.interrupted !== true || (!state.isRunning && !state.isPaused)) {
+      this._detachedCountupSessionId = null;
+      return;
+    }
+    const exitAt = Date.now();
+    const pausedTime = state.isPaused ? Math.max(0, exitAt - state.pauseTimestamp) : 0;
+    const elapsed = Math.max(0, Math.floor((exitAt - state.startTimestamp - state.totalPausedTime - pausedTime) / 1000));
+    const duration = Math.floor(Math.min(elapsed, 24 * 60 * 60) / 60);
+    const endedAt = elapsed >= 24 * 60 * 60
+      ? Math.min(exitAt, state.startTimestamp + state.totalPausedTime + 24 * 60 * 60 * 1000) : exitAt;
+    const completion = duration >= 1 ? { sessionId, duration, endedAt, text: '' } : null;
+    // 先保存可重试草稿，再撤销运行状态；保存失败也不能恢复成继续累计的会话。
+    if (completion) wx.setStorageSync('timerPendingCompletion', completion);
+    wx.setStorageSync('timerState', null);
+    this._detachedCountupSessionId = null;
+    if (this._timerSessionAudio && this._timerSessionAudio.sessionId === sessionId) this._timerSessionAudio = null;
+    let saved = false;
+    if (completion) {
+      try {
+        const result = checkinManager.recordCheckin(duration, [], [], endedAt, sessionId);
+        saved = !!(result && result.success);
+        if (saved) wx.setStorageSync('timerPendingCompletion', null);
+      } catch (error) {
+        console.warn('正计时退出保存失败，保留完成草稿:', error && error.message);
+      }
+    }
+    wx.setStorageSync('timerCompletionNotice', !completion ? '正计时已结束，不足1分钟未记录'
+      : saved ? `正计时已结束，${duration}分钟已存本机` : '正计时已结束，请确认保存记录');
   },
 
   syncAlertIdentity() {

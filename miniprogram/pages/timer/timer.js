@@ -117,6 +117,7 @@ Page({
     this.safeTimerEffect('check_audio_file', () => this.checkCloudFileExists());
     this.safeTimerEffect('load_guide', () => this.getBackgroundMusicUrl());
     this.setupAppStateListeners();
+    this.timerApp._detachedCountupSessionId = null;
     this.detachCountdown = this.countdownSession.attach((state, event) => this.onCountdownState(state, event));
     this.restoreTimerState();
     this.safeTimerEffect('restore_audio', () => this.restoreSessionAudio());
@@ -629,6 +630,10 @@ Page({
       this.startSoundTimer = null;
       this.startSoundRemaining = Math.max(0,
         this.startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
+    } else if (this.audioSuspended && this.startSoundRemaining !== null) {
+      // 音频中断不暂停静坐；在手动暂停这一刻扣除中断期间已运行的准备时间。
+      this.startSoundRemaining = Math.max(0,
+        this.startSoundRemaining - (Date.now() - this.audioInterruptedAt));
     }
     if (this.currentSessionSound === 'start' && this.audioPlayer) {
       this.safeTimerEffect('pause_cue', () => this.audioPlayer.pause());
@@ -857,10 +862,16 @@ Page({
   onUnload() {
     const interruptedCountUp = !this.data.isCountdown && this.isAppHidden
       && (this.data.isRunning || this.data.isPaused);
+    if (interruptedCountUp) this.timerApp._detachedCountupSessionId = this.sessionId;
     if (!this.data.isCountdown && !interruptedCountUp && (this.data.isRunning || this.data.isPaused)) {
       this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'page_unload' });
     }
     this.safeTimerEffect('save_audio', () => this.saveSessionAudio());
+    if (interruptedCountUp && this.timerApp._timerForeground === false
+      && typeof this.timerApp.finishDetachedCountup === 'function') {
+      // App 的退出回调可能先于本次卸载，交接时补处理，避免移除监听后漏掉退出。
+      this.timerApp.finishDetachedCountup(this.timerApp._timerHideOptions);
+    }
     if (this.detachCountdown) this.detachCountdown();
     this.countdownSession.diagnose('page_unload');
     this.isUnloaded = true;

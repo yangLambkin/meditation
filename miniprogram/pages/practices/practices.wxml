@@ -47,11 +47,12 @@
         <template wx:if="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
         <block wx:if="{{homeLoaded}}">
           <text wx:if="{{homeError}}" class="caption">刷新失败，以下为上次读取的记录</text>
+          <text wx:if="{{recentRecords.length}}" class="caption home-records-hint">点击查看详情，长按管理功课记录</text>
           <view class="home-day-group" wx:for="{{recentGroups}}" wx:for-item="group" wx:key="date">
             <view class="home-day-heading"><text class="home-day-label">{{group.label}}</text><text class="home-day-date">{{group.dateLabel}}</text></view>
             <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text></view>
             <view wx:else class="home-record-list">
-              <view class="home-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" data-key="{{record.key}}" bindtap="openDetail" catchlongpress="showRecordActions" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + '，点击查看详情'}}">
+              <view class="home-record" wx:for="{{group.records}}" wx:for-item="record" wx:key="key" data-key="{{record.key}}" bindtap="openDetail" catchlongpress="showRecordActions" hover-class="card-hover" aria-role="button" aria-label="{{record.typeName + '，' + record.quantity + record.unit + '，' + record.timeLabel + '，点击查看详情' + (record.canEdit || record.canDelete ? '，长按管理记录' : '')}}">
                 <view class="home-record-copy"><view class="home-record-heading"><text class="home-record-name">{{record.typeName}}</text><text class="home-record-time">{{record.timeLabel}}</text></view><text wx:if="{{record.preview}}" class="home-record-preview">{{record.preview}}</text></view>
                 <view class="home-record-quantity"><text class="home-record-value">{{record.quantity}}</text><text class="home-record-unit">{{record.unit}}</text></view>
               </view>

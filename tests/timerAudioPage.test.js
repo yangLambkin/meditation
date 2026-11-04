@@ -15,7 +15,7 @@ function createPage({
   withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true,
   recordCheckin, backgroundUpload = async () => ({ success: true }), networkType,
   contentSecRequest = () => new Promise(() => {}), navigateTo,
-  initialTime = Date.parse('2026-09-18T08:00:00+08:00')
+  initialTime = Date.parse('2026-09-18T08:00:00+08:00'), withAppLifecycle = false
 } = {}) {
   let definition;
   let now = initialTime;
@@ -174,7 +174,27 @@ function createPage({
   });
   const countdown = controllerModule.exports.createCountdownSessionController({ api: wx,
     recordCheckin: (...args) => checkin.recordCheckin(...args) });
-  const application = { getCountdownSession: () => countdown, _timerForeground: true, _timerAudioInterrupted: false };
+  let application = { getCountdownSession: () => countdown, _timerForeground: true, _timerAudioInterrupted: false };
+  if (withAppLifecycle) {
+    const appPath = path.join(__dirname, '../miniprogram/app.js');
+    vm.runInNewContext(fs.readFileSync(appPath, 'utf8'), {
+      App(value) { application = value; }, wx, Date: ClockDate,
+      console: { log() {}, warn() {}, error() {} },
+      require(request) {
+        if (request === './utils/checkin.js') return checkin;
+        if (request === './utils/countdownSession') {
+          return { createCountdownSessionController: () => countdown };
+        }
+        assert.equal(request, './utils/timerInterruption');
+        return timerInterruption;
+      }
+    }, { filename: appPath });
+    for (const method of ['setupRecordRefresh', 'setupCacheStatus', 'testCloudEnvironment', 'setAudioOptions',
+      'resumePracticeRecords', 'startSyncAlertRefresh', 'refreshRecordBackups', 'resumeRecordBackups', 'clearSyncAlert']) {
+      application[method] = () => {};
+    }
+    application.onLaunch();
+  }
 
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     wx,
@@ -239,8 +259,12 @@ function createPage({
       return page;
     },
     emitApp: (event, options = { reason: 0 }) => {
-      application._timerForeground = event === 'show';
-      if (event === 'hide') countdown.appHide(options); else countdown.appShow();
+      if (withAppLifecycle) {
+        if (event === 'hide') application.onHide(options); else application.onShow();
+      } else {
+        application._timerForeground = event === 'show';
+        if (event === 'hide') countdown.appHide(options); else countdown.appShow();
+      }
       for (const callback of [...listeners[event]]) callback(options);
     },
     emitAudio: type => {
@@ -250,6 +274,146 @@ function createPage({
     }
   };
 }
+
+test('App settles detached running and paused count-ups on either explicit exit without reviving them', () => {
+  for (const reason of [0, 1]) {
+    for (const paused of [false, true]) {
+      const h = createPage({ isCountdown: false, withGuide: true, withAppLifecycle: true });
+      h.page.startTimer(); h.advance(65000);
+      if (paused) h.page.pauseTimer();
+      const sessionId = h.page.sessionId;
+      h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+      const checkpoint = structuredClone(h.storage.get('timerState'));
+      const playCount = h.plays().length;
+      h.advance(30000); h.emitApp('show'); h.emitAudio('end'); h.advance(60000);
+      const endedAt = h.now();
+      h.emitApp('hide', { reason });
+      assert.equal(h.records.length, 1);
+      assert.equal(h.records[0][0], paused ? 1 : 2);
+      assert.equal(h.records[0][3], endedAt);
+      assert.equal(h.records[0][4], sessionId);
+      assert.equal(h.storage.get('timerState'), null);
+      assert.equal(h.storage.get('timerPendingCompletion'), null);
+      assert.equal(h.application._timerSessionAudio, null);
+      h.emitApp('hide', { reason }); h.jump(3600000); h.emitApp('show');
+      const fresh = h.recreatePage();
+      assert.equal(fresh.data.isRunning, false);
+      assert.equal(fresh.data.isPaused, false);
+      assert.equal(h.records.length, 1);
+      assert.equal(h.plays().length, playCount);
+      assert.match(h.toasts.at(-1).title, /正计时已结束/);
+      assert.equal(checkpoint.elapsedTime, 65);
+    }
+  }
+});
+
+test('count-up unload reconciles an explicit App exit received before ownership transfer', () => {
+  for (const reason of [0, 1]) {
+    const h = createPage({ isCountdown: false, withGuide: true, withAppLifecycle: true });
+    h.page.startTimer(); h.advance(65000);
+    const sessionId = h.page.sessionId;
+    h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.advance(45000);
+    const queuedHideHandler = h.page.appHideHandler;
+    const endedAt = h.now();
+    h.application.onHide({ reason });
+    h.page.onUnload();
+    queuedHideHandler({ reason });
+    assert.equal(h.records.length, 1);
+    assert.equal(h.records[0][0], 1);
+    assert.equal(h.records[0][3], endedAt);
+    assert.equal(h.records[0][4], sessionId);
+    assert.equal(h.storage.get('timerState'), null);
+    assert.equal(h.application._timerSessionAudio, null);
+    h.jump(3600000); h.emitApp('show');
+    assert.equal(h.recreatePage().data.isRunning, false);
+    assert.equal(h.records.length, 1);
+  }
+});
+
+test('detached count-ups retain the original checkpoint through interruptions and transfer ownership to the rebuilt page', () => {
+  const h = createPage({ isCountdown: false, withAppLifecycle: true });
+  h.page.startTimer(); h.advance(65000);
+  h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+  const checkpoint = structuredClone(h.storage.get('timerState'));
+  for (const options of [{ reason: 2 }, { reason: 3 }, {}]) {
+    h.emitApp('show'); h.advance(30000); h.emitApp('hide', options);
+    assert.equal(h.records.length, 0);
+    assert.deepEqual(structuredClone(h.storage.get('timerState')), checkpoint);
+  }
+  h.emitApp('show');
+  const fresh = h.recreatePage();
+  assert.equal(fresh.sessionId, checkpoint.sessionId);
+  assert.equal(fresh.data.isRunning, true);
+  assert.equal(fresh.data.elapsedTime, 155);
+  h.emitApp('hide', { reason: 0 });
+  assert.equal(h.records.length, 1, 'the replacement page is the only owner of this exit');
+  assert.equal(h.records[0][0], 2);
+});
+
+test('detached count-up save failures retain a completion draft for page retry at the original exit time', async () => {
+  for (const failure of ['false', 'throw']) {
+    let shouldFail = true;
+    const h = createPage({ isCountdown: false, withAppLifecycle: true, recordCheckin() {
+      if (shouldFail) {
+        if (failure === 'throw') throw new Error('local save failed');
+        return { success: false };
+      }
+      return { success: true };
+    } });
+    h.page.startTimer(); h.advance(65000);
+    const sessionId = h.page.sessionId;
+    h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+    h.advance(30000); h.emitApp('show'); h.advance(60000);
+    const endedAt = h.now();
+    h.emitApp('hide', { reason: 0 });
+    assert.equal(h.records.length, 0);
+    assert.equal(h.storage.get('timerState'), null);
+    assert.deepEqual({ ...h.storage.get('timerPendingCompletion') }, { sessionId, duration: 2, endedAt, text: '' });
+    h.jump(3600000); h.emitApp('show');
+    const fresh = h.recreatePage();
+    assert.equal(fresh.data.isRunning, false);
+    assert.equal(fresh.data.showCompletionDialog, true);
+    shouldFail = false;
+    await fresh.confirmCompletion();
+    assert.equal(h.records.length, 1);
+    assert.equal(h.records[0][0], 2);
+    assert.equal(h.records[0][3], endedAt);
+    assert.equal(h.records[0][4], sessionId);
+  }
+});
+
+test('detached count-up exits omit subminute records and cap long interruptions at 24 hours', () => {
+  for (const duration of [2000, 25 * 3600000]) {
+    const h = createPage({ isCountdown: false, withAppLifecycle: true });
+    h.page.startTimer(); h.advance(1000);
+    const startedAt = h.page.data.startTimestamp;
+    h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+    h.jump(duration - 1000); h.emitApp('hide', { reason: 1 });
+    assert.equal(h.storage.get('timerState'), null);
+    assert.ok(!h.storage.get('timerPendingCompletion'));
+    assert.equal(h.application._timerSessionAudio, null);
+    assert.equal(h.records.length, duration < 60000 ? 0 : 1);
+    if (duration >= 60000) {
+      assert.equal(h.records[0][0], 1440);
+      assert.equal(h.records[0][3], startedAt + 24 * 3600000);
+    }
+  }
+});
+
+test('detached count-up exit ownership cannot settle a different session or runtime checkpoint', () => {
+  for (const replacement of [{ sessionId: 'newer_session' }, { runtimeId: 'other_runtime' }, { isCountdown: true }]) {
+    const h = createPage({ isCountdown: false, withAppLifecycle: true });
+    h.page.startTimer(); h.advance(65000);
+    h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+    const checkpoint = { ...h.storage.get('timerState'), ...replacement };
+    const audio = h.application._timerSessionAudio;
+    h.storage.set('timerState', checkpoint);
+    h.emitApp('hide', { reason: 0 });
+    assert.equal(h.records.length, 0);
+    assert.deepEqual(h.storage.get('timerState'), checkpoint);
+    assert.equal(h.application._timerSessionAudio, audio);
+  }
+});
 
 test('timing starts immediately but 起坐 waits until exactly five seconds in either mode', () => {
   for (const isCountdown of [true, false]) {
@@ -2433,4 +2597,35 @@ test('only countdown ticks animate the ring; pause, resume and page restore reta
   assert.ok(fresh.data.progressAngleLeft < angles[0]);
   assert.equal(fresh.data.displayTime, '04:54');
   assert.equal(fresh.data.isProgressAnimating, true);
+});
+
+test('manual pause during an audio interruption preserves the remaining five-second preparation', () => {
+  for (const isCountdown of [true, false]) {
+    for (const interruptedRunningTime of [2000, 4000]) {
+      for (const endBeforeResume of [true, false]) {
+        const h = createPage({ isCountdown });
+        h.page.startTimer();
+        h.advance(2000);
+        h.emitAudio('begin');
+        h.advance(interruptedRunningTime);
+        h.page.pauseTimer();
+        h.advance(10000);
+        if (endBeforeResume) h.emitAudio('end');
+        assert.deepEqual(h.plays(), [], 'the opening cue stays silent throughout the manual pause');
+        assert.equal(h.page.calculateElapsedTime(), (2000 + interruptedRunningTime) / 1000);
+
+        h.page.startTimer();
+        if (!endBeforeResume) h.emitAudio('end');
+        const remaining = Math.max(0, 5000 - 2000 - interruptedRunningTime);
+        if (remaining) {
+          h.advance(remaining - 1);
+          assert.deepEqual(h.plays(), [], 'the opening cue still waits for five cumulative running seconds');
+          h.advance(1);
+        } else h.advance(0);
+        assert.deepEqual(h.plays(), [START_AUDIO], 'running time during the interruption counts toward preparation');
+        h.advance(5000);
+        assert.deepEqual(h.plays(), [START_AUDIO], 'the opening cue only plays once');
+      }
+    }
+  }
 });
