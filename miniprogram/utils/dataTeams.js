@@ -110,14 +110,46 @@ function createDataTeams({ auth = authDefault, config = configDefault, wxApi = (
       avatarUrl: value.avatarUrl || '/images/avatar.png', bijingStudentNumber: value.studentNumber || '',
       role: value.role, isCreator: value.role === 'creator', isDeputy: value.role === 'deputy' };
   }
+  function practicesOf(value) {
+    const list = value.practices === undefined ? [value] : value.practices;
+    if (!Array.isArray(list) || list.length < 1 || list.length > 6 ||
+        list.some(item => !item || !TYPES[item.practiceType]) || new Set(list.map(item => item.practiceType)).size !== list.length ||
+        list[0].practiceType !== value.practiceType) throw new Error('团队功课类型异常');
+    return list.map(item => ({ ...settings({ dayBoundaryHour: 2, ...item }), practiceType: item.practiceType,
+      practiceTypeName: TYPES[item.practiceType], unit: item.unit || ({ instant: '次', kindness: '件' }[item.practiceType] || '分钟') }));
+  }
+  function inputPractices(list) {
+    if (!Array.isArray(list) || !list.length || list.length > 6 ||
+        list.some(item => !item || !TYPES[item.practiceType]) || new Set(list.map(item => item.practiceType)).size !== list.length) throw new Error('请选择1至6项不同的功课');
+    return list.map(item => ({ practiceType: item.practiceType, practiceStartDate: item.practiceStartDate ?? null,
+      dailyGoal: item.dailyGoal === undefined ? item.dailyGoalMinutes ?? null : item.dailyGoal }));
+  }
+  function confirmPractices(team, input) {
+    if (!input) return;
+    const actual = practicesOf(team);
+    if (actual.length !== input.length || input.some((item, index) => actual[index].practiceType !== item.practiceType ||
+        actual[index].practiceStartDate !== item.practiceStartDate || actual[index].dailyGoalMinutes !== item.dailyGoal)) {
+      throw new Error('团队服务未确认全部功课配置，请刷新后重试');
+    }
+  }
+  function selectedPractice(team, type) {
+    const practice = team.practices.find(item => item.practiceType === (type || team.practiceType));
+    if (!practice) throw new Error('该功课未加入团队，请刷新后重试');
+    return practice;
+  }
+  function confirmSelected(value, practice, explicit) {
+    if (value.practiceType !== undefined && value.practiceType !== practice.practiceType ||
+        explicit && value.practiceType !== practice.practiceType) throw new Error('团队服务未确认所选功课，请刷新后重试');
+  }
   function normalize(value, actor, roster) {
     if (!TYPES[value.practiceType]) throw new Error('团队功课类型异常');
+    const practices = practicesOf(value);
     const creator = value.leaderMemberId ? memberKey(value.leaderMemberId, actor) : undefined;
     const own = actor && value.myRole ? actor.openid : null;
     const members = roster ? roster.map(item => memberKey(item.memberId, actor)) : [...new Set([creator, own].filter(Boolean))];
     return { _id: teamId(value.id), cloudId: teamId(value.id), source: 'bijing', name: value.name,
       description: value.description || '', icon: displayUrl(value.iconUrl), iconUrl: value.iconUrl || '',
-      practiceType: value.practiceType, practiceTypeName: TYPES[value.practiceType], tags: [TYPES[value.practiceType]], unit: value.unit,
+      practiceType: value.practiceType, practices, practiceTypeName: TYPES[value.practiceType], tags: practices.map(item => item.practiceTypeName), unit: value.unit,
       creator, creatorName: value.leaderName || '匿名用户', members, memberCount: value.memberCount,
       deputyLeaders: roster ? roster.filter(item => item.role === 'deputy').map(item => memberKey(item.memberId, actor))
         : value.myRole === 'deputy' && actor ? [actor.openid] : [],
@@ -180,11 +212,14 @@ function createDataTeams({ auth = authDefault, config = configDefault, wxApi = (
     if (type === 'createTeam') {
       if (!data || !/^[\x21-\x7e]{8,128}$/.test(data.operationKey || '')) throw new Error('创建请求标识无效，请重新进入创建页面');
       // 输入先由 data 验证，身份及成员始终由服务端绑定决定。
-      const input = { name: data.name, description: data.description || '', practiceType: data.practiceType || 'sitting',
-        practiceStartDate: data.practiceStartDate ?? null, dailyGoal: data.dailyGoalMinutes ?? null,
-        iconUrl: await iconUrl(data.icon || '', actor) };
+      const primary = Array.isArray(data.practices) && data.practices[0];
+      const input = { name: data.name, description: data.description || '', practiceType: data.practiceType || primary && primary.practiceType || 'sitting',
+        practiceStartDate: data.practiceStartDate === undefined ? primary && primary.practiceStartDate || null : data.practiceStartDate,
+        dailyGoal: data.dailyGoalMinutes === undefined ? (primary && (primary.dailyGoal === undefined ? primary.dailyGoalMinutes : primary.dailyGoal)) ?? null : data.dailyGoalMinutes,
+        iconUrl: await iconUrl(data.icon || '', actor), ...(data.practices ? { practices: inputPractices(data.practices) } : {}) };
       const created = await request(actor, 'POST', '', input, undefined, { 'Idempotency-Key': data.operationKey });
       if (created.practiceType !== input.practiceType) throw new Error('团队服务未确认所选功课类型，请稍后重试');
+      confirmPractices(created, input.practices);
       const team = normalize(created, actor);
       return { success: true, data: { teamId: team._id, team } };
     }
@@ -230,9 +265,16 @@ function createDataTeams({ auth = authDefault, config = configDefault, wxApi = (
         iconUrl: input.icon === undefined ? current.raw.team.iconUrl : await iconUrl(input.icon, actor),
         practiceType: current.raw.team.practiceType, practiceStartDate: input.practiceStartDate === undefined ? current.raw.team.practiceStartDate : input.practiceStartDate,
         dailyGoal: input.dailyGoalMinutes === undefined ? current.raw.team.dailyGoal : input.dailyGoalMinutes,
-        expectedVersion: data.expectedVersion ?? input.expectedVersion };
+        expectedVersion: data.expectedVersion ?? input.expectedVersion,
+        ...(input.practices ? { practices: inputPractices(input.practices) } : {}) };
+      if (body.practices) {
+        if (body.practices[0].practiceType !== body.practiceType) throw new Error('默认功课不能更改');
+        body.practiceStartDate = body.practices[0].practiceStartDate;
+        body.dailyGoal = body.practices[0].dailyGoal;
+      }
       // wx.request does not support PATCH; data also accepts PUT for versioned edits.
       const updated = await request(actor, 'PUT', path, body);
+      confirmPractices(updated, body.practices);
       return { success: true, data: { teamId: data.teamId, team: normalize(updated, actor, current.raw.members) } };
     }
     if (['setTeamDeputy', 'removeTeamMember', 'transferTeamLeader'].includes(type)) {
@@ -259,31 +301,38 @@ function createDataTeams({ auth = authDefault, config = configDefault, wxApi = (
     }
     if (type === 'recordInviteRelation') return { success: true, data: { relationId: data.teamId } };
     if (type === 'getTeamPracticeReport' || type === 'getTeamMembersCheckinData') {
-      const report = await request(actor, 'GET', path + '/report', undefined, data.month ? { month: data.month } : undefined);
+      const practice = selectedPractice(current.team, data.practiceType);
+      const report = await request(actor, 'GET', path + '/report', undefined, { month: data.month, practiceType: data.practiceType });
+      confirmSelected(report, practice, !!data.practiceType);
       const members = report.members.map(member => ({ ...profile(member, actor), ...member,
         openid: memberKey(member.memberId, actor), todayMinutes: member.todayValue, totalMinutes: member.totalValue, cumulativeMinutes: member.cumulativeValue }));
       if (type === 'getTeamMembersCheckinData') throw new Error('请使用团队功课报表查看打卡数据');
       return { success: true, data: { ...report, teamId: data.teamId,
         creator: members.find(member => member.role === 'creator')?.openid,
         deputyLeaders: members.filter(member => member.role === 'deputy').map(member => member.openid),
-        practiceType: current.team.practiceType, unit: current.team.unit, settings: settings(report.settings), members } };
+        practiceType: practice.practiceType, unit: practice.unit, settings: settings(report.settings), members } };
     }
     if (type === 'getTeamHistoryDetails') {
+      const practice = selectedPractice(current.team, data.practiceType);
       const history = await request(actor, 'GET', path + '/history', undefined, {
         ...(data.month ? { month: data.month } : {}), ...(data.filter ? { filter: data.filter } : {}),
+        ...(data.practiceType ? { practiceType: data.practiceType } : {}),
         ...(data.memberOpenid ? { memberId: memberId(data.memberOpenid, actor) } : {}),
         ...(data.cursor ? { cursor: data.cursor } : {}), ...(data.limit ? { limit: data.limit } : {}) });
+      confirmSelected(history, practice, !!data.practiceType);
       return { success: true, data: { ...history, teamId: data.teamId, settings: settings(history.settings),
-        practiceType: current.team.practiceType, unit: current.team.unit,
+        practiceType: practice.practiceType, unit: practice.unit,
         items: history.items.map(item => ({ ...profile(item, actor), date: item.date, minutes: item.value, status: item.status })) } };
     }
     if (type === 'getTeamMemberPracticeRecords') {
+      const practice = selectedPractice(current.team, data.practiceType);
       const records = await request(actor, 'GET', path + `/members/${memberId(data.memberOpenid, actor)}/records`, undefined,
         { ...(data.cursor ? { cursor: data.cursor } : {}), ...(data.month ? { month: data.month } : {}),
-          ...(data.date ? { date: data.date } : {}), limit: 100 });
+          ...(data.date ? { date: data.date } : {}), ...(data.practiceType ? { practiceType: data.practiceType } : {}), limit: 100 });
+      confirmSelected(records, practice, !!data.practiceType);
       return { success: true, data: { ...records, member: profile(records.member, actor),
-        startDate: current.team.effectivePracticeStartDate, businessDate: new Date(Date.now() + 6 * 3600000).toISOString().slice(0, 10),
-        practiceType: current.team.practiceType, unit: current.team.unit,
+        startDate: practice.effectivePracticeStartDate, businessDate: new Date(Date.now() + 6 * 3600000).toISOString().slice(0, 10),
+        practiceType: practice.practiceType, unit: practice.unit,
         records: records.records.map(record => ({ _id: String(record.id), date: record.date,
           timestamp: record.occurredAt ? timestamp(record.occurredAt) : null,
           duration: record.value, value: record.value, source: record.source })) } };

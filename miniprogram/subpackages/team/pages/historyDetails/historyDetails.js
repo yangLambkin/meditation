@@ -58,7 +58,7 @@ function reportSignature(report) {
 
 Page({
   data: {
-    teamId: '', memberOpenid: '', memberName: '', filter: 'unmet',
+    teamId: '', practiceType: '', memberOpenid: '', memberName: '', filter: 'unmet',
     selectedMonth: '', currentMonth: '', minMonth: '', maxMonth: '', monthLabel: '',
     canPreviousMonth: false, canNextMonth: false,
     settings: null, history: null, hasGoal: true, rangeLabel: '', goalLabel: '',
@@ -73,7 +73,7 @@ Page({
     const memberOpenid = decodeParameter(options.memberOpenid);
     this._queryMemberName = memberOpenid ? decodeParameter(options.memberName) || '当前成员' : '';
     this._items = [];
-    this.setData({ teamId, memberOpenid, memberName: this._queryMemberName,
+    this.setData({ teamId, practiceType: PRACTICES.some(item => item.type === options.practiceType) ? options.practiceType : '', memberOpenid, memberName: this._queryMemberName,
       filter: FILTERS.includes(options.filter) ? options.filter : 'unmet' });
     const currentMonth = currentPracticeMonth();
     const month = decodeParameter(options.month);
@@ -186,7 +186,7 @@ Page({
     if (!append) this.clearDetails();
     this.setData(append ? { isLoadingMore: true, moreError: '' } : { isLoading: true, loadError: '' });
     try {
-      const data = { teamId, filter, month, limit: 50 };
+      const data = { teamId, filter, month, limit: 50, ...(this.data.practiceType ? { practiceType: this.data.practiceType } : {}) };
       if (memberOpenid) data.memberOpenid = memberOpenid;
       if (cursor) data.cursor = cursor;
       const response = await callTeam('getTeamHistoryDetails', data);
@@ -223,7 +223,7 @@ Page({
 
   validateReport(report, requestedFilter, memberOpenid, requestedMonth) {
     const fail = () => { throw new Error('历史明细暂不完整，请刷新重试'); };
-    if (!report || report.teamId !== this.data.teamId || !validDate(report.businessDate) || !report.settings || !report.history) return fail();
+    if (!report || report.teamId !== this.data.teamId || this.data.practiceType && report.practiceType !== this.data.practiceType || !validDate(report.businessDate) || !report.settings || !report.history) return fail();
     const { settings, history, filter, items, nextCursor } = report;
     const hasGoal = settings.dailyGoalMinutes !== null;
     const expectedFilter = !hasGoal && ['unmet', 'below_goal'].includes(requestedFilter) ? 'not_practiced' : requestedFilter;
@@ -366,7 +366,7 @@ Page({
     const key = event && event.currentTarget && event.currentTarget.dataset.key;
     const item = this._items.find(row => rowKey(row) === key);
     if (!item) return;
-    const query = `teamId=${encodeURIComponent(this.data.teamId)}&memberOpenid=${encodeURIComponent(item.openid)}&memberName=${encodeURIComponent(item.nickname || '团队成员')}&date=${encodeURIComponent(item.date)}`;
+    const query = `teamId=${encodeURIComponent(this.data.teamId)}&practiceType=${encodeURIComponent(this.data.practiceType)}&memberOpenid=${encodeURIComponent(item.openid)}&memberName=${encodeURIComponent(item.nickname || '团队成员')}&date=${encodeURIComponent(item.date)}`;
     wx.navigateTo({ url: /^bijing_/.test(this.data.teamId)
       ? `/subpackages/team/pages/memberRecords/memberRecords?${query}` : `/pages/history/history?${query}` });
   }

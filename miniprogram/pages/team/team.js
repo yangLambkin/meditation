@@ -108,7 +108,8 @@ Page({
       ...team,
       _id: team.cloudId || team._id,
       practiceType: PRACTICES.some(practice => practice.type === team.practiceType) ? team.practiceType : 'sitting',
-      practiceTypeName: (PRACTICES.find(practice => practice.type === team.practiceType) || PRACTICES[0]).name,
+      practiceTypeName: Array.isArray(team.practices) && team.practices.length ? team.practices.map(item => (PRACTICES.find(practice => practice.type === item.practiceType) || PRACTICES[0]).name).join(' · ')
+        : (PRACTICES.find(practice => practice.type === team.practiceType) || PRACTICES[0]).name,
       icon: !team.icon || /^(wxfile:\/\/|https?:\/\/tmp\/)/.test(team.icon) ? '/images/icons/team.png' : team.icon,
       formattedCreateTime: this.formatCreateTime(team.createdAt),
       practiceStartDate: team.practiceStartDate === null ? null : team.practiceStartDate || this.getPracticeDate(team.createdAt),

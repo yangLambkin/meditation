@@ -39,6 +39,8 @@ Page({
     practiceTypes: PRACTICES,
     practiceType: 'sitting',
     practiceTypeIndex: 0,
+    additionalPractices: [],
+    additionalPracticeOptions: PRACTICES.filter(item => item.type !== 'sitting'),
     practiceUnit: '分钟',
     maxDailyGoal: 1440,
     // 团队练习规则
@@ -185,8 +187,31 @@ Page({
     if (practice.type === this.data.practiceType) return;
     const isCount = practice.type === 'instant' || practice.type === 'kindness';
     this.setData({ practiceType: practice.type, practiceTypeIndex: index, practiceUnit: practice.unit,
+      additionalPractices: this.data.additionalPractices.filter(item => item.practiceType !== practice.type),
+      additionalPracticeOptions: PRACTICES.filter(item => item.type !== practice.type).map(item => ({ ...item, selected: this.data.additionalPractices.some(row => row.practiceType === item.type) })),
       maxDailyGoal: practice.type === 'instant' ? 1000000 : practice.type === 'kindness' ? 100000 : 1440,
       dailyGoalMinutes: '', dailyGoalPresets: isCount ? [1, 3, 10] : [20, 30, 60] });
+  },
+
+  toggleAdditionalPractice(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    const type = e.currentTarget.dataset.type;
+    const config = PRACTICES.find(item => item.type === type);
+    if (!config || type === this.data.practiceType) return;
+    const rows = this.data.additionalPractices;
+    const next = rows.some(item => item.practiceType === type) ? rows.filter(item => item.practiceType !== type)
+      : [...rows, { practiceType: type, name: config.name, unit: config.unit, practiceStartDate: '', dailyGoalMinutes: '',
+        maxGoal: type === 'instant' ? 1000000 : type === 'kindness' ? 100000 : 1440 }];
+    this.setData({ additionalPractices: next, additionalPracticeOptions: PRACTICES.filter(item => item.type !== this.data.practiceType)
+      .map(item => ({ ...item, selected: next.some(row => row.practiceType === item.type) })) });
+  },
+
+  changeAdditionalRule(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    const { type, field } = e.currentTarget.dataset;
+    if (!['practiceStartDate', 'dailyGoalMinutes'].includes(field)) return;
+    this.setData({ additionalPractices: this.data.additionalPractices.map(item => item.practiceType === type
+      ? { ...item, [field]: e.detail.value } : item) });
   },
 
   onPracticeStartDateChange(e) {
@@ -288,6 +313,22 @@ Page({
       return;
     }
 
+    if (this.data.additionalPractices.length) {
+      const practices = [{ practiceType: teamInfo.practiceType, practiceStartDate: teamInfo.practiceStartDate, dailyGoalMinutes: teamInfo.dailyGoalMinutes }];
+      for (const item of this.data.additionalPractices) {
+        const start = optionalRuleValue(item.practiceStartDate);
+        const goal = optionalRuleValue(item.dailyGoalMinutes);
+        const max = item.practiceType === 'instant' ? 1000000 : item.practiceType === 'kindness' ? 100000 : 1440;
+        if (!PRACTICES.some(config => config.type === item.practiceType) || practices.some(row => row.practiceType === item.practiceType) ||
+            start !== null && (!isCalendarDate(start) || start > today) ||
+            goal !== null && (!/^\d+$/.test(String(goal)) || !Number.isSafeInteger(Number(goal)) || Number(goal) < 1 || Number(goal) > max)) {
+          wx.showToast({ title: '请检查各项功课的起始日期和每日目标', icon: 'none' });
+          return;
+        }
+        practices.push({ practiceType: item.practiceType, practiceStartDate: start, dailyGoalMinutes: goal === null ? null : Number(goal) });
+      }
+      teamInfo.practices = practices;
+    }
     this.setData({ isCreating: true });
     try {
       if (!await contentSec.checkText(teamInfo.name, 2)) return;
@@ -352,7 +393,7 @@ Page({
     this._visible = true;
     const today = currentPracticeDay();
     this.setData({ practiceRulesEnabled: false, practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '',
-      practiceType: 'sitting', practiceTypeIndex: 0, practiceUnit: '分钟', maxDailyGoal: 1440, dailyGoalPresets: [20, 30, 60] });
+      practiceType: 'sitting', practiceTypeIndex: 0, additionalPractices: [], additionalPracticeOptions: PRACTICES.filter(item => item.type !== 'sitting'), practiceUnit: '分钟', maxDailyGoal: 1440, dailyGoalPresets: [20, 30, 60] });
     console.log('=== createTeam页面加载 ===');
     
     // 获取用户信息

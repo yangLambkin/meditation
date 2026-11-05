@@ -14,7 +14,7 @@ function displayValue(value) { return (Math.floor((value + Number.EPSILON * Math
 
 Page({
   data: {
-    teamId: '', memberOpenid: '', memberName: '团队成员', memberAvatar: '/images/avatar.png',
+    teamId: '', practiceType: '', memberOpenid: '', memberName: '团队成员', memberAvatar: '/images/avatar.png',
     mode: 'month', date: '', month: '', today: '', todayMonth: '', startDate: '', startMonth: '',
     practiceTypeName: '', unit: '分钟', records: [], totalValueLabel: '0',
     nextCursor: null, hasLoaded: false, isLoading: false, isLoadingMore: false, loadError: '', moreError: ''
@@ -24,7 +24,7 @@ Page({
     const today = getBusinessDate(Date.now());
     const date = decode(options.date);
     const month = decode(options.month);
-    this.setData({ teamId: decode(options.teamId), memberOpenid: decode(options.memberOpenid),
+    this.setData({ teamId: decode(options.teamId), practiceType: PRACTICES.some(item => item.type === options.practiceType) ? options.practiceType : '', memberOpenid: decode(options.memberOpenid),
       memberName: decode(options.memberName) || '团队成员', today, todayMonth: today.slice(0, 7),
       mode: validDate(date) ? 'day' : 'month', date: validDate(date) && date <= today ? date : today,
       month: validMonth(month) && month <= today.slice(0, 7) ? month : today.slice(0, 7) });
@@ -88,12 +88,12 @@ Page({
     });
     try {
       const response = await callTeam('getTeamMemberPracticeRecords',
-        { teamId, memberOpenid, ...(mode === 'day' ? { date } : { month }), ...(cursor ? { cursor } : {}), limit: 100 });
+        { teamId, memberOpenid, ...(this.data.practiceType ? { practiceType: this.data.practiceType } : {}), ...(mode === 'day' ? { date } : { month }), ...(cursor ? { cursor } : {}), limit: 100 });
       if (!current()) return;
       const result = response && response.result;
       if (!result || !result.success) throw new Error(result && result.error || '成员记录暂时无法加载');
       const data = result.data;
-      if (!data || !data.member || data.member.openid !== memberOpenid || !Array.isArray(data.records) ||
+      if (!data || !data.member || data.member.openid !== memberOpenid || this.data.practiceType && data.practiceType !== this.data.practiceType || !Array.isArray(data.records) ||
           data.nextCursor !== null && (typeof data.nextCursor !== 'string' || !data.nextCursor.trim()) ||
           cursor && data.nextCursor === cursor) throw new Error('成员记录暂不完整，请重试');
       const seen = new Set();

@@ -7,7 +7,10 @@
           <text class="team-name">{{teamInfo.name}}</text>
           <button wx:if="{{isCreator}}" class="hero-edit" size="mini" bindtap="openSettings">编辑</button>
         </view>
-        <text class="team-practice-tag">{{practiceTypeName}}</text>
+        <view class="team-practice-options">
+          <button wx:for="{{practiceOptions}}" wx:key="practiceType" class="team-practice-choice {{selectedPracticeType === item.practiceType ? 'active' : ''}}"
+            data-type="{{item.practiceType}}" bindtap="switchPractice" disabled="{{isSaving || isDeleting || settingsOpen}}">{{item.name}}</button>
+        </view>
         <text class="team-description">{{teamInfo.description || ''}}</text>
       </view>
       <view class="team-stats">
@@ -44,7 +47,7 @@
     </view>
 
     <block wx:if="{{currentTab === 'records'}}">
-      <view class="record-toolbar"><view class="record-tabs"><view class="record-tab {{recordTab === 'today' ? 'active' : ''}}" data-tab="today" bindtap="switchRecordTab">今日练习</view><view class="record-tab {{recordTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchRecordTab">历史统计</view></view><text class="record-rules" bindtap="openSettings">{{hasGoal ? '每日目标 ' + teamInfo.dailyGoalMinutes + ' ' + practiceUnit : '未设置每日目标'}} ›</text></view>
+      <view class="record-toolbar"><view class="record-tabs"><view class="record-tab {{recordTab === 'today' ? 'active' : ''}}" data-tab="today" bindtap="switchRecordTab">今日练习</view><view class="record-tab {{recordTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchRecordTab">历史统计</view></view><text class="record-rules" bindtap="openSettings">{{hasGoal ? '每日目标 ' + selectedPractice.dailyGoalMinutes + ' ' + practiceUnit : '未设置每日目标'}} ›</text></view>
     <view wx:if="{{isLoading}}" class="state-panel">
       <view class="loading-dot"></view>
       <text class="state-title">正在加载练习数据</text>
@@ -119,7 +122,7 @@
         <view class="section-heading"><view><text class="section-title">历史练习统计</text><text class="section-caption">从起始日期至昨日，今日不计入历史</text></view></view>
         <view class="history-overview">
           <view class="history-overview-top"><text class="history-range">{{report.history.totalDays > 0 ? historyRangeLabel : '今天是统计的第一天'}}</text><text class="history-day-count">{{report.history.totalDays}}<text> 天</text></text></view>
-          <text class="history-rule">{{hasGoal ? '每天累计 ' + report.settings.dailyGoalMinutes + ' ' + practiceUnit + '即达标；未达标天数包含未练习。' : '未设置每日目标，记录实际练习天数与练习量。'}}</text><text wx:if="{{!report.settings.practiceStartDate}}" class="history-rule">未设置起始日期，从团队创建日开始统计。</text>
+          <text class="history-rule">{{hasGoal ? '每天累计 ' + report.settings.dailyGoalMinutes + ' ' + practiceUnit + '即达标；未达标天数包含未练习。' : '未设置每日目标，记录实际练习天数与练习量。'}}</text><text wx:if="{{!report.settings.practiceStartDate}}" class="history-rule">未设置起始日期，从该功课启用日开始统计。</text>
         </view>
         <block wx:if="{{report.history.totalDays > 0}}">
           <view wx:if="{{historySummary}}" class="history-summary">
@@ -256,6 +259,16 @@
             </view>
           </view>
           <view class="team-form-card">
+            <view wx:if="{{teamInfo.source === 'bijing'}}" class="team-form-field">
+              <text class="team-form-label">选择要设置的功课</text>
+              <picker range="{{draftPractices}}" range-key="name" value="{{draftPracticeIndex}}" bindchange="selectDraftPractice" disabled="{{!isCreator || isSaving || isDeleting}}">
+                <view class="team-form-control"><text>{{draftPractices[draftPracticeIndex].name}}</text><text>›</text></view>
+              </picker>
+              <text class="team-form-help">所有成员共同参与，每项功课分别计算。已有功课保留。</text>
+              <view wx:if="{{isCreator && availablePractices.length}}" class="team-form-presets">
+                <button wx:for="{{availablePractices}}" wx:key="type" class="team-form-preset" data-type="{{item.type}}" bindtap="addDraftPractice" disabled="{{isSaving || isDeleting}}">+ {{item.name}}</button>
+              </view>
+            </view>
             <view class="team-form-heading team-form-rules-heading">
               <view class="team-form-rules-summary">
                 <text class="team-form-title">练习规则</text>
@@ -276,11 +289,11 @@
                 <picker wx:if="{{isCreator}}" mode="date" value="{{draftStartDate || dateMax}}" end="{{dateMax}}"
                   bindchange="changeStartDate" disabled="{{isSaving || isDeleting}}">
                   <view class="team-form-control">
-                    <text class="{{!draftStartDate ? 'team-form-placeholder' : ''}}">{{draftStartDate || '不设置，默认从创建日统计'}}</text>
+                    <text class="{{!draftStartDate ? 'team-form-placeholder' : ''}}">{{draftStartDate || '不设置，默认从该功课启用日统计'}}</text>
                     <text class="team-form-chevron">›</text>
                   </view>
                 </picker>
-                <view wx:else class="team-form-readonly">{{draftStartDate || '未设置，从团队创建日统计'}}</view>
+                <view wx:else class="team-form-readonly">{{draftStartDate || '未设置，从该功课启用日统计'}}</view>
                 <text class="team-form-help">全体当前成员从这一天开始统计，不区分加入时间。</text>
               </view>
               <view class="team-form-field" id="daily-goal-field">
@@ -290,20 +303,20 @@
                     type="number" value="{{draftGoalMinutes}}" bindinput="changeGoalMinutes"
                     bindkeyboardheightchange="onGoalKeyboardHeightChange" adjust-position="{{false}}"
                     cursor-spacing="24" maxlength="7" disabled="{{isSaving || isDeleting}}" />
-                  <text class="team-form-unit">{{practiceUnit}} / 天</text>
+                  <text class="team-form-unit">{{draftUnit || practiceUnit}} / 天</text>
                 </view>
                 <view wx:else class="team-form-readonly">{{draftGoalMinutes ? draftGoalMinutes + ' ' + practiceUnit + ' / 天' : '未设置'}}</view>
                 <block wx:if="{{isCreator}}">
-                  <text class="team-form-help">可选推荐值，也可输入 1–{{goalMax}} 的整数；留空则不设置。</text>
+                  <text class="team-form-help">可选推荐值，也可输入 1–{{draftGoalMax || goalMax}} 的整数；留空则不设置。</text>
                   <view class="team-form-presets">
                     <button class="team-form-preset {{draftGoalMinutes === '' ? 'selected' : ''}}" data-minutes=""
                       bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">不设置</button>
                     <button class="team-form-preset {{draftGoalMinutes == 20 ? 'selected' : ''}}" data-minutes="20"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">20 {{practiceUnit}}</button>
+                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">20 {{draftUnit || practiceUnit}}</button>
                     <button class="team-form-preset {{draftGoalMinutes == 30 ? 'selected' : ''}}" data-minutes="30"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">30 {{practiceUnit}}</button>
+                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">30 {{draftUnit || practiceUnit}}</button>
                     <button class="team-form-preset {{draftGoalMinutes == 60 ? 'selected' : ''}}" data-minutes="60"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">60 {{practiceUnit}}</button>
+                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">60 {{draftUnit || practiceUnit}}</button>
                   </view>
                 </block>
               </view>

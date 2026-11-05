@@ -23,7 +23,8 @@ function validDate(value) {
 
 Page({
   data: {
-    teamId: '', teamInfo: null, report: null,
+    teamId: '', teamInfo: null, report: null, selectedPracticeType: '', practiceOptions: [], selectedPractice: null,
+    draftPractices: [], draftPracticeType: '', draftPracticeIndex: 0, availablePractices: [], draftUnit: '', draftGoalMax: 1440,
     isLoading: false, isMember: false, isCreator: false, isDeputy: false, deputyCount: 0,
     loadError: '', reportError: '',
     currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
@@ -121,18 +122,19 @@ Page({
         !this._isVisible || this._unloaded || this._viewerOpenid !== openid || this._viewerKey !== viewerKey || this._viewerTeamId !== teamId ||
         this.data.isSaving || this.data.isDeleting || this.data.removingMemberId || this.data.roleChangingMemberId) return;
     if (this.data.report && this.data.report.nextResetAt > Date.now()) return;
+    const practiceType = this.data.selectedPracticeType;
     const version = this._loadVersion;
     if (this._reportRequest && this._reportRequest.version === version) return this._reportRequest.promise;
     if (this.data.isLoading) return;
     const request = { version };
     const isCurrent = () => !this._unloaded && this._isVisible && version === this._loadVersion &&
-      this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid && getViewerKey(this.data.teamId) === viewerKey;
+      this.data.teamId === teamId && this.data.selectedPracticeType === practiceType && wx.getStorageSync('userOpenId') === openid && getViewerKey(this.data.teamId) === viewerKey;
     this.clearPracticeReport();
     this.setData({ isLoading: true });
     this._reportRequest = request;
     request.promise = (async () => {
       try {
-        const report = await this.callTeam('getTeamPracticeReport', { teamId });
+        const report = await this.callTeam('getTeamPracticeReport', { teamId, ...(isDataTeam(teamId) ? { practiceType: this.data.selectedPracticeType } : {}) });
         if (!isCurrent()) return;
         this.applyReport(report);
         this.scheduleReset(Number(report.nextResetAt));
@@ -185,7 +187,7 @@ Page({
       }
       this.updateLocalTeamCache(team);
       this.setData({ ...this.teamRoleData(team), teamMembers: this.profileMembers(team.members || [], team), isMember: true,
-        hasGoal: Number.isInteger(team.dailyGoalMinutes) && team.dailyGoalMinutes > 0 });
+        hasGoal: Number.isInteger((this.practiceFor(team) || team).dailyGoalMinutes) && (this.practiceFor(team) || team).dailyGoalMinutes > 0 });
       this._teamInfoReady = true;
       if (!this.data.isCreator && !this.data.isDeputy) {
         this.resetInvitation();
@@ -207,7 +209,8 @@ Page({
     const counts = ['todayMinutes', 'practiceDays', 'qualifiedDays', 'belowGoalDays', 'missedDays', 'unmetDays', 'totalMinutes'];
     const summaryKeys = ['memberCount', 'notPracticedCount', 'belowGoalCount', 'qualifiedCount'];
     const validCount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-    if (!report || report.teamId !== this.data.teamInfo._id || !validDate(report.businessDate) ||
+    if (!report || report.teamId !== this.data.teamInfo._id ||
+        isDataTeam(this.data.teamId) && report.practiceType !== this.data.selectedPracticeType || !validDate(report.businessDate) ||
         !report.settings || !(report.settings.practiceStartDate === null ? validDate(report.settings.effectivePracticeStartDate) : validDate(report.settings.practiceStartDate)) ||
         !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= maxGoal(report.practiceType || this.data.teamInfo.practiceType))) || report.settings.dayBoundaryHour !== 2 ||
         !report.history || !validCount(report.history.totalDays) || !validDate(report.history.startDate) || !validDate(report.history.endDate) ||
@@ -251,7 +254,8 @@ Page({
       overview: report.overview || null,
       historySummary: this.buildHistorySummary(report),
       teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || Number(b.isDeputy) - Number(a.isDeputy) || a.nickname.localeCompare(b.nickname)),
-      teamInfo: { ...this.data.teamInfo, ...report.settings },
+      teamInfo: isDataTeam(this.data.teamId) ? this.data.teamInfo : { ...this.data.teamInfo, ...report.settings },
+      selectedPractice: { ...(this.data.selectedPractice || {}), ...report.settings },
       attentionCount: report.summary.notPracticedCount + report.summary.belowGoalCount,
       historyMembers,
       dayLabel: `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`,
@@ -302,12 +306,38 @@ Page({
     const deputyLeaders = [...new Set((Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])
       .filter(id => typeof id === 'string' && id !== team.creator && members.includes(id)))];
     const isCreator = !!openid && team.creator === openid;
-    const practice = practiceConfig(team.practiceType);
-    return { teamInfo: { ...team, deputyLeaders }, isCreator,
+    const currentPractice = this.practiceFor(team);
+    const practice = practiceConfig(currentPractice.practiceType || team.practiceType);
+    return { selectedPracticeType: practice.type, selectedPractice: currentPractice,
+      practiceOptions: this.practicesFor(team).map(item => ({ ...item, ...practiceConfig(item.practiceType) })), teamInfo: { ...team, deputyLeaders }, isCreator,
       practiceTypeName: practice.name, practiceUnit: practice.unit, goalMax: maxGoal(practice.type),
       belowGoalLabel: practice.unit === '分钟' ? '时长不足' : '数量不足',
       isDeputy: !isCreator && !!openid && deputyLeaders.includes(openid), deputyCount: deputyLeaders.length,
       ...(!isCreator ? { settingsOpen: false, isChoosingIcon: false } : {}) };
+  },
+
+  practicesFor(team) {
+    return isDataTeam(team._id) && Array.isArray(team.practices) && team.practices.length ? team.practices : [{ ...team, practiceType: team.practiceType || 'sitting' }];
+  },
+
+  practiceFor(team = this.data.teamInfo) {
+    const practices = this.practicesFor(team);
+    return practices.find(item => item.practiceType === this.data.selectedPracticeType) || practices[0];
+  },
+
+  async switchPractice(event) {
+    const type = event.currentTarget.dataset.type;
+    if (!this._teamInfoReady || !this.data.teamInfo || !isDataTeam(this.data.teamId) || this.data.isSaving || this.data.isDeleting || this.data.settingsOpen ||
+        this.data.removingMemberId || this.data.roleChangingMemberId || type === this.data.selectedPracticeType ||
+        !this.practicesFor(this.data.teamInfo).some(item => item.practiceType === type)) return;
+    this._loadVersion = (this._loadVersion || 0) + 1;
+    this.cancelReminder();
+    this.clearResetTimer();
+    this.setData({ selectedPracticeType: type, isLoading: false });
+    const practice = this.practiceFor();
+    this.setData({ ...this.teamRoleData(this.data.teamInfo), hasGoal: Number.isInteger(practice.dailyGoalMinutes) && practice.dailyGoalMinutes > 0 });
+    this.clearPracticeReport();
+    if (this.data.currentTab === 'records') await this.loadTeamReport();
   },
 
   profileMembers(members, team = this.data.teamInfo) {
@@ -399,14 +429,15 @@ Page({
     this.cancelReminder();
     const version = this._reminderVersion;
     const loadVersion = this._loadVersion;
-    const isCurrent = () => !this._unloaded && this._isVisible && version === this._reminderVersion &&
+    const practiceType = this.data.selectedPracticeType;
+    const isCurrent = () => !this._unloaded && this._isVisible && this.data.selectedPracticeType === practiceType && version === this._reminderVersion &&
       loadVersion === this._loadVersion && this.data.teamId === teamId && this.data.isMember &&
       this.canAssistTeam() && wx.getStorageSync('userOpenId') === openid && getViewerKey(this.data.teamId) === viewerKey &&
       !this.data.isSaving && !this.data.isDeleting && !this.data.removingMemberId && !this.data.roleChangingMemberId;
     this.setData({ isPreparingReminder: true });
     try {
       // 长图包含全体未达标成员，不受当前列表筛选影响；生成前重新获取云端统计。
-      const report = await this.callTeam('getTeamPracticeReport', { teamId });
+      const report = await this.callTeam('getTeamPracticeReport', { teamId, ...(isDataTeam(teamId) ? { practiceType: this.data.selectedPracticeType } : {}) });
       if (!isCurrent()) return;
       this.applyReport(report);
       if (!isCurrent()) return;
@@ -419,7 +450,7 @@ Page({
       }
       const canvas = await this.getReminderCanvas();
       if (!isCurrent()) return;
-      const reminder = await createReminderImage({ canvas, report, members, teamName: teamInfo.name, isCurrent,
+      const reminder = await createReminderImage({ canvas, report, members, teamName: isDataTeam(teamId) ? `${teamInfo.name} · ${practiceConfig(practiceType).name}` : teamInfo.name, isCurrent,
         resizeCanvas: (width, height) => new Promise(resolve => {
           this.setData({ reminderCanvasWidth: width, reminderCanvasHeight: height }, resolve);
         }) });
@@ -429,7 +460,7 @@ Page({
         await this.loadTeamData();
         return;
       }
-      this._reminderContext = { teamId, openid, viewerKey, nextResetAt: report.nextResetAt };
+      this._reminderContext = { teamId, openid, viewerKey, practiceType, nextResetAt: report.nextResetAt };
       this.setData({ reminderDialogOpen: true, reminderImagePath: reminder.tempFilePath,
         reminderCount: members.length, reminderDate: report.businessDate });
     } catch (error) {
@@ -442,7 +473,7 @@ Page({
   canUseReminderImage(context) {
     return !!context && this._reminderContext === context && !(this._unloaded || !this._isVisible || !this.data.reminderDialogOpen ||
         !this.data.reminderImagePath || !this.canAssistTeam() ||
-        this.data.teamId !== context.teamId || this._viewerOpenid !== context.openid ||
+        this.data.teamId !== context.teamId || this.data.selectedPracticeType !== context.practiceType || this._viewerOpenid !== context.openid ||
         wx.getStorageSync('userOpenId') !== context.openid || getViewerKey(context.teamId) !== context.viewerKey || this.data.isLoading ||
         this.data.isSaving || this.data.isDeleting || this.data.removingMemberId || this.data.roleChangingMemberId);
   },
@@ -527,7 +558,7 @@ Page({
       memberQuery = `&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname)}`;
     }
     const filter = !hasGoal && ['unmet', 'below_goal'].includes(dataset.filter) ? 'not_practiced' : dataset.filter;
-    wx.navigateTo({ url: `/subpackages/team/pages/historyDetails/historyDetails?teamId=${encodeURIComponent(teamId)}&month=${report.businessDate.slice(0, 7)}&filter=${filter}${memberQuery}` });
+    wx.navigateTo({ url: `/subpackages/team/pages/historyDetails/historyDetails?teamId=${encodeURIComponent(teamId)}&month=${report.businessDate.slice(0, 7)}&filter=${filter}${memberQuery}${isDataTeam(teamId) ? '&practiceType=' + encodeURIComponent(this.data.selectedPracticeType) : ''}` });
   },
 
   openMemberRecords(event) {
@@ -543,7 +574,7 @@ Page({
     const date = validDate(reportDate) ? reportDate : currentPracticeDate();
     const context = `teamId=${encodeURIComponent(teamId)}&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname || '团队成员')}`;
     if (/^bijing_/.test(teamId)) {
-      wx.navigateTo({ url: `/subpackages/team/pages/memberRecords/memberRecords?${context}&${dataset.view === 'day' ? 'date=' + date : 'month=' + date.slice(0, 7)}` });
+      wx.navigateTo({ url: `/subpackages/team/pages/memberRecords/memberRecords?${context}&practiceType=${encodeURIComponent(this.data.selectedPracticeType)}&${dataset.view === 'day' ? 'date=' + date : 'month=' + date.slice(0, 7)}` });
       return;
     }
     const url = dataset.view === 'day'
@@ -562,9 +593,15 @@ Page({
     const team = this.data.teamInfo;
     if (!team || this._viewerKey !== getViewerKey(this.data.teamId) || !this.data.isMember || this.data.isDeleting || this.data.isSaving || this.data.isChoosingIcon ||
         this.data.removingMemberId || this.data.roleChangingMemberId) return;
-    const settings = this.data.report ? this.data.report.settings : team;
+    const settings = this.data.report ? this.data.report.settings : this.practiceFor(team);
+    const draftPractices = this.practicesFor(team).map(item => ({ ...item, ...practiceConfig(item.practiceType),
+      practiceStartDate: item.practiceStartDate || '', dailyGoalMinutes: item.dailyGoalMinutes == null ? '' : String(item.dailyGoalMinutes) }));
+    const draftPracticeType = this.data.selectedPracticeType || team.practiceType || 'sitting';
     this.setData({
       settingsOpen: true, keyboardHeight: 0, settingsScrollTarget: '',
+      draftPractices, draftPracticeType, draftPracticeIndex: Math.max(0, draftPractices.findIndex(item => item.practiceType === draftPracticeType)),
+      draftUnit: practiceConfig(draftPracticeType).unit, draftGoalMax: maxGoal(draftPracticeType),
+      availablePractices: isDataTeam(this.data.teamId) ? PRACTICES.filter(item => !draftPractices.some(row => row.practiceType === item.type)) : [],
       draftName: team.name || '', draftDescription: team.description || '', draftIcon: team.icon || '/images/icons/team.png',
       draftStartDate: settings.practiceStartDate || '',
       draftGoalMinutes: settings.dailyGoalMinutes == null ? '' : String(settings.dailyGoalMinutes),
@@ -572,6 +609,39 @@ Page({
       dateMax: this.data.report ? this.data.report.businessDate : currentPracticeDate(),
       settingsError: ''
     });
+  },
+
+  currentDraftPractices() {
+    return this.data.draftPractices.map(item => item.practiceType === this.data.draftPracticeType
+      ? { ...item, practiceStartDate: this.data.draftPracticeRulesEnabled ? this.data.draftStartDate || '' : '',
+        dailyGoalMinutes: this.data.draftPracticeRulesEnabled ? this.data.draftGoalMinutes : '' } : item);
+  },
+
+  selectDraftPractice(event) {
+    if (!this.canManageTeam() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || !isDataTeam(this.data.teamId)) return;
+    const index = Number(event.detail.value);
+    const list = this.currentDraftPractices();
+    if (Number.isInteger(index) && list[index]) this.applyDraftPractice(list, index);
+  },
+
+  addDraftPractice(event) {
+    if (!this.canManageTeam() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || !isDataTeam(this.data.teamId)) return;
+    const type = event.currentTarget.dataset.type;
+    const config = PRACTICES.find(item => item.type === type);
+    const list = this.currentDraftPractices();
+    if (!config || list.some(item => item.practiceType === type)) return;
+    // Newly enabled homework starts today unless the leader explicitly changes it.
+    list.push({ ...config, practiceType: type, practiceStartDate: currentPracticeDate(), dailyGoalMinutes: '' });
+    this.applyDraftPractice(list, list.length - 1);
+  },
+
+  applyDraftPractice(list, index) {
+    const item = list[index];
+    this.setData({ draftPractices: list, draftPracticeType: item.practiceType, draftPracticeIndex: index,
+      draftUnit: practiceConfig(item.practiceType).unit, draftGoalMax: maxGoal(item.practiceType),
+      draftStartDate: item.practiceStartDate || '', draftGoalMinutes: item.dailyGoalMinutes == null ? '' : String(item.dailyGoalMinutes),
+      draftPracticeRulesEnabled: Boolean(item.practiceStartDate || item.dailyGoalMinutes !== '' && item.dailyGoalMinutes != null),
+      availablePractices: PRACTICES.filter(config => !list.some(row => row.practiceType === config.type)), settingsError: '' });
   },
 
   closeSettings() {
@@ -858,14 +928,32 @@ Page({
       this.setData({ settingsError: '请选择不晚于当前练习日的起始日期' });
       return;
     }
-    if (dailyGoalMinutes !== null && (!/^\d+$/.test(goalInput) || !Number.isInteger(dailyGoalMinutes) || dailyGoalMinutes < 1 || dailyGoalMinutes > maxGoal(this.data.teamInfo.practiceType))) {
-      this.setData({ settingsError: `每日目标请输入 1–${maxGoal(this.data.teamInfo.practiceType)} 之间的整数${this.data.practiceUnit}` });
+    if (dailyGoalMinutes !== null && (!/^\d+$/.test(goalInput) || !Number.isInteger(dailyGoalMinutes) || dailyGoalMinutes < 1 || dailyGoalMinutes > maxGoal(this.data.draftPracticeType || this.data.teamInfo.practiceType))) {
+      this.setData({ settingsError: `每日目标请输入 1–${maxGoal(this.data.draftPracticeType || this.data.teamInfo.practiceType)} 之间的整数${this.data.draftUnit || this.data.practiceUnit}` });
       return;
     }
     const openid = wx.getStorageSync('userOpenId');
     const viewerKey = getViewerKey(this.data.teamId);
     const teamId = this.data.teamInfo._id;
     const teamData = { name, description, icon, practiceStartDate, dailyGoalMinutes };
+    if (isDataTeam(teamId)) {
+      const drafts = this.currentDraftPractices();
+      const practices = [];
+      for (const item of drafts) {
+        const start = item.practiceStartDate || null;
+        const raw = item.dailyGoalMinutes == null ? '' : String(item.dailyGoalMinutes).trim();
+        const goal = raw === '' ? null : Number(raw);
+        if (start !== null && (!validDate(start) || start > currentPracticeDate()) ||
+            goal !== null && (!/^\d+$/.test(raw) || !Number.isSafeInteger(goal) || goal < 1 || goal > maxGoal(item.practiceType))) {
+          this.setData({ settingsError: `请检查${practiceConfig(item.practiceType).name}的起始日期和目标` });
+          return;
+        }
+        practices.push({ practiceType: item.practiceType, practiceStartDate: start, dailyGoalMinutes: goal });
+      }
+      teamData.practices = practices;
+      teamData.practiceStartDate = practices[0].practiceStartDate;
+      teamData.dailyGoalMinutes = practices[0].dailyGoalMinutes;
+    }
     const visibilityVersion = this._editVisibilityVersion || 0;
     const isCurrent = () => !this._unloaded && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid && getViewerKey(this.data.teamId) === viewerKey && this.canManageTeam();
     const canSubmit = () => isCurrent() && visibilityVersion === (this._editVisibilityVersion || 0);

@@ -2857,3 +2857,72 @@ test('data report responses for a previous binding never populate the new bindin
   assert.equal(page.data.historyMembers.length, 0);
   assert.equal(page.canAssistTeam(), false);
 });
+
+const dataTeamWithPractices = () => ({ ...structuredClone(team), _id: 'bijing_12', source: 'bijing', version: 4,
+  practiceType: 'sitting', practices: [
+    { practiceType: 'sitting', practiceStartDate: '2026-09-01', effectivePracticeStartDate: '2026-09-01', dailyGoalMinutes: 20, unit: '分钟' },
+    { practiceType: 'kindness', practiceStartDate: '2026-09-10', effectivePracticeStartDate: '2026-09-10', dailyGoalMinutes: 1, unit: '件' },
+    { practiceType: 'walking', practiceStartDate: null, effectivePracticeStartDate: '2026-09-01', dailyGoalMinutes: null, unit: '分钟' }
+  ] });
+const dataReportFor = type => ({ ...structuredClone(report), teamId: 'bijing_12', practiceType: type,
+  unit: type === 'kindness' ? '件' : '分钟', settings: { ...report.settings,
+    practiceStartDate: type === 'walking' ? null : report.settings.practiceStartDate, effectivePracticeStartDate: '2026-09-01',
+    dailyGoalMinutes: type === 'kindness' ? 1 : type === 'walking' ? null : 20 } });
+
+test('homework switching discards late reports and preserves the default team configuration', async () => {
+  let resolveWalking;
+  const walking = new Promise(resolve => { resolveWalking = resolve; });
+  const h = createPage({ cloud: (type, request) => type === 'getTeamInfo' ? success(dataTeamWithPractices())
+    : request.practiceType === 'walking' ? walking : success(dataReportFor(request.practiceType)) });
+  h.page.setData({ teamId: 'bijing_12' });
+  await h.page.onShow();
+  const old = h.page.switchPractice(event('type', 'walking'));
+  await flushPromises();
+  await h.page.switchPractice(event('type', 'kindness'));
+  resolveWalking(success(dataReportFor('walking')));
+  await old;
+  assert.equal(h.page.data.selectedPracticeType, 'kindness');
+  assert.equal(h.page.data.practiceUnit, '件');
+  assert.equal(h.page.data.report.practiceType, 'kindness');
+  assert.equal(h.page.data.teamInfo.practiceType, 'sitting');
+  assert.equal(h.page.data.teamInfo.dailyGoalMinutes, 20);
+  h.page.openHistoryDetails(event('filter', 'all'));
+  h.page.openMemberRecords({ currentTarget: { dataset: { memberOpenid: 'owner', view: 'month' } } });
+  assert.ok(h.calls.navigation.every(item => new URL('https://local' + item.url).searchParams.get('practiceType') === 'kindness'));
+});
+
+test('editing and adding homework retain all rules and work when the selected homework has no target', async () => {
+  let updated;
+  const h = createPage({ cloud(type, request) {
+    if (type === 'updateTeam') { updated = structuredClone(request); return success({ teamId: 'bijing_12' }); }
+    return success(type === 'getTeamInfo' ? dataTeamWithPractices() : dataReportFor(request.practiceType));
+  } });
+  h.page.setData({ teamId: 'bijing_12' });
+  await h.page.onShow();
+  await h.page.switchPractice(event('type', 'walking'));
+  h.page.openSettings();
+  assert.equal(h.page.data.draftPracticeRulesEnabled, false);
+  h.page.addDraftPractice(event('type', 'instant'));
+  assert.equal(h.page.data.draftPracticeType, 'instant');
+  assert.equal(h.page.data.draftStartDate, '2026-09-19');
+  h.page.changeGoalMinutes({ detail: { value: '2000' } });
+  await h.page.saveSettings();
+  assert.equal(updated.teamData.dailyGoalMinutes, 20);
+  assert.equal(updated.teamData.practiceStartDate, '2026-09-01');
+  assert.deepEqual(updated.teamData.practices.map(item => [item.practiceType, item.dailyGoalMinutes]),
+    [['sitting', 20], ['kindness', 1], ['walking', null], ['instant', 2000]]);
+});
+
+test('reminder generation uses selected homework and switching invalidates the exported image', async () => {
+  const h = createPage({ cloud: (type, request) => success(type === 'getTeamInfo' ? dataTeamWithPractices() : dataReportFor(request.practiceType)) });
+  h.page.setData({ teamId: 'bijing_12' });
+  await h.page.onShow();
+  await h.page.switchPractice(event('type', 'kindness'));
+  await h.page.showReminderList();
+  assert.equal(h.calls.reminderImages[0].report.practiceType, 'kindness');
+  assert.match(h.calls.reminderImages[0].teamName, /日行一善/);
+  assert.equal(h.page.data.reminderDialogOpen, true);
+  await h.page.switchPractice(event('type', 'sitting'));
+  assert.equal(h.page.data.reminderDialogOpen, false);
+  assert.equal(await h.page.getCurrentReminderContext(), null);
+});

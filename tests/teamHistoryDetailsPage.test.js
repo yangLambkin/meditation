@@ -744,3 +744,16 @@ test('a history page completed after same-account rebinding cannot append or ope
   page.openDayRecords(event({ key: oldKey }));
   assert.equal(calls.navigation.length, 0);
 });
+
+test('history paging and record links keep the selected homework and reject another type', async () => {
+  const { page, calls } = createPage({ query: { teamId: 'bijing_12', practiceType: 'kindness' }, cloud: () => success(details([row()], {
+    teamId: 'bijing_12', practiceType: 'kindness', unit: '件', settings: { ...details().settings, dailyGoalMinutes: 1 }
+  })) });
+  await page.onShow();
+  assert.equal(calls.cloud[0].data.data.practiceType, 'kindness');
+  page.openDayRecords(event({ key: '2026-09-18:a' }));
+  assert.equal(new URL('https://local' + calls.navigation[0].url).searchParams.get('practiceType'), 'kindness');
+  const mismatch = createPage({ query: { teamId: 'bijing_12', practiceType: 'walking' }, cloud: () => success(details([], { teamId: 'bijing_12', practiceType: 'kindness' })) });
+  await mismatch.page.onShow();
+  assert.match(mismatch.page.data.loadError, /暂不完整/);
+});

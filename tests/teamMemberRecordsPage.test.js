@@ -190,3 +190,16 @@ test('a member-record append received after same-account rebinding discards reco
   assert.equal(page.data.isLoadingMore, false);
   assert.match(page.data.loadError, /账号或绑定已变化/);
 });
+
+test('member records keep selected homework across paging and period changes and reject a mismatched response', async () => {
+  const { page, calls } = createPage({ query: { teamId: 'bijing_1', memberOpenid: 'bijing_member_2', month: '2026-09', practiceType: 'kindness' },
+    cloud: (_, count) => success(count === 1 ? data([record('1')], 'kindness-cursor') : data([record('2')])) });
+  await page.onShow();
+  await page.loadMore();
+  await page.changePeriod({ detail: { value: '2026-08' } });
+  assert.ok(calls.every(call => call.data.data.practiceType === 'kindness'));
+  const mismatch = createPage({ query: { teamId: 'bijing_1', memberOpenid: 'bijing_member_2', month: '2026-09', practiceType: 'walking' } });
+  await mismatch.page.onShow();
+  assert.match(mismatch.page.data.loadError, /暂不完整/);
+  assert.equal(mismatch.page.data.records.length, 0);
+});

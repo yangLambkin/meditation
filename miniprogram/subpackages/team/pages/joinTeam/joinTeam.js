@@ -136,7 +136,8 @@ Page({
       wx.setNavigationBarTitle({ title: `加入${teamInfo.name}` });
       this.setData({
         teamInfo, members, isMember, statsAvailable,
-        practiceTypeName: (PRACTICES.find(item => item.type === teamInfo.practiceType) || PRACTICES[0]).name,
+        practiceTypeName: Array.isArray(teamInfo.practices) && teamInfo.practices.length ? teamInfo.practices.map(row => (PRACTICES.find(item => item.type === row.practiceType) || PRACTICES[0]).name).join(' · ')
+          : (PRACTICES.find(item => item.type === teamInfo.practiceType) || PRACTICES[0]).name,
         teamTotalCheckins: members.reduce((sum, member) => sum + member.checkInCount, 0),
         teamActivityRate: members.length ? Math.round(members.filter(member => member.monthlyCount > 0).length / members.length * 100) : 0
       });

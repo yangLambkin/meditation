@@ -14,7 +14,8 @@ const creationFingerprint = teamInfo => JSON.stringify([
   teamInfo && typeof teamInfo.name === 'string' ? teamInfo.name.trim() : '',
   teamInfo && typeof teamInfo.description === 'string' ? teamInfo.description.trim() : '',
   teamInfo && teamInfo.icon || '/images/icons/team.png', teamInfo && teamInfo.practiceType || 'sitting',
-  teamInfo && teamInfo.practiceStartDate || null, teamInfo && teamInfo.dailyGoalMinutes != null ? teamInfo.dailyGoalMinutes : null
+  teamInfo && teamInfo.practiceStartDate || null, teamInfo && teamInfo.dailyGoalMinutes != null ? teamInfo.dailyGoalMinutes : null,
+  ...(teamInfo && Array.isArray(teamInfo.practices) ? [teamInfo.practices] : [])
 ]);
 
 class TeamManager {
@@ -127,6 +128,7 @@ class TeamManager {
         name, description: (teamInfo.description || '').trim(), icon, practiceType,
         ...(teamInfo.practiceStartDate !== undefined ? { practiceStartDate: teamInfo.practiceStartDate } : {}),
         ...(teamInfo.dailyGoalMinutes !== undefined ? { dailyGoalMinutes: teamInfo.dailyGoalMinutes } : {}),
+        ...(Array.isArray(teamInfo.practices) ? { practices: teamInfo.practices.map(item => ({ ...item })) } : {}),
         creator: openid, creatorName: wx.getStorageSync('userNickname') || '匿名用户',
         members: [openid], memberCount: 1, deputyLeaders: [],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), isActive: true

@@ -812,3 +812,27 @@ test('team lists show practice labels while existing teams keep the sitting labe
     assert.equal(app.page.data[list][1].source, 'bijing');
   }
 });
+
+test('an upgraded single-practice client reuses the existing six-field creation fingerprint', async () => {
+  const draft = { name: '旧版待确认', description: '同一表单', icon: dataIcon, practiceType: 'walking', practiceStartDate: '2026-09-01', dailyGoalMinutes: 30 };
+  const fingerprint = JSON.stringify([draft.name, draft.description, draft.icon, draft.practiceType, draft.practiceStartDate, draft.dailyGoalMinutes]);
+  const app = harness({ stored: { teamCreateOperations_v1_owner: [{ fingerprint, operationKey: 'old-version-create-key' }] },
+    cloud: async request => created(20, request.data) });
+  assert.equal((await app.manager.createTeam(draft)).success, true);
+  assert.equal(app.calls[0].data.operationKey, 'old-version-create-key');
+});
+
+test('adding or editing secondary homework changes the creation operation while identical retries reuse it', async () => {
+  const draft = { name: '多项待确认', practiceType: 'sitting', practices: [
+    { practiceType: 'sitting', practiceStartDate: null, dailyGoalMinutes: null },
+    { practiceType: 'kindness', practiceStartDate: null, dailyGoalMinutes: 1 }
+  ] };
+  const app = harness({ cloud: async () => ({ success: false, error: '响应丢失' }) });
+  await app.manager.createTeam(draft);
+  await app.manager.createTeam(clone(draft));
+  assert.equal(app.calls[0].data.operationKey, app.calls[1].data.operationKey);
+  draft.practices[1].dailyGoalMinutes = 3;
+  await app.manager.createTeam(draft);
+  assert.notEqual(app.calls[1].data.operationKey, app.calls[2].data.operationKey);
+  assert.equal(app.calls[2].data.practices[1].dailyGoalMinutes, 3);
+});

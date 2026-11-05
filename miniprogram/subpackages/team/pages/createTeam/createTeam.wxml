@@ -1,7 +1,7 @@
 <view class="create-team-page">
   <view class="page-heading">
     <text class="page-title">创建团队</text>
-    <text class="page-description">选择一项功课，邀请伙伴一起坚持</text>
+    <text class="page-description">选择功课，邀请伙伴一起坚持</text>
   </view>
 
   <view class="team-form-card">
@@ -47,7 +47,7 @@
           <text class="team-form-chevron">›</text>
         </view>
       </picker>
-      <text class="team-form-help">每个团队专注一项功课，创建后不可更改。</text>
+      <text class="team-form-help">默认功课创建后保留；还可以添加其他功课，共用团队成员。</text>
     </view>
   </view>
 
@@ -99,6 +99,28 @@
         <text>练习日为北京时间 02:00 至次日 02:00。</text>
         <text>当日多次练习累计计算；未设置目标时不判断达标。</text>
       </view>
+    </view>
+  </view>
+
+  <view class="team-form-card">
+    <text class="team-form-title">添加其他功课</text>
+    <text class="team-form-help">每项功课分别设置目标、统计和提醒。可选，共六种。</text>
+    <view class="team-form-presets">
+      <button wx:for="{{additionalPracticeOptions}}" wx:key="type" class="team-form-preset {{item.selected ? 'selected' : ''}}"
+        data-type="{{item.type}}" bindtap="toggleAdditionalPractice" disabled="{{isCreating || hasCreatedTeam}}">{{item.selected ? '✓ ' : '+ '}}{{item.name}}</button>
+    </view>
+    <view class="team-form-field" wx:for="{{additionalPractices}}" wx:key="practiceType">
+      <text class="team-form-label">{{item.name}}</text>
+      <picker mode="date" end="{{maxPracticeStartDate}}" value="{{item.practiceStartDate || maxPracticeStartDate}}"
+        data-type="{{item.practiceType}}" data-field="practiceStartDate" bindchange="changeAdditionalRule" disabled="{{isCreating || hasCreatedTeam}}">
+        <view class="team-form-control"><text>{{item.practiceStartDate || '默认从创建日统计'}}</text><text>›</text></view>
+      </picker>
+      <view class="team-form-control">
+        <input class="team-form-input" type="number" maxlength="7" value="{{item.dailyGoalMinutes}}" placeholder="每日目标，留空不设置"
+          data-type="{{item.practiceType}}" data-field="dailyGoalMinutes" bindinput="changeAdditionalRule" disabled="{{isCreating || hasCreatedTeam}}" />
+        <text class="team-form-unit">{{item.unit}} / 天</text>
+      </view>
+      <text class="team-form-help">目标为 1–{{item.maxGoal}} 的整数；各项独立计算。</text>
     </view>
   </view>
 

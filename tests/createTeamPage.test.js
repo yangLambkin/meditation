@@ -600,3 +600,23 @@ test('each practice rejects invalid target ranges and unknown types before submi
   await page.createTeam();
   assert.equal(calls.create.length, 0);
 });
+
+test('creation combines independent homework goals and rejects invalid secondary rules before moderation', async () => {
+  const { page, calls } = createPage();
+  page.toggleAdditionalPractice({ currentTarget: { dataset: { type: 'kindness' } } });
+  page.changeAdditionalRule({ currentTarget: { dataset: { type: 'kindness', field: 'dailyGoalMinutes' } }, detail: { value: '3' } });
+  page.toggleAdditionalPractice({ currentTarget: { dataset: { type: 'walking' } } });
+  page.changeAdditionalRule({ currentTarget: { dataset: { type: 'walking', field: 'practiceStartDate' } }, detail: { value: '2026-09-01' } });
+  await page.createTeam();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.create[0].practices)), [
+    { practiceType: 'sitting', practiceStartDate: null, dailyGoalMinutes: null },
+    { practiceType: 'kindness', practiceStartDate: null, dailyGoalMinutes: 3 },
+    { practiceType: 'walking', practiceStartDate: '2026-09-01', dailyGoalMinutes: null }
+  ]);
+  const invalid = createPage();
+  invalid.page.toggleAdditionalPractice({ currentTarget: { dataset: { type: 'walking' } } });
+  invalid.page.changeAdditionalRule({ currentTarget: { dataset: { type: 'walking', field: 'dailyGoalMinutes' } }, detail: { value: '1441' } });
+  await invalid.page.createTeam();
+  assert.equal(invalid.calls.create.length, 0);
+  assert.equal(invalid.calls.text.length, 0);
+});

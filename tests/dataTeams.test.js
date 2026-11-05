@@ -251,3 +251,62 @@ test('moderated cloud images upload directly to data and reuse relative signed U
   assert.equal(h.uploads.length, 1);
   assert.equal(h.cloudCalls.length, 0);
 });
+
+const multiTeam = extra => makeTeam({ practices: [
+  { practiceType: 'instant', practiceStartDate: null, effectivePracticeStartDate: '2026-11-01', dailyGoal: 2000, unit: '次' },
+  { practiceType: 'kindness', practiceStartDate: '2026-11-04', effectivePracticeStartDate: '2026-11-04', dailyGoal: 1, unit: '件' },
+  { practiceType: 'walking', practiceStartDate: '2026-11-05', effectivePracticeStartDate: '2026-11-05', dailyGoal: 30, unit: '分钟' }
+], ...extra });
+
+test('multi-practice creation confirms every rule and shows all tags without changing the default', async () => {
+  const input = multiTeam().practices.map(({ practiceType, practiceStartDate, dailyGoal }) => ({ practiceType, practiceStartDate, dailyGoalMinutes: dailyGoal }));
+  const h = harness({ handler: () => multiTeam() });
+  const result = await h.run('createTeam', { name: '一起练习', practices: input, operationKey: 'multi-stable-key' });
+  assert.equal(h.calls[0].data.practiceType, 'instant');
+  assert.equal(h.calls[0].data.dailyGoal, 2000);
+  assert.deepEqual(h.calls[0].data.practices, multiTeam().practices.map(({ practiceType, practiceStartDate, dailyGoal }) => ({ practiceType, practiceStartDate, dailyGoal })));
+  assert.deepEqual(result.data.team.tags, ['即刻觉察', '日行一善', '走路觉察']);
+  assert.equal(result.data.team.practices[1].dailyGoalMinutes, 1);
+  const oldServer = harness();
+  await assert.rejects(oldServer.run('createTeam', { name: 'a', practiceType: 'instant', practices: input, operationKey: 'multi-retry-key' }), /全部功课配置/);
+});
+
+test('editing a secondary practice retains default scalar rules and checks full server confirmation', async () => {
+  const h = harness({ handler(path, input) {
+    return input.method === 'PUT' ? multiTeam({ practices: input.data.practices.map(item => ({ ...item,
+      effectivePracticeStartDate: item.practiceStartDate || '2026-11-01', unit: item.practiceType === 'instant' ? '次' : item.practiceType === 'kindness' ? '件' : '分钟' })) })
+      : { team: multiTeam(), members: roster };
+  } });
+  const practices = multiTeam().practices.map(item => ({ ...item, dailyGoalMinutes: item.practiceType === 'kindness' ? 3 : item.dailyGoal }));
+  practices.forEach(item => { delete item.dailyGoal; });
+  const result = await h.run('updateTeam', { teamId: 'bijing_12', expectedVersion: 4, teamData: { practices, dailyGoalMinutes: 3 } });
+  const edit = h.calls.find(call => call.method === 'PUT');
+  assert.equal(edit.data.dailyGoal, 2000);
+  assert.equal(edit.data.practices[1].dailyGoal, 3);
+  assert.equal(result.data.team.practices[1].dailyGoalMinutes, 3);
+});
+
+test('selected homework scopes reports, history and member records including their independent start dates', async () => {
+  const h = harness({ handler(path, input) {
+    if (path === '/12') return { team: multiTeam(), members: roster };
+    assert.equal(input.params.practiceType, 'kindness');
+    if (path.endsWith('/report')) return { practiceType: 'kindness', unit: '件', settings: { ...rules, dailyGoal: 1 }, members: roster.map(item => ({ ...item, todayValue: 1, totalValue: 2, cumulativeValue: 3 })) };
+    if (path.endsWith('/history')) return { practiceType: 'kindness', unit: '件', settings: { ...rules, dailyGoal: 1 }, items: [], nextCursor: null };
+    return { practiceType: 'kindness', unit: '件', member: roster[1], records: [], nextCursor: null };
+  } });
+  for (const type of ['getTeamPracticeReport', 'getTeamHistoryDetails', 'getTeamMemberPracticeRecords']) {
+    const result = await h.run(type, { teamId: 'bijing_12', practiceType: 'kindness', memberOpenid: 'bijing_member_8' });
+    assert.equal(result.data.practiceType, 'kindness');
+    assert.equal(result.data.unit, '件');
+    if (type === 'getTeamMemberPracticeRecords') assert.equal(result.data.startDate, '2026-11-04');
+  }
+  await assert.rejects(h.run('getTeamPracticeReport', { teamId: 'bijing_12', practiceType: 'clapping' }), /未加入团队/);
+});
+
+test('a selected homework rejects an old/default response instead of relabeling its quantities', async () => {
+  const h = harness({ handler: path => path === '/12' ? { team: multiTeam(), members: roster }
+    : { practiceType: 'instant', settings: rules, members: roster, items: [], member: roster[1], records: [], nextCursor: null } });
+  for (const type of ['getTeamPracticeReport', 'getTeamHistoryDetails', 'getTeamMemberPracticeRecords']) {
+    await assert.rejects(h.run(type, { teamId: 'bijing_12', practiceType: 'kindness', memberOpenid: 'bijing_member_8' }), /未确认所选功课/);
+  }
+});
