@@ -128,6 +128,7 @@ function harness({ now: initialTime = INITIAL_TIME, online = true, failures = 0,
       const definition = pages.get(path.resolve(root, filename));
       return {
         ...definition,
+        timerApp: app,
         data: clone(definition.data),
         setData(values) { Object.assign(this.data, values); }
       };

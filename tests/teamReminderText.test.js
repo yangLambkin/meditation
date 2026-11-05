@@ -65,3 +65,16 @@ test('large lists include every name without truncation or a display limit', () 
   assert.equal(new Set(names).size, 2000);
   for (const item of input.report.members) assert.ok(names.includes(item.nickname));
 });
+
+test('multi-practice reminders include partially completed classmates without summing unlike units', () => {
+  const input = { multiPractice: true, settings: { dailyGoalMinutes: null }, members: [
+    { ...member('partial', '部分练习', 'below_goal', 99999), practices: [{ todayStatus: 'practiced' }, { todayStatus: 'not_practiced' }] },
+    { ...member('done', '全部完成', 'practiced'), practices: [{ todayStatus: 'practiced' }, { todayStatus: 'practiced' }] },
+    { ...member('none', '未开始'), practices: [{ todayStatus: 'not_practiced' }, { todayStatus: 'not_practiced' }] },
+    { ...member('below', '未完成', 'below_goal', 1), practices: [{ todayStatus: 'below_goal' }, { todayStatus: 'not_practiced' }] }
+  ] };
+  const original = structuredClone(input);
+  assert.deepEqual(selectReminderMembers(input).map(item => item.openid), ['none', 'below', 'partial']);
+  assert.deepEqual(buildReminderText({ report: input }), { text: '未开始\n未完成\n部分练习', memberCount: 3 });
+  assert.deepEqual(input, original);
+});

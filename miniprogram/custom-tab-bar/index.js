@@ -4,7 +4,6 @@ const HOME_PATH = 'pages/index/index';
 const RECORDS_PATH = 'pages/practices/practices';
 const TABS = [
   { pagePath: HOME_PATH, text: '首页', iconPath: '/images/icons/home.png', selectedIconPath: '/images/icons/home-active.png' },
-  { pagePath: 'pages/timer/timer', text: '计时', iconPath: '/images/icons/timer.png', selectedIconPath: '/images/icons/timer-active.png' },
   { pagePath: RECORDS_PATH, text: '记录', iconPath: '/images/icons/practice-records.png', selectedIconPath: '/images/icons/practice-records-active.png' },
   { pagePath: 'pages/team/team', text: '团队', iconPath: '/images/icons/team.png', selectedIconPath: '/images/icons/team-active.png' },
   { pagePath: 'pages/me/me', text: '我', iconPath: '/images/icons/me.png', selectedIconPath: '/images/icons/me-active.png' }

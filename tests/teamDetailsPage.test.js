@@ -47,8 +47,8 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
   title: `邀请您加入${team.name}团队`
 });
 
-// Most cases exercise the report view; pass initialTab: null to test the actual default members view.
-function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, uploadIcon, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+// Use the actual default view unless a case explicitly starts on the members tab.
+function createPage({ initialTab = null, cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, uploadIcon, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
@@ -94,8 +94,8 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
         isDataTeamIcon: value => typeof value === 'string' && value.startsWith('https://data.bijing.life/api/public/teams/avatar?'),
         async uploadTeamIcon(file) { calls.uploads.push(file); return uploadIcon ? uploadIcon(file) : 'https://data.bijing.life/api/public/teams/avatar?key=approved'; }
       };
-      if (name.endsWith('/teamPracticeSelection.js')) return require('../miniprogram/utils/teamPracticeSelection.js');
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
+      if (name.endsWith('/teamPracticeSelection.js')) return require('../miniprogram/utils/teamPracticeSelection.js');
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
       if (name.endsWith('/reminderText.js')) return require('../miniprogram/subpackages/team/utils/reminderText.js');
@@ -168,9 +168,21 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
   }, { filename: pagePath });
   function createNextPage({ teamId = 'team-a' } = {}) {
     const page = { ...definition, data: structuredClone(definition.data), dataUpdates: [],
-      setData(values) {
+      setData(values, callback) {
         this.dataUpdates.push(structuredClone(values));
-        Object.assign(this.data, values);
+        for (const [key, value] of Object.entries(values)) {
+          const segments = key.replace(/\[(\d+)\]/g, '.$1').split('.');
+          let target = this.data;
+          for (let index = 0; index < segments.length - 1; index++) {
+            const segment = segments[index];
+            if (!target[segment] || typeof target[segment] !== 'object') {
+              target[segment] = /^\d+$/.test(segments[index + 1]) ? [] : {};
+            }
+            target = target[segment];
+          }
+          target[segments.at(-1)] = value;
+        }
+        if (callback) callback();
       }
     };
     page.onLoad({ teamId });
@@ -183,15 +195,13 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
 const event = (key, value) => ({ currentTarget: { dataset: { [key]: value } } });
 async function flushPromises() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 
-test('default members view loads only profiles and loads report statistics on demand', async () => {
-  const { page, calls, manager } = createPage({ initialTab: null });
+test('opening a team defaults to records and loads today practice after member profiles', async () => {
+  const { page, calls, manager } = createPage();
+  assert.equal(page.data.currentTab, 'records');
   await page.onShow();
-  assert.equal(page.data.currentTab, 'members');
-  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
-  assert.equal(page.data.report, null);
+  assert.equal(page.data.report.businessDate, report.businessDate);
   assert.equal(page.data.isLoading, false);
   assert.equal(page.data.teamMembers.length, 3);
-  await page.switchTab(event('tab', 'records'));
   assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamPracticeReport']);
   assert.equal(calls.cloud[1].data.teamId, 'team-a');
   assert.equal(Object.hasOwn(calls.cloud[1].data, 'month'), false);
@@ -210,7 +220,7 @@ test('default members view loads only profiles and loads report statistics on de
 test('opening member details and returning preserves the roster without a request or list reset', async () => {
   const boundTeam = structuredClone(team);
   boundTeam.members[1].bijingStudentNumber = 'BJ123456';
-  const { page, calls } = createPage({ initialTab: null, cloud: type => {
+  const { page, calls } = createPage({ initialTab: 'members', cloud: type => {
     assert.equal(type, 'getTeamInfo');
     return success(boundTeam);
   } });
@@ -229,7 +239,7 @@ test('opening member details and returning preserves the roster without a reques
 });
 
 test('record tab and return navigation reuse the report while pull refresh invalidates it', async () => {
-  const { page, calls } = createPage({ initialTab: null });
+  const { page, calls } = createPage({ initialTab: 'members' });
   await page.onShow();
   await page.switchTab(event('tab', 'records'));
   const savedReport = page.data.report;
@@ -251,7 +261,7 @@ test('record tab and return navigation reuse the report while pull refresh inval
 test('member cards keep bound student numbers after a practice report replaces statistics', async () => {
   const boundTeam = structuredClone(team);
   boundTeam.members[1].bijingStudentNumber = 'BJ123456';
-  const { page } = createPage({ initialTab: null,
+  const { page } = createPage({ initialTab: 'members',
     cloud: type => success(type === 'getTeamInfo' ? boundTeam : report) });
   await page.onShow();
   await page.switchTab(event('tab', 'records'));
@@ -266,7 +276,7 @@ test('member cards keep bound student numbers after a practice report replaces s
 
 test('missing student numbers are unavailable until a roster refresh confirms binding state', async () => {
   let currentTeam = structuredClone(team);
-  const { page } = createPage({ initialTab: null,
+  const { page } = createPage({ initialTab: 'members',
     cloud: type => success(type === 'getTeamInfo' ? currentTeam : report) });
   await page.onShow();
   assert.ok(page.data.teamMembers.every(item => item.bijingStudentNumberLabel === '学号暂未获取'));
@@ -285,7 +295,7 @@ test('missing student numbers are unavailable until a roster refresh confirms bi
 test('switching to records during roster loading fetches the report once after profiles are ready', async () => {
   let finishTeam;
   let finishReport;
-  const { page, calls } = createPage({ initialTab: null, cloud: type => new Promise(resolve => {
+  const { page, calls } = createPage({ initialTab: 'members', cloud: type => new Promise(resolve => {
     if (type === 'getTeamInfo') finishTeam = resolve;
     else finishReport = resolve;
   }) });
@@ -302,7 +312,7 @@ test('switching to records during roster loading fetches the report once after p
 });
 
 test('returning to members after the practice day changes invalidates only statistics', async () => {
-  const { page, calls, setNow } = createPage({ initialTab: null });
+  const { page, calls, setNow } = createPage({ initialTab: 'members' });
   await page.onShow();
   await page.switchTab(event('tab', 'records'));
   await page.switchTab(event('tab', 'members'));
@@ -317,7 +327,7 @@ test('returning to members after the practice day changes invalidates only stati
 
 test('saving settings from members refreshes profiles once and keeps statistics lazy', async () => {
   const currentTeam = structuredClone(team);
-  const { page, calls } = createPage({ initialTab: null, cloud: (type, data) => {
+  const { page, calls } = createPage({ initialTab: 'members', cloud: (type, data) => {
     if (type === 'getTeamInfo') return success(currentTeam);
     assert.equal(type, 'updateTeam');
     Object.assign(currentTeam, data.teamData);
@@ -335,7 +345,7 @@ test('saving settings from members refreshes profiles once and keeps statistics 
 
 test('cached member profiles are cleared before showing another account', async () => {
   let currentTeam = team;
-  const { page, calls, storage } = createPage({ initialTab: null, cloud: type => {
+  const { page, calls, storage } = createPage({ initialTab: 'members', cloud: type => {
     assert.equal(type, 'getTeamInfo');
     return success(currentTeam);
   } });
@@ -353,7 +363,7 @@ test('cached member profiles are cleared before showing another account', async 
 
 test('a failed initial roster is retried on return instead of being treated as cached', async () => {
   let reads = 0;
-  const { page, calls } = createPage({ initialTab: null, cloud: () => ++reads === 1
+  const { page, calls } = createPage({ initialTab: 'members', cloud: () => ++reads === 1
     ? { result: { success: false, error: '网络暂不可用' } } : success(team) });
   await page.onShow();
   assert.equal(page.data.teamInfo, null);
@@ -1544,7 +1554,7 @@ test('reusing a data invitation verifies current permissions once and disables s
   const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', deputyLeaders: ['member'] };
   let finishCheck;
   let reads = 0;
-  const { calls, createNextPage } = createPage({ initialTab: null, openid: 'member',
+  const { calls, createNextPage } = createPage({ initialTab: 'members', openid: 'member',
     cloud: () => ++reads === 1 ? success(current) : new Promise(resolve => { finishCheck = resolve; }),
     generateInvite: () => success(invitation(current._id, 'member')) });
   const page = createNextPage({ teamId: current._id });
@@ -1573,7 +1583,7 @@ test('cached data invitations cannot survive revoked deputy membership or a diss
   const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', deputyLeaders: ['member'] };
   for (const state of ['revoked', 'removed', 'deleted', 'network-error']) {
     let reads = 0;
-    const { calls, createNextPage } = createPage({ initialTab: null, openid: 'member',
+    const { calls, createNextPage } = createPage({ initialTab: 'members', openid: 'member',
       cloud: () => {
         if (++reads === 1) return success(current);
         if (state === 'deleted' || state === 'network-error') return { result: { success: false,
@@ -1608,7 +1618,7 @@ test('late cached invitation permission checks cannot restore sharing after iden
   for (const change of ['account', 'binding', 'hidden', 'closed', 'unloaded', 'share']) {
     let finishCheck;
     let reads = 0;
-    const { storage, calls, createNextPage } = createPage({ initialTab: null,
+    const { storage, calls, createNextPage } = createPage({ initialTab: 'members',
       cloud: () => ++reads === 1 ? success(current) : new Promise(resolve => { finishCheck = resolve; }),
       generateInvite: () => success(invitation(current._id)) });
     const page = createNextPage({ teamId: current._id });
@@ -2377,7 +2387,7 @@ test('failed removal retains members and reports the server error', async () => 
 test('failed removal resumes a report requested while removal was pending', async () => {
   for (const failure of ['response', 'network']) {
     let finishRemoval;
-    const { page, calls } = createPage({ initialTab: null,
+    const { page, calls } = createPage({ initialTab: 'members',
       removeTeamMember: () => new Promise((resolve, reject) => {
         finishRemoval = () => failure === 'network' ? reject(new Error('网络暂不可用'))
           : resolve({ success: false, error: '暂时无法移除' });
@@ -2404,7 +2414,7 @@ test('failed removal resumes a report requested while removal was pending', asyn
 test('a report resumed after failed removal exposes fetch errors and permits retry', async () => {
   let finishRemoval;
   let failReport = true;
-  const { page, calls } = createPage({ initialTab: null,
+  const { page, calls } = createPage({ initialTab: 'members',
     removeTeamMember: () => new Promise(resolve => {
       finishRemoval = () => resolve({ success: false, error: '暂时无法移除' });
     }),
@@ -2430,7 +2440,7 @@ test('a report resumed after failed removal exposes fetch errors and permits ret
 test('failed removal keeps reports lazy when the user leaves the records view', async () => {
   for (const leave of ['members', 'onHide', 'onUnload']) {
     let finishRemoval;
-    const { page, calls } = createPage({ initialTab: null,
+    const { page, calls } = createPage({ initialTab: 'members',
       removeTeamMember: () => new Promise(resolve => {
         finishRemoval = () => resolve({ success: false, error: '暂时无法移除' });
       })
@@ -2870,26 +2880,138 @@ const dataReportFor = type => ({ ...structuredClone(report), teamId: 'bijing_12'
     practiceStartDate: type === 'walking' ? null : report.settings.practiceStartDate, effectivePracticeStartDate: '2026-09-01',
     dailyGoalMinutes: type === 'kindness' ? 1 : type === 'walking' ? null : 20 } });
 
-test('homework switching discards late reports and preserves the default team configuration', async () => {
+function combinedReportFor(type, { allOptional = false } = {}) {
+  const current = dataReportFor(type);
+  const goal = allOptional ? null : current.settings.dailyGoalMinutes;
+  const values = type === 'sitting' ? [25, 12, 0] : type === 'kindness' ? [1, 0, 0] : [5, 0, 0];
+  const statuses = values.map(value => !value ? 'not_practiced' : goal === null ? 'practiced' : value >= goal ? 'qualified' : 'below_goal');
+  current.settings.dailyGoalMinutes = goal;
+  current.members = current.members.map((item, index) => ({ ...item,
+    todayMinutes: values[index], todayStatus: statuses[index], todayPracticeCount: values[index] > 0 ? 1 : 0,
+    totalPracticeCount: [20, 15, 17][index],
+    ...(goal === null ? { qualifiedDays: 0, belowGoalDays: 0, unmetDays: 0 } : {})
+  }));
+  current.summary = { memberCount: 3,
+    notPracticedCount: statuses.filter(status => status === 'not_practiced').length,
+    belowGoalCount: statuses.filter(status => status === 'below_goal').length,
+    qualifiedCount: statuses.filter(status => status === 'qualified').length,
+    practicedCount: statuses.filter(status => status !== 'not_practiced').length };
+  current.overview = { memberCount: 3, totalPracticeCount: 52,
+    activeMemberCount: current.summary.practicedCount, activityRate: Math.round(current.summary.practicedCount / 3 * 100) };
+  return current;
+}
+
+async function combinedPage(extra = {}) {
+  const h = createPage({ ...extra, cloud: extra.cloud || ((type, request) => success(type === 'getTeamInfo'
+    ? dataTeamWithPractices() : combinedReportFor(request.practiceType))) });
+  h.page.setData({ teamId: 'bijing_12' });
+  await h.page.onShow();
+  return h;
+}
+
+test('all homework reports form one student card with independent progress and units', async () => {
+  const { page, calls } = await combinedPage();
+  assert.deepEqual(calls.cloud.filter(call => call.type === 'getTeamPracticeReport').map(call => call.data.practiceType),
+    ['sitting', 'kindness', 'walking']);
+  assert.equal(page.data.reportError, '');
+  assert.equal(page.data.todayHasGoal, true);
+  assert.deepEqual({ ...page.data.todaySummary }, {
+    memberCount: 3, notPracticedCount: 1, belowGoalCount: 1, qualifiedCount: 1, practicedCount: 0
+  });
+  assert.equal(page.data.attentionCount, 2);
+  assert.deepEqual(Array.from(page.data.todayMembers, item => item.openid), ['third', 'member']);
+  page.changeTodayFilter(event('filter', 'all'));
+  assert.equal(page.data.todayMembers.length, 3);
+  const partial = page.data.todayMembers.find(item => item.openid === 'member');
+  assert.equal(partial.todayStatus, 'below_goal');
+  assert.deepEqual(Array.from(partial.practices, item => [item.practiceType, item.unit, item.todayMinutesLabel, item.dailyGoalMinutes, item.progress]),
+    [['sitting', '分钟', '12', 20, 60], ['kindness', '件', '0', 1, 0], ['walking', '分钟', '0', null, 0]]);
+  page.changeTodayFilter(event('filter', 'qualified'));
+  assert.deepEqual(Array.from(page.data.todayMembers, item => item.openid), ['owner']);
+  assert.deepEqual(Array.from(page.data.practiceReports, item => item.practiceType), ['sitting', 'kindness', 'walking']);
+  assert.equal(page.data.overview.totalPracticeCount, 156);
+  assert.equal(page.data.overview.activeMemberCount, 2);
+  assert.equal(page.data.overview.activityRate, 67);
+  assert.equal(page.data.teamInfo.practiceType, 'sitting');
+  assert.equal(page.data.teamInfo.dailyGoalMinutes, 20);
+});
+
+test('all homework waits for the complete set and discards late reports after an account change', async () => {
   let resolveWalking;
   const walking = new Promise(resolve => { resolveWalking = resolve; });
   const h = createPage({ cloud: (type, request) => type === 'getTeamInfo' ? success(dataTeamWithPractices())
-    : request.practiceType === 'walking' ? walking : success(dataReportFor(request.practiceType)) });
+    : request.practiceType === 'walking' ? walking : success(combinedReportFor(request.practiceType)) });
   h.page.setData({ teamId: 'bijing_12' });
-  await h.page.onShow();
-  const old = h.page.switchPractice(event('type', 'walking'));
+  const pending = h.page.onShow();
   await flushPromises();
-  await h.page.switchPractice(event('type', 'kindness'));
-  resolveWalking(success(dataReportFor('walking')));
-  await old;
-  assert.equal(h.page.data.selectedPracticeType, 'kindness');
-  assert.equal(h.page.data.practiceUnit, '件');
-  assert.equal(h.page.data.report.practiceType, 'kindness');
-  assert.equal(h.page.data.teamInfo.practiceType, 'sitting');
-  assert.equal(h.page.data.teamInfo.dailyGoalMinutes, 20);
-  h.page.openHistoryDetails(event('filter', 'all'));
-  h.page.openMemberRecords({ currentTarget: { dataset: { memberOpenid: 'owner', view: 'month' } } });
-  assert.ok(h.calls.navigation.every(item => new URL('https://local' + item.url).searchParams.get('practiceType') === 'kindness'));
+  assert.equal(h.page.data.report, null);
+  assert.equal(h.page.data.todayMembers.length, 0);
+  assert.equal(h.page.data.practiceReports.length, 0);
+  h.storage.set('userOpenId', 'third');
+  resolveWalking(success(combinedReportFor('walking')));
+  await pending;
+  assert.equal(h.page.data.report, null);
+  assert.equal(h.page.data.todayMembers.length, 0);
+  assert.equal(h.page.data.practiceReports.length, 0);
+});
+
+test('a missing optional homework still needs attention and all optional homework uses participation filters', async () => {
+  const current = dataTeamWithPractices();
+  current.practices = current.practices.map(item => ({ ...item, dailyGoalMinutes: null }));
+  const { page } = await combinedPage({ cloud: (type, request) => success(type === 'getTeamInfo'
+    ? current : combinedReportFor(request.practiceType, { allOptional: true })) });
+  assert.equal(page.data.todayHasGoal, false);
+  assert.equal(page.data.todaySummary.qualifiedCount, 0);
+  assert.equal(page.data.attentionCount, 2);
+  assert.equal(page.data.todayMembers.find(item => item.openid === 'member').todayStatus, 'below_goal');
+  page.changeTodayFilter(event('filter', 'practiced'));
+  assert.deepEqual(Array.from(page.data.todayMembers, item => item.openid), ['owner']);
+  assert.equal(page.data.todayMembers[0].practices.every(item => !item.hasGoal), true);
+});
+
+test('a practiced optional homework cannot hide an incomplete homework with a target', async () => {
+  const { page } = await combinedPage({ cloud(type, request) {
+    if (type === 'getTeamInfo') return success(dataTeamWithPractices());
+    const current = combinedReportFor(request.practiceType);
+    if (request.practiceType === 'walking') {
+      current.members[1].todayMinutes = 10;
+      current.members[1].todayStatus = 'practiced';
+      current.members[1].todayPracticeCount = 1;
+    }
+    return success(current);
+  } });
+  const partial = page.data.todayMembers.find(item => item.openid === 'member');
+  assert.equal(partial.todayStatus, 'below_goal');
+  assert.equal(partial.practices.find(item => item.practiceType === 'walking').todayStatus, 'practiced');
+});
+
+test('a failed or inconsistent homework report never leaves partially populated student cards', async () => {
+  for (const mismatch of ['request', 'date', 'reset', 'members', 'invalid']) {
+    const { page } = await combinedPage({ cloud(type, request) {
+      if (type === 'getTeamInfo') return success(dataTeamWithPractices());
+      const current = combinedReportFor(request.practiceType);
+      if (request.practiceType === 'kindness') {
+        if (mismatch === 'request') return Promise.reject(new Error('功课暂时无法加载'));
+        if (mismatch === 'date') current.businessDate = '2026-09-20';
+        if (mismatch === 'reset') current.nextResetAt += 24 * 60 * 60 * 1000;
+        if (mismatch === 'members') current.members.pop();
+        if (mismatch === 'invalid') current.members[0].todayMinutes = -1;
+      }
+      return success(current);
+    } });
+    assert.ok(page.data.reportError, mismatch);
+    assert.equal(page.data.report, null, mismatch);
+    assert.equal(page.data.todayMembers.length, 0, mismatch);
+    assert.equal(page.data.practiceReports.length, 0, mismatch);
+  }
+});
+
+test('homework row links preserve the explicit type for member and historical details', async () => {
+  const { page, calls } = await combinedPage();
+  page.openMemberRecords({ currentTarget: { dataset: { memberOpenid: 'owner', view: 'day', practiceType: 'kindness' } } });
+  page.openHistoryDetails({ currentTarget: { dataset: { filter: 'all', practiceType: 'walking' } } });
+  assert.equal(new URL('https://local' + calls.navigation[0].url).searchParams.get('practiceType'), 'kindness');
+  assert.equal(new URL('https://local' + calls.navigation[1].url).searchParams.get('practiceType'), 'walking');
 });
 
 test('editing and adding homework retain all rules and work when the selected homework has no target', async () => {
@@ -2900,8 +3022,8 @@ test('editing and adding homework retain all rules and work when the selected ho
   } });
   h.page.setData({ teamId: 'bijing_12' });
   await h.page.onShow();
-  await h.page.switchPractice(event('type', 'walking'));
   h.page.openSettings();
+  h.page.selectDraftPractice(event('type', 'walking'));
   assert.equal(h.page.data.draftPracticeRulesEnabled, false);
   h.page.addDraftPractice(event('type', 'instant'));
   assert.equal(h.page.data.draftPracticeType, 'instant');
@@ -2914,18 +3036,100 @@ test('editing and adding homework retain all rules and work when the selected ho
     [['sitting', 20], ['kindness', 1], ['walking', null], ['instant', 2000]]);
 });
 
-test('reminder generation uses selected homework and switching invalidates the exported image', async () => {
-  const h = createPage({ cloud: (type, request) => success(type === 'getTeamInfo' ? dataTeamWithPractices() : dataReportFor(request.practiceType)) });
-  h.page.setData({ teamId: 'bijing_12' });
-  await h.page.onShow();
-  await h.page.switchPractice(event('type', 'kindness'));
+test('reminder generation refreshes all homework and exports each student with every progress row', async () => {
+  const h = await combinedPage();
   await h.page.showReminderList();
-  assert.equal(h.calls.reminderImages[0].report.practiceType, 'kindness');
-  assert.match(h.calls.reminderImages[0].teamName, /日行一善/);
+  assert.equal(h.calls.cloud.filter(call => call.type === 'getTeamPracticeReport').length, 6);
+  assert.equal(h.calls.reminderImages[0].report.multiPractice, true);
+  assert.equal(h.calls.reminderImages[0].teamName, team.name);
+  assert.deepEqual(Array.from(h.calls.reminderImages[0].members, item => item.openid), ['third', 'member']);
+  assert.equal(h.calls.reminderImages[0].members.every(item => item.practices.length === 3), true);
   assert.equal(h.page.data.reminderDialogOpen, true);
-  await h.page.switchPractice(event('type', 'sitting'));
+  h.page.onHide();
   assert.equal(h.page.data.reminderDialogOpen, false);
   assert.equal(await h.page.getCurrentReminderContext(), null);
+});
+
+test('repeated homework reminder refreshes keep progress rows flat instead of nesting earlier snapshots', async () => {
+  const { page, calls } = await combinedPage();
+  for (let refresh = 0; refresh < 3; refresh++) {
+    await page.showReminderList();
+    assert.equal(page.data.reminderDialogOpen, true);
+    const members = calls.reminderImages.at(-1).members;
+    assert.equal(members.every(member => member.practices.length === 3), true);
+    for (const member of members) {
+      assert.equal(member.practices.some(practice => Object.hasOwn(practice, 'practices')), false);
+    }
+    page.closeReminderDialog();
+  }
+});
+
+test('large team progress updates stay below the bridge payload limit and replace shortened snapshots completely', async () => {
+  const types = ['sitting', 'kindness', 'walking', 'instant', 'learning', 'clapping'];
+  let memberCount = 500;
+  const profiles = Array.from({ length: memberCount }, (_, index) => ({
+    openid: index === 0 ? 'owner' : `bijing_member_${100000 + index}`,
+    nickname: `瑞璞练习同学${String(index).padStart(4, '0')}`,
+    bijingStudentNumber: `BJ${100000 + index}`,
+    avatarUrl: `https://example.test/avatars/practice-student-${100000 + index}.png`,
+    isCreator: index === 0
+  }));
+  const currentTeam = dataTeamWithPractices();
+  currentTeam.practices = types.map(practiceType => ({ practiceType,
+    practiceStartDate: '2026-09-01', effectivePracticeStartDate: '2026-09-01',
+    dailyGoalMinutes: practiceType === 'kindness' ? 1 : practiceType === 'instant' ? 10 : 20,
+    unit: practiceType === 'kindness' ? '件' : practiceType === 'instant' ? '次' : '分钟' }));
+  function currentReport(practiceType) {
+    const settings = currentTeam.practices.find(item => item.practiceType === practiceType);
+    const current = combinedReportFor(practiceType === 'kindness' ? 'kindness' : 'sitting');
+    const members = profiles.slice(0, memberCount).map((profile, index) => ({
+      ...current.members[index % 3], ...profile,
+      todayStatus: ['qualified', 'below_goal', 'not_practiced'][index % 3],
+      todayMinutes: index % 3 === 0 ? settings.dailyGoalMinutes + 1 : index % 3 === 1 ? settings.dailyGoalMinutes / 2 : 0,
+      todayPracticeCount: index % 3 === 2 ? 0 : 1
+    }));
+    return { ...current, practiceType, unit: settings.unit, creator: 'owner', deputyLeaders: [],
+      settings: { ...current.settings, ...settings }, members,
+      summary: { memberCount,
+        notPracticedCount: members.filter(item => item.todayStatus === 'not_practiced').length,
+        belowGoalCount: members.filter(item => item.todayStatus === 'below_goal').length,
+        qualifiedCount: members.filter(item => item.todayStatus === 'qualified').length,
+        practicedCount: members.filter(item => item.todayStatus !== 'not_practiced').length } };
+  }
+  const { page, calls } = await combinedPage({ cloud(type, request) {
+    return success(type === 'getTeamInfo' ? { ...currentTeam, members: profiles.slice(0, memberCount) }
+      : currentReport(request.practiceType));
+  } });
+  assert.equal(page.data.reportError, '');
+  assert.equal(page.data.teamMembers.length, 500);
+  assert.equal(page.data.practiceReports.length, 6);
+  assert.equal(page.data.practiceReports.every(item => item.report.members.length === 500 && item.historyMembers.length === 500), true);
+  page.changeTodayFilter(event('filter', 'all'));
+  assert.equal(page.data.todayMembers.length, 500);
+  assert.equal(page.data.todayMembers.every(item => item.practices.length === 6), true);
+  for (let refresh = 0; refresh < 2; refresh++) {
+    await page.showReminderList();
+    assert.equal(page.data.reminderDialogOpen, true);
+    assert.equal(calls.reminderImages.at(-1).members.every(item => item.practices.length === 6 &&
+      item.practices.every(practice => !Object.hasOwn(practice, 'practices'))), true);
+    page.closeReminderDialog();
+  }
+  page.changeTodayFilter(event('filter', 'qualified'));
+  assert.equal(page.data.todayMembers.length, 167);
+  assert.equal(page.data.todayMembers.every(item => item.todayStatus === 'qualified'), true);
+  page.changeTodayFilter(event('filter', 'all'));
+  memberCount = 100;
+  await page.showReminderList();
+  assert.equal(page.data.reportError, '');
+  assert.equal(page.data.teamMembers.length, 100);
+  assert.equal(page.data.todayMembers.length, 100);
+  assert.equal(page.data.historyMembers.length, 100);
+  assert.equal(page.data.report.members.length, 100);
+  assert.equal(page.data.practiceReports.every(item => item.report.members.length === 100 &&
+    item.members.length === 100 && item.historyMembers.length === 100), true);
+  assert.equal(page.data.todayMembers.every(item => item.practices.length === 6), true);
+  const maxPayloadBytes = page.dataUpdates.reduce((max, update) => Math.max(max, Buffer.byteLength(JSON.stringify(update), 'utf8')), 0);
+  assert.ok(maxPayloadBytes < 1024 * 1024, `largest setData payload was ${maxPayloadBytes} bytes`);
 });
 
 const draftEvent = (type, value) => ({ currentTarget: { dataset: { type } }, detail: { value } });

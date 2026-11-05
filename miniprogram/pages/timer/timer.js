@@ -10,12 +10,6 @@ const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
 const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
 const MAX_SESSION_SECONDS = 24 * 60 * 60;
 
-function syncTabBar(page) {
-  const app = typeof getApp === 'function' ? getApp() : null;
-  if (app && typeof app.syncTabBar === 'function') app.syncTabBar(page);
-  if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
-}
-
 Page({
   ...timerAudioMethods,
   data: {
@@ -97,6 +91,7 @@ Page({
     this.didOpenDaily = false;
     this.sessionId = null;
     this.timerApp = getApp();
+    this.timerApp._timerPage = this;
     if (!this.timerApp._timerRuntimeId) {
       this.timerApp._timerRuntimeId = `timer_runtime_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     }
@@ -117,16 +112,17 @@ Page({
     this.safeTimerEffect('restore_audio', () => this.restoreSessionAudio());
   },
 
-  // 会话归应用持有；页面只投影状态，卸载不会丢掉仍在前台的倒计时。
+  // 会话由应用持有；明确退出会结算，系统中断重建页面仍可恢复。
   onCountdownState(state, event = {}) {
     if (this.isUnloaded) return;
-    if (event.type === 'restore' || event.type === 'exit') {
+    if (event.type === 'restore' || event.type === 'exit' || event.automatic) {
       // 冷恢复可能在 attach 内才生成通知；以存储为准，已展示的通知不再重复。
       this.safeTimerEffect('restore_notice', () => this.setData({
         completionNotice: wx.getStorageSync('timerCompletionNotice') || ''
       }));
     }
     if (!state.sessionId) return;
+    if (event.automatic) this._automaticExitSessionId = state.sessionId;
     // 已结束的旧倒计时不能覆盖后续正计时尚未确认的感受草稿。
     if (this.pendingCompletion && this.pendingCompletion.sessionId !== state.sessionId) return;
     if (state.status === 'cancelled' && event.type === 'restore') return;
@@ -163,7 +159,7 @@ Page({
       this.safeTimerEffect('stop_brightness', () => this.stopBrightnessControl());
       this.safeTimerEffect('stop_guide', () => this.stopBackgroundMusic());
       this.safeTimerEffect('stop_cue', () => this.stopSessionSound());
-      if (event.type === 'complete') {
+      if (event.type === 'complete' && !event.automatic && !this.isLeavingTimer) {
         this.safeTimerEffect('end_cue', () => this.playSessionSound('end'));
         if (this.pendingCompletion) this.safeTimerEffect('show_completion', () => this.showCompletion());
         else wx.showToast({ title: '不足1分钟，本次不会记录', icon: 'none', duration: 2500 });
@@ -179,12 +175,7 @@ Page({
     }
   },
 
-  onReady() {
-    syncTabBar(this);
-  },
-
   onShow() {
-    syncTabBar(this);
     this.isPageVisible = true;
     // 路由动画期间保留完成弹窗，回到计时页时再清理，避免先闪回计时界面。
     if (this.didOpenDaily) this.closeCompletionDialog();
@@ -235,18 +226,21 @@ Page({
     // 应用进入后台（屏幕关闭）
     this.appHideHandler = (options) => {
       if (this.isUnloaded) return;
+      const endPosition = this.currentSessionSound === 'end' ? this.cuePlayer.position : 0;
       this.isPageVisible = false;
       const exiting = isExplicitTimerExit(options);
-      // 倒计时仅由 App 转发后台原因，页面不得再次用无参数通知覆盖决策。
-      if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
-        if (exiting) {
-          this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'app_hide' });
-        } else if (!this.isAppHidden) {
+      const wasHidden = this.isAppHidden;
+      this.isAppHidden = true;
+      if (exiting) {
+        this.timerApp._timerForeground = false;
+        this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'app_hide' });
+        this.savePendingCompletionOnExit();
+      } else if (!this.data.isCountdown && (this.data.isRunning || this.data.isPaused)) {
+        if (!wasHidden) {
           this.saveTimerState({ interrupted: true });
           this.cleanupTimers();
         }
       }
-      this.isAppHidden = true;
       this.safeTimerEffect('exit_screen', () => this.restoreScreenSettings());
       const countdown = this.data.isCountdown && this.countdownSession.getSnapshot();
       const continuingCountdown = countdown && (countdown.isRunning || countdown.isPaused);
@@ -256,6 +250,7 @@ Page({
       } else {
         this.safeTimerEffect('interrupt_audio', () => this.suspendSessionAudio());
       }
+      if (exiting) this.handoffEndReminder(endPosition);
     };
     this.audioInterruptionBeginHandler = () => {
       if (this.isUnloaded) return;
@@ -399,6 +394,7 @@ Page({
     }
     const duration = Math.floor(Math.max(0, elapsedSeconds) / 60);
     const sessionId = this.sessionId || `timer_${this.data.startTimestamp}_${Math.random().toString(36).slice(2)}`;
+    if (silent) this._automaticExitSessionId = sessionId;
     if (duration >= 1) {
       this.pendingCompletion = { sessionId, duration, endedAt, text: '' };
       this.safeTimerEffect('save_completion_draft', () => wx.setStorageSync('timerPendingCompletion', this.pendingCompletion));
@@ -408,11 +404,13 @@ Page({
     this.stopTimer({ playEndSound: !silent });
     // 手动结束保留 stopTimer 的初始显示，本次实际时长已存入完成记录。
     if (!resetDisplay) {
-      this.setData({
+      const completedTime = {
         elapsedTime: Math.max(0, elapsedSeconds),
         remainingTime: Math.max(0, this.data.totalTime - elapsedSeconds)
-      });
-      this.updateDisplay();
+      };
+      Object.assign(this.data, completedTime);
+      this.safeTimerEffect('render_completed_time', () => this.setData(completedTime));
+      this.safeTimerEffect('render_completed_display', () => this.updateDisplay());
     }
     if (duration < 1) {
       if (silent) {
@@ -432,8 +430,8 @@ Page({
   },
 
   setCompletionNotice(notice) {
-    if (!this.isUnloaded) this.setData({ completionNotice: notice });
-    wx.setStorageSync('timerCompletionNotice', notice);
+    this.safeTimerEffect('save_completion_notice', () => wx.setStorageSync('timerCompletionNotice', notice));
+    if (!this.isUnloaded) this.safeTimerEffect('render_completion_notice', () => this.setData({ completionNotice: notice }));
   },
 
   showCompletion() {
@@ -532,6 +530,7 @@ Page({
   saveCompletedSession(text) {
     const completion = this.pendingCompletion;
     if (!completion) return false;
+    const savedSessions = this.timerApp._timerSavedCompletionIds || (this.timerApp._timerSavedCompletionIds = new Set());
     const experience = text ? [{
       text,
       timestamp: completion.endedAt,
@@ -541,11 +540,14 @@ Page({
     }] : [];
     try {
       // 同步保存本机并启动后台上传，计时完成界面不等待或展示上传结果。
-      const result = checkinManager.recordCheckin(
+      const result = savedSessions.has(completion.sessionId) ? { success: true } : checkinManager.recordCheckin(
         completion.duration, [], experience, completion.endedAt, completion.sessionId
       );
       if (!result || !result.success) throw new Error('本地保存失败');
-      wx.setStorageSync('timerPendingCompletion', null);
+      savedSessions.add(completion.sessionId);
+      if (savedSessions.size > 200) savedSessions.delete(savedSessions.values().next().value);
+      const stored = wx.getStorageSync('timerPendingCompletion');
+      if (stored && stored.sessionId === completion.sessionId) wx.setStorageSync('timerPendingCompletion', null);
       if (this.countdownSession) this.countdownSession.markCompletionSaved(completion.sessionId);
       this.pendingCompletion = null;
       return result;
@@ -590,7 +592,7 @@ Page({
     // 停止亮度控制并恢复亮度
     this.safeTimerEffect('stop_brightness', () => this.stopBrightnessControl());
     
-    this.setData({
+    const stoppedState = {
       elapsedTime: 0,
       remainingTime: this.data.totalTime,
       isRunning: false,
@@ -598,7 +600,10 @@ Page({
       startTimestamp: 0,
       pauseTimestamp: 0,
       totalPausedTime: 0
-    });
+    };
+    // 逻辑终态先提交；原生渲染失败不能阻止退出时保存记录。
+    Object.assign(this.data, stoppedState);
+    this.safeTimerEffect('render_stopped_state', () => this.setData(stoppedState));
     
     // 停止背景音乐
     this.safeTimerEffect('stop_guide', () => this.stopBackgroundMusic());
@@ -609,10 +614,10 @@ Page({
       this.safeTimerEffect('end_cue', () => this.playSessionSound('end'));
     }
     
-    this.updateDisplay();
-    this.updateButtonStates();
+    this.safeTimerEffect('render_stopped_display', () => this.updateDisplay());
+    this.safeTimerEffect('render_stopped_buttons', () => this.updateButtonStates());
     this.sessionId = null;
-    this.saveTimerState();
+    this.safeTimerEffect('save_stopped_state', () => this.saveTimerState());
     console.log('⏹️ 计时器已停止');
   },
 
@@ -796,13 +801,45 @@ Page({
     });
   },
 
+  handoffEndReminder(position = 0) {
+    this.safeTimerEffect('exit_reminder', () => {
+      this.timerApp.getTimerExitAudio().play({ position });
+    });
+  },
+
+  savePendingCompletionOnExit() {
+    const completion = this.pendingCompletion;
+    if (!completion || completion.sessionId === this._automaticExitSessionId
+      || this.data.isSavingCompletion || this._savingExitCompletion) return;
+    const text = String(completion.text || '').trim();
+    if (!text) { this.saveCompletedSession(''); return; }
+    // 已填写的感受仍走原安全检测；页面退出不丢草稿，也不跳过检测。
+    const account = wx.getStorageSync('userOpenId') || '';
+    this._savingExitCompletion = true;
+    Promise.resolve().then(() => contentSec.checkText(text, 2, { allowOffline: true, timeoutMs: 1500 })).then(allowed => {
+      const current = wx.getStorageSync('timerPendingCompletion');
+      if (allowed && (wx.getStorageSync('userOpenId') || '') === account
+        && current && current.sessionId === completion.sessionId && String(current.text || '').trim() === text
+        && this.pendingCompletion && this.pendingCompletion.sessionId === completion.sessionId) {
+        this.saveCompletedSession(text);
+      }
+    }).catch(error => {
+      this.countdownSession.diagnose('exit_completion_error', { message: String(error && error.message || error).slice(0, 160) });
+    }).finally(() => { this._savingExitCompletion = false; });
+  },
+
   onUnload() {
-    const interruptedCountUp = !this.data.isCountdown && this.isAppHidden
+    if (this.isUnloaded) return;
+    const endPosition = this.currentSessionSound === 'end' ? this.cuePlayer.position : 0;
+    this.isLeavingTimer = true;
+    const interruptedSession = this.isAppHidden && !isExplicitTimerExit(this.timerApp._timerHideOptions)
       && (this.data.isRunning || this.data.isPaused);
+    const interruptedCountUp = !this.data.isCountdown && interruptedSession;
     if (interruptedCountUp) this.timerApp._detachedCountupSessionId = this.sessionId;
-    if (!this.data.isCountdown && !interruptedCountUp && (this.data.isRunning || this.data.isPaused)) {
+    if (!interruptedSession && (this.data.isRunning || this.data.isPaused)) {
       this.finishSession(this.calculateElapsedTime(), { silent: true, reason: 'page_unload' });
     }
+    if (!interruptedSession) this.safeTimerEffect('exit_completion', () => this.savePendingCompletionOnExit());
     this.safeTimerEffect('save_audio', () => this.saveSessionAudio());
     if (interruptedCountUp && this.timerApp._timerForeground === false
       && typeof this.timerApp.finishDetachedCountup === 'function') {
@@ -813,6 +850,7 @@ Page({
     this.countdownSession.diagnose('page_unload');
     this.isUnloaded = true;
     this.isPageVisible = false;
+    if (this.timerApp._timerPage === this) this.timerApp._timerPage = null;
     wx.offAppShow(this.appShowHandler);
     wx.offAppHide(this.appHideHandler);
     if (wx.offAudioInterruptionBegin) wx.offAudioInterruptionBegin(this.audioInterruptionBeginHandler);
@@ -821,8 +859,9 @@ Page({
     this.safeTimerEffect('unload_guide', () => this.stopBackgroundMusic());
     this.safeTimerEffect('destroy_guide', () => this.destroyBackgroundMusicPlayer());
     this.safeTimerEffect('unload_cue', () => this.destroyAudioPlayer());
-    if (!interruptedCountUp) this.saveTimerState();
+    if (!interruptedCountUp) this.safeTimerEffect('save_unloaded_state', () => this.saveTimerState());
     this.safeTimerEffect('unload_screen', () => this.restoreScreenSettings());
+    if (!interruptedSession) this.handoffEndReminder(endPosition);
     
     console.log('📱 页面卸载，资源清理完成');
   },

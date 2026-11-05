@@ -217,7 +217,7 @@ function createCountdownSessionController({
     write('timerCompletionNotice', text);
   }
 
-  function terminate(reason, { seconds = elapsed(), endedAt = now(), cancelled = false } = {}) {
+  function terminate(reason, { seconds = elapsed(), endedAt = now(), cancelled = false, automatic = false } = {}) {
     if (!active()) return null;
     const targetEnd = state.startTimestamp + state.totalPausedTime + state.totalTime * 1000;
     const finalSeconds = Math.min(state.totalTime, Math.max(0, Math.floor(seconds)));
@@ -242,7 +242,25 @@ function createCountdownSessionController({
     if (completion) write('timerPendingCompletion', completion);
     clearTimers();
     diagnose(cancelled ? 'cancel' : 'finish', { reason, elapsedTime: finalSeconds, totalTime: state.totalTime });
-    emit({ type: cancelled ? 'exit' : 'complete', reason, cancelled, completion });
+    let autoSaved = false;
+    if (automatic) {
+      if (completion) {
+        try {
+          // Exit callbacks can be the last work before suspension. The local
+          // record write is synchronous; upload continues through the normal queue.
+          const result = recordCheckin(completion.duration, [], [], completion.endedAt, completion.sessionId);
+          if (!result || !result.success) throw new Error('Local record save failed');
+          markCompletionSaved(completion.sessionId);
+          autoSaved = true;
+        } catch (error) {
+          diagnose('record_save_error', { message: error && error.message || String(error) });
+        }
+      }
+      notice(!completion ? '倒计时已结束，不足1分钟未记录'
+        : autoSaved ? `倒计时已结束，${duration}分钟已存本机` : '倒计时已结束，请确认保存记录');
+      persist();
+    }
+    emit({ type: cancelled ? 'exit' : 'complete', reason, cancelled, completion, automatic, autoSaved });
     return completion ? { ...completion } : null;
   }
 
@@ -400,10 +418,12 @@ function createCountdownSessionController({
       diagnose('app_hide', { reason: options && options.reason,
         explicitExit: isExplicitTimerExit(options) });
     }
+    // A later explicit exit still ends a sit after a call or native screen has
+    // already backgrounded the app. Only repeated interruption callbacks are inert.
+    if (isExplicitTimerExit(options)) return terminate('app_hide', { automatic: true });
     if (!wasForeground) return null;
-    // Hiding the app never expresses a timer stop. Persist its boundary now,
-    // because background timers and later lifecycle callbacks may not run.
-    // Duplicate hides must not move this cold-start recovery checkpoint forward.
+    // System interruptions retain the recovery boundary because background
+    // timers and later lifecycle callbacks may not run.
     if (active()) {
       state.elapsedTime = elapsed();
       persist();
@@ -431,6 +451,7 @@ function createCountdownSessionController({
 
   function finish(reason = 'unknown') {
     if (disposed || !active()) return null;
+    if (reason === 'page_unload' || reason === 'app_hide') return terminate(reason, { automatic: true });
     if (reason === 'manual') return terminate(reason);
     if ((reason === 'deadline' || reason === 'timeout') && elapsed() >= state.totalTime) {
       return terminate(reason, { seconds: state.totalTime,

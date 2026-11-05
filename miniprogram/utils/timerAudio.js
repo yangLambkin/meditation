@@ -31,6 +31,7 @@ const timerAudioMethods = {
     this.deferredEndSound = false;
     this.audioSuspended = false;
     if (!resume) {
+      if (this.timerApp._timerExitAudio) this.timerApp._timerExitAudio.stop();
       const oldReminder = getEndReminder(wx);
       if (oldReminder) clearEndReminder(wx, oldReminder.sessionId);
       this.endReminderFailed = false;
@@ -141,6 +142,11 @@ const timerAudioMethods = {
     if (allowEndRetry) this.endReminderFailed = false;
     if (!this.isPageVisible || !this.canPlayTimerAudio()) return;
     const pendingEnd = getEndReminder(wx);
+    if (pendingEnd && this.timerApp._timerExitAudio && this.timerApp._timerExitAudio.owns(pendingEnd.sessionId)) {
+      this.deferredEndSound = false;
+      this.lastEndReminderSessionId = pendingEnd.sessionId;
+      return;
+    }
     const countdown = pendingEnd && this.data.isCountdown
       && typeof this.countdownSession.getSnapshot === 'function'
       ? this.countdownSession.getSnapshot() : null;
@@ -219,6 +225,12 @@ const timerAudioMethods = {
         const sessionId = this.sessionId || this.pendingCompletion && this.pendingCompletion.sessionId;
         if (sessionId && sessionId === this.lastEndReminderSessionId) return;
         if (sessionId) endReminder = queueEndReminder(wx, sessionId);
+      }
+      if (endReminder && this.timerApp._timerExitAudio
+        && this.timerApp._timerExitAudio.owns(endReminder.sessionId)) {
+        this.deferredEndSound = false;
+        this.lastEndReminderSessionId = endReminder.sessionId;
+        return;
       }
       // Repeated onShow/state events must not restart a playing or deferred cue.
       if (this.currentSessionSound === 'end' && endReminder

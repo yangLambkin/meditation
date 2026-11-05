@@ -42,6 +42,14 @@ App({
     this._timerHideOptions = null;
     this.refreshTabBars();
     if (this._countdownSession) this._countdownSession.appShow();
+    if (this._timerExitAudio) this._timerExitAudio.resume();
+    else if (!this._timerPage && wx.getStorageSync) {
+      try {
+        const reminder = wx.getStorageSync('timerPendingEndReminder');
+        const state = wx.getStorageSync('timerState');
+        if (reminder && (!state || (!state.isRunning && !state.isPaused))) this.playTimerExitReminder();
+      } catch (_) { /* A failed read keeps the reminder available for a later visit. */ }
+    }
     if (!wx.cloud) return;
     this.resumePracticeRecords();
     this.startSyncAlertRefresh();
@@ -60,9 +68,12 @@ App({
   onHide(options = {}) {
     this._timerForeground = false;
     this._timerHideOptions = options || {};
-    // 保留完整后台原因用于诊断；未到期倒计时始终保留，正计时另行处理明确退出。
+    if (this._timerExitAudio) this._timerExitAudio.pause();
+    // 明确退出立即结算；锁屏、来电等系统中断保留会话。
     if (this._countdownSession) this._countdownSession.appHide(this._timerHideOptions);
     this.finishDetachedCountup(this._timerHideOptions);
+    if (options && (options.reason === 0 || options.reason === 1)
+      && (this._countdownSession || this._timerExitAudio)) this.playTimerExitReminder();
     this._syncAlertVisible = false;
     this.clearSyncAlert();
   },
@@ -72,10 +83,16 @@ App({
     this._timerAudioInterruptionReady = true;
     // 音频占用和静坐会话相互独立；中断结束后才允许计时页恢复声音。
     if (typeof wx.onAudioInterruptionBegin === 'function') {
-      wx.onAudioInterruptionBegin(() => { this._timerAudioInterrupted = true; });
+      wx.onAudioInterruptionBegin(() => {
+        this._timerAudioInterrupted = true;
+        if (this._timerExitAudio) this._timerExitAudio.pause();
+      });
     }
     if (typeof wx.onAudioInterruptionEnd === 'function') {
-      wx.onAudioInterruptionEnd(() => { this._timerAudioInterrupted = false; });
+      wx.onAudioInterruptionEnd(() => {
+        this._timerAudioInterrupted = false;
+        if (this._timerExitAudio) this._timerExitAudio.resume();
+      });
     }
   },
 
@@ -90,6 +107,24 @@ App({
       if (this._timerForeground === false) this._countdownSession.appHide(this._timerHideOptions || {});
     }
     return this._countdownSession;
+  },
+
+  getTimerExitAudio() {
+    if (!this._timerExitAudio) {
+      const { createTimerExitAudio } = require('./utils/timerExitAudio');
+      this._timerExitAudio = createTimerExitAudio({
+        api: wx,
+        canPlay: () => this._timerForeground !== false && !this._timerAudioInterrupted,
+        diagnose: (type, details) => {
+          if (this._countdownSession) this._countdownSession.diagnose(type, details);
+        }
+      });
+    }
+    return this._timerExitAudio;
+  },
+
+  playTimerExitReminder(options = {}) {
+    this.getTimerExitAudio().play(options);
   },
 
   // 正计时页因中断卸载后，由 App 接管明确退出，直到新页面接回会话。
@@ -142,7 +177,7 @@ App({
       if (typeof bar.setMeAlert === 'function') bar.setMeAlert(visible);
     });
     const action = visible ? wx.showTabBarRedDot : wx.hideTabBarRedDot;
-    if (typeof action === 'function') action.call(wx, { index: 4, fail() {} });
+    if (typeof action === 'function') action.call(wx, { index: 3, fail() {} });
   },
   registerTabBar(bar) {
     if (!this._tabBars) this._tabBars = new Set();
@@ -153,7 +188,7 @@ App({
   },
   forEachTabBar(callback) {
     // Cached tab pages can be absent from the navigation stack. Update their
-    // own bars now so the next switch cannot reveal an older four/five layout.
+    // own bars now so the next switch cannot reveal an older three/four layout.
     const bars = new Set(this._tabBars || []);
     const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
     pages.forEach(page => {

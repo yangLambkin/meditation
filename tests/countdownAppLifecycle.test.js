@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 function createApp({ cloud = true, audioEvents = false } = {}) {
   let app;
-  const calls = { modules: [], factories: [], events: [], records: [], hides: [], audioBegin: [], audioEnd: [] };
+  const calls = { modules: [], factories: [], events: [], records: [], hides: [], audioBegin: [], audioEnd: [], exitAudio: [] };
   const recordResult = { success: true };
   const api = cloud ? { cloud: { init() {} } } : {};
   if (audioEvents) {
@@ -33,6 +33,16 @@ function createApp({ cloud = true, audioEvents = false } = {}) {
       if (name === './utils/practiceMirror.js') return { resume: async () => ({ pending: 0 }) };
       if (name === './utils/checkin.js') return {
         recordCheckin(...args) { calls.records.push(args); return recordResult; }
+      };
+      if (name === './utils/timerExitAudio') return {
+        createTimerExitAudio(options) {
+          assert.equal(options.api, api);
+          return {
+            play() { calls.exitAudio.push({ type: 'play', available: options.canPlay() }); },
+            pause() { calls.exitAudio.push({ type: 'pause' }); },
+            resume() { calls.exitAudio.push({ type: 'resume', available: options.canPlay() }); }
+          };
+        }
       };
       assert.equal(name, './utils/countdownSession');
       return {
@@ -158,19 +168,26 @@ test('reminder refresh failures cannot prevent countdown foreground processing',
   assert.deepEqual(calls.events, [{ type: 'timer-show', foreground: true }]);
 });
 
-test('app hide forwards every background reason and all additional options without interpreting them', () => {
+test('app forwards complete background options and claims an exit reminder only on explicit exits', () => {
   const { app, calls } = createApp();
   app.onLaunch();
   app.getCountdownSession();
   for (const reason of [0, 1, 2, 3]) {
     const options = { reason, extra: 'forward unchanged' };
+    const claimsBefore = calls.exitAudio.filter(event => event.type === 'play').length;
     app.onHide(options);
     assert.equal(calls.hides.at(-1), options);
     assert.equal(app._timerHideOptions, options);
+    assert.equal(calls.exitAudio.filter(event => event.type === 'play').length,
+      claimsBefore + (reason === 0 || reason === 1 ? 1 : 0));
   }
+  assert.ok(calls.exitAudio.filter(event => event.type === 'play').every(event => !event.available),
+    'exit reminders wait for audio to become available in the foreground');
   app.onHide();
   assert.equal(calls.hides.at(-1).reason, undefined);
   assert.notEqual(calls.hides.at(-1), calls.hides.at(-2));
+  app.onShow();
+  assert.deepEqual(calls.exitAudio.at(-1), { type: 'resume', available: true });
 });
 
 test('a controller first created while interrupted receives the original background options', () => {

@@ -58,12 +58,6 @@
         "selectedIconPath": "/images/icons/home-active.png"
       },
       {
-        "pagePath": "pages/timer/timer",
-        "text": "计时",
-        "iconPath": "/images/icons/timer.png",
-        "selectedIconPath": "/images/icons/timer-active.png"
-      },
-      {
         "pagePath": "pages/practices/practices",
         "text": "记录",
         "iconPath": "/images/icons/practice-records.png",

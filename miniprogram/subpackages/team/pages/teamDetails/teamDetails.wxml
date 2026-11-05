@@ -1,3 +1,52 @@
+<template name="practiceHistory">
+        <view class="section-heading"><view><text class="section-title">{{hasMultiplePractices ? name : '历史练习统计'}}</text><text class="section-caption">从起始日期至昨日，今日不计入历史</text></view></view>
+        <view class="history-overview">
+          <view class="history-overview-top"><text class="history-range">{{report.history.totalDays > 0 ? historyRangeLabel : '今天是统计的第一天'}}</text><text class="history-day-count">{{report.history.totalDays}}<text> 天</text></text></view>
+          <text class="history-rule">{{hasGoal ? '每天累计 ' + report.settings.dailyGoalMinutes + ' ' + practiceUnit + '即达标；未达标天数包含未练习。' : '未设置每日目标，记录实际练习天数与练习量。'}}</text><text wx:if="{{!report.settings.practiceStartDate}}" class="history-rule">未设置起始日期，从该功课启用日开始统计。</text>
+        </view>
+        <block wx:if="{{report.history.totalDays > 0}}">
+          <view wx:if="{{historySummary}}" class="history-summary">
+            <view class="today-summary history-summary-metrics">
+              <view class="summary-item" data-filter="{{hasGoal ? 'unmet' : 'not_practiced'}}" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{hasGoal ? '未达标' : '未练习'}}成员和日期">
+                <text class="summary-number gold-number">{{hasGoal ? historySummary.unmetMemberCount : historySummary.missedMemberCount}}<text class="history-summary-unit"> 人</text></text>
+                <text class="summary-label">{{hasGoal ? '未达标人数' : '未练习人数'}} ›</text>
+              </view>
+              <view class="summary-item" data-filter="{{hasGoal ? 'unmet' : 'not_practiced'}}" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看累计{{hasGoal ? '未达标' : '未练习'}}明细">
+                <text class="summary-number gold-number">{{hasGoal ? historySummary.unmetCount : historySummary.missedCount}}<text class="history-summary-unit"> 人次</text></text>
+                <text class="summary-label">{{hasGoal ? '累计未达标' : '累计未练习'}} ›</text>
+              </view>
+              <view class="summary-item" data-filter="all" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看全部成员每日练习情况">
+                <text class="summary-number green-number">{{historySummary.rateLabel}}</text>
+                <text class="summary-label">{{hasGoal ? '总体达标率' : '练习参与率'}} ›</text>
+              </view>
+            </view>
+            <view wx:if="{{hasGoal}}" class="history-summary-breakdown">
+              <view data-filter="not_practiced" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看未练习成员和日期"><text class="status-dot neutral-dot"></text><text>未练习</text><text class="breakdown-number">{{historySummary.missedMemberCount}} 人 · {{historySummary.missedCount}} 人次 ›</text></view>
+              <view data-filter="below_goal" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看未达标成员和日期"><text class="status-dot gold-dot"></text><text>{{belowGoalLabel}}</text><text class="breakdown-number">{{historySummary.belowGoalMemberCount}} 人 · {{historySummary.belowGoalCount}} 人次 ›</text></view>
+            </view>
+            <view class="history-summary-footer"><text>共 {{historySummary.memberCount}} 位成员</text><text>{{hasGoal ? '全程达标' : '每天都练习'}} {{historySummary.fullAttendanceCount}} 人</text></view>
+          </view>
+          <text wx:if="{{historySummary}}" class="history-summary-note">人数为整个统计期间曾{{hasGoal ? '未达标' : '未练习'}}的成员数；每人每天计 1 人次。点击统计可按月查看明细。{{hasGoal ? '两类未达标人数可能重叠。' : ''}}</text>
+          <view class="history-list-caption"><text>成员练习记录</text><text>{{hasGoal ? '按未达标天数排序' : '按练习天数排序'}}</text></view>
+          <view class="history-card" wx:for="{{historyMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" data-record-scope="history" data-practice-type="{{practiceType}}" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的历史练习记录">
+            <view class="member-row">
+              <nickname-avatar avatar-class="member-avatar history-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" size="{{62}}" />
+              <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view></view>
+              <view class="member-card-trailing"><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+            </view>
+            <view class="history-metrics">
+              <view class="history-metric"><text class="metric-label">练习天数</text><text class="metric-value">{{item.practiceDays}}<text class="metric-unit"> 天</text></text></view>
+              <view class="metric-divider"></view>
+              <view wx:if="{{hasGoal}}" class="history-metric" data-filter="unmet" data-member-openid="{{item.openid}}" data-practice-type="{{practiceType}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未达标的日期"><text class="metric-label">未达标天数 ›</text><text class="metric-value {{item.unmetDays > 0 ? 'gold-number' : ''}}">{{item.unmetDays}}<text class="metric-unit"> 天</text></text></view>
+              <view wx:else class="history-metric"><text class="metric-label">{{practiceUnit === '分钟' ? '练习时长' : '练习数量'}}</text><text class="metric-value">{{item.totalMinutesLabel}}<text class="metric-unit"> {{practiceUnit}}</text></text></view>
+            </view>
+            <view class="history-breakdown"><text data-filter="not_practiced" data-member-openid="{{item.openid}}" data-practice-type="{{practiceType}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未练习的日期">未练习 <text class="breakdown-number">{{item.missedDays}}</text> 天 ›</text><text wx:if="{{hasGoal}}" data-filter="below_goal" data-member-openid="{{item.openid}}" data-practice-type="{{practiceType}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未达标的日期">{{belowGoalLabel}} <text class="breakdown-number">{{item.belowGoalDays}}</text> 天 ›</text></view>
+          </view>
+        </block>
+        <view wx:else class="empty-panel"><text class="empty-mark">○</text><text class="state-title">暂无历史统计</text><text class="state-description">当前练习日结束后，这里会展示每位成员的积累。</text></view>
+        <text class="page-footnote">本功课全体当前成员使用同一起始日期 · 每日 02:00 结算</text>
+</template>
+
 <view class="team-page">
   <view wx:if="{{teamInfo}}" class="team-content">
     <view class="team-overview">
@@ -7,12 +56,8 @@
           <text class="team-name">{{teamInfo.name}}</text>
           <button wx:if="{{isCreator}}" class="hero-edit" size="mini" bindtap="openSettings">编辑</button>
         </view>
-        <text wx:if="{{practiceOptions.length <= 1}}" class="team-practice-tag">{{practiceTypeName}}</text>
-        <view wx:else class="team-practice-options" aria-label="选择功课">
-          <button wx:for="{{practiceOptions}}" wx:key="practiceType" class="team-practice-choice {{selectedPracticeType === item.practiceType ? 'active' : ''}}"
-            data-type="{{item.practiceType}}" bindtap="switchPractice" hover-class="team-practice-choice-hover"
-            aria-label="查看{{item.name}}记录{{selectedPracticeType === item.practiceType ? '，当前已选' : ''}}"
-            disabled="{{isSaving || isDeleting || settingsOpen || removingMemberId || roleChangingMemberId}}">{{item.name}}</button>
+        <view class="team-practice-options" aria-label="团队功课">
+          <text wx:for="{{practiceOptions}}" wx:key="practiceType" class="team-practice-tag">{{item.name}}</text>
         </view>
         <text class="team-description">{{teamInfo.description || ''}}</text>
       </view>
@@ -29,8 +74,8 @@
     </view>
 
     <view class="main-tabs">
-      <view class="main-tab {{currentTab === 'members' ? 'active' : ''}}" data-tab="members" bindtap="switchTab">团队成员</view>
       <view class="main-tab {{currentTab === 'records' ? 'active' : ''}}" data-tab="records" bindtap="switchTab">查看记录</view>
+      <view class="main-tab {{currentTab === 'members' ? 'active' : ''}}" data-tab="members" bindtap="switchTab">团队成员</view>
     </view>
 
     <view wx:if="{{currentTab === 'members'}}" class="members-view">
@@ -50,7 +95,7 @@
     </view>
 
     <block wx:if="{{currentTab === 'records'}}">
-      <view class="record-toolbar"><view class="record-tabs"><view class="record-tab {{recordTab === 'today' ? 'active' : ''}}" data-tab="today" bindtap="switchRecordTab">今日练习</view><view class="record-tab {{recordTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchRecordTab">历史统计</view></view><text class="record-rules" bindtap="openSettings">{{hasGoal ? '每日目标 ' + selectedPractice.dailyGoalMinutes + ' ' + practiceUnit : '未设置每日目标'}} ›</text></view>
+      <view class="record-toolbar"><view class="record-tabs"><view class="record-tab {{recordTab === 'today' ? 'active' : ''}}" data-tab="today" bindtap="switchRecordTab">今日练习</view><view class="record-tab {{recordTab === 'history' ? 'active' : ''}}" data-tab="history" bindtap="switchRecordTab">历史统计</view></view><text class="record-rules" bindtap="openSettings">{{todayPracticeRuleLabel}} ›</text></view>
     <view wx:if="{{isLoading}}" class="state-panel">
       <view class="loading-dot"></view>
       <text class="state-title">正在加载练习数据</text>
@@ -70,104 +115,71 @@
             <text class="section-title">{{dayLabel}}<text class="date-caption"> · 练习日</text></text>
             <text class="section-caption">02:00 — 次日 02:00 · 当日多次练习累计计算</text>
           </view>
-          <text class="member-total">{{report.summary.memberCount}} 位成员</text>
+          <text class="member-total">{{todaySummary.memberCount}} 位成员</text>
         </view>
 
         <view class="today-summary">
           <view class="summary-item {{todayFilter === 'not_practiced' ? 'selected' : ''}}" data-filter="not_practiced" bindtap="changeTodayFilter">
-            <text class="summary-number neutral-number">{{report.summary.notPracticedCount}}</text>
+            <text class="summary-number neutral-number">{{todaySummary.notPracticedCount}}</text>
             <text class="summary-label">尚未练习</text>
           </view>
-          <view wx:if="{{hasGoal}}" class="summary-item {{todayFilter === 'below_goal' ? 'selected' : ''}}" data-filter="below_goal" bindtap="changeTodayFilter">
-            <text class="summary-number gold-number">{{report.summary.belowGoalCount}}</text>
-            <text class="summary-label">{{belowGoalLabel}}</text>
+          <view wx:if="{{todayHasGoal || hasMultiplePractices}}" class="summary-item {{todayFilter === 'below_goal' ? 'selected' : ''}}" data-filter="below_goal" bindtap="changeTodayFilter">
+            <text class="summary-number gold-number">{{todaySummary.belowGoalCount}}</text>
+            <text class="summary-label">{{todayBelowGoalLabel}}</text>
           </view>
-          <view wx:if="{{hasGoal}}" class="summary-item {{todayFilter === 'qualified' ? 'selected' : ''}}" data-filter="qualified" bindtap="changeTodayFilter">
-            <text class="summary-number green-number">{{report.summary.qualifiedCount}}</text>
-            <text class="summary-label">已达标</text>
+          <view wx:if="{{todayHasGoal}}" class="summary-item {{todayFilter === 'qualified' ? 'selected' : ''}}" data-filter="qualified" bindtap="changeTodayFilter">
+            <text class="summary-number green-number">{{todaySummary.qualifiedCount}}</text>
+            <text class="summary-label">{{hasMultiplePractices ? '已完成' : '已达标'}}</text>
           </view>
-          <view wx:if="{{!hasGoal}}" class="summary-item {{todayFilter === 'practiced' ? 'selected' : ''}}" data-filter="practiced" bindtap="changeTodayFilter"><text class="summary-number green-number">{{report.summary.practicedCount}}</text><text class="summary-label">已练习</text></view>
+          <view wx:if="{{!todayHasGoal}}" class="summary-item {{todayFilter === 'practiced' ? 'selected' : ''}}" data-filter="practiced" bindtap="changeTodayFilter"><text class="summary-number green-number">{{todaySummary.practicedCount}}</text><text class="summary-label">{{hasMultiplePractices ? '已完成' : '已练习'}}</text></view>
         </view>
 
         <view class="filter-row">
           <view class="filter-chip {{todayFilter === 'attention' ? 'active' : ''}}" data-filter="attention" bindtap="changeTodayFilter">待关注 <text class="filter-count">{{attentionCount}}</text></view>
-          <view class="filter-chip {{todayFilter === (hasGoal ? 'qualified' : 'practiced') ? 'active' : ''}}" data-filter="{{hasGoal ? 'qualified' : 'practiced'}}" bindtap="changeTodayFilter">{{hasGoal ? '已达标' : '已练习'}}</view>
+          <view class="filter-chip {{todayFilter === (todayHasGoal ? 'qualified' : 'practiced') ? 'active' : ''}}" data-filter="{{todayHasGoal ? 'qualified' : 'practiced'}}" bindtap="changeTodayFilter">{{hasMultiplePractices ? '已完成' : (todayHasGoal ? '已达标' : '已练习')}}</view>
           <view class="filter-chip {{todayFilter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeTodayFilter">全部</view>
-          <button wx:if="{{isCreator || isDeputy}}" class="reminder-button" bindtap="showReminderList" loading="{{isPreparingReminder}}" disabled="{{isPreparingReminder || isSaving || isDeleting || removingMemberId || roleChangingMemberId}}" aria-label="{{hasGoal ? '生成今日未达标同学的卡片长图' : '生成今日未练习同学的卡片长图'}}">提醒</button>
+          <button wx:if="{{isCreator || isDeputy}}" class="reminder-button" bindtap="showReminderList" loading="{{isPreparingReminder}}" disabled="{{isPreparingReminder || isSaving || isDeleting || removingMemberId || roleChangingMemberId}}" aria-label="{{hasMultiplePractices ? '生成今日功课未全部完成同学的卡片长图' : (todayHasGoal ? '生成今日未达标同学的卡片长图' : '生成今日未练习同学的卡片长图')}}">提醒</button>
         </view>
-        <text class="list-note">{{todayFilter === 'attention' ? (hasGoal ? '先显示尚未练习的成员，再显示未达标的成员' : '本练习日尚无练习记录的成员') : (todayFilter === 'not_practiced' ? '本练习日尚无练习记录的成员' : (todayFilter === 'below_goal' ? '本练习日累计练习未达目标的成员' : (todayFilter === 'qualified' ? '已完成本练习日目标的成员' : (todayFilter === 'practiced' ? '本练习日已有练习记录的成员' : '全体成员的当日累计练习情况'))))}}</text>
+        <text class="list-note">{{todayFilter === 'attention' ? (hasMultiplePractices ? '先显示尚未练习的同学，再显示功课未全部完成的同学' : (todayHasGoal ? '先显示尚未练习的成员，再显示未达标的成员' : '本练习日尚无练习记录的成员')) : (todayFilter === 'not_practiced' ? '本练习日尚无练习记录的成员' : (todayFilter === 'below_goal' ? (hasMultiplePractices ? '本练习日功课尚未全部完成的同学' : '本练习日累计练习未达目标的成员') : (todayFilter === 'qualified' ? (hasMultiplePractices ? '已完成全部功课目标的同学' : '已完成本练习日目标的成员') : (todayFilter === 'practiced' ? (hasMultiplePractices ? '本练习日全部功课都已练习的同学' : '本练习日已有练习记录的成员') : '全体成员的当日累计练习情况'))))}}</text>
 
         <view class="member-list" wx:if="{{todayMembers.length}}">
-          <view class="practice-card" wx:for="{{todayMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="day" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}今日的练习记录">
+          <view class="practice-card" wx:for="{{todayMembers}}" wx:key="openid">
             <view class="member-row">
               <nickname-avatar avatar-class="member-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" />
               <view class="member-identity">
                 <view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view>
-                <text class="member-subtitle">{{item.todayStatus === 'not_practiced' ? '今天的练习，还未开始' : (item.todayStatus === 'below_goal' ? '距离目标还差 ' + item.remainingMinutesLabel + ' ' + practiceUnit : (hasGoal ? '今日目标已完成' : '今天已完成练习'))}}</text>
+                <text class="member-subtitle">{{item.summaryLabel}}</text>
               </view>
-              <view class="member-card-trailing"><text class="status-badge status-{{item.todayStatus}}">{{item.statusLabel}}</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+              <text wx:if="{{hasMultiplePractices}}" class="status-badge status-{{item.todayStatus}}">{{item.statusLabel}}</text>
             </view>
-            <view class="practice-detail">
-              <view class="minutes-line"><text class="minutes-value">{{item.todayMinutesLabel}}</text><text class="minutes-unit">{{hasGoal ? ' / ' + report.settings.dailyGoalMinutes : ''}} {{practiceUnit}}</text><text wx:if="{{item.todayPracticeCount > 0}}" class="session-count">{{item.todayPracticeCount}} 条记录</text></view>
-              <view wx:if="{{hasGoal}}" class="progress-track"><view class="progress-fill progress-{{item.todayStatus}}" style="width: {{item.progress}}%;"></view></view>
+            <view class="member-practices">
+              <view class="member-practice" wx:for="{{item.practices}}" wx:for-item="practice" wx:key="practiceType"
+                data-member-openid="{{item.openid}}" data-view="day" data-practice-type="{{practice.practiceType}}" bindtap="openMemberRecords"
+                hover-class="member-practice-pressed" aria-role="button" aria-label="查看{{item.nickname}}今日{{practice.name}}的练习记录">
+                <view class="member-practice-heading">
+                  <text class="member-practice-name">{{practice.name}}</text>
+                  <view class="member-card-trailing"><text class="status-badge status-{{practice.todayStatus}}">{{practice.statusLabel}}</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+                </view>
+                <view class="minutes-line"><text class="minutes-value">{{practice.todayMinutesLabel}}</text><text class="minutes-unit">{{practice.hasGoal ? ' / ' + practice.dailyGoalMinutes : ''}} {{practice.unit}}</text><text wx:if="{{practice.todayPracticeCount > 0}}" class="session-count">{{practice.todayPracticeCount}} 条记录</text></view>
+                <view wx:if="{{practice.hasGoal}}" class="progress-track"><view class="progress-fill progress-{{practice.todayStatus}}" style="width: {{practice.progress}}%;"></view></view>
+                <text wx:if="{{practice.hasGoal && practice.todayStatus !== 'qualified'}}" class="member-practice-note">距离目标还差 {{practice.remainingMinutesLabel}} {{practice.unit}}</text>
+                <text wx:elif="{{!practice.hasGoal}}" class="member-practice-note">未设置每日目标</text>
+              </view>
             </view>
           </view>
         </view>
         <view wx:else class="empty-panel">
           <text class="empty-mark">{{todayFilter === 'attention' ? '✓' : '—'}}</text>
-          <text class="state-title">{{todayFilter === 'attention' ? (hasGoal ? '今天，大家都已完成目标' : '今天，大家都已练习') : '当前分类暂无成员'}}</text>
+          <text class="state-title">{{todayFilter === 'attention' ? (todayHasGoal ? '今天，大家都已完成目标' : '今天，大家都已练习') : '当前分类暂无成员'}}</text>
           <text class="state-description">{{todayFilter === 'attention' ? '一起把这份坚持，带到明天。' : '可以切换其他分类，查看团队练习情况。'}}</text>
         </view>
         <text class="page-footnote">{{nextDayLabel}} 02:00 更新为下一个练习日 · 北京时间</text>
       </view>
 
       <view wx:else class="history-view">
-        <view class="section-heading"><view><text class="section-title">历史练习统计</text><text class="section-caption">从起始日期至昨日，今日不计入历史</text></view></view>
-        <view class="history-overview">
-          <view class="history-overview-top"><text class="history-range">{{report.history.totalDays > 0 ? historyRangeLabel : '今天是统计的第一天'}}</text><text class="history-day-count">{{report.history.totalDays}}<text> 天</text></text></view>
-          <text class="history-rule">{{hasGoal ? '每天累计 ' + report.settings.dailyGoalMinutes + ' ' + practiceUnit + '即达标；未达标天数包含未练习。' : '未设置每日目标，记录实际练习天数与练习量。'}}</text><text wx:if="{{!report.settings.practiceStartDate}}" class="history-rule">未设置起始日期，从该功课启用日开始统计。</text>
+        <view class="practice-history-section" wx:for="{{practiceReports}}" wx:for-item="practiceReport" wx:key="practiceType">
+          <template is="practiceHistory" data="{{...practiceReport, practiceUnit: practiceReport.unit, hasMultiplePractices: hasMultiplePractices}}" />
         </view>
-        <block wx:if="{{report.history.totalDays > 0}}">
-          <view wx:if="{{historySummary}}" class="history-summary">
-            <view class="today-summary history-summary-metrics">
-              <view class="summary-item" data-filter="{{hasGoal ? 'unmet' : 'not_practiced'}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{hasGoal ? '未达标' : '未练习'}}成员和日期">
-                <text class="summary-number gold-number">{{hasGoal ? historySummary.unmetMemberCount : historySummary.missedMemberCount}}<text class="history-summary-unit"> 人</text></text>
-                <text class="summary-label">{{hasGoal ? '未达标人数' : '未练习人数'}} ›</text>
-              </view>
-              <view class="summary-item" data-filter="{{hasGoal ? 'unmet' : 'not_practiced'}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看累计{{hasGoal ? '未达标' : '未练习'}}明细">
-                <text class="summary-number gold-number">{{hasGoal ? historySummary.unmetCount : historySummary.missedCount}}<text class="history-summary-unit"> 人次</text></text>
-                <text class="summary-label">{{hasGoal ? '累计未达标' : '累计未练习'}} ›</text>
-              </view>
-              <view class="summary-item" data-filter="all" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看全部成员每日练习情况">
-                <text class="summary-number green-number">{{historySummary.rateLabel}}</text>
-                <text class="summary-label">{{hasGoal ? '总体达标率' : '练习参与率'}} ›</text>
-              </view>
-            </view>
-            <view wx:if="{{hasGoal}}" class="history-summary-breakdown">
-              <view data-filter="not_practiced" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看未练习成员和日期"><text class="status-dot neutral-dot"></text><text>未练习</text><text class="breakdown-number">{{historySummary.missedMemberCount}} 人 · {{historySummary.missedCount}} 人次 ›</text></view>
-              <view data-filter="below_goal" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看未达标成员和日期"><text class="status-dot gold-dot"></text><text>{{belowGoalLabel}}</text><text class="breakdown-number">{{historySummary.belowGoalMemberCount}} 人 · {{historySummary.belowGoalCount}} 人次 ›</text></view>
-            </view>
-            <view class="history-summary-footer"><text>共 {{historySummary.memberCount}} 位成员</text><text>{{hasGoal ? '全程达标' : '每天都练习'}} {{historySummary.fullAttendanceCount}} 人</text></view>
-          </view>
-          <text wx:if="{{historySummary}}" class="history-summary-note">人数为整个统计期间曾{{hasGoal ? '未达标' : '未练习'}}的成员数；每人每天计 1 人次。点击统计可按月查看明细。{{hasGoal ? '两类未达标人数可能重叠。' : ''}}</text>
-          <view class="history-list-caption"><text>成员练习记录</text><text>{{hasGoal ? '按未达标天数排序' : '按练习天数排序'}}</text></view>
-          <view class="history-card" wx:for="{{historyMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" data-record-scope="history" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的历史练习记录">
-            <view class="member-row">
-              <nickname-avatar avatar-class="member-avatar history-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" size="{{62}}" />
-              <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view></view>
-              <view class="member-card-trailing"><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
-            </view>
-            <view class="history-metrics">
-              <view class="history-metric"><text class="metric-label">练习天数</text><text class="metric-value">{{item.practiceDays}}<text class="metric-unit"> 天</text></text></view>
-              <view class="metric-divider"></view>
-              <view wx:if="{{hasGoal}}" class="history-metric" data-filter="unmet" data-member-openid="{{item.openid}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未达标的日期"><text class="metric-label">未达标天数 ›</text><text class="metric-value {{item.unmetDays > 0 ? 'gold-number' : ''}}">{{item.unmetDays}}<text class="metric-unit"> 天</text></text></view>
-              <view wx:else class="history-metric"><text class="metric-label">{{practiceUnit === '分钟' ? '练习时长' : '练习数量'}}</text><text class="metric-value">{{item.totalMinutesLabel}}<text class="metric-unit"> {{practiceUnit}}</text></text></view>
-            </view>
-            <view class="history-breakdown"><text data-filter="not_practiced" data-member-openid="{{item.openid}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未练习的日期">未练习 <text class="breakdown-number">{{item.missedDays}}</text> 天 ›</text><text wx:if="{{hasGoal}}" data-filter="below_goal" data-member-openid="{{item.openid}}" catchtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}未达标的日期">{{belowGoalLabel}} <text class="breakdown-number">{{item.belowGoalDays}}</text> 天 ›</text></view>
-          </view>
-        </block>
-        <view wx:else class="empty-panel"><text class="empty-mark">○</text><text class="state-title">暂无历史统计</text><text class="state-description">当前练习日结束后，这里会展示每位成员的积累。</text></view>
-        <text class="page-footnote">全体当前成员使用同一起始日期 · 每日 02:00 结算</text>
       </view>
     </block>
     </block>
@@ -184,14 +196,14 @@
   <canvas type="2d" id="reminderCanvas" class="reminder-canvas" style="width: {{reminderCanvasWidth}}px; height: {{reminderCanvasHeight}}px;" aria-hidden="true"></canvas>
 
   <view wx:if="{{(isCreator || isDeputy) && reminderDialogOpen}}" class="invite-overlay" bindtap="closeReminderDialog" catchtouchmove="noop">
-    <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasGoal ? '今日未达标长图' : '今日未练习长图'}}">
+    <view class="invite-dialog reminder-dialog" catchtap="noop" aria-role="dialog" aria-label="{{hasMultiplePractices ? '今日功课提醒长图' : (todayHasGoal ? '今日未达标长图' : '今日未练习长图')}}">
       <view class="invite-dialog-heading">
-        <text class="invite-dialog-title">{{hasGoal ? '今日未达标长图' : '今日未练习长图'}}</text>
+        <text class="invite-dialog-title">{{hasMultiplePractices ? '今日功课提醒长图' : (todayHasGoal ? '今日未达标长图' : '今日未练习长图')}}</text>
         <button class="invite-dialog-close" bindtap="closeReminderDialog" aria-label="关闭长图">×</button>
       </view>
       <text class="reminder-caption">{{reminderDate}} · {{reminderCount}} 位同学</text>
       <scroll-view class="reminder-image-scroll" scroll-y="true">
-        <image class="reminder-image" src="{{reminderImagePath}}" mode="widthFix" show-menu-by-longpress="{{true}}" bindtap="previewReminderImage" aria-label="{{hasGoal ? '未达标成员' : '未练习成员'}}的练习提醒长图，点击查看大图" />
+        <image class="reminder-image" src="{{reminderImagePath}}" mode="widthFix" show-menu-by-longpress="{{true}}" bindtap="previewReminderImage" aria-label="{{hasMultiplePractices ? '功课未全部完成同学' : (todayHasGoal ? '未达标成员' : '未练习成员')}}的练习提醒长图，点击查看大图" />
       </scroll-view>
       <text class="reminder-image-tip">长按图片可保存或转发</text>
       <view class="invite-dialog-actions">

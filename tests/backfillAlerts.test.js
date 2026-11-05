@@ -18,8 +18,8 @@ function harness(t) {
   const requests = [], dots = [], navigations = [], pages = [], timers = new Set();
   const wx = {
     getStorageSync: () => account,
-    showTabBarRedDot({ index }) { assert.equal(index, 4); dots.push(true); },
-    hideTabBarRedDot({ index }) { assert.equal(index, 4); dots.push(false); },
+    showTabBarRedDot({ index }) { assert.equal(index, 3); dots.push(true); },
+    hideTabBarRedDot({ index }) { assert.equal(index, 3); dots.push(false); },
     navigateTo(options) { navigations.push(plain(options)); },
     hideLoading() {},
     cloud: { callFunction(request) {

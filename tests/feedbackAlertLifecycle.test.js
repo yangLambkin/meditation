@@ -8,8 +8,10 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
   let definition;
   let tabReady = false;
   const storage = { userOpenId: account };
-  const calls = { applied: 0, dots: [], refresh: [], migrations: [], homeRefresh: 0, teamRefresh: 0 };
+  const calls = { applied: 0, dots: [], refresh: [], migrations: [], homeRefresh: 0, teamRefresh: 0,
+    tabSync: [], timerScreen: 0, timerAudio: 0 };
   const app = {
+    syncTabBar(page) { calls.tabSync.push(page); },
     applySyncAlertDot() {
       calls.applied++;
       // The initial route can show before the native tab bar accepts updates.
@@ -63,7 +65,10 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
     page.hasUserInfo = () => false;
     page.refreshCheckinsFromCloud = () => { calls.homeRefresh++; return Promise.resolve('home refreshed'); };
   }
-  if (name === 'timer') page.setKeepScreenOn = () => {};
+  if (name === 'timer') {
+    page.setKeepScreenOn = () => { calls.timerScreen++; };
+    page.resumeInterruptedAudio = () => { calls.timerAudio++; };
+  }
   if (name === 'team') {
     page.getUserInfo = () => {};
     page.loadTeamData = () => { calls.teamRefresh++; return Promise.resolve('team refreshed'); };
@@ -71,7 +76,7 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
   return { page, storage, calls, ready() { tabReady = true; } };
 }
 
-for (const name of ['index', 'timer', 'team']) {
+for (const name of ['index', 'team']) {
   test(`${name} reapplies cached reminders when its tab is ready and shown again without requesting alerts`, async () => {
     const { page, calls, ready } = createPage(name);
     await page.onShow();
@@ -82,10 +87,10 @@ for (const name of ['index', 'timer', 'team']) {
     assert.deepEqual(calls.dots, [true], 'ready redraws the reminder missed during initial route creation');
     await page.onShow();
     assert.deepEqual(calls.dots, [true, true], 'returning from another page redraws the cached reminder');
+    assert.deepEqual(calls.tabSync, [page, page, page], 'each tab synchronizes its own page on show and ready');
     assert.deepEqual(calls.refresh, [], 'tab redraws introduce no alert requests or polling');
     if (name === 'index') assert.equal(calls.homeRefresh, 2);
     if (name === 'team') assert.equal(calls.teamRefresh, 2);
-    if (name === 'timer') assert.equal(page.isPageVisible, true);
   });
 
   test(`${name} lifecycle remains compatible when the app or reminder API is unavailable`, async () => {
@@ -97,6 +102,23 @@ for (const name of ['index', 'timer', 'team']) {
     }
   });
 }
+
+test('the regular timer page shows without synchronizing tab bars or requesting reminders', async () => {
+  for (const appMode of ['available', 'missing', 'null', 'empty']) {
+    const { page, calls, ready } = createPage('timer', { appMode });
+    await page.onShow();
+    ready();
+    if (page.onReady) page.onReady();
+    await page.onShow();
+    assert.equal(page.isPageVisible, true);
+    assert.equal(calls.timerScreen, 2, 'timer screen handling still runs on each show');
+    assert.equal(calls.timerAudio, 2, 'timer audio handling still runs on each show');
+    assert.deepEqual(calls.tabSync, []);
+    assert.equal(calls.applied, 0);
+    assert.deepEqual(calls.dots, []);
+    assert.deepEqual(calls.refresh, []);
+  }
+});
 
 test('successful profile login refreshes reminders after the new account and profile are stored', () => {
   const { page, calls, storage } = createPage('profile');

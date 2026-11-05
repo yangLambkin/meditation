@@ -91,8 +91,8 @@ function applicationWorkflow(t, backend, account = 'owner') {
   const flush = () => new Promise(resolve => setImmediate(resolve));
   const wx = {
     getStorageSync: () => account,
-    showTabBarRedDot({ index }) { assert.equal(index, 4); tabDots.push(true); },
-    hideTabBarRedDot({ index }) { assert.equal(index, 4); tabDots.push(false); },
+    showTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(true); },
+    hideTabBarRedDot({ index }) { assert.equal(index, 3); tabDots.push(false); },
     cloud: { callFunction(request) {
       alerts.push({ account, type: request.data.type });
       backend.as(account, request.data).then(result => request.success({ result }), request.fail);

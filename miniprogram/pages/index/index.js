@@ -1315,12 +1315,16 @@ Page({
    * 开始静坐打卡
    */
   startMeditation: function() {
+    if (this._openingTimer) return;
     // 获取用户标识
     this.getUserOpenId();
     
-    // 跳转到计时页面
-    wx.switchTab({
-      url: '/pages/timer/timer'
+    // 计时作为普通页面打开，保留返回首页的路径。
+    this._openingTimer = true;
+    wx.navigateTo({
+      url: '/pages/timer/timer',
+      fail: () => wx.showToast({ title: '计时页打开失败，请重试', icon: 'none' }),
+      complete: () => { this._openingTimer = false; }
     });
   },
 

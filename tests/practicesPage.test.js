@@ -1666,10 +1666,11 @@ test('retry also rechecks original cloud confirmation and shows specific source 
   assert.equal(h.calls.flush[0].manual, true);
 });
 
-test('five tab navigation retains existing sitting entry and the profile reminder targets tab 4', () => {
+test('four tab navigation retains the home sitting entry and records page', () => {
   const app = JSON.parse(fs.readFileSync(path.join(__dirname, '../miniprogram/app.json'), 'utf8'));
-  assert.deepEqual(app.tabBar.list.map(item => item.text), ['首页', '计时', '记录', '团队', '我']);
-  assert.equal(app.tabBar.list[2].pagePath, 'pages/practices/practices');
+  assert.deepEqual(app.tabBar.list.map(item => item.text), ['首页', '记录', '团队', '我']);
+  assert.equal(app.tabBar.list[1].pagePath, 'pages/practices/practices');
+  assert.ok(app.pages.includes('pages/timer/timer'), 'timer remains available as a regular page');
   const home = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/index/index.wxml'), 'utf8');
   assert.match(home, /bindtap="startMeditation"[\s\S]*?开始静坐/);
   assert.match(home, /bindtap="openPracticePicker"[\s\S]*?记录功课/);

@@ -29,9 +29,10 @@ Page({
     draftPractices: [], draftPracticeType: '', draftPracticeIndex: 0, availablePractices: [], draftUnit: '', draftGoalMax: 1440, draftGoalPresets: [20, 30, 60],
     isLoading: false, isMember: false, isCreator: false, isDeputy: false, deputyCount: 0,
     loadError: '', reportError: '',
-    currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
+    currentTab: 'records', recordTab: 'today', todayFilter: 'attention',
     teamMembers: [], todayMembers: [], historyMembers: [], attentionCount: 0,
-    overview: null, historySummary: null, hasGoal: false,
+    overview: null, historySummary: null, hasGoal: false, practiceReports: [],
+    hasMultiplePractices: false, todayHasGoal: false, todaySummary: null, todayBelowGoalLabel: '时长不足', todayPracticeRuleLabel: '',
     practiceTypeName: '静坐觉察', practiceUnit: '分钟', goalMax: 1440, belowGoalLabel: '时长不足',
     dayLabel: '', nextDayLabel: '', historyRangeLabel: '',
     settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', draftStartDate: '', draftGoalMinutes: '', dateMax: '',
@@ -113,7 +114,7 @@ Page({
 
   clearPracticeReport() {
     this._reportMembers = [];
-    this.setData({ report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: '', dateMax: currentPracticeDate() });
+    this.setData({ report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], reportError: '', dateMax: currentPracticeDate() });
   },
 
   async loadTeamReport() {
@@ -136,10 +137,10 @@ Page({
     this._reportRequest = request;
     request.promise = (async () => {
       try {
-        const report = await this.callTeam('getTeamPracticeReport', { teamId, ...(isDataTeam(teamId) ? { practiceType: this.data.selectedPracticeType } : {}) });
+        const reports = await this.requestPracticeReports(teamId, teamInfo);
         if (!isCurrent()) return;
-        this.applyReport(report);
-        this.scheduleReset(Number(report.nextResetAt));
+        this.applyReports(reports);
+        this.scheduleReset(Number(this.data.report.nextResetAt));
       } catch (error) {
         if (isCurrent()) this.setData({ reportError: error.message || '练习数据暂时无法加载' });
       } finally {
@@ -158,7 +159,7 @@ Page({
     if (this._viewerOpenid !== openid || this._viewerKey !== viewerKey || this._viewerTeamId !== teamId) {
       this.resetInvitation();
       this._reportMembers = [];
-      this.setData({ teamInfo: null, report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
+      this.setData({ teamInfo: null, report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
     if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId || this.data.roleChangingMemberId) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingViewerKey === viewerKey && this._loadingTeamId === teamId) return;
@@ -175,7 +176,7 @@ Page({
     this._viewerTeamId = teamId;
     const isCurrent = () => !this._unloaded && version === this._loadVersion && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid && getViewerKey(this.data.teamId) === viewerKey;
     this._reportMembers = [];
-    this.setData({ isLoading: true, loadError: '', reportError: '', report: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [] });
+    this.setData({ isLoading: true, loadError: '', reportError: '', report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [] });
     try {
       const team = await this.callTeam('getTeamInfo', { teamId });
       if (!isCurrent()) return;
@@ -207,37 +208,69 @@ Page({
     }
   },
 
-  applyReport(report) {
+  setPracticeData(values) {
+    // 多功课报告可能超过微信单次 setData 的 1 MB 上限，按路径分批传输。
+    // 每个 UTF-16 字符最多按 3 个 UTF-8 字节估算，给键名及消息封装留余量。
+    const limit = 240 * 1024;
+    const sizeOf = value => JSON.stringify(value).length * 3;
+    if (sizeOf(values) <= limit) { this.setData(values); return; }
+    let patch = {};
+    let size = 0;
+    const flush = () => {
+      if (Object.keys(patch).length) this.setData(patch);
+      patch = {};
+      size = 0;
+    };
+    const append = (path, value) => {
+      const entrySize = sizeOf({ [path]: value });
+      if (entrySize > limit && value && typeof value === 'object') {
+        flush();
+        const isArray = Array.isArray(value);
+        // 先清空容器，确保新快照变短时不会留下旧成员。
+        this.setData({ [path]: isArray ? [] : {} });
+        Object.keys(value).forEach(key => append(isArray ? `${path}[${key}]` : `${path}.${key}`, value[key]));
+        return;
+      }
+      if (size + entrySize > limit) flush();
+      patch[path] = value;
+      size += entrySize;
+    };
+    Object.keys(values).forEach(key => append(key, values[key]));
+    flush();
+  },
+
+  requestPracticeReports(teamId, teamInfo) {
+    return Promise.all(this.practicesFor(teamInfo).map(practice => this.callTeam('getTeamPracticeReport', {
+      teamId, ...(isDataTeam(teamId) ? { practiceType: practice.practiceType } : {})
+    })));
+  },
+
+  validateReport(report, practiceType) {
     const counts = ['todayMinutes', 'practiceDays', 'qualifiedDays', 'belowGoalDays', 'missedDays', 'unmetDays', 'totalMinutes'];
     const summaryKeys = ['memberCount', 'notPracticedCount', 'belowGoalCount', 'qualifiedCount'];
     const validCount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
     if (!report || report.teamId !== this.data.teamInfo._id ||
-        isDataTeam(this.data.teamId) && report.practiceType !== this.data.selectedPracticeType || !validDate(report.businessDate) ||
+        isDataTeam(this.data.teamId) && report.practiceType !== practiceType || !validDate(report.businessDate) ||
         !report.settings || !(report.settings.practiceStartDate === null ? validDate(report.settings.effectivePracticeStartDate) : validDate(report.settings.practiceStartDate)) ||
         !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= maxGoal(report.practiceType || this.data.teamInfo.practiceType))) || report.settings.dayBoundaryHour !== 2 ||
         !report.history || !validCount(report.history.totalDays) || !validDate(report.history.startDate) || !validDate(report.history.endDate) ||
         !report.summary || !summaryKeys.every(key => validCount(report.summary[key])) || !Array.isArray(report.members) ||
         !report.members.every(member => member && member.openid && statusLabels[member.todayStatus] && counts.every(key => validCount(member[key]))) ||
+        new Set(report.members.map(member => member.openid)).size !== report.members.length ||
         !Number.isFinite(report.nextResetAt)) {
       throw new Error('练习数据暂不完整，请刷新重试');
     }
     if (report.nextResetAt <= Date.now()) throw new Error('练习日已更新，请刷新查看最新数据');
-    if (typeof report.creator === 'string' && Array.isArray(report.deputyLeaders)) {
-      const leader = report.members.find(member => member.openid === report.creator);
-      this.setData(this.teamRoleData({ ...this.data.teamInfo, creator: report.creator,
-        creatorName: leader && leader.nickname || '团队成员', deputyLeaders: report.deputyLeaders, members: report.members }));
-      this.updateLocalTeamCache(this.data.teamInfo);
-      if (!this.data.isCreator && !this.data.isDeputy) {
-        this.resetInvitation();
-        this.cancelReminder();
-      }
-    }
+  },
+
+  reportView(report, practice, team) {
+    const config = practiceConfig(practice.practiceType);
     const goal = report.settings.dailyGoalMinutes;
     const hasGoal = goal !== null;
-    const profiles = new Map(this.data.teamMembers.map(member => [member.openid, member]));
-    const members = this.profileMembers(report.members.map(member => ({ ...profiles.get(member.openid), ...member }))).map(member => ({
-      ...member,
-      statusLabel: member.todayStatus === 'below_goal' && practiceConfig(report.practiceType || this.data.teamInfo.practiceType).unit !== '分钟' ? '数量不足' : statusLabels[member.todayStatus],
+    const profiles = new Map(this.data.teamMembers.map(({ practices, summaryLabel, completedPracticeCount, ...profile }) => [profile.openid, profile]));
+    const members = this.profileMembers(report.members.map(member => ({ ...profiles.get(member.openid), ...member })), team).map(member => ({
+      ...member, practiceType: practice.practiceType, name: config.name, unit: config.unit, hasGoal, dailyGoalMinutes: goal,
+      statusLabel: member.todayStatus === 'below_goal' && config.unit !== '分钟' ? '数量不足' : statusLabels[member.todayStatus],
       todayMinutesLabel: this.formatMinutes(member.todayMinutes),
       totalMinutesLabel: this.formatMinutes(member.totalMinutes),
       cumulativeMinutesLabel: this.formatMinutes(member.cumulativeMinutes === undefined ? member.totalMinutes + member.todayMinutes : member.cumulativeMinutes),
@@ -245,27 +278,87 @@ Page({
       remainingMinutesLabel: hasGoal ? this.formatMinutes(Math.max(0, goal - member.todayMinutes)) : '',
       progress: !hasGoal ? 0 : member.todayStatus === 'qualified' ? 100 : Math.min(99, Math.floor(member.todayMinutes / goal * 100))
     }));
-    this._reportMembers = members;
-    const historyMembers = [...members].sort((a, b) => (hasGoal ? b.unmetDays - a.unmetDays || b.missedDays - a.missedDays : b.practiceDays - a.practiceDays || b.totalMinutes - a.totalMinutes) || a.nickname.localeCompare(b.nickname));
-    const date = new Date(`${report.businessDate}T00:00:00Z`);
-    const nextDay = new Date(date.getTime() + DAY_MS);
-    this.setData({
-      report,
-      hasGoal,
-      todayFilter: !hasGoal && ['below_goal', 'qualified'].includes(this.data.todayFilter) || hasGoal && this.data.todayFilter === 'practiced' ? 'attention' : this.data.todayFilter,
-      overview: report.overview || null,
+    return { practiceType: practice.practiceType, name: config.name, unit: config.unit,
+      belowGoalLabel: config.unit === '分钟' ? '时长不足' : '数量不足', hasGoal, report, members,
       historySummary: this.buildHistorySummary(report),
-      teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || Number(b.isDeputy) - Number(a.isDeputy) || a.nickname.localeCompare(b.nickname)),
-      teamInfo: isDataTeam(this.data.teamId) ? this.data.teamInfo : { ...this.data.teamInfo, ...report.settings },
-      selectedPractice: { ...(this.data.selectedPractice || {}), ...report.settings },
-      attentionCount: report.summary.notPracticedCount + report.summary.belowGoalCount,
-      historyMembers,
-      dayLabel: `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`,
-      nextDayLabel: `${nextDay.getUTCMonth() + 1}月${nextDay.getUTCDate()}日`,
-      historyRangeLabel: `${report.history.startDate.replace(/-/g, '.')} — ${report.history.endDate.replace(/-/g, '.')}`,
-      dateMax: report.businessDate,
-      reportError: ''
+      historyMembers: [...members].sort((a, b) => (hasGoal ? b.unmetDays - a.unmetDays || b.missedDays - a.missedDays : b.practiceDays - a.practiceDays || b.totalMinutes - a.totalMinutes) || a.nickname.localeCompare(b.nickname)),
+      historyRangeLabel: `${report.history.startDate.replace(/-/g, '.')} — ${report.history.endDate.replace(/-/g, '.')}` };
+  },
+
+  applyReport(report) {
+    this.applyReports([report]);
+  },
+
+  applyReports(reports) {
+    const practices = this.practicesFor(this.data.teamInfo);
+    if (!Array.isArray(reports) || reports.length !== practices.length) throw new Error('练习数据暂不完整，请刷新重试');
+    reports.forEach((report, index) => this.validateReport(report, practices[index].practiceType));
+    const first = reports[0];
+    const memberIds = report => report.members.map(member => member.openid).sort().join('\n');
+    const rolesKey = report => JSON.stringify([report.creator, [...(report.deputyLeaders || [])].sort()]);
+    if (reports.some(report => report.businessDate !== first.businessDate || report.nextResetAt !== first.nextResetAt ||
+        memberIds(report) !== memberIds(first) || rolesKey(report) !== rolesKey(first))) {
+      throw new Error('功课数据已更新，请刷新后重试');
+    }
+    let team = this.data.teamInfo;
+    if (typeof first.creator === 'string' && Array.isArray(first.deputyLeaders)) {
+      const leader = first.members.find(member => member.openid === first.creator);
+      team = { ...team, creator: first.creator, creatorName: leader && leader.nickname || '团队成员', deputyLeaders: first.deputyLeaders, members: first.members };
+    }
+    const roleData = this.teamRoleData(team);
+    const views = reports.map((report, index) => this.reportView(report, practices[index], roleData.teamInfo));
+    const hasMultiplePractices = views.length > 1;
+    const todayHasGoal = views.some(view => view.hasGoal);
+    const memberMaps = views.map(view => new Map(view.members.map(member => [member.openid, member])));
+    const members = views[0].members.map(member => {
+      const progress = memberMaps.map(map => map.get(member.openid));
+      const completedPracticeCount = progress.filter(item => ['qualified', 'practiced'].includes(item.todayStatus)).length;
+      if (!hasMultiplePractices) return { ...member, practices: progress, completedPracticeCount, summaryLabel:
+        member.todayStatus === 'not_practiced' ? '今天的练习，还未开始' : member.todayStatus === 'below_goal'
+          ? `距离目标还差 ${member.remainingMinutesLabel} ${member.unit}` : todayHasGoal ? '今日目标已完成' : '今天已完成练习' };
+      const todayStatus = progress.every(item => item.todayStatus === 'not_practiced') ? 'not_practiced'
+        : completedPracticeCount < progress.length ? 'below_goal' : todayHasGoal ? 'qualified' : 'practiced';
+      // 不同功课的分钟、次数和件数各自保留，不能相加为成员的练习量。
+      const { todayMinutes, totalMinutes, cumulativeMinutes, ...profile } = member;
+      return { ...profile, todayStatus, practices: progress, completedPracticeCount,
+        statusLabel: todayStatus === 'not_practiced' ? '尚未练习' : todayStatus === 'below_goal' ? '未完成' : '全部完成',
+        summaryLabel: `已完成 ${completedPracticeCount} / ${progress.length} 项功课` };
     });
+    const todaySummary = hasMultiplePractices ? {
+      memberCount: members.length,
+      notPracticedCount: members.filter(member => member.todayStatus === 'not_practiced').length,
+      belowGoalCount: members.filter(member => member.todayStatus === 'below_goal').length,
+      qualifiedCount: members.filter(member => member.todayStatus === 'qualified').length,
+      practicedCount: members.filter(member => member.todayStatus === 'practiced').length
+    } : first.summary;
+    const activeMemberCount = members.filter(member => member.practices.some(practice => practice.todayStatus !== 'not_practiced')).length;
+    const overview = hasMultiplePractices ? {
+      memberCount: members.length, activeMemberCount,
+      totalPracticeCount: views.reduce((sum, view) => sum + (Number(view.report.overview && view.report.overview.totalPracticeCount) ||
+        view.members.reduce((count, member) => count + (Number(member.totalPracticeCount) || 0), 0)), 0),
+      activityRate: members.length ? Math.round(activeMemberCount / members.length * 100) : 0
+    } : first.overview || null;
+    const defaultView = views[0];
+    const date = new Date(`${first.businessDate}T00:00:00Z`);
+    const nextDay = new Date(date.getTime() + DAY_MS);
+    this._reportMembers = members;
+    this.setPracticeData({ ...roleData, report: first, practiceReports: views, hasMultiplePractices, todayHasGoal, todaySummary,
+      todayBelowGoalLabel: hasMultiplePractices ? '未完成' : defaultView.belowGoalLabel,
+      todayPracticeRuleLabel: hasMultiplePractices ? `共 ${views.length} 项功课 · 查看规则` : defaultView.hasGoal ? `每日目标 ${first.settings.dailyGoalMinutes} ${defaultView.unit}` : '未设置每日目标',
+      hasGoal: defaultView.hasGoal,
+      todayFilter: !todayHasGoal && (this.data.todayFilter === 'qualified' || !hasMultiplePractices && this.data.todayFilter === 'below_goal') || todayHasGoal && this.data.todayFilter === 'practiced' ? 'attention' : this.data.todayFilter,
+      overview, historySummary: defaultView.historySummary, historyMembers: defaultView.historyMembers,
+      teamMembers: [...members].sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || Number(b.isDeputy) - Number(a.isDeputy) || a.nickname.localeCompare(b.nickname)),
+      teamInfo: isDataTeam(this.data.teamId) ? roleData.teamInfo : { ...roleData.teamInfo, ...first.settings },
+      selectedPractice: { ...(this.data.selectedPractice || {}), ...first.settings },
+      attentionCount: todaySummary.notPracticedCount + todaySummary.belowGoalCount,
+      dayLabel: `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`, nextDayLabel: `${nextDay.getUTCMonth() + 1}月${nextDay.getUTCDate()}日`,
+      historyRangeLabel: defaultView.historyRangeLabel, dateMax: first.businessDate, reportError: ''
+    });
+    if (typeof first.creator === 'string' && Array.isArray(first.deputyLeaders)) {
+      this.updateLocalTeamCache(this.data.teamInfo);
+      if (!this.data.isCreator && !this.data.isDeputy) { this.resetInvitation(); this.cancelReminder(); }
+    }
     this.updateTodayMembers();
   },
 
@@ -327,21 +420,6 @@ Page({
     return practices.find(item => item.practiceType === this.data.selectedPracticeType) || practices[0];
   },
 
-  async switchPractice(event) {
-    const type = event.currentTarget.dataset.type;
-    if (!this._teamInfoReady || !this.data.teamInfo || !isDataTeam(this.data.teamId) || this.data.isSaving || this.data.isDeleting || this.data.settingsOpen ||
-        this.data.removingMemberId || this.data.roleChangingMemberId || type === this.data.selectedPracticeType ||
-        !this.practicesFor(this.data.teamInfo).some(item => item.practiceType === type)) return;
-    this._loadVersion = (this._loadVersion || 0) + 1;
-    this.cancelReminder();
-    this.clearResetTimer();
-    this.setData({ selectedPracticeType: type, isLoading: false });
-    const practice = this.practiceFor();
-    this.setData({ ...this.teamRoleData(this.data.teamInfo), hasGoal: Number.isInteger(practice.dailyGoalMinutes) && practice.dailyGoalMinutes > 0 });
-    this.clearPracticeReport();
-    if (this.data.currentTab === 'records') await this.loadTeamReport();
-  },
-
   profileMembers(members, team = this.data.teamInfo) {
     return members.map(value => {
       const member = typeof value === 'string' ? { openid: value } : value;
@@ -375,8 +453,8 @@ Page({
     const priority = { not_practiced: 0, below_goal: 1, qualified: 2, practiced: 2 };
     const members = (this._reportMembers || []).filter(member => filter === 'all' ||
       (filter === 'attention' ? ['not_practiced', 'below_goal'].includes(member.todayStatus) : member.todayStatus === filter));
-    members.sort((a, b) => priority[a.todayStatus] - priority[b.todayStatus] || a.todayMinutes - b.todayMinutes || a.nickname.localeCompare(b.nickname));
-    this.setData({ todayMembers: members });
+    members.sort((a, b) => priority[a.todayStatus] - priority[b.todayStatus] || (this.data.hasMultiplePractices ? a.completedPracticeCount - b.completedPracticeCount : a.todayMinutes - b.todayMinutes) || a.nickname.localeCompare(b.nickname));
+    this.setPracticeData({ todayMembers: members });
   },
 
   switchTab(event) {
@@ -439,12 +517,14 @@ Page({
     this.setData({ isPreparingReminder: true });
     try {
       // 长图包含全体未达标成员，不受当前列表筛选影响；生成前重新获取云端统计。
-      const report = await this.callTeam('getTeamPracticeReport', { teamId, ...(isDataTeam(teamId) ? { practiceType: this.data.selectedPracticeType } : {}) });
+      const reports = await this.requestPracticeReports(teamId, teamInfo);
       if (!isCurrent()) return;
-      this.applyReport(report);
+      this.applyReports(reports);
       if (!isCurrent()) return;
+      const report = this.data.hasMultiplePractices ? { ...this.data.report, multiPractice: true, summary: this.data.todaySummary,
+        settings: { ...this.data.report.settings, dailyGoalMinutes: this.data.todayHasGoal ? 1 : null }, members: this._reportMembers } : this.data.report;
       this.scheduleReset(report.nextResetAt);
-      const hasGoal = report.settings.dailyGoalMinutes !== null;
+      const hasGoal = this.data.todayHasGoal;
       const members = selectReminderMembers({ ...report, members: this._reportMembers });
       if (!members.length) {
         wx.showToast({ title: hasGoal ? '今天大家都已达标' : '今天大家都已练习', icon: 'none' });
@@ -452,7 +532,7 @@ Page({
       }
       const canvas = await this.getReminderCanvas();
       if (!isCurrent()) return;
-      const reminder = await createReminderImage({ canvas, report, members, teamName: isDataTeam(teamId) ? `${teamInfo.name} · ${practiceConfig(practiceType).name}` : teamInfo.name, isCurrent,
+      const reminder = await createReminderImage({ canvas, report, members, teamName: teamInfo.name, isCurrent,
         resizeCanvas: (width, height) => new Promise(resolve => {
           this.setData({ reminderCanvasWidth: width, reminderCanvasHeight: height }, resolve);
         }) });
@@ -547,7 +627,12 @@ Page({
 
   openHistoryDetails(event) {
     const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
-    const { teamId, teamInfo, report, isMember, hasGoal, teamMembers } = this.data;
+    const { teamId, teamInfo, isMember, teamMembers } = this.data;
+    const practiceType = dataset.practiceType || this.data.selectedPracticeType;
+    if (dataset.practiceType !== undefined && !this.practicesFor(teamInfo || {}).some(item => item.practiceType === practiceType)) return;
+    const view = this.data.practiceReports.find(item => item.practiceType === practiceType);
+    const report = view ? view.report : this.data.report;
+    const hasGoal = view ? view.hasGoal : this.data.hasGoal;
     if (this._unloaded || this.data.isLoading || this.data.isSaving || this.data.isDeleting ||
         !isMember || !teamInfo || teamInfo._id !== teamId || !report || report.teamId !== teamId ||
         !report.history || report.history.totalDays <= 0 ||
@@ -560,12 +645,16 @@ Page({
       memberQuery = `&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname)}`;
     }
     const filter = !hasGoal && ['unmet', 'below_goal'].includes(dataset.filter) ? 'not_practiced' : dataset.filter;
-    wx.navigateTo({ url: `/subpackages/team/pages/historyDetails/historyDetails?teamId=${encodeURIComponent(teamId)}&month=${report.businessDate.slice(0, 7)}&filter=${filter}${memberQuery}${isDataTeam(teamId) ? '&practiceType=' + encodeURIComponent(this.data.selectedPracticeType) : ''}` });
+    wx.navigateTo({ url: `/subpackages/team/pages/historyDetails/historyDetails?teamId=${encodeURIComponent(teamId)}&month=${report.businessDate.slice(0, 7)}&filter=${filter}${memberQuery}${isDataTeam(teamId) ? '&practiceType=' + encodeURIComponent(practiceType) : ''}` });
   },
 
   openMemberRecords(event) {
     const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
-    const { teamId, teamInfo, report, isMember, teamMembers } = this.data;
+    const { teamId, teamInfo, isMember, teamMembers } = this.data;
+    const practiceType = dataset.practiceType || this.data.selectedPracticeType;
+    if (dataset.practiceType !== undefined && !this.practicesFor(teamInfo || {}).some(item => item.practiceType === practiceType)) return;
+    const view = this.data.practiceReports.find(item => item.practiceType === practiceType);
+    const report = view ? view.report : this.data.report;
     if (!isMember || !teamInfo || teamInfo._id !== teamId || typeof teamId !== 'string' || !teamId ||
         !this._viewerOpenid || wx.getStorageSync('userOpenId') !== this._viewerOpenid || this._viewerKey !== getViewerKey(teamId) ||
         typeof dataset.memberOpenid !== 'string' || !['month', 'day'].includes(dataset.view)) return;
@@ -576,7 +665,7 @@ Page({
     const date = validDate(reportDate) ? reportDate : currentPracticeDate();
     const context = `teamId=${encodeURIComponent(teamId)}&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname || '团队成员')}`;
     if (/^bijing_/.test(teamId)) {
-      wx.navigateTo({ url: `/subpackages/team/pages/memberRecords/memberRecords?${context}&practiceType=${encodeURIComponent(this.data.selectedPracticeType)}&${dataset.view === 'day' ? 'date=' + date : 'month=' + date.slice(0, 7)}` });
+      wx.navigateTo({ url: `/subpackages/team/pages/memberRecords/memberRecords?${context}&practiceType=${encodeURIComponent(practiceType)}&${dataset.view === 'day' ? 'date=' + date : 'month=' + date.slice(0, 7)}` });
       return;
     }
     const url = dataset.view === 'day'
@@ -623,12 +712,46 @@ Page({
         practiceStartDate: this.data.draftStartDate || '', dailyGoalMinutes: this.data.draftGoalMinutes == null ? '' : String(this.data.draftGoalMinutes) } : item);
   },
 
+  updateDraftDisplay(values = {}) {
+    this.setData(values);
+    const list = this.currentDraftPractices();
+    this.setData({ draftPractices: list, draftPracticeCards: practiceCards(list, '启用日起'),
+      draftSelectionOptions: selectionOptions(list, this.data.draftLockedPracticeTypes) });
+  },
+
+  canViewDraftPractices() {
+    return !this._unloaded && this.data.settingsOpen && this.data.isMember && this.data.teamInfo && this.data.teamInfo._id === this.data.teamId && Boolean(this._viewerOpenid) &&
+      this._viewerTeamId === this.data.teamId && this._viewerOpenid === wx.getStorageSync('userOpenId') &&
+      this._viewerKey === getViewerKey(this.data.teamId);
+  },
+
   selectDraftPractice(event) {
     if (!this.canViewDraftPractices() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || this._unloaded || !isDataTeam(this.data.teamId)) return;
     const list = this.currentDraftPractices();
     const type = event.currentTarget && event.currentTarget.dataset && event.currentTarget.dataset.type;
     const index = type ? list.findIndex(item => item.practiceType === type) : Number(event.detail && event.detail.value);
     if (Number.isInteger(index) && list[index]) this.applyDraftPractice(list, index);
+  },
+
+  toggleDraftPractice(event) {
+    if (!this.canManageTeam() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || this._unloaded || !isDataTeam(this.data.teamId)) return;
+    const type = event.currentTarget.dataset.type;
+    if (!PRACTICES.some(item => item.type === type)) return;
+    if (this.data.draftLockedPracticeTypes.includes(type)) {
+      this.setData({ settingsError: '已开启的功课暂不支持取消，可调整目标和起始日期' }); return;
+    }
+    const list = this.currentDraftPractices();
+    const index = list.findIndex(item => item.practiceType === type);
+    this._draftPracticeCache = this._draftPracticeCache || {};
+    if (index >= 0) {
+      this._draftPracticeCache[type] = { ...list[index] };
+      list.splice(index, 1);
+      const active = this.data.draftPracticeType === type ? Math.min(index, list.length - 1) : list.findIndex(item => item.practiceType === this.data.draftPracticeType);
+      this.applyDraftPractice(list, active);
+    } else {
+      list.push(practiceDraft(this._draftPracticeCache[type] || { practiceType: type, practiceStartDate: currentPracticeDate(), rulesEnabled: true }));
+      this.applyDraftPractice(list, list.length - 1);
+    }
   },
 
   addDraftPractice(event) {
@@ -653,6 +776,18 @@ Page({
       draftStartDate: item.practiceStartDate, draftGoalMinutes: item.dailyGoalMinutes, draftPracticeRulesEnabled: item.rulesEnabled,
       keyboardHeight: 0, settingsScrollTarget: '',
       availablePractices: PRACTICES.filter(config => !list.some(row => row.practiceType === config.type)), settingsError: '' });
+  },
+
+  isDraftRuleEventCurrent(event) {
+    const type = event && event.currentTarget && event.currentTarget.dataset && event.currentTarget.dataset.type;
+    return !type || type === this.data.draftPracticeType;
+  },
+
+  showDraftPracticeError(type, message) {
+    const list = this.currentDraftPractices();
+    const index = list.findIndex(item => item.practiceType === type);
+    if (index >= 0) this.applyDraftPractice(list, index);
+    this.setData({ settingsError: message, settingsScrollTarget: `practice-rule-${type}` });
   },
 
   closeSettings() {
@@ -853,7 +988,7 @@ Page({
       this._reportMembers = [];
       this.updateLocalTeamCache(roles.teamInfo);
       this.setData({ ...roles, teamMembers: this.profileMembers(updatedTeam.members, roles.teamInfo),
-        report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], settingsOpen: false });
+        report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [], settingsOpen: false });
       if (this._isVisible) wx.showToast({ title: role === 'leader' ? '已交接团长' : isDeputy ? '已设为副团长' : '已取消副团长', icon: 'success' });
     } catch (error) {
       if (isCurrent() && this._isVisible) wx.showModal({ title: `${title}失败`, content: error.message || '请稍后重试', showCancel: false });
@@ -898,7 +1033,7 @@ Page({
       const teamMembers = this.data.teamMembers.filter(item => item.openid !== memberOpenid);
       const roles = this.teamRoleData({ ...this.data.teamInfo, members: teamMembers, memberCount: teamMembers.length });
       this.setData({ ...roles, teamMembers,
-        report: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [] });
+        report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, todayMembers: [], historyMembers: [] });
       wx.showToast({ title: '已移除成员', icon: 'success' });
     } catch (error) {
       if (isCurrent()) wx.showModal({ title: '移除失败', content: error.message || '请稍后重试', showCancel: false });
@@ -1159,51 +1294,5 @@ Page({
 
   goToTeamList() {
     wx.switchTab({ url: '/pages/team/team' });
-  },
-  updateDraftDisplay(values = {}) {
-    this.setData(values);
-    const list = this.currentDraftPractices();
-    this.setData({ draftPractices: list, draftPracticeCards: practiceCards(list, '启用日起'),
-      draftSelectionOptions: selectionOptions(list, this.data.draftLockedPracticeTypes) });
-  },
-
-  canViewDraftPractices() {
-    return !this._unloaded && this.data.settingsOpen && this.data.isMember && this.data.teamInfo && this.data.teamInfo._id === this.data.teamId && Boolean(this._viewerOpenid) &&
-      this._viewerTeamId === this.data.teamId && this._viewerOpenid === wx.getStorageSync('userOpenId') &&
-      this._viewerKey === getViewerKey(this.data.teamId);
-  },
-
-  toggleDraftPractice(event) {
-    if (!this.canManageTeam() || !this.data.settingsOpen || this.data.isSaving || this.data.isDeleting || this._unloaded || !isDataTeam(this.data.teamId)) return;
-    const type = event.currentTarget.dataset.type;
-    if (!PRACTICES.some(item => item.type === type)) return;
-    if (this.data.draftLockedPracticeTypes.includes(type)) {
-      this.setData({ settingsError: '已开启的功课暂不支持取消，可调整目标和起始日期' }); return;
-    }
-    const list = this.currentDraftPractices();
-    const index = list.findIndex(item => item.practiceType === type);
-    this._draftPracticeCache = this._draftPracticeCache || {};
-    if (index >= 0) {
-      this._draftPracticeCache[type] = { ...list[index] };
-      list.splice(index, 1);
-      const active = this.data.draftPracticeType === type ? Math.min(index, list.length - 1) : list.findIndex(item => item.practiceType === this.data.draftPracticeType);
-      this.applyDraftPractice(list, active);
-    } else {
-      list.push(practiceDraft(this._draftPracticeCache[type] || { practiceType: type, practiceStartDate: currentPracticeDate(), rulesEnabled: true }));
-      this.applyDraftPractice(list, list.length - 1);
-    }
-  },
-
-  isDraftRuleEventCurrent(event) {
-    const type = event && event.currentTarget && event.currentTarget.dataset && event.currentTarget.dataset.type;
-    return !type || type === this.data.draftPracticeType;
-  },
-
-  showDraftPracticeError(type, message) {
-    const list = this.currentDraftPractices();
-    const index = list.findIndex(item => item.practiceType === type);
-    if (index >= 0) this.applyDraftPractice(list, index);
-    this.setData({ settingsError: message, settingsScrollTarget: `practice-rule-${type}` });
-  },
-
+  }
 });

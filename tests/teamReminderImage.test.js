@@ -381,3 +381,69 @@ test('count practice reminder images display count units in the goal and shortfa
   assert.equal(h.text.some(item => item.value === ' / 60 件'), true);
   assert.equal(h.text.some(item => item.value.includes('分钟')), false);
 });
+
+const multiReport = { businessDate: '2026-09-21', multiPractice: true, settings: { dailyGoalMinutes: 1 } };
+const multiMember = (overrides = {}) => member('多功课同学', { todayMinutes: 9999, todayMinutesLabel: '9999',
+  statusLabel: '部分未完成', practices: [
+    { practiceType: 'sitting', name: '静坐觉察', unit: '分钟', hasGoal: true, dailyGoalMinutes: 20,
+      todayMinutes: 12, todayMinutesLabel: '12', todayStatus: 'below_goal', statusLabel: '时长不足', progress: 60, todayPracticeCount: 2 },
+    { practiceType: 'instant', name: '即刻觉察', unit: '次', hasGoal: true, dailyGoalMinutes: 10,
+      todayMinutes: 10, todayMinutesLabel: '10', todayStatus: 'qualified', statusLabel: '已达标', progress: 100, todayPracticeCount: 1 },
+    { practiceType: 'kindness', name: '日行一善', unit: '件', hasGoal: false, dailyGoalMinutes: null,
+      todayMinutes: 0, todayMinutesLabel: '0', todayStatus: 'not_practiced', statusLabel: '尚未练习', progress: 0, todayPracticeCount: 0 }
+  ], ...overrides });
+
+test('multi-practice reminders show every homework with its own value, target, unit and progress', async () => {
+  const h = harness();
+  await h.generate([multiMember({ isDeputy: true })], { report: multiReport });
+  const values = h.text.map(item => item.value);
+  for (const value of ['多功课同学', '副团长', '部分未完成', '已完成 1 / 3 项功课', '静坐觉察', '即刻觉察', '日行一善',
+    '12', '10', '0', ' / 20 分钟', ' / 10 次', ' 件', '2 条记录', '1 条记录', '时长不足', '已达标', '尚未练习']) {
+    assert.ok(values.includes(value), value);
+  }
+  assert.equal(values.includes('9999'), false, 'the synthetic aggregate amount is never rendered');
+  assert.equal(values.includes(' / 1 分钟'), false, 'the synthetic aggregate goal is never rendered');
+  const tracks = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#f2f4f6');
+  assert.equal(tracks.length, 2);
+  const green = h.fills.find(fill => fill.kind === 'path' && fill.color === '#50a67a');
+  assert.equal(Math.max(...green.points.map(point => point[0])) - Math.min(...green.points.map(point => point[0])), 646);
+  const names = h.text.filter(item => ['静坐觉察', '即刻觉察', '日行一善'].includes(item.value));
+  const quantities = h.text.filter(item => ['12', '10', '0'].includes(item.value));
+  for (let index = 0; index < names.length; index++) {
+    assert.ok(quantities[index].y > names[index].y + 24);
+    if (index + 1 < names.length) assert.ok(names[index + 1].y > quantities[index].y + 32);
+  }
+});
+
+test('multi-practice reminders include partly practiced classmates when no homework has a daily goal', async () => {
+  const h = harness();
+  const current = multiMember({ practices: multiMember().practices.map((practice, index) => ({ ...practice,
+    hasGoal: false, dailyGoalMinutes: null, todayStatus: index === 0 ? 'practiced' : 'not_practiced',
+    statusLabel: index === 0 ? '已练习' : '尚未练习', todayMinutes: index === 0 ? 12 : 0, todayMinutesLabel: index === 0 ? '12' : '0' })) });
+  await h.generate([current], { report: { ...multiReport, settings: { dailyGoalMinutes: null } } });
+  assert.ok(h.text.some(item => item.value === '已完成 1 / 3 项功课'));
+  assert.equal(h.text.some(item => item.value.includes(' / 20') || item.value.includes(' / 10')), false);
+  assert.equal(h.fills.some(fill => fill.kind === 'path' && fill.color === '#f2f4f6'), false);
+});
+
+test('multi-practice reminder export retains the last homework and padding within native canvas bounds', async () => {
+  const h = harness();
+  const result = await h.generate(Array.from({ length: 55 }, (_, index) => multiMember({ nickname: `同学${index + 1}` })), { report: multiReport });
+  assert.equal(h.text.filter(item => item.value === '日行一善').length, 55);
+  assert.ok(result.width > 0 && result.height <= 16383);
+  assert.ok(result.width * result.height <= 32 * 1024 * 1024);
+  const cards = h.fills.filter(fill => fill.kind === 'path' && fill.color === '#ffffff');
+  const logicalHeight = h.fills.find(fill => fill.kind === 'rect' && fill.color === '#f8f9fb').height;
+  assert.equal(logicalHeight - Math.max(...cards.at(-1).points.map(point => point[1])), 24);
+  assert.ok(h.text.at(-1).y + 22 < logicalHeight - 24);
+});
+
+test('incomplete multi-practice reminder data fails before exporting a misleading card', async () => {
+  const h = harness();
+  for (const practices of [undefined, [], [{ ...multiMember().practices[0], unit: '' }],
+    [{ ...multiMember().practices[0], dailyGoalMinutes: null }],
+    [multiMember().practices[0], multiMember().practices[0]]]) {
+    await assert.rejects(h.generate([multiMember({ practices })], { report: multiReport }), /数据不完整/);
+  }
+  assert.equal(h.exports.length, 0);
+});

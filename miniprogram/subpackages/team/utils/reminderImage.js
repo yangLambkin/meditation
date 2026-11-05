@@ -82,7 +82,16 @@ function roundedRect(context, x, y, width, height, radius, fill, stroke) {
   }
 }
 
-function layoutCard(context, member, hasGoal, unit = '分钟') {
+function layoutPractice(context, practice) {
+  font(context, 20);
+  const statusWidth = context.measureText(practice.statusLabel).width;
+  font(context, 24, '500');
+  const nameLines = wrapText(context, practice.name, 646 - statusWidth - 24);
+  const nameHeight = nameLines.length * 34;
+  return { practice, nameLines, nameHeight, statusWidth, height: nameHeight + (practice.hasGoal ? 90 : 66) };
+}
+
+function layoutCard(context, member, hasGoal, unit = '分钟', multiPractice = false) {
   const status = member.statusLabel || (member.todayStatus === 'not_practiced' ? '尚未练习' : unit === '分钟' ? '时长不足' : '数量不足');
   font(context, 20);
   const statusWidth = context.measureText(status).width + 24;
@@ -95,14 +104,17 @@ function layoutCard(context, member, hasGoal, unit = '分钟') {
   const roleWidth = roleLabel ? context.measureText(roleLabel).width + 16 : 0;
   const roleOnNewLine = Boolean(roleLabel && lastNameWidth + roleWidth + 10 > nameWidth);
   const nameHeight = nameLines.length * 42 + (roleOnNewLine ? 36 : 0);
-  const subtitle = member.todayStatus === 'not_practiced'
+  const practices = multiPractice ? member.practices.map(practice => layoutPractice(context, practice)) : null;
+  const completed = multiPractice ? member.practices.filter(practice => ['qualified', 'practiced'].includes(practice.todayStatus)).length : 0;
+  const subtitle = multiPractice ? `已完成 ${completed} / ${member.practices.length} 项功课` : member.todayStatus === 'not_practiced'
     ? '今天的练习，还未开始'
     : `距离目标还差 ${member.remainingMinutesLabel} ${unit}`;
   font(context, 22);
   const subtitleLines = wrapText(context, subtitle, nameWidth);
   const headerHeight = Math.max(76, nameHeight + 8 + subtitleLines.length * 33);
   return { member, status, statusWidth, nameLines, lastNameWidth, roleLabel, roleWidth, roleOnNewLine,
-    nameHeight, subtitleLines, headerHeight, height: 24 + headerHeight + 22 + 44 + (hasGoal ? 20 : 0) + 24 };
+    nameHeight, subtitleLines, headerHeight, practices,
+    height: 24 + headerHeight + 22 + (practices ? practices.reduce((sum, practice) => sum + practice.height, 0) : 44 + (hasGoal ? 20 : 0)) + 24 };
 }
 
 // Both callback-only and Promise-returning WeChat SDK versions are supported.
@@ -249,6 +261,14 @@ function drawCard(context, layout, avatar, top, goal, practiceUnit = '分钟') {
   context.fillStyle = '#a9b0ba';
   context.fillText('›', LOGICAL_WIDTH - 65, statusY - 1);
   const detailsTop = headerTop + headerHeight + 22;
+  if (layout.practices) {
+    let practiceTop = detailsTop;
+    layout.practices.forEach(practice => {
+      drawPractice(context, practice, left, practiceTop);
+      practiceTop += practice.height;
+    });
+    return;
+  }
   font(context, 36, '500');
   context.fillStyle = colors.text;
   const minutes = String(member.todayMinutesLabel == null ? member.todayMinutes || 0 : member.todayMinutesLabel);
@@ -266,6 +286,36 @@ function drawCard(context, layout, avatar, top, goal, practiceUnit = '分钟') {
     roundedRect(context, left, progressTop, 646, 6, 3, colors.track);
     const progress = Math.max(0, Math.min(100, Number(member.progress) || 0));
     if (progress > 0) roundedRect(context, left, progressTop, 646 * progress / 100, 6, 3, colors.gold);
+  }
+}
+
+function drawPractice(context, layout, left, top) {
+  const { practice, nameLines, nameHeight, statusWidth } = layout;
+  const complete = ['qualified', 'practiced'].includes(practice.todayStatus);
+  font(context, 24, '500');
+  context.fillStyle = colors.text;
+  nameLines.forEach((line, index) => context.fillText(line, left, top + index * 34));
+  font(context, 20);
+  context.fillStyle = complete ? '#50a67a' : practice.todayStatus === 'not_practiced' ? '#7a8493' : colors.goldText;
+  context.fillText(practice.statusLabel, left + 646 - statusWidth, top + 4);
+  const valueTop = top + nameHeight + 8;
+  font(context, 32, '500');
+  context.fillStyle = colors.text;
+  const value = String(practice.todayMinutesLabel == null ? practice.todayMinutes : practice.todayMinutesLabel);
+  context.fillText(value, left, valueTop);
+  const valueWidth = context.measureText(value).width;
+  font(context, 22);
+  context.fillStyle = colors.muted;
+  const unit = practice.hasGoal ? ` / ${practice.dailyGoalMinutes} ${practice.unit}` : ` ${practice.unit}`;
+  context.fillText(unit, left + valueWidth + 2, valueTop + 8);
+  if (practice.todayPracticeCount > 0) {
+    context.fillText(`${practice.todayPracticeCount} 条记录`, left + valueWidth + 2 + context.measureText(unit).width + 18, valueTop + 8);
+  }
+  if (practice.hasGoal) {
+    const progressTop = valueTop + 48;
+    roundedRect(context, left, progressTop, 646, 6, 3, colors.track);
+    const progress = Math.max(0, Math.min(100, Number(practice.progress) || 0));
+    if (progress > 0) roundedRect(context, left, progressTop, 646 * progress / 100, 6, 3, complete ? '#50a67a' : colors.gold);
   }
 }
 
@@ -291,10 +341,20 @@ function exportImage(canvas, width, height, wxApi, isCurrent) {
 async function createReminderImage({ canvas, report, members, teamName = '', wxApi = wx, isCurrent = () => true, resizeCanvas = async () => {} } = {}) {
   checkCurrent(isCurrent);
   const goal = report && report.settings && report.settings.dailyGoalMinutes;
+  const multiPractice = Boolean(report && report.multiPractice);
+  const validPractices = member => Array.isArray(member.practices) && member.practices.length > 0 && member.practices.length <= 6 &&
+    new Set(member.practices.map(practice => practice && practice.practiceType)).size === member.practices.length &&
+    member.practices.every(practice => practice && typeof practice.practiceType === 'string' && practice.practiceType &&
+      typeof practice.name === 'string' && practice.name.trim() && ['分钟', '次', '件'].includes(practice.unit) &&
+      typeof practice.hasGoal === 'boolean' && (practice.hasGoal ? Number.isFinite(practice.dailyGoalMinutes) && practice.dailyGoalMinutes > 0 : practice.dailyGoalMinutes === null) &&
+      Number.isFinite(practice.todayMinutes) && practice.todayMinutes >= 0 &&
+      ['not_practiced', 'below_goal', 'qualified', 'practiced'].includes(practice.todayStatus) &&
+      typeof practice.statusLabel === 'string' && practice.statusLabel.trim());
   if (!report || !/^\d{4}-\d{2}-\d{2}$/.test(report.businessDate || '') ||
       !report.settings || !(goal === null || Number.isFinite(goal) && goal > 0) ||
       !Array.isArray(members) || members.some(member => !member ||
-        !(member.todayStatus === 'not_practiced' || goal !== null && member.todayStatus === 'below_goal'))) {
+        !(member.todayStatus === 'not_practiced' || (goal !== null || multiPractice) && member.todayStatus === 'below_goal') ||
+        multiPractice && !validPractices(member))) {
     throw new Error('当日练习数据不完整，请刷新后重试');
   }
   if (!members.length) throw new Error('当日没有需要提醒的成员');
@@ -306,7 +366,7 @@ async function createReminderImage({ canvas, report, members, teamName = '', wxA
   if (!context) throw new Error('暂时无法生成图片，请重试或更新微信');
   const heading = layoutHeading(context, teamName, report.businessDate);
   const unit = ['分钟', '次', '件'].includes(report.unit) ? report.unit : '分钟';
-  const layouts = members.map(member => layoutCard(context, member, goal !== null, unit));
+  const layouts = members.map(member => layoutCard(context, member, goal !== null, unit, multiPractice));
   const logicalHeight = heading.height + 24 + layouts.reduce((sum, layout) => sum + layout.height, 0) + (layouts.length - 1) * 16;
   const scale = Math.min(2, MAX_CANVAS_EDGE / logicalHeight, MAX_CANVAS_EDGE / LOGICAL_WIDTH,
     Math.sqrt(MAX_CANVAS_PIXELS / (LOGICAL_WIDTH * logicalHeight)));

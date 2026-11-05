@@ -10,13 +10,17 @@ function normalizeName(value) {
 
 function selectReminderMembers(report) {
   const hasGoal = hasDailyGoal(report);
+  const multiPractice = Boolean(report && report.multiPractice);
+  const completedPractices = member => (Array.isArray(member.practices) ? member.practices : [])
+    .filter(practice => ['qualified', 'practiced'].includes(practice.todayStatus)).length;
   return (report && Array.isArray(report.members) ? report.members : [])
     .filter(member => member && (member.todayStatus === 'not_practiced' ||
-      hasGoal && member.todayStatus === 'below_goal'))
+      (hasGoal || multiPractice) && member.todayStatus === 'below_goal'))
     .map(member => ({ ...member, nickname: normalizeName(member.nickname),
       todayMinutes: Math.max(0, Number(member.todayMinutes) || 0) }))
     .sort((a, b) => Number(a.todayStatus !== 'not_practiced') - Number(b.todayStatus !== 'not_practiced') ||
-      a.todayMinutes - b.todayMinutes || a.nickname.localeCompare(b.nickname));
+      (multiPractice ? completedPractices(a) - completedPractices(b) : a.todayMinutes - b.todayMinutes) ||
+      a.nickname.localeCompare(b.nickname));
 }
 
 function buildReminderText({ report } = {}) {

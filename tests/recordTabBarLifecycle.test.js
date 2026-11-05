@@ -6,12 +6,11 @@ const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '../miniprogram');
 const HOME = 'pages/index/index';
-const TIMER = 'pages/timer/timer';
 const RECORDS = 'pages/practices/practices';
 const TEAM = 'pages/team/team';
 const ME = 'pages/me/me';
 const SETTINGS = 'pages/practiceSettings/practiceSettings';
-const ALL_ROUTES = [HOME, TIMER, RECORDS, TEAM, ME];
+const ALL_ROUTES = [HOME, RECORDS, TEAM, ME];
 const plain = value => JSON.parse(JSON.stringify(value));
 const tap = pagePath => ({ currentTarget: { dataset: { pagePath } } });
 const hasTabs = patch => Object.hasOwn(patch, 'tabs');
@@ -227,7 +226,7 @@ test('settings immediately updates every cached bar before the first and later t
   h.warmTabs();
   let settings = h.openSettings();
   assert.deepEqual(h.stack.map(page => page.route), [ME, SETTINGS]);
-  assert.equal(h.pages.size, 5, 'four cached tab pages are absent from the settings stack');
+  assert.equal(h.pages.size, 4, 'three cached tab pages are absent from the settings stack');
 
   for (const visible of [false, true]) {
     h.clearObservations();
@@ -286,13 +285,13 @@ test('repeated settings and foreground notifications preserve each owner highlig
 test('an instance created after a settings change sends the correct first nonempty layout', () => {
   const h = harness();
   h.enterTab(ME);
-  for (const [visible, newRoute] of [[false, TIMER], [true, TEAM]]) {
+  for (const [visible, newRoute] of [[false, HOME], [true, TEAM]]) {
     const settings = h.openSettings();
     h.toggle(settings, visible);
     h.closeSettings();
     assertFirstRender(h.switchTo(newRoute), visible);
     const { bar } = h.pages.get(newRoute);
-    assert.deepEqual(bar.initialData.tabs, [], 'unattached instances must not expose a default five-item layout');
+    assert.deepEqual(bar.initialData.tabs, [], 'unattached instances must not expose a default tab layout');
     const firstLayout = bar.patches.find(patch => patch.tabs && patch.tabs.length);
     assert.ok(firstLayout, 'attached sends a renderable layout');
     assert.deepEqual(firstLayout.tabs.map(tab => tab.pagePath),
@@ -305,45 +304,45 @@ test('an instance created after a settings change sends the correct first nonemp
 
 test('page lifecycle synchronization confirms the destination even while the source remains in the stack', () => {
   const h = harness();
-  h.enterTab(TIMER);
-  const timer = h.pages.get(TIMER);
+  h.enterTab(TEAM);
+  const team = h.pages.get(TEAM);
   h.enterTab(HOME);
-  timer.bar._page = null;
-  timer.bar._pageProvisional = false;
-  timer.bar.data.selectedPath = '';
+  team.bar._page = null;
+  team.bar._pageProvisional = false;
+  team.bar.data.selectedPath = '';
   // Page.onShow and Page.onReady pass their own instance rather than consulting
   // a navigation stack that may still contain the previous tab.
-  h.app.syncTabBar(timer);
-  assertLayout(timer.bar, true, TIMER);
+  h.app.syncTabBar(team);
+  assertLayout(team.bar, true, TEAM);
   assert.equal(h.stack.at(-1).route, HOME);
   assertLayout(h.pages.get(HOME).bar, true, HOME);
   h.app.refreshTabBars();
-  assertLayout(timer.bar, true, TIMER);
+  assertLayout(team.bar, true, TEAM);
 
   h.app.syncTabBar(null);
-  h.app.syncTabBar({ route: TIMER });
-  h.app.syncTabBar({ route: TIMER, getTabBar: () => null });
+  h.app.syncTabBar({ route: TEAM });
+  h.app.syncTabBar({ route: TEAM, getTabBar: () => null });
   assert.deepEqual(h.requests, [], 'missing components are left for later lifecycle synchronization');
 });
 
 test('detaching a cached bar removes it from later preference and reminder broadcasts', () => {
   const h = harness();
   h.warmTabs();
-  const timer = h.pages.get(TIMER).bar;
-  h.detach(TIMER);
+  const team = h.pages.get(TEAM).bar;
+  h.detach(TEAM);
   h.clearObservations();
   const settings = h.openSettings();
   h.toggle(settings, false);
   h.alerts({ user: true });
   h.app.refreshTabBars();
-  h.show(TIMER); // An already queued lifecycle callback must also stay inert.
-  assert.deepEqual(timer.patches, []);
-  assert.equal(timer.calls.refresh, 1, 'only the explicitly queued show reaches the detached instance');
-  assert.equal(timer.calls.setMeAlert, 0);
-  assertLayout(timer, true, TIMER);
-  assert.equal(timer.data.hasMeAlert, false);
+  h.show(TEAM); // An already queued lifecycle callback must also stay inert.
+  assert.deepEqual(team.patches, []);
+  assert.equal(team.calls.refresh, 1, 'only the explicitly queued show reaches the detached instance');
+  assert.equal(team.calls.setMeAlert, 0);
+  assertLayout(team, true, TEAM);
+  assert.equal(team.data.hasMeAlert, false);
   for (const [route, { bar }] of h.pages) {
-    if (route === TIMER) continue;
+    if (route === TEAM) continue;
     assertLayout(bar, false, route);
     assert.equal(bar.data.hasMeAlert, true);
   }
@@ -373,4 +372,5 @@ test('all reminder sources update background bars once per broadcast without rew
     }
   }
   assert.equal(h.nativeDots.at(-1).visible, true);
+  assert.equal(h.nativeDots.at(-1).index, 3, 'native reminder follows Me after removing the timer tab');
 });

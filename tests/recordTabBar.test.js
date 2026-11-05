@@ -6,14 +6,13 @@ const vm = require('node:vm');
 
 const componentPath = path.join(__dirname, '../miniprogram/custom-tab-bar/index.js');
 const HOME = 'pages/index/index';
-const TIMER = 'pages/timer/timer';
 const RECORDS = 'pages/practices/practices';
 const TEAM = 'pages/team/team';
 const ME = 'pages/me/me';
 const SETTINGS = 'pages/practiceSettings/practiceSettings';
-const TAB_ROUTES = [HOME, TIMER, RECORDS, TEAM, ME];
-const FOUR_NAMES = ['首页', '计时', '团队', '我'];
-const FIVE_NAMES = ['首页', '计时', '记录', '团队', '我'];
+const TAB_ROUTES = [HOME, RECORDS, TEAM, ME];
+const HIDDEN_NAMES = ['首页', '团队', '我'];
+const VISIBLE_NAMES = ['首页', '记录', '团队', '我'];
 const plain = value => JSON.parse(JSON.stringify(value));
 const tap = pagePath => ({ currentTarget: { dataset: { pagePath } } });
 
@@ -147,7 +146,7 @@ test('the first populated frame uses saved visibility, selected route and remind
     const h = harness({ route: ME, visible, alerts: { backfillAdmin: true } });
     assert.deepEqual(names(h.bar), []);
     h.attach();
-    assert.deepEqual(names(h.bar), visible ? FIVE_NAMES : FOUR_NAMES);
+    assert.deepEqual(names(h.bar), visible ? VISIBLE_NAMES : HIDDEN_NAMES);
     assert.equal(h.bar.data.recordsVisible, visible);
     assert.equal(h.bar.data.selectedPath, ME);
     assert.equal(h.bar.data.hasMeAlert, true);
@@ -155,7 +154,7 @@ test('the first populated frame uses saved visibility, selected route and remind
     assert.deepEqual(viewNames(h.bar), [], 'setData updates logic before the view renders');
     h.flushView();
     assert.equal(h.bar.frames.length, 2);
-    assert.deepEqual(viewNames(h.bar), visible ? FIVE_NAMES : FOUR_NAMES);
+    assert.deepEqual(viewNames(h.bar), visible ? VISIBLE_NAMES : HIDDEN_NAMES);
     assert.equal(h.bar.view.selectedPath, ME);
     assert.equal(h.bar.view.hasMeAlert, true);
     assert.equal(h.requests.length, 0);
@@ -167,13 +166,13 @@ test('each cached tab keeps its own route when settings are refreshed above it',
   h.pushPage(SETTINGS);
   h.setVisible(false); h.app.refreshTabBars();
   for (const [route, bar] of tabs) {
-    assert.deepEqual(names(bar), FOUR_NAMES);
+    assert.deepEqual(names(bar), HIDDEN_NAMES);
     assert.equal(bar.data.selectedPath, route === RECORDS ? '' : route);
   }
   assert.equal(h.requests.length, 0, 'a background records tab cannot dismiss settings');
   h.setVisible(true); h.app.refreshTabBars();
   for (const [route, bar] of tabs) {
-    assert.deepEqual(names(bar), FIVE_NAMES);
+    assert.deepEqual(names(bar), VISIBLE_NAMES);
     assert.equal(bar.data.selectedPath, route);
   }
 });
@@ -186,10 +185,10 @@ test('attached bars register once and detached bars stop receiving global refres
   assert.deepEqual(h.unregistrations, [h.bar]);
   assert.equal(h.registered.has(h.bar), false);
   h.setVisible(false); h.app.refreshTabBars();
-  assert.deepEqual(names(h.bar), FIVE_NAMES);
+  assert.deepEqual(names(h.bar), VISIBLE_NAMES);
 });
 
-test('hiding records updates cached bars before the first switch and never shows five again', () => {
+test('hiding records updates cached bars before the first switch and never shows the hidden entry again', () => {
   const h = harness({ visible: true }), tabs = attachAllTabs(h);
   h.flushAll();
   h.pushPage(SETTINGS);
@@ -197,33 +196,33 @@ test('hiding records updates cached bars before the first switch and never shows
   const frameStarts = new Map([...tabs.values()].map(bar => [bar, bar.frames.length - 1]));
   h.setRoute(ME); h.show(tabs.get(ME));
   let current = tabs.get(ME);
-  for (const route of [HOME, TIMER, TEAM, ME]) {
+  for (const route of [HOME, TEAM, ME]) {
     const source = current, sourceRoute = source.data.selectedPath;
     source.onTabTap(tap(route));
     assert.equal(h.requests.at(-1).url, `/${route}`);
     current = h.succeed(); h.flushAll();
     assert.equal(source.data.selectedPath, sourceRoute, 'callbacks do not rebind the old bar');
     assert.equal(current.data.selectedPath, route);
-    assert.deepEqual(viewNames(current), FOUR_NAMES, 'the first click already has four tabs');
+    assert.deepEqual(viewNames(current), HIDDEN_NAMES, 'the first click already has three tabs');
   }
   for (const bar of tabs.values()) {
     const frames = bar.frames.slice(frameStarts.get(bar));
     assert.ok(frames.length);
-    assert.ok(frames.every(frame => frame.tabs.length === 4), 'no stale records entry returns');
+    assert.ok(frames.every(frame => frame.tabs.length === 3), 'no stale records entry returns');
   }
-  assert.equal(h.requests.length, 4);
+  assert.equal(h.requests.length, 3);
 });
 
 test('a new instance reads changed preferences after the same definition was already used', () => {
   const h = harness({ visible: true }); h.attach(); h.flushView();
   h.setVisible(false); h.app.refreshTabBars();
-  h.setRoute(TIMER);
-  const timer = h.createBar(TIMER); h.attach(timer); h.flushView(timer);
-  assert.deepEqual(timer.frames.map(frame => frame.tabs.length), [0, 4]);
-  assert.equal(timer.view.selectedPath, TIMER);
+  h.setRoute(TEAM);
+  const team = h.createBar(TEAM); h.attach(team); h.flushView(team);
+  assert.deepEqual(team.frames.map(frame => frame.tabs.length), [0, 3]);
+  assert.equal(team.view.selectedPath, TEAM);
   h.setVisible(true); h.app.refreshTabBars(); h.flushAll();
-  assert.deepEqual(viewNames(h.bar), FIVE_NAMES);
-  assert.deepEqual(viewNames(timer), FIVE_NAMES);
+  assert.deepEqual(viewNames(h.bar), VISIBLE_NAMES);
+  assert.deepEqual(viewNames(team), VISIBLE_NAMES);
 });
 
 test('repeated refreshes and taps do not resend unchanged tab arrays or selection', () => {
@@ -248,43 +247,65 @@ test('a bar binds to its own page below settings instead of adopting the top rou
   assert.equal(h.requests.length, 0);
 });
 
+test('a regular timer above home cannot claim its bar or trigger delayed tab gestures', () => {
+  const timerRoute = 'pages/timer/timer';
+  const h = harness({ visible: true });
+  h.attach();
+  const timer = h.pushPage(timerRoute);
+  timer.exposeBar = false;
+  h.bar.refresh(timer);
+  h.setVisible(false);
+  h.app.refreshTabBars();
+  h.bar.onTabTap(tap(TEAM));
+  assert.equal(h.bar.data.selectedPath, HOME);
+  assert.deepEqual(names(h.bar), HIDDEN_NAMES);
+  assert.equal(h.requests.length, 0, 'the hidden home bar cannot navigate over the timer');
+
+  h.setRoute(HOME);
+  h.show();
+  h.bar.onTabTap(tap(timerRoute));
+  assert.equal(h.requests.length, 0, 'a stale timer tab target is no longer accepted');
+  h.bar.onTabTap(tap(TEAM));
+  assert.equal(h.requests.at(-1).url, `/${TEAM}`, 'home navigation works after returning');
+});
+
 test('a top tab can be captured before getTabBar becomes available', () => {
-  const h = harness({ route: TIMER });
-  h.pageFor(TIMER).exposeBar = false; h.attach();
-  assert.equal(h.bar.data.selectedPath, TIMER);
-  h.pageFor(TIMER).exposeBar = true;
+  const h = harness({ route: TEAM });
+  h.pageFor(TEAM).exposeBar = false; h.attach();
+  assert.equal(h.bar.data.selectedPath, TEAM);
+  h.pageFor(TEAM).exposeBar = true;
   h.pushPage(SETTINGS); h.bar.refresh();
-  assert.equal(h.bar.data.selectedPath, TIMER);
+  assert.equal(h.bar.data.selectedPath, TEAM);
 });
 
 test('a destination attached before the stack changes never selects a ready source page', () => {
   const h = harness({ visible: true }); h.attach(); h.flushView();
-  const timer = h.createBar(TIMER);
-  h.attach(timer); h.flushView(timer);
-  assert.equal(timer.data.selectedPath, '', 'the source already belongs to a different bar');
-  assert.ok(timer.frames.every(frame => frame.selectedPath !== HOME));
-  h.setRoute(TIMER); h.show(timer); h.flushView(timer);
-  assert.equal(timer.data.selectedPath, TIMER);
-  assert.equal(timer.view.selectedPath, TIMER);
+  const team = h.createBar(TEAM);
+  h.attach(team); h.flushView(team);
+  assert.equal(team.data.selectedPath, '', 'the source already belongs to a different bar');
+  assert.ok(team.frames.every(frame => frame.selectedPath !== HOME));
+  h.setRoute(TEAM); h.show(team); h.flushView(team);
+  assert.equal(team.data.selectedPath, TEAM);
+  assert.equal(team.view.selectedPath, TEAM);
   assert.equal(h.bar.data.selectedPath, HOME);
-  assert.ok(timer.frames.every(frame => frame.selectedPath !== HOME));
+  assert.ok(team.frames.every(frame => frame.selectedPath !== HOME));
   assert.equal(h.requests.length, 0);
 });
 
 test('destination show corrects provisional ownership while both page APIs are still unavailable', () => {
   const h = harness({ visible: true });
   h.pageFor(HOME).exposeBar = false; h.attach();
-  const timer = h.createBar(TIMER);
-  h.pageFor(TIMER).exposeBar = false;
-  h.attach(timer);
-  assert.equal(timer.data.selectedPath, HOME, 'early attach can only capture the old stack provisionally');
-  h.setRoute(TIMER); h.show(timer); h.flushView(timer);
-  assert.equal(timer.data.selectedPath, TIMER, 'show rechecks its own newly visible page');
-  assert.equal(timer.view.selectedPath, TIMER);
+  const team = h.createBar(TEAM);
+  h.pageFor(TEAM).exposeBar = false;
+  h.attach(team);
+  assert.equal(team.data.selectedPath, HOME, 'early attach can only capture the old stack provisionally');
+  h.setRoute(TEAM); h.show(team); h.flushView(team);
+  assert.equal(team.data.selectedPath, TEAM, 'show rechecks its own newly visible page');
+  assert.equal(team.view.selectedPath, TEAM);
   assert.equal(h.bar.data.selectedPath, HOME);
-  h.pageFor(TIMER).exposeBar = true; timer.refresh();
-  h.setRoute(HOME); timer.refresh();
-  assert.equal(timer.data.selectedPath, TIMER, 'later background refreshes preserve verified ownership');
+  h.pageFor(TEAM).exposeBar = true; team.refresh();
+  h.setRoute(HOME); team.refresh();
+  assert.equal(team.data.selectedPath, TEAM, 'later background refreshes preserve verified ownership');
   assert.equal(h.requests.length, 0);
 });
 
@@ -293,18 +314,18 @@ test('switch success repairs a destination whose attach and show both preceded t
     for (const provisional of [false, true]) {
       const h = harness({ visible }); h.attach();
       if (provisional) h.pageFor(HOME).exposeBar = false;
-      h.bar.onTabTap(tap(TIMER));
-      const timer = h.createBar(TIMER);
-      h.pageFor(TIMER).exposeBar = false;
-      h.attach(timer); h.show(timer);
-      assert.equal(timer.data.selectedPath, provisional ? HOME : '');
+      h.bar.onTabTap(tap(TEAM));
+      const team = h.createBar(TEAM);
+      h.pageFor(TEAM).exposeBar = false;
+      h.attach(team); h.show(team);
+      assert.equal(team.data.selectedPath, provisional ? HOME : '');
 
-      h.setRoute(TIMER);
-      h.pageFor(TIMER).exposeBar = true;
+      h.setRoute(TEAM);
+      h.pageFor(TEAM).exposeBar = true;
       h.requests[0].success(); h.requests[0].complete(); h.flushAll();
-      assert.equal(timer.view.selectedPath, TIMER, 'the successful switch must repair the visible target');
+      assert.equal(team.view.selectedPath, TEAM, 'the successful switch must repair the visible target');
       assert.equal(h.bar.data.selectedPath, HOME, 'the source must retain its own highlight');
-      assert.deepEqual(viewNames(timer), visible ? FIVE_NAMES : FOUR_NAMES);
+      assert.deepEqual(viewNames(team), visible ? VISIBLE_NAMES : HIDDEN_NAMES);
       assert.equal(h.requests.length, 1);
     }
   }
@@ -312,41 +333,41 @@ test('switch success repairs a destination whose attach and show both preceded t
 
 test('an explicit host page selects its own bar before the navigation stack catches up', () => {
   const h = harness({ visible: true }); h.attach();
-  const timer = h.createBar(TIMER);
-  h.attach(timer); h.show(timer);
-  assert.equal(timer.data.selectedPath, '');
+  const team = h.createBar(TEAM);
+  h.attach(team); h.show(team);
+  assert.equal(team.data.selectedPath, '');
 
-  timer.refresh(h.pageFor(TIMER));
-  assert.equal(timer.data.selectedPath, TIMER);
-  h.bar.refresh(h.pageFor(TIMER));
+  team.refresh(h.pageFor(TEAM));
+  assert.equal(team.data.selectedPath, TEAM);
+  h.bar.refresh(h.pageFor(TEAM));
   assert.equal(h.bar.data.selectedPath, HOME, 'another component cannot claim the explicit page');
   h.pushPage(SETTINGS); h.app.refreshTabBars();
-  assert.equal(timer.data.selectedPath, TIMER, 'later background refreshes preserve confirmed ownership');
+  assert.equal(team.data.selectedPath, TEAM, 'later background refreshes preserve confirmed ownership');
   assert.equal(h.requests.length, 0);
 });
 
 test('component ready repairs early lifecycle selection when the destination page becomes available', () => {
   const h = harness({ visible: true }); h.attach();
-  const timer = h.createBar(TIMER);
-  h.attach(timer); h.show(timer);
-  assert.equal(timer.data.selectedPath, '');
-  h.setRoute(TIMER);
-  h.pageFor(TIMER).exposeBar = false;
-  h.definition.lifetimes.ready.call(timer); h.flushView(timer);
-  assert.equal(timer.view.selectedPath, TIMER);
+  const team = h.createBar(TEAM);
+  h.attach(team); h.show(team);
+  assert.equal(team.data.selectedPath, '');
+  h.setRoute(TEAM);
+  h.pageFor(TEAM).exposeBar = false;
+  h.definition.lifetimes.ready.call(team); h.flushView(team);
+  assert.equal(team.view.selectedPath, TEAM);
   assert.equal(h.bar.data.selectedPath, HOME);
   assert.equal(h.requests.length, 0, 'programmatic navigation can recover without a custom tap callback');
 });
 
 test('a delayed switch callback cannot select a destination after a newer navigation took over', () => {
   const h = harness({ visible: true }); h.attach();
-  h.bar.onTabTap(tap(TIMER));
-  const timer = h.createBar(TIMER); h.attach(timer); h.show(timer);
+  h.bar.onTabTap(tap(TEAM));
+  const team = h.createBar(TEAM); h.attach(team); h.show(team);
   h.setRoute(ME);
   const me = h.createBar(ME); h.attach(me);
   h.requests[0].success(); h.requests[0].complete();
   assert.equal(me.data.selectedPath, ME);
-  assert.equal(timer.data.selectedPath, '');
+  assert.equal(team.data.selectedPath, '');
   assert.equal(h.bar.data.selectedPath, HOME);
 });
 
@@ -354,7 +375,7 @@ test('account changes reload visibility and an active hidden records page return
   const h = harness({ visible: true, route: RECORDS }); h.attach();
   assert.equal(h.bar.data.selectedPath, RECORDS);
   h.setAccount('owner-b'); h.show(); h.bar.refresh();
-  assert.deepEqual(names(h.bar), FOUR_NAMES);
+  assert.deepEqual(names(h.bar), HIDDEN_NAMES);
   assert.equal(h.bar.data.selectedPath, '');
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].url, `/${HOME}`);
@@ -362,7 +383,7 @@ test('account changes reload visibility and an active hidden records page return
   assert.equal(home.data.selectedPath, HOME);
   assert.equal(h.bar.data.selectedPath, '', 'the cached records bar keeps its hidden selection');
   h.setAccount('owner-a'); h.app.refreshTabBars();
-  assert.deepEqual(names(h.bar), FIVE_NAMES);
+  assert.deepEqual(names(h.bar), VISIBLE_NAMES);
   assert.equal(h.bar.data.selectedPath, RECORDS);
   assert.equal(home.data.selectedPath, HOME);
   assert.equal(h.requests.length, 1);
@@ -386,7 +407,7 @@ test('background records bars never navigate during settings or another tab refr
   assert.equal(h.requests.length, 0);
   h.setRoute(HOME);
   const home = h.createBar(HOME); h.attach(home); h.app.refreshTabBars();
-  h.bar.onTabTap(tap(HOME)); h.bar.onTabTap(tap(TIMER));
+  h.bar.onTabTap(tap(HOME)); h.bar.onTabTap(tap(TEAM));
   assert.equal(h.requests.length, 0, 'a delayed background gesture cannot navigate');
   assert.equal(home.data.selectedPath, HOME);
   assert.equal(h.bar.data.selectedPath, '');
@@ -397,7 +418,7 @@ test('background records bars never navigate during settings or another tab refr
 test('a shared records entry stays open without restoring its hidden tab or saving preferences', () => {
   const options = { from: 'share' }, h = harness({ route: RECORDS, options });
   h.attach(); h.show(); h.bar.refresh();
-  assert.deepEqual(names(h.bar), FOUR_NAMES);
+  assert.deepEqual(names(h.bar), HIDDEN_NAMES);
   assert.equal(h.bar.data.recordsVisible, false);
   assert.equal(h.bar.data.selectedPath, '');
   assert.equal(h.settings.get('owner-a'), false);
@@ -434,7 +455,7 @@ test('only the exact share query on the current records page bypasses the hidden
 test('a shared records entry remains accessible when preferences cannot be read', () => {
   const options = { from: 'share' }, h = harness({ route: RECORDS, options, visible: true });
   h.failReads(); h.attach(); h.show();
-  assert.deepEqual(names(h.bar), FOUR_NAMES);
+  assert.deepEqual(names(h.bar), HIDDEN_NAMES);
   assert.equal(h.bar.data.recordsVisible, false);
   assert.equal(h.requests.length, 0);
   assert.equal(h.settings.get('owner-a'), true);
@@ -451,7 +472,7 @@ test('stale records taps are rejected after a setting or account change', () => 
     else h.setAccount('owner-b');
     h.bar.onTabTap(tap(RECORDS));
     assert.equal(h.requests.length, 0);
-    assert.deepEqual(names(h.bar), FOUR_NAMES);
+    assert.deepEqual(names(h.bar), HIDDEN_NAMES);
     assert.equal(h.bar.data.selectedPath, HOME);
   }
 });
@@ -470,8 +491,8 @@ test('navigation failure preserves selection and success does not rebind the old
   const me = h.succeed(); h.flushAll();
   assert.equal(me.data.selectedPath, ME);
   assert.equal(h.bar.data.selectedPath, HOME);
-  assert.equal(h.bar.data.tabs.length, 5);
-  h.bar.onTabTap(tap(TIMER));
+  assert.equal(h.bar.data.tabs.length, 4);
+  h.bar.onTabTap(tap(TEAM));
   assert.equal(h.requests.length, 2, 'late taps from the previous page are ignored');
 });
 
@@ -500,7 +521,7 @@ test('all four reminders appear on Me and explicit updates clear or restore the 
 test('unreadable preferences safely omit records', () => {
   const h = harness({ visible: true }); h.attach();
   h.failReads(); h.bar.refresh();
-  assert.deepEqual(names(h.bar), FOUR_NAMES);
+  assert.deepEqual(names(h.bar), HIDDEN_NAMES);
 });
 
 test('markup preserves route keys, original icons, overlay layer and safe area padding', () => {
