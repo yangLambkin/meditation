@@ -167,6 +167,10 @@ App({
       if (typeof bar.refresh === 'function') bar.refresh();
     });
   },
+  syncTabBar(page) {
+    const bar = page && typeof page.getTabBar === 'function' ? page.getTabBar() : null;
+    if (bar && typeof bar.refresh === 'function') bar.refresh(page);
+  },
   getSyncAlertState({ includeBackfill = false } = {}) {
     const state = this._syncAlertState || {};
     const current = this._syncAlertVisible && this._syncAlertAccount === this.syncAlertIdentity();

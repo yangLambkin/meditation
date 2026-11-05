@@ -288,6 +288,68 @@ test('destination show corrects provisional ownership while both page APIs are s
   assert.equal(h.requests.length, 0);
 });
 
+test('switch success repairs a destination whose attach and show both preceded the stack update', () => {
+  for (const visible of [false, true]) {
+    for (const provisional of [false, true]) {
+      const h = harness({ visible }); h.attach();
+      if (provisional) h.pageFor(HOME).exposeBar = false;
+      h.bar.onTabTap(tap(TIMER));
+      const timer = h.createBar(TIMER);
+      h.pageFor(TIMER).exposeBar = false;
+      h.attach(timer); h.show(timer);
+      assert.equal(timer.data.selectedPath, provisional ? HOME : '');
+
+      h.setRoute(TIMER);
+      h.pageFor(TIMER).exposeBar = true;
+      h.requests[0].success(); h.requests[0].complete(); h.flushAll();
+      assert.equal(timer.view.selectedPath, TIMER, 'the successful switch must repair the visible target');
+      assert.equal(h.bar.data.selectedPath, HOME, 'the source must retain its own highlight');
+      assert.deepEqual(viewNames(timer), visible ? FIVE_NAMES : FOUR_NAMES);
+      assert.equal(h.requests.length, 1);
+    }
+  }
+});
+
+test('an explicit host page selects its own bar before the navigation stack catches up', () => {
+  const h = harness({ visible: true }); h.attach();
+  const timer = h.createBar(TIMER);
+  h.attach(timer); h.show(timer);
+  assert.equal(timer.data.selectedPath, '');
+
+  timer.refresh(h.pageFor(TIMER));
+  assert.equal(timer.data.selectedPath, TIMER);
+  h.bar.refresh(h.pageFor(TIMER));
+  assert.equal(h.bar.data.selectedPath, HOME, 'another component cannot claim the explicit page');
+  h.pushPage(SETTINGS); h.app.refreshTabBars();
+  assert.equal(timer.data.selectedPath, TIMER, 'later background refreshes preserve confirmed ownership');
+  assert.equal(h.requests.length, 0);
+});
+
+test('component ready repairs early lifecycle selection when the destination page becomes available', () => {
+  const h = harness({ visible: true }); h.attach();
+  const timer = h.createBar(TIMER);
+  h.attach(timer); h.show(timer);
+  assert.equal(timer.data.selectedPath, '');
+  h.setRoute(TIMER);
+  h.pageFor(TIMER).exposeBar = false;
+  h.definition.lifetimes.ready.call(timer); h.flushView(timer);
+  assert.equal(timer.view.selectedPath, TIMER);
+  assert.equal(h.bar.data.selectedPath, HOME);
+  assert.equal(h.requests.length, 0, 'programmatic navigation can recover without a custom tap callback');
+});
+
+test('a delayed switch callback cannot select a destination after a newer navigation took over', () => {
+  const h = harness({ visible: true }); h.attach();
+  h.bar.onTabTap(tap(TIMER));
+  const timer = h.createBar(TIMER); h.attach(timer); h.show(timer);
+  h.setRoute(ME);
+  const me = h.createBar(ME); h.attach(me);
+  h.requests[0].success(); h.requests[0].complete();
+  assert.equal(me.data.selectedPath, ME);
+  assert.equal(timer.data.selectedPath, '');
+  assert.equal(h.bar.data.selectedPath, HOME);
+});
+
 test('account changes reload visibility and an active hidden records page returns home once', () => {
   const h = harness({ visible: true, route: RECORDS }); h.attach();
   assert.equal(h.bar.data.selectedPath, RECORDS);

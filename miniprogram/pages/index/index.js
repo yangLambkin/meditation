@@ -8,8 +8,9 @@ const bijingRecordSync = require('../../utils/bijingRecordSync.js');
 const homeBackfill = require('../../utils/homeBackfill.js');
 const practiceEntry = require('../../utils/practiceEntry.js');
 
-function applySyncAlertDot() {
+function syncTabBar(page) {
   const app = typeof getApp === 'function' ? getApp() : null;
+  if (page && app && typeof app.syncTabBar === 'function') app.syncTabBar(page);
   if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
 }
 function refreshAlertsAfterAccountChange(previousAccount, account) {
@@ -760,7 +761,7 @@ Page({
       console.log('生成新的本地用户标识:', newLocalUserId);
       wx.setStorageSync('localUserId', newLocalUserId);
       wx.setStorageSync('userOpenId', newLocalUserId);
-      applySyncAlertDot();
+      syncTabBar();
       
       this.setData({
         userOpenId: newLocalUserId,
@@ -1729,13 +1730,14 @@ Page({
    * 生命周期函数--监听页面初次渲染完成
    */
   onReady() {
-    applySyncAlertDot();
+    syncTabBar(this);
   },
 
   /**
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    syncTabBar(this);
     this._checkinPageHidden = false;
     if (this.data.showForm && this._checkinEditAccount !== this.getCheckinActionAccount()) {
       this._checkinEditToken = null;
@@ -1749,7 +1751,6 @@ Page({
       wx.removeStorageSync('practiceSittingEntry');
       this.openCheckinModal();
     }
-    applySyncAlertDot();
     console.log('=== index页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {

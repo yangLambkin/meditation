@@ -46,6 +46,10 @@ Component({
       if (app && typeof app.registerTabBar === 'function') app.registerTabBar(this);
       this.refresh();
     },
+    ready() {
+      // Page APIs can become available after attached and the first page show.
+      this.refresh();
+    },
     detached() {
       this._detached = true;
       const app = appInstance();
@@ -85,8 +89,15 @@ Component({
       return this._page;
     },
 
-    refresh() {
+    refresh(host) {
       if (this._detached) return;
+      // Page onShow/onReady knows its own component even before the navigation
+      // stack catches up. Confirm that identity instead of guessing its route.
+      if (TABS.some(item => item.pagePath === currentRoute(host)) &&
+          typeof host.getTabBar === 'function' && host.getTabBar() === this) {
+        this._page = host;
+        this._pageProvisional = false;
+      }
       const visible = recordsVisible();
       const changedTabs = !this.data.tabs.length || visible !== this.data.recordsVisible;
       const tabs = changedTabs ? TABS.filter(item => visible || item.pagePath !== RECORDS_PATH) : this.data.tabs;
@@ -131,8 +142,15 @@ Component({
       try {
         wx.switchTab({
           url: `/${pagePath}`,
-          // The destination selects its own bar; this cached bar keeps its host.
-          success: () => this.refresh(),
+          success: () => {
+            this.refresh();
+            // Destination attached/show may have run against the old stack.
+            // Repair its selection now without rebinding this cached source.
+            const page = currentPage();
+            if (currentRoute(page) !== pagePath) return;
+            const bar = typeof page.getTabBar === 'function' ? page.getTabBar() : null;
+            if (bar && typeof bar.refresh === 'function') bar.refresh(page);
+          },
           fail: () => {
             wx.showToast({ title: '页面打开失败，请重试', icon: 'none' });
             this.refresh();

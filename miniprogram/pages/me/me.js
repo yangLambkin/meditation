@@ -86,10 +86,11 @@ Page({
   },
 
   onShow() {
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.syncTabBar === 'function') app.syncTabBar(this);
     const alertGeneration = this._meAlertGeneration = (this._meAlertGeneration || 0) + 1;
     this._adminHidden = false;
     this._bijingHidden = false;
-    const app = typeof getApp === 'function' ? getApp() : null;
     this.stopMeAlertWatch();
     if (app && typeof app.watchSyncAlerts === 'function') {
       this._stopMeAlertWatch = app.watchSyncAlerts(state => {
@@ -1101,6 +1102,7 @@ Page({
 
   onReady() {
     const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && typeof app.syncTabBar === 'function') app.syncTabBar(this);
     if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
   },
 

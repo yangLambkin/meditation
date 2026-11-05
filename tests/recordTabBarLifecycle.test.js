@@ -170,6 +170,58 @@ function assertFirstRender(render, visible) {
   assert.equal(render.selectedPath, render.route);
 }
 
+test('every tab page synchronizes its own component before show and ready business work', () => {
+  for (const route of ALL_ROUTES) {
+    let definition;
+    const stopAfterSync = new Error('tab synchronized');
+    const received = [];
+    const app = { syncTabBar(page) { received.push(page); throw stopAfterSync; } };
+    const filename = path.join(ROOT, `${route}.js`);
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      Page(value) { definition = value; },
+      getApp: () => app,
+      require(name) {
+        if (name === './practicePage.js') return () => ({ onShow() {} });
+        return { PRACTICES: [], DEFAULT_QUOTE: '', methods: {}, data: {}, timerAudioMethods: {} };
+      }
+    }, { filename });
+    const page = { route };
+    for (const lifecycle of ['onShow', 'onReady']) {
+      assert.equal(typeof definition[lifecycle], 'function', `${route}: ${lifecycle}`);
+      assert.throws(() => definition[lifecycle].call(page), error => error === stopAfterSync,
+        `${route}: ${lifecycle} must synchronize before touching page data or starting requests`);
+      assert.equal(received.at(-1), page, `${route}: ${lifecycle} passes the exact owning Page`);
+    }
+  }
+});
+
+test('records tab lifecycle wrappers preserve factory arguments, receivers and results', () => {
+  const calls = [];
+  const showResult = Promise.resolve('records loaded');
+  const readyResult = { ready: true };
+  let definition;
+  const original = {
+    onShow(...args) { calls.push({ lifecycle: 'show', receiver: this, args }); return showResult; },
+    onReady(...args) { calls.push({ lifecycle: 'ready', receiver: this, args }); return readyResult; }
+  };
+  const filename = path.join(ROOT, `${RECORDS}.js`);
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    Page(value) { definition = value; },
+    getApp: () => ({ syncTabBar(page) { calls.push({ lifecycle: 'sync', receiver: page }); } }),
+    require(name) {
+      assert.equal(name, './practicePage.js');
+      return screen => { assert.equal(screen, 'home'); return original; };
+    }
+  }, { filename });
+  const page = { route: RECORDS }, argument = { from: 'test' };
+  assert.equal(definition.onShow.call(page, argument, 2), showResult);
+  assert.equal(definition.onReady.call(page, argument), readyResult);
+  assert.deepEqual(calls.map(call => call.lifecycle), ['sync', 'show', 'sync', 'ready']);
+  assert.ok(calls.every(call => call.receiver === page));
+  assert.deepEqual(Array.from(calls[1].args), [argument, 2]);
+  assert.deepEqual(Array.from(calls[3].args), [argument]);
+});
+
 test('settings immediately updates every cached bar before the first and later tab gestures in either direction', () => {
   const h = harness();
   h.warmTabs();
@@ -249,6 +301,29 @@ test('an instance created after a settings change sends the correct first nonemp
     assertLayout(bar, visible, newRoute);
     h.switchTo(ME);
   }
+});
+
+test('page lifecycle synchronization confirms the destination even while the source remains in the stack', () => {
+  const h = harness();
+  h.enterTab(TIMER);
+  const timer = h.pages.get(TIMER);
+  h.enterTab(HOME);
+  timer.bar._page = null;
+  timer.bar._pageProvisional = false;
+  timer.bar.data.selectedPath = '';
+  // Page.onShow and Page.onReady pass their own instance rather than consulting
+  // a navigation stack that may still contain the previous tab.
+  h.app.syncTabBar(timer);
+  assertLayout(timer.bar, true, TIMER);
+  assert.equal(h.stack.at(-1).route, HOME);
+  assertLayout(h.pages.get(HOME).bar, true, HOME);
+  h.app.refreshTabBars();
+  assertLayout(timer.bar, true, TIMER);
+
+  h.app.syncTabBar(null);
+  h.app.syncTabBar({ route: TIMER });
+  h.app.syncTabBar({ route: TIMER, getTabBar: () => null });
+  assert.deepEqual(h.requests, [], 'missing components are left for later lifecycle synchronization');
 });
 
 test('detaching a cached bar removes it from later preference and reminder broadcasts', () => {

@@ -10,8 +10,9 @@ const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
 const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
 const MAX_SESSION_SECONDS = 24 * 60 * 60;
 
-function applySyncAlertDot() {
+function syncTabBar(page) {
   const app = typeof getApp === 'function' ? getApp() : null;
+  if (app && typeof app.syncTabBar === 'function') app.syncTabBar(page);
   if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
 }
 
@@ -179,11 +180,11 @@ Page({
   },
 
   onReady() {
-    applySyncAlertDot();
+    syncTabBar(this);
   },
 
   onShow() {
-    applySyncAlertDot();
+    syncTabBar(this);
     this.isPageVisible = true;
     // 路由动画期间保留完成弹窗，回到计时页时再清理，避免先闪回计时界面。
     if (this.didOpenDaily) this.closeCompletionDialog();

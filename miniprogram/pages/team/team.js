@@ -3,8 +3,9 @@ const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
 const { PRACTICES } = require('../../utils/practicePreferences.js');
 
-function applySyncAlertDot() {
+function syncTabBar(page) {
   const app = typeof getApp === 'function' ? getApp() : null;
+  if (app && typeof app.syncTabBar === 'function') app.syncTabBar(page);
   if (app && typeof app.applySyncAlertDot === 'function') app.applySyncAlertDot();
 }
 
@@ -62,11 +63,11 @@ Page({
   },
 
   onReady() {
-    applySyncAlertDot();
+    syncTabBar(this);
   },
 
   onShow() {
-    applySyncAlertDot();
+    syncTabBar(this);
     this.getUserInfo();
     return this.loadTeamData();
   },
