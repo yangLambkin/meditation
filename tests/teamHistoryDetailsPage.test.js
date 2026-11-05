@@ -60,7 +60,7 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
   });
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     Date: ClockDate,
-    require: name => dateModule.exports,
+    require: name => name.endsWith('/practicePreferences.js') ? require('../miniprogram/utils/practicePreferences.js') : dateModule.exports,
     Page(value) { definition = value; },
     wx: {
       getStorageSync: key => key === 'userOpenId' ? currentAccount : undefined,
@@ -672,4 +672,23 @@ test('a moved practice start month resets old pagination and adopts the new serv
     assert.equal(page.data.isLoadingMore, false, responseType);
     assert.deepEqual(rendered(page).map(item => item.openid), ['fresh'], responseType);
   }
+});
+
+test('bijing history preserves opaque cursors and count units when opening day records', async () => {
+  const teamId = 'bijing_6';
+  const settings = { practiceStartDate: '2026-09-01', dailyGoalMinutes: 2000, dayBoundaryHour: 2 };
+  const { page, calls } = createPage({ query: { teamId }, cloud: (_, count) => success(details(
+    count === 1 ? [row('a', '2026-09-18', 1000)] : [row('b', '2026-09-18', 1500)],
+    { teamId, practiceType: 'instant', unit: '次', settings, nextCursor: count === 1 ? 'opaque-next-page' : null }
+  )) });
+  await page.onShow();
+  assert.equal(page.data.loadError, '');
+  assert.equal(page.data.practiceUnit, '次');
+  assert.equal(page.data.groups[0].items[0].statusLabel, '数量不足');
+  assert.match(page.data.goalLabel, /2000 次/);
+  await page.loadMore();
+  assert.equal(calls.cloud[1].data.data.cursor, 'opaque-next-page');
+  assert.equal(page.data.itemCount, 2);
+  page.openDayRecords(event({ key: page.data.groups[0].items[0].key }));
+  assert.match(calls.navigation.at(-1).url, /^\/subpackages\/team\/pages\/memberRecords\/memberRecords\?/);
 });

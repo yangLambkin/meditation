@@ -5,8 +5,8 @@
       <image class="hero-image" src="/images/bg_image.png" mode="aspectFill" />
     </view>
     <view class="hero-content">
-      <view class="hero-welcome">欢迎回来，{{hasUserInfo ? userNickname : '静坐的朋友'}}</view>
-      <text class="hero-title">结伴静坐，共同成长</text>
+      <view class="hero-welcome">{{hasUserInfo ? '欢迎回来，' + userNickname : '在这里，找到同行的伙伴'}}</view>
+      <text class="hero-title">一起做功课，让坚持有伴</text>
       <view class="hero-footer">
         <view class="overview-summary">
           <view class="hero-stat">
@@ -34,6 +34,7 @@
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
         <view class="team-identity">
           <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text><text class="role-badge owner" wx:elif="{{item.isSelfManaged}}">我管理的</text></view>
+          <text class="practice-tag">{{item.practiceTypeName}}</text>
           <text class="team-owner">团长：{{item.creatorName || '匿名用户'}}</text>
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>
@@ -41,19 +42,20 @@
       <text class="team-description">{{item.description || ''}}</text>
     </view>
     <view wx:if="{{!totalJoinedTeams && !isLoading}}" class="empty-state">
-      <view class="empty-symbol">◎</view><text class="empty-title">从一个小组开始</text><text class="empty-description">请联系团长或副团长，通过邀请加入团队。<text wx:if="{{showCreateTeam}}">
-也可以创建自己的团队，邀请伙伴一起练习。</text></text>
+      <view class="empty-symbol">◎</view><text class="empty-title">找到一起做功课的伙伴</text><text class="empty-description">联系团长或副团长，受邀加入你感兴趣的功课团队。<text wx:if="{{showCreateTeam}}">
+也可以创建团队，邀请伙伴一起坚持。</text></text>
       <button wx:if="{{showCreateTeam}}" class="primary-button" bindtap="createNewTeam">创建第一个团队</button>
     </view>
   </block>
 
   <block wx:if="{{currentTab === 'joined'}}">
-    <view class="list-caption">找到一起静坐的伙伴，联系团长或副团长获取邀请即可加入。</view>
+    <view class="list-caption">选择想坚持的功课，找到同行的伙伴。联系团长或副团长获取邀请即可加入。</view>
     <view class="team-card" wx:for="{{allTeams}}" wx:key="_id">
       <view class="card-top">
         <image class="team-avatar" src="{{item.icon}}" mode="aspectFill" />
         <view class="team-identity">
           <view class="name-row"><text class="team-name">{{item.name}}</text><text class="role-badge owner" wx:if="{{item.isSelfCreated}}">我创建的</text><text class="role-badge owner" wx:elif="{{item.isSelfManaged}}">我管理的</text></view>
+          <text class="practice-tag">{{item.practiceTypeName}}</text>
           <text class="team-owner">团长：{{item.creatorName || '匿名用户'}}</text>
           <text class="member-count">{{item.memberCount || 0}} 位成员</text>
         </view>

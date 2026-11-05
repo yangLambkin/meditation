@@ -1,0 +1,104 @@
+page {
+  background: #f8fafc;
+  color: #354152;
+}
+
+.settings-page {
+  padding: 40rpx 32rpx;
+  padding-bottom: calc(48rpx + env(safe-area-inset-bottom));
+}
+
+.settings-title {
+  display: block;
+  margin-left: 8rpx;
+  font-size: 36rpx;
+  font-weight: 600;
+  line-height: 52rpx;
+}
+
+.settings-subtitle {
+  display: block;
+  margin: 12rpx 8rpx 0;
+  color: #8b94a2;
+  font-size: 24rpx;
+  line-height: 38rpx;
+}
+
+.settings-card {
+  margin-top: 32rpx;
+  border: 1rpx solid #edf0f3;
+  border-radius: 24rpx;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* 导航行用 view，避免原生 button 的默认定宽样式把内容挤到中间。 */
+.settings-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 160rpx;
+  padding: 32rpx;
+  text-align: left;
+}
+
+.settings-row + .settings-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 128rpx;
+  right: 32rpx;
+  height: 1rpx;
+  background: #f0f2f5;
+}
+
+.settings-row-hover {
+  background: #faf8f3;
+}
+
+.settings-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 72rpx;
+  height: 72rpx;
+  margin-right: 24rpx;
+  border-radius: 20rpx;
+  background: #faf7f0;
+}
+
+.settings-icon {
+  display: block;
+  width: 40rpx;
+  height: 40rpx;
+}
+
+.settings-copy {
+  flex: 1;
+  min-width: 0;
+  margin-right: 24rpx;
+}
+
+.settings-label {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 500;
+  line-height: 44rpx;
+}
+
+.settings-description {
+  display: block;
+  margin-top: 8rpx;
+  color: #8b94a2;
+  font-size: 24rpx;
+  line-height: 36rpx;
+}
+
+.settings-chevron {
+  flex-shrink: 0;
+  width: 24rpx;
+  height: 24rpx;
+  opacity: 0.6;
+}

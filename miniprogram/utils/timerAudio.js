@@ -1,6 +1,7 @@
 const { createCuePlayer } = require('./cuePlayer');
+const { getReminderSettings } = require('./timerReminderSettings');
 
-// 计时页的音频副作用集中在这里；不修改计时、完成草稿或记录入账状态。
+// 计时页的音频和提醒副作用集中在这里；不修改计时、完成草稿或记录入账状态。
 const timerAudioMethods = {
   initializeSessionAudio() {
     this.currentSessionSound = null;
@@ -192,6 +193,16 @@ const timerAudioMethods = {
     }
     this.deferredEndSound = false;
     this.currentSessionSound = type;
+    if (getReminderSettings(wx)[type] === 'vibrate') {
+      this.safeTimerEffect('vibrate_cue', () => wx.vibrateLong({
+        fail: error => this.countdownSession.diagnose('vibration_failed', {
+          cue: type, message: String(error && error.errMsg || '').slice(0, 160)
+        })
+      }));
+      // 震动没有音频结束事件；立即释放提醒状态，让引导继续且恢复时不补播铃声。
+      this.handleSessionSoundEnded();
+      return;
+    }
     this.cuePlayer.play(type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3');
   },
 

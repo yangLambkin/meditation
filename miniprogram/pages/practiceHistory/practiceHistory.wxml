@@ -101,7 +101,7 @@
               <text wx:if="{{type === 'all'}}" class="metric-month">本月 {{item.monthValue}} {{item.unit}}</text>
             </view>
           </view>
-          <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。团队、勋章继续沿用原静坐统计。</text>
+          <text class="stats-note">静坐历史尚未全部导入；这里的累计不代表原静坐完整历史。勋章仍按原静坐记录统计。</text>
         </view>
       </block>
     </view>

@@ -431,8 +431,8 @@ Page({
     });
   },
 
-  goToPracticeSettings() {
-    wx.navigateTo({ url: '/pages/practiceSettings/practiceSettings' });
+  goToSettings() {
+    wx.navigateTo({ url: '/pages/settings/settings' });
   },
 
   goToFeedbackPage() {

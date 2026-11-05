@@ -1,7 +1,7 @@
 <view class="create-team-page">
   <view class="page-heading">
     <text class="page-title">创建团队</text>
-    <text class="page-description">一起觉察，让练习成为日常</text>
+    <text class="page-description">选择一项功课，邀请伙伴一起坚持</text>
   </view>
 
   <view class="team-form-card">
@@ -38,13 +38,24 @@
         value="{{teamDescription}}" bindinput="onTeamDescriptionInput" maxlength="100"
         disabled="{{isCreating || hasCreatedTeam}}" />
     </view>
+    <view class="team-form-field">
+      <text class="team-form-label">功课类型</text>
+      <picker range="{{practiceTypes}}" range-key="name" value="{{practiceTypeIndex}}"
+        bindchange="onPracticeTypeChange" disabled="{{isCreating || hasCreatedTeam}}">
+        <view class="team-form-control">
+          <text>{{practiceTypes[practiceTypeIndex].name}}</text>
+          <text class="team-form-chevron">›</text>
+        </view>
+      </picker>
+      <text class="team-form-help">每个团队专注一项功课，创建后不可更改。</text>
+    </view>
   </view>
 
   <view class="team-form-card">
     <view class="team-form-heading team-form-rules-heading">
       <view class="team-form-rules-summary">
         <text class="team-form-title">练习规则</text>
-        <text class="team-form-help">{{practiceRulesEnabled ? '每日多次练习累计计算' : '开启后可设置统计日期和每日期望分钟。'}}</text>
+        <text class="team-form-help">{{practiceRulesEnabled ? '每日多次练习累计计算' : '开启后可设置统计日期和每日目标。'}}</text>
       </view>
       <switch class="team-form-rules-switch" checked="{{practiceRulesEnabled}}" bindchange="onPracticeRulesChange"
         color="#b29764" aria-label="启用练习规则" disabled="{{isCreating || hasCreatedTeam}}" />
@@ -66,27 +77,27 @@
         <text class="team-form-help">全体当前成员从这一天开始统计，不区分加入时间。</text>
       </view>
       <view class="team-form-field">
-        <text class="team-form-label">每日期望分钟 <text class="team-form-optional">选填</text></text>
+        <text class="team-form-label">每日目标 <text class="team-form-optional">选填</text></text>
         <view class="team-form-control">
           <input class="team-form-input" type="number" value="{{dailyGoalMinutes}}"
-            bindinput="onDailyGoalInput" maxlength="4" placeholder="手动填写分钟数" placeholder-class="team-form-placeholder"
+            bindinput="onDailyGoalInput" maxlength="7" placeholder="手动填写目标" placeholder-class="team-form-placeholder"
             disabled="{{isCreating || hasCreatedTeam}}" />
-          <text class="team-form-unit">分钟 / 天</text>
+          <text class="team-form-unit">{{practiceUnit}} / 天</text>
         </view>
-        <text class="team-form-help">可选推荐值，也可输入 1–1440 的整数；留空则不设置。</text>
+        <text class="team-form-help">可选推荐值，也可输入 1–{{maxDailyGoal}} 的整数；留空则不设置。</text>
         <view class="team-form-presets">
           <button class="team-form-preset {{dailyGoalMinutes === '' ? 'selected' : ''}}"
             bindtap="clearDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
           <button wx:for="{{dailyGoalPresets}}" wx:key="*this"
             class="team-form-preset {{dailyGoalMinutes == item ? 'selected' : ''}}"
             data-minutes="{{item}}" bindtap="selectDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">
-            {{item}} 分钟
+            {{item}} {{practiceUnit}}
           </button>
         </view>
       </view>
       <view class="team-form-note">
         <text>练习日为北京时间 02:00 至次日 02:00。</text>
-        <text>当日多次练习累计计算；未设置期望分钟时不判断达标。</text>
+        <text>当日多次练习累计计算；未设置目标时不判断达标。</text>
       </view>
     </view>
   </view>

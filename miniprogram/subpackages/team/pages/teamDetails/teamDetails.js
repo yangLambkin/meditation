@@ -1,9 +1,12 @@
 const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 const teamManager = require('../../../../utils/teamManager.js');
+const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 const contentSec = require('../../../../utils/contentSec.js');
 const { selectReminderMembers } = require('../../utils/reminderText.js');
 const { createReminderImage } = require('../../utils/reminderImage.js');
 const DAY_MS = 24 * 60 * 60 * 1000;
+const practiceConfig = type => PRACTICES.find(item => item.type === type) || PRACTICES[0];
+const maxGoal = type => type === 'instant' ? 1000000 : type === 'kindness' ? 100000 : 1440;
 const statusLabels = { not_practiced: '尚未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 
 // 练习日按北京时间 02:00 切换；页面统计日期仍以云端报告为准。
@@ -25,6 +28,7 @@ Page({
     currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
     teamMembers: [], todayMembers: [], historyMembers: [], attentionCount: 0,
     overview: null, historySummary: null, hasGoal: false,
+    practiceTypeName: '静坐觉察', practiceUnit: '分钟', goalMax: 1440, belowGoalLabel: '时长不足',
     dayLabel: '', nextDayLabel: '', historyRangeLabel: '',
     settingsOpen: false, keyboardHeight: 0, settingsScrollTarget: '', draftStartDate: '', draftGoalMinutes: '', dateMax: '',
     draftName: '', draftDescription: '', draftIcon: '', isChoosingIcon: false,
@@ -200,7 +204,7 @@ Page({
     const validCount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
     if (!report || report.teamId !== this.data.teamInfo._id || !validDate(report.businessDate) ||
         !report.settings || !(report.settings.practiceStartDate === null ? validDate(report.settings.effectivePracticeStartDate) : validDate(report.settings.practiceStartDate)) ||
-        !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= 1440)) || report.settings.dayBoundaryHour !== 2 ||
+        !(report.settings.dailyGoalMinutes === null || (Number.isInteger(report.settings.dailyGoalMinutes) && report.settings.dailyGoalMinutes >= 1 && report.settings.dailyGoalMinutes <= maxGoal(report.practiceType || this.data.teamInfo.practiceType))) || report.settings.dayBoundaryHour !== 2 ||
         !report.history || !validCount(report.history.totalDays) || !validDate(report.history.startDate) || !validDate(report.history.endDate) ||
         !report.summary || !summaryKeys.every(key => validCount(report.summary[key])) || !Array.isArray(report.members) ||
         !report.members.every(member => member && member.openid && statusLabels[member.todayStatus] && counts.every(key => validCount(member[key]))) ||
@@ -223,7 +227,7 @@ Page({
     const profiles = new Map(this.data.teamMembers.map(member => [member.openid, member]));
     const members = this.profileMembers(report.members.map(member => ({ ...profiles.get(member.openid), ...member }))).map(member => ({
       ...member,
-      statusLabel: statusLabels[member.todayStatus],
+      statusLabel: member.todayStatus === 'below_goal' && practiceConfig(report.practiceType || this.data.teamInfo.practiceType).unit !== '分钟' ? '数量不足' : statusLabels[member.todayStatus],
       todayMinutesLabel: this.formatMinutes(member.todayMinutes),
       totalMinutesLabel: this.formatMinutes(member.totalMinutes),
       cumulativeMinutesLabel: this.formatMinutes(member.cumulativeMinutes === undefined ? member.totalMinutes + member.todayMinutes : member.cumulativeMinutes),
@@ -293,7 +297,10 @@ Page({
     const deputyLeaders = [...new Set((Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])
       .filter(id => typeof id === 'string' && id !== team.creator && members.includes(id)))];
     const isCreator = !!openid && team.creator === openid;
+    const practice = practiceConfig(team.practiceType);
     return { teamInfo: { ...team, deputyLeaders }, isCreator,
+      practiceTypeName: practice.name, practiceUnit: practice.unit, goalMax: maxGoal(practice.type),
+      belowGoalLabel: practice.unit === '分钟' ? '时长不足' : '数量不足',
       isDeputy: !isCreator && !!openid && deputyLeaders.includes(openid), deputyCount: deputyLeaders.length,
       ...(!isCreator ? { settingsOpen: false, isChoosingIcon: false } : {}) };
   },
@@ -529,6 +536,10 @@ Page({
       ? report.history.endDate : report && report.businessDate;
     const date = validDate(reportDate) ? reportDate : currentPracticeDate();
     const context = `teamId=${encodeURIComponent(teamId)}&memberOpenid=${encodeURIComponent(member.openid)}&memberName=${encodeURIComponent(member.nickname || '团队成员')}`;
+    if (/^bijing_/.test(teamId)) {
+      wx.navigateTo({ url: `/subpackages/team/pages/memberRecords/memberRecords?${context}&${dataset.view === 'day' ? 'date=' + date : 'month=' + date.slice(0, 7)}` });
+      return;
+    }
     const url = dataset.view === 'day'
       ? `/pages/history/history?${context}&date=${date}`
       : `/pages/checkinHistory/checkinHistory?${context}&month=${date.slice(0, 7)}&date=${date}`;
@@ -771,7 +782,7 @@ Page({
     const isCurrent = () => !this._unloaded && this.data.teamId === teamId && wx.getStorageSync('userOpenId') === openid;
     try {
       const confirmed = await new Promise(resolve => wx.showModal({
-        title: '移除成员', content: `确定将「${member.nickname}」移出团队吗？对方的个人静坐记录会保留。`,
+        title: '移除成员', content: `确定将「${member.nickname}」移出团队吗？对方的个人练习记录会保留。`,
         confirmText: '移除', confirmColor: '#a4594e', cancelText: '取消',
         success: result => resolve(result.confirm), fail: () => resolve(false)
       }));
@@ -830,8 +841,8 @@ Page({
       this.setData({ settingsError: '请选择不晚于当前练习日的起始日期' });
       return;
     }
-    if (dailyGoalMinutes !== null && (!/^\d+$/.test(goalInput) || !Number.isInteger(dailyGoalMinutes) || dailyGoalMinutes < 1 || dailyGoalMinutes > 1440)) {
-      this.setData({ settingsError: '每日目标请输入 1–1440 之间的整数分钟' });
+    if (dailyGoalMinutes !== null && (!/^\d+$/.test(goalInput) || !Number.isInteger(dailyGoalMinutes) || dailyGoalMinutes < 1 || dailyGoalMinutes > maxGoal(this.data.teamInfo.practiceType))) {
+      this.setData({ settingsError: `每日目标请输入 1–${maxGoal(this.data.teamInfo.practiceType)} 之间的整数${this.data.practiceUnit}` });
       return;
     }
     const openid = wx.getStorageSync('userOpenId');
@@ -849,7 +860,7 @@ Page({
       if (!canSubmit()) return;
       if (!await contentSec.checkText(description, 2)) return;
       if (!canSubmit()) return;
-      await this.callTeam('updateTeam', { teamId, teamData });
+      await this.callTeam('updateTeam', { teamId, teamData, expectedVersion: this.data.teamInfo.version });
       if (!isCurrent()) return;
       const team = { ...this.data.teamInfo, ...teamData };
       this.updateLocalTeamCache(team);
@@ -957,7 +968,7 @@ Page({
         invite.teamId !== this.data.teamId || invite.openid !== wx.getStorageSync('userOpenId') || invite.expireTime <= Date.now()) {
       this.resetInvitation({ keepDialog: this.canInviteTeam() });
       if (this.data.inviteDialogOpen) this.setData({ inviteError: '邀请已失效，请重新生成' });
-      return { title: '冥想团队', path: '/pages/team/team' };
+      return { title: '一起做功课，让坚持有伴', path: '/pages/team/team' };
     }
     const path = '/subpackages/team/pages/joinTeam/joinTeam?' +
       `teamId=${encodeURIComponent(invite.teamId)}&teamName=${encodeURIComponent(this.data.teamInfo.name)}` +
@@ -971,7 +982,7 @@ Page({
     this._deletePrompt = true;
     try {
       const confirmed = await new Promise(resolve => wx.showModal({
-        title: '解散团队', content: '确定要解散该团队吗？团队和成员关系将被删除，此操作不可撤销。个人冥想记录会保留。',
+        title: '解散团队', content: '确定要解散这个团队吗？解散后，成员将无法再进入团队，个人功课记录会保留。此操作不可撤销。',
         confirmText: '解散', confirmColor: '#a4594e', cancelText: '取消',
         success: result => resolve(result.confirm), fail: () => resolve(false)
       }));

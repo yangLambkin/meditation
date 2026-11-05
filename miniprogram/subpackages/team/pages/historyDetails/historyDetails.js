@@ -1,4 +1,7 @@
 const { getBusinessDate, watchBusinessDate } = require('../../../../utils/dateUtil.js');
+const { PRACTICES } = require('../../../../utils/practicePreferences.js');
+const practiceConfig = type => PRACTICES.find(item => item.type === type) || PRACTICES[0];
+const maxGoal = type => type === 'instant' ? 1000000 : type === 'kindness' ? 100000 : 1440;
 const FILTERS = ['unmet', 'not_practiced', 'below_goal', 'all'];
 const STATUS_LABELS = { not_practiced: '未练习', below_goal: '时长不足', qualified: '已达标', practiced: '已练习' };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -49,7 +52,7 @@ function reportSignature(report) {
   return JSON.stringify([report.businessDate, report.history.startDate, report.history.endDate,
     report.history.totalDays, report.history.month, report.history.minMonth, report.history.maxMonth,
     report.settings.practiceStartDate, report.settings.effectivePracticeStartDate,
-    report.settings.dailyGoalMinutes, report.settings.dayBoundaryHour]);
+    report.settings.dailyGoalMinutes, report.settings.dayBoundaryHour, report.practiceType, report.unit]);
 }
 
 Page({
@@ -58,6 +61,7 @@ Page({
     selectedMonth: '', currentMonth: '', minMonth: '', maxMonth: '', monthLabel: '',
     canPreviousMonth: false, canNextMonth: false,
     settings: null, history: null, hasGoal: true, rangeLabel: '', goalLabel: '',
+    practiceUnit: '分钟', belowGoalLabel: '时长不足',
     groups: [], itemCount: 0, nextCursor: null, hasLoaded: false,
     isLoading: false, isLoadingMore: false, loadError: '', moreError: '',
     emptyTitle: '', emptyDescription: ''
@@ -201,7 +205,7 @@ Page({
           maxMonth: report.history.maxMonth, currentMonth: report.history.maxMonth });
         return this.loadDetails();
       }
-      if (cursor && report.nextCursor && cursor.date === report.nextCursor.date && cursor.memberOpenid === report.nextCursor.memberOpenid) {
+      if (cursor && report.nextCursor && (typeof cursor === 'string' ? cursor === report.nextCursor : typeof report.nextCursor !== 'string' && cursor.date === report.nextCursor.date && cursor.memberOpenid === report.nextCursor.memberOpenid)) {
         throw new Error('历史明细暂不完整，请重试');
       }
       this.applyReport(report, append);
@@ -220,7 +224,7 @@ Page({
     const hasGoal = settings.dailyGoalMinutes !== null;
     const expectedFilter = !hasGoal && ['unmet', 'below_goal'].includes(requestedFilter) ? 'not_practiced' : requestedFilter;
     if (!(settings.practiceStartDate === null ? validDate(settings.effectivePracticeStartDate) : validDate(settings.practiceStartDate)) ||
-        !(settings.dailyGoalMinutes === null || Number.isInteger(settings.dailyGoalMinutes) && settings.dailyGoalMinutes > 0 && settings.dailyGoalMinutes <= 1440) ||
+        !(settings.dailyGoalMinutes === null || Number.isInteger(settings.dailyGoalMinutes) && settings.dailyGoalMinutes > 0 && settings.dailyGoalMinutes <= maxGoal(report.practiceType)) ||
         settings.dayBoundaryHour !== 2 || !validDate(history.startDate) || !validDate(history.endDate) ||
         !Number.isInteger(history.totalDays) || history.totalDays < 0 || history.endDate >= report.businessDate ||
         filter !== expectedFilter || !Array.isArray(items)) return fail();
@@ -248,7 +252,9 @@ Page({
       const expectedStatus = item.minutes === 0 ? 'not_practiced' : !hasGoal ? 'practiced' : meetsGoal ? 'qualified' : 'below_goal';
       if (item.status !== expectedStatus || filter !== 'all' && (filter === 'unmet' ? !['not_practiced', 'below_goal'].includes(item.status) : item.status !== filter)) return fail();
     }
-    if (nextCursor !== null && (!nextCursor || !validDate(nextCursor.date) || nextCursor.date < history.startDate ||
+    if (typeof nextCursor === 'string') {
+      if (!/^bijing_/.test(this.data.teamId) || !nextCursor.trim() || nextCursor.length > 4096) return fail();
+    } else if (nextCursor !== null && (!nextCursor || !validDate(nextCursor.date) || nextCursor.date < history.startDate ||
         nextCursor.date > history.endDate || typeof nextCursor.memberOpenid !== 'string' || !nextCursor.memberOpenid ||
         memberOpenid && nextCursor.memberOpenid !== memberOpenid)) return fail();
   },
@@ -262,6 +268,8 @@ Page({
       return true;
     }).sort((a, b) => b.date.localeCompare(a.date) || (a.openid < b.openid ? -1 : a.openid > b.openid ? 1 : 0));
     const hasGoal = report.settings.dailyGoalMinutes !== null;
+    const practice = practiceConfig(report.practiceType);
+    const belowGoalLabel = practice.unit === '分钟' ? '时长不足' : '数量不足';
     const groups = [];
     this._items.forEach(item => {
       let group = groups[groups.length - 1];
@@ -271,7 +279,7 @@ Page({
       }
       group.items.push({ ...item, key: rowKey(item), nickname: item.nickname || '团队成员',
         avatar: typeof item.avatarUrl === 'string' && item.avatarUrl && !/^(wxfile:|https?:\/\/tmp\/)/.test(item.avatarUrl) ? item.avatarUrl : '/images/avatar.png',
-        statusLabel: STATUS_LABELS[item.status], minutesLabel: formatMinutes(item.minutes),
+        statusLabel: item.status === 'below_goal' ? belowGoalLabel : STATUS_LABELS[item.status], minutesLabel: formatMinutes(item.minutes),
         remainingLabel: item.status === 'below_goal' ? formatMinutes(Math.max(0, report.settings.dailyGoalMinutes - item.minutes)) : '' });
     });
     const member = this.data.memberOpenid && this._items.find(item => item.openid === this.data.memberOpenid);
@@ -280,7 +288,7 @@ Page({
     const emptyMessages = {
       unmet: ['本月暂无未达标记录', `${subject}每天均已达标`],
       not_practiced: ['本月暂无未练习记录', `${subject}每天都有练习`],
-      below_goal: ['本月暂无时长不足记录', `${subject}没有练习时长不足的日期`],
+      below_goal: [`本月暂无${belowGoalLabel}记录`, `${subject}没有${belowGoalLabel}的日期`],
       all: ['本月暂无历史明细', `${subject}暂无可展示的成员练习明细`]
     };
     const empty = report.history.totalDays ? emptyMessages[report.filter] : ['本月暂无历史日期',
@@ -288,9 +296,9 @@ Page({
     this._signature = reportSignature(report);
     this.updateMonthControls({ selectedMonth: report.history.month, minMonth: report.history.minMonth,
       maxMonth: report.history.maxMonth, currentMonth: report.history.maxMonth });
-    this.setData({ settings: report.settings, history: report.history, filter: report.filter, hasGoal,
+    this.setData({ practiceUnit: practice.unit, belowGoalLabel, settings: report.settings, history: report.history, filter: report.filter, hasGoal,
       rangeLabel: `${report.history.startDate.replace(/-/g, '.')} — ${report.history.endDate.replace(/-/g, '.')}`,
-      goalLabel: hasGoal ? `每日期望 ${report.settings.dailyGoalMinutes} 分钟，多次练习累计计算` : '未设置期望分钟，按每日是否练习统计',
+      goalLabel: hasGoal ? `每日目标 ${report.settings.dailyGoalMinutes} ${practice.unit}，多次练习累计计算` : '未设置每日目标，按每日是否练习统计',
       memberName, groups, itemCount: this._items.length, nextCursor: report.nextCursor,
       hasLoaded: true, loadError: '', moreError: '', emptyTitle: empty[0], emptyDescription: empty[1] });
   },
@@ -355,6 +363,7 @@ Page({
     const item = this._items.find(row => rowKey(row) === key);
     if (!item) return;
     const query = `teamId=${encodeURIComponent(this.data.teamId)}&memberOpenid=${encodeURIComponent(item.openid)}&memberName=${encodeURIComponent(item.nickname || '团队成员')}&date=${encodeURIComponent(item.date)}`;
-    wx.navigateTo({ url: `/pages/history/history?${query}` });
+    wx.navigateTo({ url: /^bijing_/.test(this.data.teamId)
+      ? `/subpackages/team/pages/memberRecords/memberRecords?${query}` : `/pages/history/history?${query}` });
   }
 });

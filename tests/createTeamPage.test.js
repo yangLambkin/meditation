@@ -29,6 +29,7 @@ function createPage({ openid = 'openid-user', create, checkText, checkImage, nav
     Date: FixedDate,
     require(name) {
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
+      if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (name.endsWith('/teamManager.js')) return { createTeam: async info => {
         calls.create.push({ ...info });
         return create ? create(info) : { success: true, team: { _id: 'cloud-team', ...info } };
@@ -113,7 +114,7 @@ test('submitted fields are the same trimmed snapshot that passed moderation', as
   pending.resolve(true);
   await creation;
   assert.deepEqual(calls.text, [['原名称', 2], ['原介绍', 2]]);
-  assert.deepEqual(calls.create, [{ name: '原名称', description: '原介绍', icon: 'cloud://existing-icon', practiceStartDate: null, dailyGoalMinutes: null }]);
+  assert.deepEqual(calls.create, [{ name: '原名称', description: '原介绍', icon: 'cloud://existing-icon', practiceType: 'sitting', practiceStartDate: null, dailyGoalMinutes: null }]);
 });
 
 test('duplicate submission remains blocked through moderation, creation and success navigation delay', async () => {
@@ -505,4 +506,61 @@ test('loading the page resets the practice rules toggle and drafts', () => {
   assert.equal(page.data.practiceRulesEnabled, false);
   assert.equal(page.data.practiceStartDate, '');
   assert.equal(page.data.dailyGoalMinutes, '');
+});
+
+test('team practice type selects the tag and matching goal units for all six practices', async () => {
+  const types = [['sitting', '分钟', 1440], ['walking', '分钟', 1440], ['instant', '次', 1000000],
+    ['learning', '分钟', 1440], ['kindness', '件', 100000], ['clapping', '分钟', 1440]];
+  for (const [index, [type, unit, maximum]] of types.entries()) {
+    const { page, calls } = createPage();
+    page.onPracticeTypeChange({ detail: { value: String(index) } });
+    assert.equal(page.data.practiceType, type);
+    assert.equal(page.data.practiceUnit, unit);
+    assert.equal(page.data.maxDailyGoal, maximum);
+    page.onPracticeRulesChange({ detail: { value: true } });
+    page.onDailyGoalInput({ detail: { value: String(maximum) } });
+    await page.createTeam();
+    assert.equal(calls.create[0].practiceType, type);
+    assert.equal(calls.create[0].dailyGoalMinutes, maximum);
+  }
+});
+
+test('switching practice types clears targets from the old unit and ignores invalid type choices', () => {
+  const { page } = createPage();
+  page.data.dailyGoalMinutes = 20;
+  page.onPracticeTypeChange({ detail: { value: '2' } });
+  assert.equal(page.data.dailyGoalMinutes, '');
+  assert.deepEqual(Array.from(page.data.dailyGoalPresets), [1, 3, 10]);
+  for (const value of ['-1', '1.5', '100', 'bad']) page.onPracticeTypeChange({ detail: { value } });
+  assert.equal(page.data.practiceType, 'instant');
+});
+
+test('practice type is fixed in the moderated snapshot and cannot change after creation', async () => {
+  const pending = deferred();
+  const { page, calls } = createPage({ checkText: () => pending.promise });
+  page.onPracticeTypeChange({ detail: { value: '4' } });
+  const request = page.createTeam();
+  page.onPracticeTypeChange({ detail: { value: '1' } });
+  assert.equal(page.data.practiceType, 'kindness');
+  pending.resolve(true);
+  await request;
+  assert.equal(calls.create[0].practiceType, 'kindness');
+  page.onPracticeTypeChange({ detail: { value: '1' } });
+  assert.equal(page.data.practiceType, 'kindness');
+});
+
+test('each practice rejects invalid target ranges and unknown types before submission', async () => {
+  for (const [index, value] of [[2, '1000001'], [4, '100001'], [1, '1441']]) {
+    const { page, calls } = createPage();
+    page.onPracticeTypeChange({ detail: { value: index } });
+    page.onPracticeRulesChange({ detail: { value: true } });
+    page.data.dailyGoalMinutes = value;
+    await page.createTeam();
+    assert.equal(calls.create.length, 0);
+    assert.equal(calls.text.length, 0);
+  }
+  const { page, calls } = createPage();
+  page.data.practiceType = 'invalid';
+  await page.createTeam();
+  assert.equal(calls.create.length, 0);
 });

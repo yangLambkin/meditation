@@ -3,12 +3,14 @@
     "pages/index/index",
     "pages/example/index",
     "pages/timer/timer",
+    "pages/timerSettings/timerSettings",
     "pages/practices/practices",
     "pages/practiceHistory/practiceHistory",
     "pages/practiceSettings/practiceSettings",
     "pages/recorder/recorder",
     "pages/daily/daily1",
     "pages/me/me",
+    "pages/settings/settings",
     "pages/feedback/feedback",
     "pages/backfill/backfill",
     "pages/admin/admin",
@@ -29,6 +31,7 @@
         "pages/createTeam/createTeam",
         "pages/teamDetails/teamDetails",
         "pages/historyDetails/historyDetails",
+        "pages/memberRecords/memberRecords",
         "pages/joinTeam/joinTeam",
         "pages/testJoinTeam/testJoinTeam"
       ]

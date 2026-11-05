@@ -16,6 +16,7 @@ function harness(initial = {}, options = {}) {
   let stored = clone({ teams: [], team_members: [], invites: [], invite_actions: [], users: [], meditation_records: [], ...initial });
   const reads = [];
   const writes = [];
+  const bijingCalls = [];
   let transactions = 0;
   const now = options.now || NOW;
   class FixedDate extends Date {
@@ -165,6 +166,17 @@ function harness(initial = {}, options = {}) {
       require(name) {
         if (name === 'crypto') return crypto;
         if (name === './maintenanceAuth') return require('../cloudfunctions/teamManager/maintenanceAuth');
+        if (name === './bijingTeams') return { createBijingTeams: () => ({
+          async list(scope, actor) {
+            bijingCalls.push({ method: 'list', scope, openid: actor });
+            return options.bijing && options.bijing.list ? options.bijing.list(scope, actor) : [];
+          },
+          async run(type, data, actor) {
+            bijingCalls.push({ method: 'run', type, data: clone(data), openid: actor });
+            if (options.bijing && options.bijing.run) return options.bijing.run(type, data, actor);
+            throw new Error('新团队操作由必经 OpenAPI 处理');
+          }
+        }) };
         assert.equal(name, 'wx-server-sdk');
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => ({ OPENID: openid }) };
       }
@@ -172,7 +184,7 @@ function harness(initial = {}, options = {}) {
     return module.exports.main;
   }
   return {
-    reads, writes,
+    reads, writes, bijingCalls,
     get stored() { return clone(stored); },
     get transactions() { return transactions; },
     async call(type, data, openid = 'owner', extra = {}) { return clone(await load(openid)({ type, data, ...extra })); }
@@ -190,22 +202,18 @@ test('client supplied OPENIDs cannot impersonate creator or joined user; authent
   assert.equal(app.stored.team_members[0].openid, 'attacker');
 });
 
-test('creation validates input, persists creator membership, and returns a canonical cloud team', async () => {
-  const app = harness();
-  for (const data of [null, {}, { name: '  ' }, { name: 'a'.repeat(21) }, { name: '团队', description: 'a'.repeat(101) }]) {
-    assert.equal((await app.call('createTeam', data)).success, false);
-  }
+test('every new team creation routes to OpenAPI without reading or writing legacy teams', async () => {
+  const response = { success: true, data: { teamId: 'bijing_10', team: { _id: 'bijing_10', source: 'bijing', practiceType: 'walking' } } };
+  const app = harness({}, { bijing: { run: async () => response } });
+  const input = { name: '团队', practiceType: 'walking', operationKey: 'stable-operation-key', creator: 'fake' };
+  assert.deepEqual(await app.call('createTeam', input, 'owner', { openid: 'attacker' }), response);
+  assert.deepEqual(app.bijingCalls, [{ method: 'run', type: 'createTeam', data: input, openid: 'owner' }]);
+  assert.equal(app.reads.length, 0);
   assert.equal(app.writes.length, 0);
-  const result = await app.call('createTeam', { name: '  团队  ', icon: 'wxfile://tmp_avatar', creator: 'fake', members: ['fake'] });
-  assert.equal(result.success, true);
-  assert.equal(result.data.teamId, result.data.team._id);
-  assert.equal(result.data.team.creator, 'owner');
-  assert.deepEqual(result.data.team.members, ['owner']);
-  assert.equal(result.data.team.icon, '/images/icons/team.png');
-  assert.equal(result.data.team.name, '团队');
-  assert.ok(Number.isFinite(Date.parse(result.data.team.createdAt)));
-  assert.equal((await app.call('createTeam', { name: '第二个' })).success, true);
-  assert.equal((await app.call('createTeam', { name: '团队' }, 'other')).success, false);
+  const unavailable = harness();
+  assert.equal((await unavailable.call('createTeam', input)).success, false);
+  assert.equal(unavailable.stored.teams.length, 0);
+  assert.equal(unavailable.writes.length, 0);
 });
 
 test('team updates whitelist presentation fields and cannot replace owner, members or active state', async () => {
@@ -221,23 +229,52 @@ test('team updates whitelist presentation fields and cannot replace owner, membe
   assert.equal(app.stored.teams[0].name, '新名字');
 });
 
-test('a creator can create multiple teams concurrently while team names stay unique', async () => {
-  for (const inputs of [
-    [{ name: '团队甲', owner: 'owner' }, { name: '团队乙', owner: 'owner' }],
-    [{ name: '同名团队', owner: 'first' }, { name: '同名团队', owner: 'second' }]
-  ]) {
-    const app = harness();
-    const results = await Promise.all(inputs.map(input => app.call('createTeam', { name: input.name }, input.owner)));
-    const expected = inputs[0].name === inputs[1].name ? 1 : 2;
-    assert.equal(results.filter(result => result.success).length, expected);
-    assert.equal(app.stored.teams.filter(item => item.isActive).length, expected);
-    assert.equal((await app.call('getAllTeams', {}, '')).data.count, expected);
-    assert.equal(app.stored.teams.filter(item => item.lockField === 'creator').length, 0);
-    assert.ok(app.reads.filter(read => read.inTransaction).every(read => typeof read.id === 'string'));
+test('new team IDs route all subsequent operations to OpenAPI and never fall back to legacy storage', async () => {
+  const response = { success: true, data: { routed: true } };
+  const app = harness({ teams: [team()] }, { bijing: { run: async () => response } });
+  for (const type of ['getTeamInfo', 'updateTeam', 'deleteTeam', 'joinTeam', 'leaveTeam', 'removeTeamMember',
+    'setTeamDeputy', 'transferTeamLeader', 'checkTeamMember', 'getTeamMembersCheckinData', 'getMemberWeekCheckin',
+    'getTeamPracticeReport', 'getTeamHistoryDetails', 'getTeamMemberPracticeRecords', 'generateInvite',
+    'recordInviteAction', 'recordInviteRelation']) {
+    assert.deepEqual(await app.call(type, { teamId: 'bijing_10' }), response, type);
+    assert.equal(app.bijingCalls.at(-1).type, type);
+    assert.equal(app.bijingCalls.at(-1).openid, 'owner');
   }
+  assert.equal(app.reads.length, 0);
+  assert.equal(app.writes.length, 0);
+  const unavailable = harness({ teams: [team({ _id: 'bijing_10' })] });
+  assert.equal((await unavailable.call('getTeamInfo', { teamId: 'bijing_10' })).success, false);
+  assert.equal(unavailable.reads.length, 0);
 });
 
-test('simultaneous renames cannot duplicate a name, and deleted or renamed reservations can be reused', async () => {
+test('legacy IDs keep using WeChat storage even when a client supplies another source', async () => {
+  const app = harness({ teams: [team()] });
+  const result = await app.call('updateTeam', { teamId: 'team', source: 'bijing', teamData: { name: '旧团队新名称' } });
+  assert.equal(result.success, true);
+  assert.equal(app.stored.teams[0].name, '旧团队新名称');
+  assert.equal(app.bijingCalls.length, 0);
+  assert.ok(app.writes.some(write => write.name === 'teams' && write.id === 'team'));
+});
+
+test('team lists combine legacy and OpenAPI results and preserve the authenticated list actor', async () => {
+  const external = { _id: 'bijing_10', source: 'bijing', practiceType: 'walking', name: '走路组' };
+  const app = harness({ teams: [team()] }, { bijing: { list: async () => [external] } });
+  const mine = await app.call('getUserTeams', {}, 'owner', { openid: 'attacker' });
+  assert.deepEqual(mine.data.map(row => row._id), ['team', 'bijing_10']);
+  assert.equal(mine.data[1].practiceType, 'walking');
+  const all = await app.call('getAllTeams', {}, '');
+  assert.deepEqual(all.data.teams.map(row => row._id), ['team', 'bijing_10']);
+  assert.equal(all.data.count, 2);
+  assert.deepEqual(app.bijingCalls, [
+    { method: 'list', scope: 'mine', openid: 'owner' }, { method: 'list', scope: 'public', openid: '' }
+  ]);
+  assert.equal(app.writes.length, 0);
+  const unavailable = harness({ teams: [team()] }, { bijing: { list: async () => { throw new Error('OpenAPI unavailable'); } } });
+  assert.equal((await unavailable.call('getUserTeams')).success, false);
+  assert.equal((await unavailable.call('getAllTeams')).success, false);
+});
+
+test('simultaneous legacy team renames cannot duplicate a name', async () => {
   const app = harness({ teams: [team(), team({ _id: 'second', name: '另一团队', creator: 'other', members: ['other'] })] });
   const results = await Promise.all([
     app.call('updateTeam', { teamId: 'team', teamData: { name: '共同名字' } }),
@@ -246,13 +283,6 @@ test('simultaneous renames cannot duplicate a name, and deleted or renamed reser
   assert.equal(results.filter(result => result.success).length, 1);
   assert.equal(app.stored.teams.filter(item => item.isActive && item.name === '共同名字').length, 1);
 
-  const created = harness();
-  const first = await created.call('createTeam', { name: '原名' });
-  assert.equal((await created.call('updateTeam', { teamId: first.data.teamId, teamData: { name: '改名' } })).success, true);
-  assert.equal((await created.call('createTeam', { name: '原名' }, 'another')).success, true);
-  assert.equal((await created.call('deleteTeam', { teamId: first.data.teamId })).success, true);
-  assert.equal((await created.call('createTeam', { name: '改名' })).success, true);
-  assert.equal((await created.call('getAllTeams', {}, '')).data.count, 2);
 });
 
 test('join retries, leaving, and rejoining never duplicate members or retain stale member relations', async () => {
@@ -701,15 +731,13 @@ test('team lists paginate, expose public fields only, and database failures rema
   assert.equal((await recordsFailure.call('getMemberWeekCheckin', { teamId: 'team', memberOpenid: 'owner', weekStart: '2026-09-14', weekEnd: '2026-09-20' })).success, false);
 });
 
-test('practice settings persist independently per team; only its creator can edit or dissolve it', async () => {
-  const app = harness();
-  const first = await app.call('createTeam', { name: '早课', practiceStartDate: '2026-09-01', dailyGoalMinutes: 30 });
-  const second = await app.call('createTeam', { name: '晚课', practiceStartDate: '2026-09-10', dailyGoalMinutes: 10 });
-  assert.equal(first.success, true);
-  assert.equal(second.success, true);
-  assert.equal(first.data.team.practiceStartDate, '2026-09-01');
-  assert.equal(first.data.team.dailyGoalMinutes, 30);
-  const secondId = second.data.teamId;
+test('legacy practice settings persist independently per team; only its creator can edit or dissolve it', async () => {
+  const firstId = 'morning';
+  const secondId = 'evening';
+  const app = harness({ teams: [
+    team({ _id: firstId, name: '早课', practiceStartDate: '2026-09-01', dailyGoalMinutes: 30 }),
+    team({ _id: secondId, name: '晚课', practiceStartDate: '2026-09-10', dailyGoalMinutes: 10 })
+  ] });
   const invite = await app.call('generateInvite', { teamId: secondId });
   assert.equal(invite.success, true);
   assert.equal((await app.call('joinTeam', { teamId: secondId, inviteId: invite.data.inviteId }, 'member')).success, true);
@@ -721,7 +749,7 @@ test('practice settings persist independently per team; only its creator can edi
   for (const type of ['getUserTeams', 'getAllTeams']) {
     const result = await app.call(type);
     const teams = type === 'getAllTeams' ? result.data.teams : result.data;
-    assert.equal(teams.find(row => row._id === first.data.teamId).dailyGoalMinutes, 30);
+    assert.equal(teams.find(row => row._id === firstId).dailyGoalMinutes, 30);
     assert.equal(teams.find(row => row._id === secondId).dailyGoalMinutes, 45);
     assert.equal(teams.find(row => row._id === secondId).practiceStartDate, '2026-09-12');
     assert.equal(teams.find(row => row._id === secondId).dayBoundaryHour, 2);
@@ -735,66 +763,61 @@ test('practice settings persist independently per team; only its creator can edi
   assert.equal(saved.practiceStartDate, '2026-09-12');
 });
 
-test('practice settings validate actual calendar dates and integer goals against the current 02:00 practice day', async () => {
+test('legacy practice setting updates validate actual dates and integer goals against the current 02:00 practice day', async () => {
   const beforeReset = Date.parse('2026-09-18T01:59:59+08:00');
   const app = harness({ teams: [team()] }, { now: beforeReset });
   for (const practiceStartDate of ['2026-09-18', '2026-02-29', '2026-04-31', '2026-00-01', '2026-13-01', '2026-9-1', '', 1]) {
-    assert.equal((await app.call('createTeam', { name: '日期校验', practiceStartDate })).success, false, String(practiceStartDate));
     assert.equal((await app.call('updateTeam', { teamId: 'team', teamData: { practiceStartDate } })).success, false);
   }
   for (const dailyGoalMinutes of [0, -1, 1.5, 1441, '20', true]) {
-    assert.equal((await app.call('createTeam', { name: '目标校验', dailyGoalMinutes })).success, false, String(dailyGoalMinutes));
     assert.equal((await app.call('updateTeam', { teamId: 'team', teamData: { dailyGoalMinutes } })).success, false);
   }
   assert.equal(app.writes.length, 0);
-  assert.equal((await app.call('createTeam', { name: '历史闰日', practiceStartDate: '2024-02-29', dailyGoalMinutes: 1440 })).success, true);
-  const defaults = await app.call('createTeam', { name: '默认设置' });
-  assert.equal(defaults.data.team.practiceStartDate, null);
-  assert.equal(defaults.data.team.dailyGoalMinutes, null);
-  const afterReset = harness({}, { now: Date.parse('2026-09-18T02:00:00+08:00') });
-  assert.equal((await afterReset.call('createTeam', { name: '边界当天', practiceStartDate: '2026-09-18', dailyGoalMinutes: 1 })).success, true);
+  assert.equal((await app.call('updateTeam', { teamId: 'team', teamData: {
+    practiceStartDate: '2024-02-29', dailyGoalMinutes: 1440
+  } })).success, true);
+  const afterReset = harness({ teams: [team()] }, { now: Date.parse('2026-09-18T02:00:00+08:00') });
+  assert.equal((await afterReset.call('updateTeam', { teamId: 'team', teamData: {
+    practiceStartDate: '2026-09-18', dailyGoalMinutes: 1
+  } })).success, true);
 });
 
-test('new teams may omit practice settings and the creator may set or clear them independently', async () => {
-  const app = harness();
-  for (const input of [{ name: '未填设置' }, { name: '显式留空', practiceStartDate: null, dailyGoalMinutes: null }]) {
-    const result = await app.call('createTeam', input);
-    assert.equal(result.success, true);
-    const teamId = result.data.teamId;
-    const stored = app.stored.teams.find(row => row._id === teamId);
-    assert.equal(stored.practiceStartDate, null);
-    assert.equal(stored.dailyGoalMinutes, null);
-    for (const type of ['getUserTeams', 'getAllTeams', 'getTeamInfo', 'getTeamPracticeReport']) {
-      const read = await app.call(type, { teamId });
-      const settings = type === 'getUserTeams' ? read.data.find(row => row._id === teamId) :
-        type === 'getAllTeams' ? read.data.teams.find(row => row._id === teamId) :
-          type === 'getTeamPracticeReport' ? read.data.settings : read.data;
-      assert.equal(settings.practiceStartDate, null, type);
-      assert.equal(settings.dailyGoalMinutes, null, type);
-      assert.equal(settings.hasPracticeStartDate, false, type);
-      assert.equal(settings.effectivePracticeStartDate, '2026-09-17', type);
-    }
-    assert.equal((await app.call('updateTeam', { teamId, teamData: {
-      practiceStartDate: '2026-09-14', dailyGoalMinutes: 30
-    } })).success, true);
-    assert.equal((await app.call('updateTeam', { teamId, teamData: {
-      practiceStartDate: null, dailyGoalMinutes: null
-    } }, 'outsider')).success, false);
-    assert.equal(app.stored.teams.find(row => row._id === teamId).dailyGoalMinutes, 30);
-    assert.equal((await app.call('updateTeam', { teamId, teamData: { dailyGoalMinutes: null } })).success, true);
-    let settings = (await app.call('getTeamInfo', { teamId })).data;
-    assert.equal(settings.dailyGoalMinutes, null);
-    assert.equal(settings.practiceStartDate, '2026-09-14');
-    assert.equal(settings.hasPracticeStartDate, true);
-    assert.equal((await app.call('updateTeam', { teamId, teamData: { practiceStartDate: null } })).success, true);
-    settings = (await app.call('getTeamInfo', { teamId })).data;
-    assert.equal(settings.practiceStartDate, null);
-    assert.equal(settings.dailyGoalMinutes, null);
-    assert.equal(settings.effectivePracticeStartDate, '2026-09-17');
+test('legacy teams with unset practice settings allow the creator to set or clear them independently', async () => {
+  const app = harness({ teams: [team({ practiceStartDate: null, dailyGoalMinutes: null, createdAt: new Date(NOW).toISOString() })] });
+  const teamId = 'team';
+  const stored = app.stored.teams.find(row => row._id === teamId);
+  assert.equal(stored.practiceStartDate, null);
+  assert.equal(stored.dailyGoalMinutes, null);
+  for (const type of ['getUserTeams', 'getAllTeams', 'getTeamInfo', 'getTeamPracticeReport']) {
+    const read = await app.call(type, { teamId });
+    const settings = type === 'getUserTeams' ? read.data.find(row => row._id === teamId) :
+      type === 'getAllTeams' ? read.data.teams.find(row => row._id === teamId) :
+        type === 'getTeamPracticeReport' ? read.data.settings : read.data;
+    assert.equal(settings.practiceStartDate, null, type);
+    assert.equal(settings.dailyGoalMinutes, null, type);
+    assert.equal(settings.hasPracticeStartDate, false, type);
+    assert.equal(settings.effectivePracticeStartDate, '2026-09-17', type);
   }
+  assert.equal((await app.call('updateTeam', { teamId, teamData: {
+    practiceStartDate: '2026-09-14', dailyGoalMinutes: 30
+  } })).success, true);
+  assert.equal((await app.call('updateTeam', { teamId, teamData: {
+    practiceStartDate: null, dailyGoalMinutes: null
+  } }, 'outsider')).success, false);
+  assert.equal(app.stored.teams.find(row => row._id === teamId).dailyGoalMinutes, 30);
+  assert.equal((await app.call('updateTeam', { teamId, teamData: { dailyGoalMinutes: null } })).success, true);
+  let settings = (await app.call('getTeamInfo', { teamId })).data;
+  assert.equal(settings.dailyGoalMinutes, null);
+  assert.equal(settings.practiceStartDate, '2026-09-14');
+  assert.equal(settings.hasPracticeStartDate, true);
+  assert.equal((await app.call('updateTeam', { teamId, teamData: { practiceStartDate: null } })).success, true);
+  settings = (await app.call('getTeamInfo', { teamId })).data;
+  assert.equal(settings.practiceStartDate, null);
+  assert.equal(settings.dailyGoalMinutes, null);
+  assert.equal(settings.effectivePracticeStartDate, '2026-09-17');
 });
 
-test('legacy teams derive defaults from their creation practice day without being limited by old creator reservations', async () => {
+test('legacy teams derive defaults from their creation practice day and exclude old creator reservations from lists', async () => {
   const app = harness({ teams: [
     team({ createdAt: '2026-09-02T01:59:59+08:00' }),
     team({ _id: 'after-reset', name: '两点创建', createdAt: '2026-09-02T02:00:00+08:00' }),
@@ -807,8 +830,7 @@ test('legacy teams derive defaults from their creation practice day without bein
   assert.equal(before.data.dailyGoalMinutes, 20);
   assert.equal(before.data.hasPracticeStartDate, false);
   assert.equal(before.data.effectivePracticeStartDate, '2026-09-01');
-  assert.equal((await app.call('createTeam', { name: '第三个团队' })).success, true);
-  assert.equal((await app.call('getAllTeams')).data.count, 3);
+  assert.equal((await app.call('getAllTeams')).data.count, 2);
 });
 
 function practiceRecord(id, openid, date, duration, timestamp) {

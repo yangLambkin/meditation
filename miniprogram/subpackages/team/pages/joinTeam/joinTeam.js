@@ -1,4 +1,5 @@
 const teamManager = require('../../../../utils/teamManager.js');
+const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 const pendingInviteKey = 'pendingTeamInvitation';
 
 function decodeParameter(value) {
@@ -79,7 +80,7 @@ Page({
     this.setData({ isLoading: true, loadError: '' });
     try {
       // 每次进入都验证团队及成员资格，旧缓存不能代表邀请仍有效。
-      const teamInfo = await this.callTeam('getTeamInfo', { teamId: this.data.teamId });
+      const teamInfo = await this.callTeam('getTeamInfo', { teamId: this.data.teamId, ...(this.data.inviteId ? { inviteId: this.data.inviteId } : {}) });
       if (!isCurrent()) return false;
       const isMember = typeof teamInfo.isMember === 'boolean' ? teamInfo.isMember : !!openid && (
         teamInfo.creator === openid || (teamInfo.members || []).some(member =>
@@ -99,7 +100,7 @@ Page({
         };
       });
       let statsAvailable = false;
-      if (isMember && members.length) {
+      if (isMember && members.length && !/^bijing_/.test(teamInfo._id)) {
         try {
           const counts = await this.callTeam('getTeamMembersCheckinData', {
             teamId: teamInfo._id, memberOpenids: members.map(member => member.openid)
@@ -118,6 +119,7 @@ Page({
       wx.setNavigationBarTitle({ title: `加入${teamInfo.name}` });
       this.setData({
         teamInfo, members, isMember, statsAvailable,
+        practiceTypeName: (PRACTICES.find(item => item.type === teamInfo.practiceType) || PRACTICES[0]).name,
         teamTotalCheckins: members.reduce((sum, member) => sum + member.checkInCount, 0),
         teamActivityRate: members.length ? Math.round(members.filter(member => member.monthlyCount > 0).length / members.length * 100) : 0
       });

@@ -22,7 +22,7 @@
   <view wx:if="{{settings}}" class="filter-row">
     <button wx:if="{{hasGoal}}" class="filter-chip {{filter === 'unmet' ? 'active' : ''}}" data-filter="unmet" bindtap="changeFilter">未达标</button>
     <button class="filter-chip {{filter === 'not_practiced' ? 'active' : ''}}" data-filter="not_practiced" bindtap="changeFilter">未练习</button>
-    <button wx:if="{{hasGoal}}" class="filter-chip {{filter === 'below_goal' ? 'active' : ''}}" data-filter="below_goal" bindtap="changeFilter">时长不足</button>
+    <button wx:if="{{hasGoal}}" class="filter-chip {{filter === 'below_goal' ? 'active' : ''}}" data-filter="below_goal" bindtap="changeFilter">{{belowGoalLabel}}</button>
     <button class="filter-chip {{filter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="changeFilter">全部</button>
   </view>
 
@@ -61,9 +61,9 @@
             </view>
             <view class="member-status-row">
               <text class="status-badge status-{{member.status}}">{{member.statusLabel}}</text>
-              <text class="minutes-label">{{member.minutesLabel}}<text class="minutes-unit">{{hasGoal ? ' / ' + settings.dailyGoalMinutes : ''}} 分钟</text></text>
+              <text class="minutes-label">{{member.minutesLabel}}<text class="minutes-unit">{{hasGoal ? ' / ' + settings.dailyGoalMinutes : ''}} {{practiceUnit}}</text></text>
             </view>
-            <text wx:if="{{member.remainingLabel}}" class="remaining-label">还差 {{member.remainingLabel}} 分钟</text>
+            <text wx:if="{{member.remainingLabel}}" class="remaining-label">还差 {{member.remainingLabel}} {{practiceUnit}}</text>
           </view>
           <text class="row-chevron">›</text>
         </view>

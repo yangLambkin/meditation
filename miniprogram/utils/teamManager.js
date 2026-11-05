@@ -8,6 +8,13 @@ const memberIdsOf = team => Array.isArray(team.members)
 const deputyIdsOf = team => [...new Set((Array.isArray(team.deputyLeaders) ? team.deputyLeaders : [])
   .filter(id => typeof id === 'string' && id !== team.creator && memberIdsOf(team).includes(id)))];
 const isLocalIcon = icon => typeof icon === 'string' && /^(wxfile:\/\/|https?:\/\/tmp\/|\/tmp\/)/.test(icon);
+const PRACTICE_TYPES = ['sitting', 'walking', 'instant', 'learning', 'kindness', 'clapping'];
+const creationFingerprint = teamInfo => JSON.stringify([
+  teamInfo && typeof teamInfo.name === 'string' ? teamInfo.name.trim() : '',
+  teamInfo && typeof teamInfo.description === 'string' ? teamInfo.description.trim() : '',
+  teamInfo && teamInfo.icon || '/images/icons/team.png', teamInfo && teamInfo.practiceType || 'sitting',
+  teamInfo && teamInfo.practiceStartDate || null, teamInfo && teamInfo.dailyGoalMinutes != null ? teamInfo.dailyGoalMinutes : null
+]);
 
 class TeamManager {
   constructor() {
@@ -59,9 +66,7 @@ class TeamManager {
 
   createTeam(teamInfo) {
     // 只合并同一账号、同一份表单的重试，不能把另一团队的创建误报为成功。
-    const creationKey = JSON.stringify([currentUser(), teamInfo && teamInfo.name,
-      teamInfo && teamInfo.description, teamInfo && teamInfo.icon,
-      teamInfo && teamInfo.practiceStartDate, teamInfo && teamInfo.dailyGoalMinutes]);
+    const creationKey = JSON.stringify([currentUser(), creationFingerprint(teamInfo)]);
     if (this.creationPromise) {
       return creationKey === this.creationKey ? this.creationPromise
         : Promise.resolve({ success: false, error: '另一个团队正在创建，请稍后重试' });
@@ -80,21 +85,30 @@ class TeamManager {
       if (!openid) throw new Error('请先登录后再创建团队');
       const name = teamInfo && typeof teamInfo.name === 'string' ? teamInfo.name.trim() : '';
       if (!name) throw new Error('请输入团队名称');
+      const practiceType = teamInfo.practiceType || 'sitting';
+      if (!PRACTICE_TYPES.includes(practiceType)) throw new Error('请选择有效的功课类型');
+      const fingerprint = creationFingerprint(teamInfo);
+      const operation = this.getCreationOperation(openid, fingerprint);
       let icon = teamInfo.icon || '/images/icons/team.png';
-      if (isLocalIcon(icon)) icon = await this.uploadTeamIconToCloud(icon);
+      if (isLocalIcon(icon)) {
+        icon = operation.uploadedIcon || await this.uploadTeamIconToCloud(icon);
+        operation.uploadedIcon = icon;
+        this.saveCreationOperation(openid, operation);
+      }
       if (openid !== currentUser()) throw new Error('登录状态已变更，请重试');
       // 允许创建多个团队；名称唯一性由云端检查。
       const draft = {
-        name, description: (teamInfo.description || '').trim(), icon,
+        name, description: (teamInfo.description || '').trim(), icon, practiceType,
         ...(teamInfo.practiceStartDate !== undefined ? { practiceStartDate: teamInfo.practiceStartDate } : {}),
         ...(teamInfo.dailyGoalMinutes !== undefined ? { dailyGoalMinutes: teamInfo.dailyGoalMinutes } : {}),
         creator: openid, creatorName: wx.getStorageSync('userNickname') || '匿名用户',
         members: [openid], memberCount: 1, deputyLeaders: [],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), isActive: true
       };
-      const data = await this.syncTeamToCloud(draft);
+      const data = await this.syncTeamToCloud(draft, operation.operationKey);
       if (!data || !data.teamId) throw new Error('云端未返回团队ID，请刷新团队列表');
       const team = { ...draft, ...(data.team || {}), _id: data.teamId, cloudId: data.teamId };
+      this.clearCreationOperation(openid, operation.operationKey);
       if (openid !== currentUser()) throw new Error('登录状态已变更，请重新进入团队列表');
       this.teams = this.loadTeamsFromStorage().filter(item => teamIdOf(item) !== team._id);
       this.teams.push(team);
@@ -108,9 +122,37 @@ class TeamManager {
     }
   }
 
-  async syncTeamToCloud(team) {
+  getCreationOperation(openid, fingerprint) {
+    const operations = this.readCreationOperations(openid);
+    const existing = operations.find(item => item.fingerprint === fingerprint);
+    if (existing) return existing;
+    const operation = { fingerprint, operationKey: `team_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}` };
+    this.saveCreationOperation(openid, operation);
+    return operation;
+  }
+
+  readCreationOperations(openid) {
+    const operations = wx.getStorageSync(storageKey('teamCreateOperations_v1', openid));
+    return Array.isArray(operations) ? operations.filter(item => item && typeof item.fingerprint === 'string' &&
+      typeof item.operationKey === 'string' && /^[\x21-\x7e]{8,128}$/.test(item.operationKey)) : [];
+  }
+
+  saveCreationOperation(openid, operation) {
+    const operations = this.readCreationOperations(openid).filter(item => item.fingerprint !== operation.fingerprint);
+    wx.setStorageSync(storageKey('teamCreateOperations_v1', openid), [...operations, operation]);
+  }
+
+  clearCreationOperation(openid, operationKey) {
+    // 创建已确认成功；清理失败不能把成功误报为失败，重试仍由服务端幂等键兜底。
+    try {
+      const operations = this.readCreationOperations(openid).filter(item => item.operationKey !== operationKey);
+      wx.setStorageSync(storageKey('teamCreateOperations_v1', openid), operations);
+    } catch (error) { console.warn('清理团队创建请求缓存失败:', error); }
+  }
+
+  async syncTeamToCloud(team, operationKey) {
     if (!currentUser()) throw new Error('用户未登录');
-    return this.callCloud('createTeam', team);
+    return this.callCloud('createTeam', { ...team, operationKey });
   }
 
   async getTeamMemberPracticeRecords(teamId, memberOpenid) {

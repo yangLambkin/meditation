@@ -255,3 +255,5 @@ page {
 .btn-hover {
   opacity: 0.85;
 }
+
+.team-practice-tag { display: inline-block; align-self: flex-start; margin: 10rpx 0; padding: 4rpx 14rpx; border-radius: 8rpx; color: #a68a57; background: #f9f7f3; font-size: 22rpx; }

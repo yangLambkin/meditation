@@ -175,12 +175,12 @@
           <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
         </view>
       </view>
-      <view class="me-menu-row" bindtap="goToPracticeSettings" hover-class="me-menu-row-hover">
+      <view class="me-menu-row" bindtap="goToSettings" hover-class="me-menu-row-hover">
         <view class="me-menu-leading">
           <view class="me-menu-icon-wrap">
-            <image class="me-menu-icon" src="/images/icons/practice-records-active.svg" mode="aspectFit" />
+            <image class="me-menu-icon" src="/images/icons/setting.svg" mode="aspectFit" />
           </view>
-          <text class="me-menu-label">记录设置</text>
+          <text class="me-menu-label">设置</text>
         </view>
         <image class="me-menu-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
       </view>
@@ -209,7 +209,7 @@
             <view wx:if="{{hasAdminAlert}}" class="me-menu-alert-dot" aria-label="有管理员待办" />
           </view>
         </view>
-        <text class="me-menu-note me-menu-version">V3.0.11</text>
+        <text class="me-menu-note me-menu-version">V3.0.12</text>
       </view>
     </view>
     <text class="me-design-credit">Designed By Genxin</text>

@@ -91,14 +91,14 @@ test('exports only selected unmet cards in list order, preserving their labels a
   const values = h.text.map(item => item.value);
   const firstCard = h.fills.find(fill => fill.kind === 'path' && fill.color === '#ffffff');
   const firstCardTop = Math.min(...firstCard.points.map(point => point[1]));
-  assert.ok(['一起冥想', '2026-09-21 · 待达标同学'].every(value =>
+  assert.ok(['一起冥想', '2026-09-21 · 今日练习提醒'].every(value =>
     h.text.some(item => item.value === value && item.y < firstCardTop)));
 
   assert.deepEqual(values.filter(value => ['玉亭', '俊池', '修一', '已达标同学'].includes(value)), ['玉亭', '俊池', '修一']);
   assert.ok(values.includes('今天的练习，还未开始'));
   assert.ok(values.includes('距离目标还差 34 分钟'));
   assert.ok(values.includes('团长'));
-  assert.equal(values.filter(value => value === '1 次练习').length, 2);
+  assert.equal(values.filter(value => value === '1 条记录').length, 2);
   assert.equal(values.filter(value => value === ' / 60 分钟').length, 3);
   assert.deepEqual(h.text.filter(item => item.color === '#ffffff').map(item => item.value), ['玉', '俊', '修']);
   assert.equal(h.exports.length, 1);
@@ -372,4 +372,12 @@ test('invalid reports, empty lists and qualified members cannot produce an image
   assert.equal(h.canvas.height, size.height);
   assert.equal(h.exports[0].width, size.width);
   assert.equal(h.exports[0].height, size.height);
+});
+
+test('count practice reminder images display count units in the goal and shortfall', async () => {
+  const h = harness();
+  await h.generate([member('同学', { statusLabel: '数量不足' })], { report: { ...report, unit: '件', practiceType: 'kindness' } });
+  assert.equal(h.text.some(item => item.value === '距离目标还差 34 件'), true);
+  assert.equal(h.text.some(item => item.value === ' / 60 件'), true);
+  assert.equal(h.text.some(item => item.value.includes('分钟')), false);
 });

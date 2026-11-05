@@ -1,0 +1,21 @@
+<view class="member-records-page">
+  <view class="overview-card">
+    <view class="member-heading">
+      <nickname-avatar src="{{memberAvatar}}" nickname="{{memberName}}" size="{{80}}" />
+      <view class="member-identity"><text class="member-name">{{memberName}}的练习记录</text><text class="practice-tag">{{practiceTypeName}}</text></view>
+    </view>
+    <view class="period-controls">
+      <view class="mode-tabs"><button class="mode-tab {{mode === 'month' ? 'active' : ''}}" data-mode="month" bindtap="changeMode">按月</button><button class="mode-tab {{mode === 'day' ? 'active' : ''}}" data-mode="day" bindtap="changeMode">按日</button></view>
+      <picker mode="date" fields="{{mode === 'month' ? 'month' : 'day'}}" value="{{mode === 'month' ? month : date}}" start="{{mode === 'month' ? startMonth : startDate}}" end="{{mode === 'month' ? todayMonth : today}}" bindchange="changePeriod"><view class="period-label">{{mode === 'month' ? month : date}} ⌄</view></picker>
+    </view>
+    <text class="rule-note">练习日按北京时间 02:00 切换。</text>
+    <text wx:if="{{hasLoaded}}" class="total-label">已加载 {{records.length}} 条 · 合计 {{totalValueLabel}} {{unit}}</text>
+  </view>
+  <view wx:if="{{isLoading}}" class="state-panel"><text>正在加载成员记录…</text></view>
+  <view wx:elif="{{loadError}}" class="state-panel"><text>{{loadError}}</text><button class="secondary-button" bindtap="retryLoad">重新加载</button></view>
+  <view wx:elif="{{hasLoaded && !records.length}}" class="state-panel"><text>这段时间暂无练习记录</text></view>
+  <view wx:elif="{{records.length}}" class="record-list">
+    <view wx:for="{{records}}" wx:key="_id" class="record-row"><view><text class="record-date">{{item.date}}</text><text class="record-time">{{item.timeLabel}}</text></view><text class="record-value">{{item.valueLabel}} <text class="value-unit">{{unit}}</text></text></view>
+  </view>
+  <view wx:if="{{hasLoaded && !loadError}}" class="pagination"><text wx:if="{{isLoadingMore}}">正在加载更多…</text><block wx:elif="{{moreError}}"><text>{{moreError}}</text><button class="secondary-button" bindtap="loadMore">重试加载更多</button></block><button wx:elif="{{nextCursor}}" class="secondary-button" bindtap="loadMore">加载更多</button><text wx:elif="{{records.length}}">已显示全部记录</text></view>
+</view>

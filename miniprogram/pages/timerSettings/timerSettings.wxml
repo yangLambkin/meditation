@@ -1,0 +1,23 @@
+<view class="settings-page">
+  <text class="settings-title">静坐提醒</text>
+  <text class="settings-subtitle">分别选择静坐开始和结束时的提醒方式。</text>
+
+  <view class="settings-card">
+    <picker wx:for="{{reminders}}" wx:key="type" mode="selector" range="{{reminderOptions}}" value="{{item.modeIndex}}" data-type="{{item.type}}" bindchange="onReminderChange" aria-label="{{item.title + '，当前为' + reminderOptions[item.modeIndex]}}">
+      <view class="reminder-row" hover-class="reminder-row-hover">
+        <view class="reminder-copy">
+          <text class="reminder-title">{{item.title}}</text>
+          <text class="reminder-description">{{item.description}}</text>
+        </view>
+        <view class="reminder-value">
+          <text>{{reminderOptions[item.modeIndex]}}</text>
+          <image class="reminder-chevron" src="/images/icons/chevron-right.svg" mode="aspectFit" />
+        </view>
+      </view>
+    </picker>
+  </view>
+
+  <text wx:if="{{error}}" class="settings-error">{{error}}</text>
+  <text class="settings-hint">选择震动后，对应的开始或结束铃声将关闭。</text>
+  <text class="settings-footnote">修改后立即生效，设置保存在当前设备。</text>
+</view>

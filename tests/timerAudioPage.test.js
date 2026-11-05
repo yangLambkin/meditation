@@ -16,7 +16,7 @@ function createPage({
   recordCheckin, backgroundUpload = async () => ({ success: true }), networkType,
   contentSecRequest = () => new Promise(() => {}), navigateTo,
   initialTime = Date.parse('2026-09-18T08:00:00+08:00'), withAppLifecycle = false,
-  audioBehavior = () => 'play'
+  audioBehavior = () => 'play', vibrationBehavior = options => options.success?.({})
 } = {}) {
   let definition;
   let now = initialTime;
@@ -24,6 +24,7 @@ function createPage({
   const timers = new Map();
   const players = [];
   const audioCalls = [];
+  const vibrations = [];
   const navigations = [];
   const modals = [];
   const toasts = [];
@@ -112,6 +113,10 @@ function createPage({
 
   const wx = {
     createInnerAudioContext: createAudioPlayer,
+    vibrateLong(options) {
+      vibrations.push(now);
+      vibrationBehavior(options);
+    },
     getStorageSync: key => storage.get(key),
     setStorageSync: (key, value) => storage.set(key, value),
     onAppShow: callback => listeners.show.add(callback),
@@ -271,7 +276,7 @@ function createPage({
   }
 
   return {
-    page, players, audioCalls, navigations, modals, toasts, records, uploads, storage, advance, imagePrefetches,
+    page, players, audioCalls, vibrations, navigations, modals, toasts, records, uploads, storage, advance, imagePrefetches,
     jump: milliseconds => { now += milliseconds; },
     plays: () => audioCalls.filter(call => call.action === 'play').map(call => call.src),
     countdown, timers, listeners, application, now: () => now,
@@ -298,6 +303,131 @@ function createPage({
     }
   };
 }
+
+test('start and end reminders independently support vibration in either timer mode', async () => {
+  for (const isCountdown of [true, false]) {
+    for (const start of ['bell', 'vibrate']) {
+      for (const end of ['bell', 'vibrate']) {
+        const h = createPage({ isCountdown,
+          initialStorage: { timerReminderSettings: { start, end } } });
+        h.page.applyDuration(1);
+        h.page.startTimer();
+        h.advance(4999);
+        assert.deepEqual(h.plays(), []);
+        assert.equal(h.vibrations.length, 0);
+        h.advance(1);
+        assert.deepEqual(h.plays(), start === 'bell' ? [START_AUDIO] : []);
+        assert.equal(h.vibrations.length, start === 'vibrate' ? 1 : 0);
+        h.advance(55000);
+        if (!isCountdown) h.page.handleStop();
+        assert.deepEqual(h.plays(), [
+          ...(start === 'bell' ? [START_AUDIO] : []),
+          ...(end === 'bell' ? [END_AUDIO] : [])
+        ]);
+        assert.equal(h.vibrations.length, Number(start === 'vibrate') + Number(end === 'vibrate'));
+        assert.equal(h.page.data.isRunning, false);
+        assert.equal(h.page.pendingCompletion.duration, 1);
+        await h.page.confirmCompletion();
+        assert.equal(h.records.length, 1);
+      }
+    }
+  }
+});
+
+test('opening vibration preserves preparation through pause and starts guidance without replaying a bell', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withGuide: true,
+      initialStorage: { timerReminderSettings: { start: 'vibrate' } } });
+    h.page.startTimer(); h.advance(2000); h.page.pauseTimer();
+    h.advance(10000);
+    assert.equal(h.vibrations.length, 0);
+    assert.deepEqual(h.plays(), []);
+    h.page.startTimer(); h.advance(2999);
+    assert.equal(h.vibrations.length, 0);
+    h.advance(1);
+    assert.equal(h.vibrations.length, 1);
+    assert.equal(h.page.currentSessionSound, null);
+    assert.deepEqual(h.plays(), [GUIDE_AUDIO]);
+    h.page.pauseTimer(); h.page.startTimer(); h.advance(5000);
+    assert.equal(h.vibrations.length, 1);
+    assert.equal(h.plays().includes(START_AUDIO), false);
+  }
+});
+
+test('reminder changes take effect with the existing timer page and persist across page recreation', async () => {
+  const h = createPage();
+  h.page.startTimer(); h.advance(5000);
+  assert.deepEqual(h.plays(), [START_AUDIO]);
+  h.page.audioPlayer.emitEnded();
+  h.storage.set('timerReminderSettings', { start: 'vibrate', end: 'vibrate' });
+  h.advance(60000); h.page.handleStop();
+  assert.equal(h.vibrations.length, 1);
+  assert.equal(h.plays().includes(END_AUDIO), false);
+  await h.page.confirmCompletion();
+  h.page.onUnload();
+  const fresh = h.recreatePage();
+  fresh.startTimer(); h.advance(5000);
+  assert.equal(h.vibrations.length, 2);
+  assert.deepEqual(h.plays(), [START_AUDIO]);
+  h.storage.set('timerReminderSettings', { start: 'bell', end: 'bell' });
+  fresh.handleStop();
+  assert.equal(h.plays().at(-1), END_AUDIO);
+});
+
+test('vibration failure keeps guidance, completion and saving working without a fallback bell', async () => {
+  for (const failure of ['callback', 'throw']) {
+    const h = createPage({ withGuide: true,
+      initialStorage: { timerReminderSettings: { start: 'vibrate', end: 'vibrate' } },
+      vibrationBehavior(options) {
+        if (failure === 'callback') options.fail({ errMsg: 'vibrateLong:fail unavailable' });
+        else throw new Error('vibrateLong unavailable');
+      } });
+    h.page.applyDuration(1); h.page.startTimer(); h.advance(5000);
+    assert.equal(h.page.data.isRunning, true);
+    assert.deepEqual(h.plays(), [GUIDE_AUDIO]);
+    h.advance(55000);
+    assert.equal(h.vibrations.length, 2);
+    assert.equal(h.page.pendingCompletion.duration, 1);
+    assert.deepEqual(h.plays(), [GUIDE_AUDIO]);
+    await h.page.confirmCompletion();
+    assert.equal(h.records.length, 1);
+  }
+});
+
+test('a deferred closing vibration fires once after interruption and foreground return', () => {
+  const h = createPage({ initialStorage: {
+    timerReminderSettings: { start: 'vibrate', end: 'vibrate' }
+  } });
+  h.page.applyDuration(1); h.page.startTimer(); h.advance(59000);
+  assert.equal(h.vibrations.length, 1);
+  h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide();
+  h.advance(1000);
+  assert.equal(h.vibrations.length, 1);
+  h.emitApp('show'); h.page.onShow();
+  assert.equal(h.page.pendingCompletion.duration, 1);
+  assert.equal(h.vibrations.length, 1);
+  h.emitAudio('end');
+  assert.equal(h.vibrations.length, 2);
+  h.emitAudio('end'); h.page.onShow(); h.advance(10000);
+  assert.equal(h.vibrations.length, 2);
+  assert.deepEqual(h.plays(), []);
+});
+
+test('reset, duration changes, app exit and unload cancel a pending opening vibration', () => {
+  for (const action of ['reset', 'duration', 'exit', 'unload']) {
+    const h = createPage({ initialStorage: {
+      timerReminderSettings: { start: 'vibrate', end: 'vibrate' }
+    } });
+    h.page.startTimer(); h.advance(2000);
+    if (action === 'reset') h.page.resetTimer();
+    if (action === 'duration') h.page.applyDuration(10);
+    if (action === 'exit') h.emitApp('hide');
+    if (action === 'unload') h.page.onUnload();
+    h.advance(10000);
+    assert.equal(h.vibrations.length, 0, action);
+    assert.deepEqual(h.plays(), [], action);
+  }
+});
 
 test('App settles detached running and paused count-ups on either explicit exit without reviving them', () => {
   for (const reason of [0, 1]) {

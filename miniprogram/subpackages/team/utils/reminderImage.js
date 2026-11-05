@@ -46,7 +46,7 @@ function layoutHeading(context, teamName, businessDate) {
   const name = String(teamName || '').replace(/\s+/g, ' ').trim();
   const nameLines = name ? wrapText(context, name, 646) : [];
   const captionTop = 32 + (nameLines.length ? nameLines.length * 44 + 12 : 0);
-  return { nameLines, caption: `${businessDate} · 待达标同学`, captionTop, height: captionTop + 36 + 28 };
+  return { nameLines, caption: `${businessDate} · 今日练习提醒`, captionTop, height: captionTop + 36 + 28 };
 }
 
 function drawHeading(context, heading) {
@@ -82,8 +82,8 @@ function roundedRect(context, x, y, width, height, radius, fill, stroke) {
   }
 }
 
-function layoutCard(context, member, hasGoal) {
-  const status = member.statusLabel || (member.todayStatus === 'not_practiced' ? '尚未练习' : '时长不足');
+function layoutCard(context, member, hasGoal, unit = '分钟') {
+  const status = member.statusLabel || (member.todayStatus === 'not_practiced' ? '尚未练习' : unit === '分钟' ? '时长不足' : '数量不足');
   font(context, 20);
   const statusWidth = context.measureText(status).width + 24;
   const nameWidth = 646 - 93 - statusWidth - 38;
@@ -97,7 +97,7 @@ function layoutCard(context, member, hasGoal) {
   const nameHeight = nameLines.length * 42 + (roleOnNewLine ? 36 : 0);
   const subtitle = member.todayStatus === 'not_practiced'
     ? '今天的练习，还未开始'
-    : `距离目标还差 ${member.remainingMinutesLabel} 分钟`;
+    : `距离目标还差 ${member.remainingMinutesLabel} ${unit}`;
   font(context, 22);
   const subtitleLines = wrapText(context, subtitle, nameWidth);
   const headerHeight = Math.max(76, nameHeight + 8 + subtitleLines.length * 33);
@@ -215,7 +215,7 @@ function drawAvatar(context, avatar, nickname, x, y) {
   context.restore();
 }
 
-function drawCard(context, layout, avatar, top, goal) {
+function drawCard(context, layout, avatar, top, goal, practiceUnit = '分钟') {
   const { member, status, statusWidth, nameLines, lastNameWidth, roleLabel, roleWidth, roleOnNewLine,
     nameHeight, subtitleLines, headerHeight, height } = layout;
   roundedRect(context, 24, top, 702, height, 20, colors.card, colors.border);
@@ -256,10 +256,10 @@ function drawCard(context, layout, avatar, top, goal) {
   const minutesWidth = context.measureText(minutes).width;
   font(context, 22);
   context.fillStyle = colors.muted;
-  const unit = goal === null ? ' 分钟' : ` / ${goal} 分钟`;
+  const unit = goal === null ? ` ${practiceUnit}` : ` / ${goal} ${practiceUnit}`;
   context.fillText(unit, left + minutesWidth + 2, detailsTop + 11);
   if (member.todayPracticeCount > 0) {
-    context.fillText(`${member.todayPracticeCount} 次练习`, left + minutesWidth + 2 + context.measureText(unit).width + 18, detailsTop + 11);
+    context.fillText(`${member.todayPracticeCount} 条记录`, left + minutesWidth + 2 + context.measureText(unit).width + 18, detailsTop + 11);
   }
   if (goal !== null) {
     const progressTop = detailsTop + 58;
@@ -305,7 +305,8 @@ async function createReminderImage({ canvas, report, members, teamName = '', wxA
   const context = canvas.getContext('2d');
   if (!context) throw new Error('暂时无法生成图片，请重试或更新微信');
   const heading = layoutHeading(context, teamName, report.businessDate);
-  const layouts = members.map(member => layoutCard(context, member, goal !== null));
+  const unit = ['分钟', '次', '件'].includes(report.unit) ? report.unit : '分钟';
+  const layouts = members.map(member => layoutCard(context, member, goal !== null, unit));
   const logicalHeight = heading.height + 24 + layouts.reduce((sum, layout) => sum + layout.height, 0) + (layouts.length - 1) * 16;
   const scale = Math.min(2, MAX_CANVAS_EDGE / logicalHeight, MAX_CANVAS_EDGE / LOGICAL_WIDTH,
     Math.sqrt(MAX_CANVAS_PIXELS / (LOGICAL_WIDTH * logicalHeight)));
@@ -327,7 +328,7 @@ async function createReminderImage({ canvas, report, members, teamName = '', wxA
   let top = heading.height;
   layouts.forEach((layout, index) => {
     checkCurrent(isCurrent);
-    drawCard(context, layout, avatars[index], top, goal);
+    drawCard(context, layout, avatars[index], top, goal, unit);
     top += layout.height + 16;
   });
   checkCurrent(isCurrent);

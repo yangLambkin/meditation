@@ -1,0 +1,10 @@
+{
+  "usingComponents": {},
+  "navigationBarTitleText": "成员练习记录",
+  "navigationBarBackgroundColor": "#B29764",
+  "navigationBarTextStyle": "white",
+  "backgroundColor": "#F8FAFC",
+  "backgroundTextStyle": "dark",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 120
+}

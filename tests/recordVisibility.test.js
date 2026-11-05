@@ -175,22 +175,28 @@ test('record settings account read failures keep the switch off and cannot write
   assert.ok(h.calls.toast.length);
 });
 
-test('Me always has one record settings entry and opens it even when records are hidden', () => {
+test('Me has one unified settings entry that keeps all preferences accessible when records are hidden', () => {
   const template = fs.readFileSync(path.join(miniprogram, 'pages/me/me.wxml'), 'utf8');
-  const entries = template.match(/<view\b[^>]*bindtap="goToPracticeSettings"[^>]*>/g) || [];
+  const entries = template.match(/<view\b[^>]*bindtap="goToSettings"[^>]*>/g) || [];
   assert.equal(entries.length, 1);
   assert.doesNotMatch(entries[0], /wx:if|wx:elif/);
-  assert.match(template, /<text[^>]*>记录设置<\/text>/);
+  assert.match(template, /<text[^>]*>设置<\/text>/);
+  assert.doesNotMatch(template, /goToPracticeSettings|goToTimerSettings/);
   assert.doesNotMatch(template, /recordsVisible|onRecordVisibilityChange|显示记录|功课入口设置/);
   const h = harness();
   const me = h.openPage('me');
   assert.equal(me.onRecordVisibilityChange, undefined);
   for (const visible of [false, true]) {
     h.storage.set(keyFor('oz-owner'), visible);
-    me.goToPracticeSettings();
+    me.goToSettings();
   }
+  const settings = h.openPage('settings');
+  settings.goToTimerSettings();
+  settings.goToPracticeSettings();
   assert.deepEqual(h.calls.navigateTo, [
-    { url: '/pages/practiceSettings/practiceSettings' },
+    { url: '/pages/settings/settings' },
+    { url: '/pages/settings/settings' },
+    { url: '/pages/timerSettings/timerSettings' },
     { url: '/pages/practiceSettings/practiceSettings' }
   ]);
 });

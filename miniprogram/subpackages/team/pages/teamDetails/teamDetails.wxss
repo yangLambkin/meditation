@@ -168,3 +168,5 @@ button::after { border: none; }
 @media (max-width: 360px) { .team-stats { gap: 10rpx; } .status-badge { margin-left: auto; } .practice-detail { margin-left: 0; } }
 
 .deputy-tag { color: #66806c; background: #edf2ec; }
+
+.team-practice-tag { display: inline-block; margin-top: 12rpx; padding: 4rpx 14rpx; border-radius: 8rpx; color: #a68a57; background: #f9f7f3; font-size: 22rpx; }

@@ -1,5 +1,6 @@
 const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
+const { PRACTICES } = require('../../utils/practicePreferences.js');
 
 function applySyncAlertDot() {
   const app = typeof getApp === 'function' ? getApp() : null;
@@ -104,6 +105,8 @@ Page({
     const format = team => ({
       ...team,
       _id: team.cloudId || team._id,
+      practiceType: PRACTICES.some(practice => practice.type === team.practiceType) ? team.practiceType : 'sitting',
+      practiceTypeName: (PRACTICES.find(practice => practice.type === team.practiceType) || PRACTICES[0]).name,
       icon: !team.icon || /^(wxfile:\/\/|https?:\/\/tmp\/)/.test(team.icon) ? '/images/icons/team.png' : team.icon,
       formattedCreateTime: this.formatCreateTime(team.createdAt),
       practiceStartDate: team.practiceStartDate === null ? null : team.practiceStartDate || this.getPracticeDate(team.createdAt),

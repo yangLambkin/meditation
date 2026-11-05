@@ -2,6 +2,7 @@ const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 // pages/createTeam/createTeam.js
 const teamManager = require('../../../../utils/teamManager.js');
 const contentSec = require('../../../../utils/contentSec.js');
+const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 
 // 练习日按北京时间 02:00 切换，与全应用业务日期保持一致。
 function currentPracticeDay() {
@@ -34,6 +35,11 @@ Page({
     teamName: '',
     // 团队介绍
     teamDescription: '',
+    practiceTypes: PRACTICES,
+    practiceType: 'sitting',
+    practiceTypeIndex: 0,
+    practiceUnit: '分钟',
+    maxDailyGoal: 1440,
     // 团队练习规则
     practiceRulesEnabled: false,
     practiceStartDate: '',
@@ -165,6 +171,18 @@ Page({
     this.setData({ practiceRulesEnabled: e.detail.value === true });
   },
 
+  onPracticeTypeChange(e) {
+    if (this.data.isCreating || this.data.hasCreatedTeam) return;
+    const index = Number(e.detail.value);
+    if (!Number.isInteger(index) || !PRACTICES[index]) return;
+    const practice = PRACTICES[index];
+    if (practice.type === this.data.practiceType) return;
+    const isCount = practice.type === 'instant' || practice.type === 'kindness';
+    this.setData({ practiceType: practice.type, practiceTypeIndex: index, practiceUnit: practice.unit,
+      maxDailyGoal: practice.type === 'instant' ? 1000000 : practice.type === 'kindness' ? 100000 : 1440,
+      dailyGoalMinutes: '', dailyGoalPresets: isCount ? [1, 3, 10] : [20, 30, 60] });
+  },
+
   onPracticeStartDateChange(e) {
     if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     const value = e.detail.value;
@@ -224,9 +242,14 @@ Page({
       name: this.data.teamName.trim(),
       description: this.data.teamDescription.trim(),
       icon: this.data.customIconPath,
+      practiceType: this.data.practiceType,
       practiceStartDate,
       dailyGoalMinutes: rawGoal === null ? null : Number(rawGoal)
     };
+    if (!PRACTICES.some(practice => practice.type === teamInfo.practiceType)) {
+      wx.showToast({ title: '请选择有效的功课类型', icon: 'none' });
+      return;
+    }
     if (typeof teamInfo.icon !== 'string' || !teamInfo.icon.startsWith('cloud://')) {
       wx.showToast({ title: '请选择团队图标', icon: 'none' });
       return;
@@ -251,10 +274,11 @@ Page({
       wx.showToast({ title: '请选择不晚于当前练习日的有效日期', icon: 'none' });
       return;
     }
+    const maxGoal = teamInfo.practiceType === 'instant' ? 1000000 : teamInfo.practiceType === 'kindness' ? 100000 : 1440;
     if (rawGoal !== null &&
         ((typeof rawGoal !== 'number' && (typeof rawGoal !== 'string' || !/^\d+$/.test(rawGoal.trim()))) ||
-        !Number.isInteger(teamInfo.dailyGoalMinutes) || teamInfo.dailyGoalMinutes < 1 || teamInfo.dailyGoalMinutes > 1440)) {
-      wx.showToast({ title: '期望分钟须为1至1440的整数', icon: 'none' });
+        !Number.isInteger(teamInfo.dailyGoalMinutes) || teamInfo.dailyGoalMinutes < 1 || teamInfo.dailyGoalMinutes > maxGoal)) {
+      wx.showToast({ title: `每日目标须为1至${maxGoal}的整数`, icon: 'none' });
       return;
     }
 
@@ -321,7 +345,8 @@ Page({
     this._unloaded = false;
     this._visible = true;
     const today = currentPracticeDay();
-    this.setData({ practiceRulesEnabled: false, practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '' });
+    this.setData({ practiceRulesEnabled: false, practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '',
+      practiceType: 'sitting', practiceTypeIndex: 0, practiceUnit: '分钟', maxDailyGoal: 1440, dailyGoalPresets: [20, 30, 60] });
     console.log('=== createTeam页面加载 ===');
     
     // 获取用户信息

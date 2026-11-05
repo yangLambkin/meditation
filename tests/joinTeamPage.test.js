@@ -13,6 +13,7 @@ function createPage({ cloud, openid = 'wechat-any-prefix', stored = {}, refresh 
   const calls = { cloud: [], navigate: [], redirects: [], modals: [], toasts: [], joined: [], refresh: 0, hiddenShares: [] };
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (!name.endsWith('/teamManager.js')) throw new Error(name);
       return {
         addJoinedTeam(team) { calls.joined.push(team); },
@@ -204,4 +205,15 @@ test('expired login recovery does not restore an old invitation or join without 
   await page.joinTeam();
   assert.equal(page.data.inviteId, '');
   assert.equal(calls.cloud.some(call => call.type === 'joinTeam'), false);
+});
+
+test('bijing invitations pass the invite token for preview, display the practice tag and avoid legacy statistics', async () => {
+  const current = { ...preview, _id: 'bijing_7', practiceType: 'kindness', isMember: true, memberCount: 9,
+    members: [{ openid: 'wechat-any-prefix', nickname: '同学' }] };
+  const { page, calls } = createPage({ cloud: () => success(current) });
+  await page.onLoad({ teamId: current._id, inviteId: 'bijing-token' });
+  assert.equal(calls.cloud[0].data.inviteId, 'bijing-token');
+  assert.equal(page.data.practiceTypeName, '日行一善');
+  assert.equal(page.data.statsAvailable, false);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo']);
 });

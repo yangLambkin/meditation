@@ -707,7 +707,7 @@ Page({
    */
   onShareAppMessage() {
     return {
-      title: '完善个人信息，开始冥想之旅',
+      title: '完善个人信息，开启日常练习',
       path: '/pages/profile/profile'
     };
   }

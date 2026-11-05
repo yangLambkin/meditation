@@ -81,6 +81,7 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
   };
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
       if (name.endsWith('/reminderText.js')) return require('../miniprogram/subpackages/team/utils/reminderText.js');
@@ -2665,4 +2666,25 @@ test('a successful role response for a replaced account cannot overwrite the new
     assert.equal(page._viewerOpenid, 'third', role);
     assert.equal(page.data.teamInfo.creator, current.creator, role);
   }
+});
+
+test('bijing team cards use the practice tag and units, route member records to the paginated page and preserve edit version', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', practiceType: 'instant', dailyGoalMinutes: 2000, version: 7 };
+  const currentReport = { ...structuredClone(report), teamId: current._id, practiceType: 'instant', unit: '次',
+    settings: { ...report.settings, dailyGoalMinutes: 2000 } };
+  const { calls, createNextPage } = createPage({ cloud: type => success(type === 'getTeamInfo' ? current : currentReport) });
+  const page = createNextPage({ teamId: current._id });
+  await page.onShow();
+  assert.equal(page.data.reportError, '');
+  assert.equal(page.data.practiceTypeName, '即刻觉察');
+  assert.equal(page.data.practiceUnit, '次');
+  assert.equal(page.data.belowGoalLabel, '数量不足');
+  page.openMemberRecords({ currentTarget: { dataset: { memberOpenid: 'member', view: 'day' } } });
+  assert.match(calls.navigation.at(-1).url, /^\/subpackages\/team\/pages\/memberRecords\/memberRecords\?/);
+  assert.match(calls.navigation.at(-1).url, /date=2026-09-19/);
+  page.openSettings();
+  await page.saveSettings();
+  const update = calls.cloud.find(call => call.type === 'updateTeam');
+  assert.equal(update.data.expectedVersion, 7);
+  assert.equal(update.data.teamData.dailyGoalMinutes, 2000);
 });

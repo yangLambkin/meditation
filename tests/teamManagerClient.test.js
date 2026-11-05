@@ -35,7 +35,8 @@ function harness({ stored = {}, cloud = async () => ({ success: true, data: [] }
   vm.runInNewContext(source, { module, wx, console: quiet });
   let definition;
   vm.runInNewContext(pageSource, {
-    wx, console: quiet, require: name => name.endsWith('/dateUtil.js') ? require('../miniprogram/utils/dateUtil.js') : module.exports, Page: page => { definition = page; }
+    wx, console: quiet, require: name => name.endsWith('/dateUtil.js') ? require('../miniprogram/utils/dateUtil.js') :
+      name.endsWith('/practicePreferences.js') ? require('../miniprogram/utils/practicePreferences.js') : module.exports, Page: page => { definition = page; }
   });
   const page = { ...definition, data: clone(definition.data), setData(data) { Object.assign(this.data, data); } };
   return { manager: module.exports, page, storage, calls, uploads, toasts, navigations, modals };
@@ -531,4 +532,67 @@ test('removing a deputy releases the cached deputy slot', async () => {
   assert.equal((await app.manager.removeTeamMember('team', 'deputy')).success, true);
   assert.deepEqual(app.storage.userTeams_owner[0].deputyLeaders, []);
   assert.deepEqual(app.storage.joinedTeams_owner[0].deputyLeaders, []);
+});
+
+test('creation keeps practice type and server source in user caches but excludes the operation key', async () => {
+  const app = harness({ cloud: async () => ({ success: true,
+    data: { teamId: 'bijing_10', team: { source: 'bijing', practiceType: 'walking' } } }) });
+  const result = await app.manager.createTeam({ name: '行走组', practiceType: 'walking' });
+  assert.equal(result.success, true);
+  assert.equal(app.calls[0].data.practiceType, 'walking');
+  assert.match(app.calls[0].data.operationKey, /^[\x21-\x7e]{8,128}$/);
+  assert.equal(app.storage.userTeams_owner[0].source, 'bijing');
+  assert.equal(app.storage.userTeams_owner[0].practiceType, 'walking');
+  assert.equal(app.storage.userTeams_owner[0].operationKey, undefined);
+  assert.equal(app.storage.teamCreateOperations_v1_owner.length, 0);
+});
+
+test('failed creation retries after a new manager instance with the same operation key and uploaded icon', async () => {
+  const draft = { name: '行走组', icon: 'wxfile://tmp_team', practiceType: 'walking' };
+  const first = harness({ cloud: async () => { throw new Error('response lost'); } });
+  assert.equal((await first.manager.createTeam(draft)).success, false);
+  const retry = harness({ stored: first.storage, cloud: async () => ({ success: true, data: { teamId: 'bijing_10' } }) });
+  assert.equal((await retry.manager.createTeam(draft)).success, true);
+  assert.equal(retry.calls[0].data.operationKey, first.calls[0].data.operationKey);
+  assert.equal(retry.calls[0].data.icon, first.calls[0].data.icon);
+  assert.equal(retry.uploads.length, 0);
+  assert.equal(retry.storage.teamCreateOperations_v1_owner.length, 0);
+  await retry.manager.createTeam(draft);
+  assert.notEqual(retry.calls[1].data.operationKey, retry.calls[0].data.operationKey);
+});
+
+test('creation operations remain isolated by account, practice type and rules', async () => {
+  const first = harness({ cloud: async () => ({ success: false, error: 'retry later' }) });
+  for (const draft of [{ name: '组', practiceType: 'sitting' }, { name: '组', practiceType: 'walking' },
+    { name: '组', practiceType: 'walking', dailyGoalMinutes: 30 }]) await first.manager.createTeam(draft);
+  assert.equal(new Set(first.calls.map(call => call.data.operationKey)).size, 3);
+  const second = harness({ stored: { ...first.storage, userOpenId: 'second' },
+    cloud: async () => ({ success: false, error: 'retry later' }) });
+  await second.manager.createTeam({ name: '组', practiceType: 'sitting' });
+  assert.notEqual(second.calls[0].data.operationKey, first.calls[0].data.operationKey);
+  assert.equal(second.storage.teamCreateOperations_v1_owner.length, 3);
+  assert.equal(second.storage.teamCreateOperations_v1_second.length, 1);
+});
+
+test('pending creation cannot merge a different practice type and invalid types never reach cloud', async () => {
+  const pending = deferred();
+  const app = harness({ cloud: () => pending.promise });
+  const first = app.manager.createTeam({ name: '组', practiceType: 'walking' });
+  assert.equal((await app.manager.createTeam({ name: '组', practiceType: 'instant' })).success, false);
+  pending.resolve({ success: true, data: { teamId: 'bijing_10' } });
+  await first;
+  assert.equal(app.calls.length, 1);
+  assert.equal((await app.manager.createTeam({ name: '组', practiceType: 'unknown' })).success, false);
+  assert.equal(app.calls.length, 1);
+});
+
+test('team lists show practice labels while existing teams keep the sitting label', () => {
+  const teams = [{ ...team('old') }, { ...team('walking'), practiceType: 'walking', source: 'bijing' },
+    { ...team('kindness'), practiceType: 'kindness', source: 'bijing' }];
+  const app = harness({ stored: { userTeams_owner: teams } });
+  app.page.renderTeams(teams);
+  for (const list of ['mergedJoinedTeams', 'allTeams']) {
+    assert.deepEqual(Array.from(app.page.data[list], item => item.practiceTypeName), ['静坐觉察', '走路觉察', '日行一善']);
+    assert.equal(app.page.data[list][1].source, 'bijing');
+  }
 });

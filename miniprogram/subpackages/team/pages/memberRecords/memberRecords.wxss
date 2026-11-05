@@ -1,0 +1,25 @@
+page { background: #f8fafc; color: #354152; }
+.member-records-page { padding: 28rpx 24rpx 64rpx; }
+.overview-card, .record-list { background: white; border-radius: 24rpx; padding: 28rpx; }
+.member-heading, .period-controls, .record-row { display: flex; align-items: center; justify-content: space-between; }
+.member-heading { justify-content: flex-start; gap: 20rpx; }
+.member-identity { min-width: 0; flex: 1; }
+.member-name { display: block; font-size: 32rpx; font-weight: 500; overflow-wrap: break-word; }
+.practice-tag { display: inline-block; margin-top: 10rpx; font-size: 22rpx; color: #a68a57; background: #f9f7f3; padding: 4rpx 12rpx; border-radius: 8rpx; }
+.period-controls { margin: 28rpx 0 20rpx; gap: 12rpx; }
+.mode-tabs { display: flex; background: #f5f6f8; padding: 4rpx; border-radius: 12rpx; }
+.mode-tab { margin: 0; padding: 0 24rpx; font-size: 26rpx; line-height: 58rpx; background: transparent; color: #99a1ae; }
+.mode-tab::after, .secondary-button::after { border: 0; }
+.mode-tab.active { background: #fff; color: #a68a57; }
+.period-label { padding: 12rpx; font-size: 28rpx; }
+.rule-note, .total-label { display: block; font-size: 23rpx; color: #99a1ae; line-height: 1.8; }
+.total-label { margin-top: 12rpx; color: #a68a57; }
+.record-list { margin-top: 24rpx; padding: 0 28rpx; }
+.record-row { padding: 28rpx 0; border-bottom: 1rpx solid #f0f2f5; }
+.record-row:last-child { border: 0; }
+.record-date { display: block; font-size: 28rpx; }
+.record-time { display: block; margin-top: 10rpx; font-size: 23rpx; color: #99a1ae; }
+.record-value { font-size: 34rpx; color: #a68a57; }
+.value-unit { font-size: 24rpx; }
+.state-panel, .pagination { display: flex; flex-direction: column; align-items: center; gap: 22rpx; padding: 52rpx 12rpx; color: #99a1ae; text-align: center; font-size: 26rpx; }
+.secondary-button { font-size: 26rpx; color: #a68a57; background: #f9f7f3; padding: 0 32rpx; margin: 0; }
