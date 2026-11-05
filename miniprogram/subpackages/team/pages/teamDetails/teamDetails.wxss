@@ -24,10 +24,10 @@ button::after { border: none; }
 .invite-note { display: block; margin-top: 16rpx; font-size: 22rpx; line-height: 1.7; color: rgba(255,255,255,.78); text-align: center; }
 .invite-error { color: #fff0df; }
 .invite-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1100; display: flex; align-items: center; justify-content: center; padding: calc(32rpx + env(safe-area-inset-top)) 40rpx calc(32rpx + env(safe-area-inset-bottom)); box-sizing: border-box; background: rgba(29, 40, 56, .45); }
-.invite-dialog { width: 100%; max-width: 640rpx; padding: 24rpx 32rpx 20rpx; box-sizing: border-box; border-radius: 28rpx; background: #ffffff; box-shadow: 0 24rpx 80rpx rgba(29, 40, 56, .12); }
-.invite-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.invite-dialog { position: relative; width: 100%; max-width: 640rpx; padding: 24rpx 32rpx 20rpx; box-sizing: border-box; border-radius: 28rpx; background: #ffffff; box-shadow: 0 24rpx 80rpx rgba(29, 40, 56, .12); }
+.invite-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; min-height: 60rpx; padding-right: 72rpx; }
 .invite-dialog-title { color: #354152; font-size: 30rpx; font-weight: 600; line-height: 1.5; }
-.invite-dialog .invite-dialog-close { flex: none; width: 60rpx; min-width: 0; min-height: 0; height: 60rpx; padding: 0; line-height: 60rpx; font-size: 44rpx; font-weight: 300; color: #99a1ae; background: transparent; }
+.invite-dialog .invite-dialog-close { position: absolute; top: 12rpx; right: 12rpx; display: flex; align-items: center; justify-content: center; flex: none; width: 72rpx; min-width: 0; min-height: 0; height: 72rpx; margin: 0; padding: 0; box-sizing: border-box; line-height: 1; font-size: 44rpx; font-weight: 300; color: #99a1ae; background: transparent; }
 .invite-dialog-team { display: flex; flex-direction: column; align-items: center; padding: 18rpx 10rpx 24rpx; text-align: center; }
 .invite-dialog-icon { width: 104rpx; height: 104rpx; border-radius: 24rpx; background: #f8fafc; }
 .invite-dialog-name { max-width: 100%; margin-top: 20rpx; color: #354152; font-size: 32rpx; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; word-break: break-all; }
@@ -79,9 +79,7 @@ button::after { border: none; }
 .filter-count { margin-left: 6rpx; font-size: 22rpx; }
 .filter-row .reminder-button { flex: none; width: auto; min-width: 96rpx; min-height: 0; height: 64rpx; margin: 0 0 0 auto; padding: 0 20rpx; box-sizing: border-box; line-height: 64rpx; border-radius: 12rpx; background: #f3ecdf; color: #a68a57; font-size: 24rpx; white-space: nowrap; }
 .filter-row .reminder-button[disabled] { background: #f7f3ec; color: #b8ad97; }
-.reminder-dialog { position: relative; padding-bottom: 32rpx; }
-.reminder-dialog .invite-dialog-heading { min-height: 60rpx; padding-right: 72rpx; }
-.reminder-dialog .invite-dialog-close { position: absolute; top: 12rpx; right: 12rpx; display: flex; align-items: center; justify-content: center; width: 72rpx; height: 72rpx; margin: 0; padding: 0; box-sizing: border-box; line-height: 1; }
+.reminder-dialog { padding-bottom: 32rpx; }
 .reminder-caption { display: block; margin: 6rpx 0 20rpx; color: #99a1ae; font-size: 23rpx; line-height: 1.6; }
 .reminder-canvas { position: fixed; left: -10000px; top: 0; width: 750px; height: 1000px; pointer-events: none; }
 .reminder-image-scroll { height: 48vh; border-radius: 14rpx; background: #f8fafc; }
