@@ -48,13 +48,13 @@ const invitation = (teamId = 'team-a', openid = 'owner', inviteId = 'invite_save
 });
 
 // Most cases exercise the report view; pass initialTab: null to test the actual default members view.
-function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
+function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam, removeTeamMember, setTeamDeputy, transferTeamLeader, checkText, checkImage, uploadIcon, reminderImage, canvasQuery, canvasNode = {}, confirm = true, openid = 'owner', cached = [], clockNow = now } = {}) {
   let definition;
   let currentTime = clockNow;
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { cloud: [], deletes: [], removals: [], deputyChanges: [], transfers: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { uploads: [], cloud: [], deletes: [], removals: [], deputyChanges: [], transfers: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -81,6 +81,19 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
   };
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/teamGateway.js')) return {
+        async callTeam(type, data) {
+          calls.cloud.push({ type, data });
+          if (type === 'generateInvite') return generateInvite ? generateInvite(data) : success(invitation());
+          if (cloud) return cloud(type, data);
+          return success(type === 'getTeamInfo' ? team : report);
+        },
+        isDataTeam: id => typeof id === 'string' && id.startsWith('bijing_'),
+        getViewerKey: id => typeof id === 'string' && id.startsWith('bijing_')
+          ? JSON.stringify([storage.get('userOpenId'), storage.get('bijingStudentNumber') || 'BJ007', storage.get('bijingBindingVersion') || 'v1']) : storage.get('userOpenId'),
+        isDataTeamIcon: value => typeof value === 'string' && value.startsWith('https://data.bijing.life/api/public/teams/avatar?'),
+        async uploadTeamIcon(file) { calls.uploads.push(file); return uploadIcon ? uploadIcon(file) : 'https://data.bijing.life/api/public/teams/avatar?key=approved'; }
+      };
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
@@ -1056,6 +1069,7 @@ test('team icon selection blocks parallel selection and saves and persists only 
   assert.equal(calls.image[0].options.cloudPrefix, 'team_icons');
   await page.saveSettings();
   assert.equal(calls.cloud.find(call => call.type === 'updateTeam').data.teamData.icon, 'cloud://approved-team-icon');
+  assert.equal(calls.uploads.length, 0);
 });
 
 test('cancelled or rejected team icon selection preserves the old icon and permits another selection', async () => {
@@ -1440,7 +1454,8 @@ test('closing the dialog clears visible sharing state and a later click reuses t
   const updateCount = page.dataUpdates.length;
   await page.prepareInvite();
   assert.equal(page.data.inviteDialogOpen, true);
-  assert.equal(page.dataUpdates.slice(updateCount).some(update => update.isPreparingInvite === true), false);
+  assert.equal(page.dataUpdates.slice(updateCount).some(update => update.isPreparingInvite === true), true);
+  assert.equal(calls.cloud.filter(call => call.type === 'getTeamInfo').length, 2);
   assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1);
   assert.equal(timers.get(page._inviteExpiryTimer).delay, invitation().expireTime - now - 60000);
   oldTimer.fn();
@@ -1524,12 +1539,104 @@ test('hiding and refreshing close prepared dialogs and require a new click befor
   assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1);
 });
 
+test('reusing a data invitation verifies current permissions once and disables sharing until confirmation', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', deputyLeaders: ['member'] };
+  let finishCheck;
+  let reads = 0;
+  const { calls, createNextPage } = createPage({ initialTab: null, openid: 'member',
+    cloud: () => ++reads === 1 ? success(current) : new Promise(resolve => { finishCheck = resolve; }),
+    generateInvite: () => success(invitation(current._id, 'member')) });
+  const page = createNextPage({ teamId: current._id });
+  await page.onShow();
+  await page.prepareInvite();
+  page.onHide();
+  await page.onShow();
+  const checking = page.prepareInvite();
+  await page.prepareInvite();
+  assert.equal(reads, 2);
+  assert.equal(page.data.isPreparingInvite, true);
+  assert.equal(page.data.inviteReady, false);
+  assert.equal(page.data.inviteDialogOpen, false);
+  assert.equal(calls.shareMenus.at(-1).action, 'hide');
+  finishCheck(success({ ...current, name: '新的团队名称' }));
+  await checking;
+  assert.equal(page.data.isPreparingInvite, false);
+  assert.equal(page.data.inviteReady, true);
+  assert.equal(page.data.inviteDialogOpen, true);
+  assert.equal(page.data.teamInfo.name, '新的团队名称');
+  assert.equal(new URLSearchParams(page.onShareAppMessage().path.split('?')[1]).get('teamName'), '新的团队名称');
+  assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1);
+});
+
+test('cached data invitations cannot survive revoked deputy membership or a dissolved team on return', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', deputyLeaders: ['member'] };
+  for (const state of ['revoked', 'removed', 'deleted', 'network-error']) {
+    let reads = 0;
+    const { calls, createNextPage } = createPage({ initialTab: null, openid: 'member',
+      cloud: () => {
+        if (++reads === 1) return success(current);
+        if (state === 'deleted' || state === 'network-error') return { result: { success: false,
+          error: state === 'deleted' ? '团队不存在或已解散' : '网络暂时无法连接' } };
+        return success({ ...current, deputyLeaders: [], ...(state === 'removed' ? { isMember: false, members: [] } : {}) });
+      }, generateInvite: () => success(invitation(current._id, 'member')) });
+    const page = createNextPage({ teamId: current._id });
+    await page.onShow();
+    await page.prepareInvite();
+    page.onHide();
+    await page.onShow();
+    assert.equal(reads, 1, state);
+    await page.prepareInvite();
+    assert.equal(reads, 2, state);
+    assert.equal(page._preparedInvite, null, state);
+    assert.equal(page.data.inviteReady, false, state);
+    assert.equal(page.data.inviteDialogOpen, false, state);
+    assert.equal(page.data.isPreparingInvite, false, state);
+    assert.equal(page.canInviteTeam(), false, state);
+    assert.match(page.data.inviteError, /刷新团队/, state);
+    assert.equal(calls.shareMenus.filter(call => call.action === 'show').length, 1, state);
+    assert.equal(calls.cloud.filter(call => call.type === 'generateInvite').length, 1, state);
+    if (state === 'revoked' || state === 'removed') {
+      assert.equal(page.data.isDeputy, false, state);
+      assert.match(calls.toasts.at(-1).title, /刷新团队/, state);
+    }
+  }
+});
+
+test('late cached invitation permission checks cannot restore sharing after identity or visibility changes', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing' };
+  for (const change of ['account', 'binding', 'hidden', 'closed', 'unloaded', 'share']) {
+    let finishCheck;
+    let reads = 0;
+    const { storage, calls, createNextPage } = createPage({ initialTab: null,
+      cloud: () => ++reads === 1 ? success(current) : new Promise(resolve => { finishCheck = resolve; }),
+      generateInvite: () => success(invitation(current._id)) });
+    const page = createNextPage({ teamId: current._id });
+    await page.onShow();
+    await page.prepareInvite();
+    page.closeInviteDialog();
+    const checking = page.prepareInvite();
+    assert.equal(page.data.isPreparingInvite, true, change);
+    if (change === 'account') storage.set('userOpenId', 'other');
+    else if (change === 'binding') storage.set('bijingBindingVersion', 'v2');
+    else if (change === 'hidden') page.onHide();
+    else if (change === 'closed') page.closeInviteDialog();
+    else if (change === 'unloaded') page.onUnload();
+    else assert.equal(page.onShareAppMessage().path, '/pages/team/team');
+    finishCheck(success(current));
+    await checking;
+    assert.equal(page.data.inviteReady, false, change);
+    assert.equal(page.data.inviteDialogOpen, false, change);
+    assert.equal(page.data.isPreparingInvite, false, change);
+    assert.equal(calls.shareMenus.filter(call => call.action === 'show').length, 1, change);
+  }
+});
+
 test('manual refresh disables cached invitations until creator permissions are confirmed and the owner clicks again', async () => {
   for (const permission of ['owner', 'member', 'outsider', 'deleted']) {
     let finishTeam;
     let teamReads = 0;
     const { page, calls } = createPage({ cloud: type => {
-      if (type === 'getTeamInfo' && ++teamReads > 1) return new Promise(resolve => { finishTeam = resolve; });
+      if (type === 'getTeamInfo' && ++teamReads === 2) return new Promise(resolve => { finishTeam = resolve; });
       return success(type === 'getTeamInfo' ? team : report);
     } });
     await page.onShow();
@@ -2687,4 +2794,66 @@ test('bijing team cards use the practice tag and units, route member records to 
   const update = calls.cloud.find(call => call.type === 'updateTeam');
   assert.equal(update.data.expectedVersion, 7);
   assert.equal(update.data.teamData.dailyGoalMinutes, 2000);
+});
+
+test('bijing team avatar changes upload the approved image to data before saving the persistent URL', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', practiceType: 'instant', version: 7 };
+  const { calls, createNextPage } = createPage({ initialTab: 'members', cloud: type => success(type === 'getTeamInfo' ? current : {}) });
+  const page = createNextPage({ teamId: current._id });
+  await page.onShow();
+  page.openSettings();
+  page.chooseTeamIcon();
+  await calls.media[0].success({ tempFiles: [{ tempFilePath: 'wxfile://tmp_new-icon' }] });
+  assert.deepEqual(calls.uploads, ['cloud://approved-team-icon']);
+  assert.equal(page.data.draftIcon, 'https://data.bijing.life/api/public/teams/avatar?key=approved');
+  await page.saveSettings();
+  assert.equal(calls.cloud.find(call => call.type === 'updateTeam').data.teamData.icon,
+    'https://data.bijing.life/api/public/teams/avatar?key=approved');
+});
+
+test('a same-WeChat binding change immediately disables old data team roles and reloads the roster on return', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', practiceType: 'instant' };
+  let finishReload;
+  let reads = 0;
+  const { calls, storage, createNextPage } = createPage({ initialTab: 'members',
+    cloud: type => type === 'getTeamInfo' && ++reads === 1 ? success(current) : new Promise(resolve => { finishReload = resolve; }) });
+  const page = createNextPage({ teamId: current._id });
+  await page.onShow();
+  assert.equal(page.canManageTeam(), true);
+  storage.set('bijingStudentNumber', 'BJ008');
+  assert.equal(page.canManageTeam(), false);
+  assert.equal(page.canAssistTeam(), false);
+  assert.equal(page.canInviteTeam(), false);
+  page.openSettings();
+  await page.prepareInvite();
+  await page.confirmRemoveMember(event('memberOpenid', 'member'));
+  assert.equal(page.data.settingsOpen, false);
+  assert.equal(calls.cloud.length, 1);
+  assert.equal(calls.removals.length, 0);
+  const reload = page.onShow();
+  assert.equal(page.data.teamInfo, null);
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.teamMembers.length, 0);
+  finishReload(success({ ...current, creator: 'member', deputyLeaders: [] }));
+  await reload;
+  assert.equal(page.data.isCreator, false);
+  assert.equal(page.canManageTeam(), false);
+});
+
+test('data report responses for a previous binding never populate the new binding page', async () => {
+  const current = { ...structuredClone(team), _id: 'bijing_8', source: 'bijing', practiceType: 'instant' };
+  const oldReport = { ...structuredClone(report), teamId: current._id, practiceType: 'instant', unit: '次' };
+  let finishReport;
+  const { storage, createNextPage } = createPage({ initialTab: 'members', cloud: type => type === 'getTeamInfo'
+    ? success(current) : new Promise(resolve => { finishReport = resolve; }) });
+  const page = createNextPage({ teamId: current._id });
+  await page.onShow();
+  const pending = page.switchTab(event('tab', 'records'));
+  storage.set('bijingBindingVersion', 'v2');
+  finishReport(success(oldReport));
+  await pending;
+  assert.equal(page.data.report, null);
+  assert.equal(page.data.todayMembers.length, 0);
+  assert.equal(page.data.historyMembers.length, 0);
+  assert.equal(page.canAssistTeam(), false);
 });

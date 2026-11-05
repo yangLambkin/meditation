@@ -64,10 +64,10 @@
         class="join-btn" 
         bindtap="joinTeam"
         hover-class="btn-hover"
-        loading="{{isJoining}}"
-        disabled="{{isLoading || isJoining}}"
+        loading="{{isJoining || isCheckingBinding}}"
+        disabled="{{isLoading || isJoining || isCheckingBinding}}"
       >
-        {{isJoining ? '加入中...' : '接受邀请并加入'}}
+        {{isCheckingBinding ? '确认学号中...' : (isJoining ? '加入中...' : '接受邀请并加入')}}
       </button>
     </view>
     <view wx:if="{{!isMember && !inviteId}}" class="join-tip">团队仅限邀请加入，请联系团长或副团长获取新邀请。</view>

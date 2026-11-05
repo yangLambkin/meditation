@@ -1,3 +1,4 @@
+const { callTeam, getViewerKey } = require('../../../../utils/teamGateway.js');
 const { getBusinessDate, watchBusinessDate } = require('../../../../utils/dateUtil.js');
 const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 const practiceConfig = type => PRACTICES.find(item => item.type === type) || PRACTICES[0];
@@ -148,20 +149,22 @@ Page({
 
   synchronizeViewer() {
     const openid = wx.getStorageSync('userOpenId');
-    if (this._viewerOpenid !== openid || this._viewerTeamId !== this.data.teamId) {
+    const viewerKey = getViewerKey(this.data.teamId);
+    if (this._viewerOpenid !== openid || this._viewerTeamId !== this.data.teamId || this._viewerKey !== viewerKey) {
       this.invalidateRequest();
       this.clearDetails(true);
       const currentMonth = currentPracticeMonth();
       this.updateMonthControls({ currentMonth, minMonth: '', maxMonth: currentMonth });
       this._viewerOpenid = openid;
       this._viewerTeamId = this.data.teamId;
+      this._viewerKey = viewerKey;
     }
     return openid;
   },
 
-  isCurrentRequest(version, openid, teamId) {
+  isCurrentRequest(version, openid, teamId, viewerKey = this._viewerKey) {
     if (this._unloaded || !this._isVisible || version !== this._loadVersion || teamId !== this.data.teamId) return false;
-    if (wx.getStorageSync('userOpenId') !== openid) {
+    if (wx.getStorageSync('userOpenId') !== openid || getViewerKey(teamId) !== viewerKey) {
       this.synchronizeViewer();
       return false;
     }
@@ -177,6 +180,7 @@ Page({
     }
     if (this.data.isLoading || this.data.isLoadingMore || (append && !this.data.nextCursor)) return;
     const { teamId, memberOpenid, filter, selectedMonth: month } = this.data;
+    const viewerKey = this._viewerKey;
     const cursor = append ? this.data.nextCursor : null;
     const version = this._loadVersion = (this._loadVersion || 0) + 1;
     if (!append) this.clearDetails();
@@ -185,8 +189,8 @@ Page({
       const data = { teamId, filter, month, limit: 50 };
       if (memberOpenid) data.memberOpenid = memberOpenid;
       if (cursor) data.cursor = cursor;
-      const response = await wx.cloud.callFunction({ name: 'teamManager', data: { type: 'getTeamHistoryDetails', data } });
-      if (!this.isCurrentRequest(version, openid, teamId)) return;
+      const response = await callTeam('getTeamHistoryDetails', data);
+      if (!this.isCurrentRequest(version, openid, teamId, viewerKey)) return;
       const result = response && response.result;
       if (append && result && !result.success && typeof result.error === 'string' && result.error.includes('分页游标无效')) {
         // 起始日期调整后，旧游标可能已不在本月窗口内；无游标重载即可取得新边界。
@@ -210,10 +214,10 @@ Page({
       }
       this.applyReport(report, append);
     } catch (error) {
-      if (!this.isCurrentRequest(version, openid, teamId)) return;
+      if (!this.isCurrentRequest(version, openid, teamId, viewerKey)) return;
       this.setData(append ? { moreError: error.message || '更多明细暂时无法加载' } : { loadError: error.message || '历史明细暂时无法加载' });
     } finally {
-      if (this.isCurrentRequest(version, openid, teamId)) this.setData({ isLoading: false, isLoadingMore: false });
+      if (this.isCurrentRequest(version, openid, teamId, viewerKey)) this.setData({ isLoading: false, isLoadingMore: false });
     }
   },
 
@@ -347,15 +351,15 @@ Page({
 
   loadMore() {
     if (this._unloaded || !this._isVisible) return;
-    const previousViewer = this._viewerOpenid;
-    const currentViewer = this.synchronizeViewer();
-    if (previousViewer !== currentViewer) return this.loadDetails();
+    const previousViewer = this._viewerKey;
+    this.synchronizeViewer();
+    if (previousViewer !== this._viewerKey) return this.loadDetails();
     return this.loadDetails({ append: true });
   },
 
   openDayRecords(event) {
     if (this._unloaded || !this._isVisible || this.data.isLoading || !this.data.hasLoaded) return;
-    if (wx.getStorageSync('userOpenId') !== this._viewerOpenid) {
+    if (wx.getStorageSync('userOpenId') !== this._viewerOpenid || getViewerKey(this.data.teamId) !== this._viewerKey) {
       this.synchronizeViewer();
       return;
     }

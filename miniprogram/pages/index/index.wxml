@@ -106,7 +106,7 @@
           <button wx:if="{{item.canRetry}}" class="record-bijing-retry" catchtap="retryBijingSync" data-date="{{item.date}}" hover-class="checkin-record-active">重试必经同步</button>
         </view>
       </view>
-      <text wx:if="{{checkinTotal}}" class="checkin-load-hint">长按记录可删除</text>
+      <text wx:if="{{checkinTotal}}" class="checkin-load-hint">长按记录可编辑或删除</text>
       <view wx:if="{{!checkinTotal}}" class="checkin-empty">尚无打卡记录</view>
       <view wx:elif="{{!checkinGroups.length}}" class="checkin-empty">最近三天暂无打卡记录</view>
       <view wx:else>
@@ -116,7 +116,7 @@
             <text class="checkin-day-summary">{{group.count}} 次 · {{group.totalDuration}} 分钟</text>
           </view>
           <view class="practice-record-list">
-            <view class="checkin-record {{!record.emotion.length && !record.experienceTexts.length && !record.syncError && !record.syncStatusText && !record.bijingSyncText ? 'checkin-record-brief' : ''}}" wx:for="{{group.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="deleteCheckinRecord" data-id="{{record.id}}" data-date="{{record.dayDate}}" hover-class="checkin-record-active">
+            <view class="checkin-record {{!record.emotion.length && !record.experienceTexts.length && !record.syncError && !record.syncStatusText && !record.bijingSyncText ? 'checkin-record-brief' : ''}}" wx:for="{{group.records}}" wx:for-item="record" wx:key="id" bindtap="openCheckinHistory" catchlongpress="showCheckinActions" data-id="{{record.id}}" data-date="{{record.dayDate}}" hover-class="checkin-record-active">
               <view class="checkin-record-heading">
                 <text class="checkin-record-time">{{record.timeLabel}}</text>
                 <view class="checkin-record-actions">
@@ -144,6 +144,8 @@
       </view>
     </view>
   </view>
+
+  <include src="../../templates/practiceForm.wxml" />
 
   <view wx:if="{{showCheckinUploadPreview}}" class="checkin-modal">
     <view class="checkin-modal-mask" bindtap="closeCheckinUploadPreview" catchtouchmove="preventCheckinModalTouchMove"></view>

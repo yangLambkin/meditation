@@ -5,7 +5,8 @@ const path = require('node:path');
 
 const { plain, deferred, failure, createPage, persistedQueue } = require('./helpers/practicePage');
 const historyTemplate = () => fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practiceHistory/practiceHistory.wxml'), 'utf8');
-const dialogsTemplate = () => fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practiceDialogs.wxml'), 'utf8');
+const dialogsTemplate = () => fs.readFileSync(path.join(__dirname, '../miniprogram/pages/practices/practiceDialogs.wxml'), 'utf8')
+  + fs.readFileSync(path.join(__dirname, '../miniprogram/templates/practiceForm.wxml'), 'utf8');
 
 test('history defaults to the practice month before 02:00 and uses that day for statistics limits', async () => {
   for (const [now, expectedMonth, expectedDay] of [

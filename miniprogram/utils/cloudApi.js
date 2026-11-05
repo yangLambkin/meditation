@@ -41,6 +41,7 @@ function recordAccount(functionName, data) {
 }
 
 function syncConfirmedHistoricalRecord(functionName, data, response, account) {
+  // 编辑时已在服务端事务中登记前后日期待办，由现有定时修复处理。
   if (functionName !== 'meditationManager' || !data || !['recordMeditation', 'deleteMeditationRecord'].includes(data.type) || !account) return;
   const result = response && response.result;
   const saved = result && result.success === true && result.data;
@@ -69,7 +70,7 @@ const cloudApi = {
     const timeoutMs = isUpload ? UPLOAD_TIMEOUT_MS : CLOUD_REQUEST_TIMEOUT_MS;
     const needsTimeout = data && (
       (functionName === 'contentSecCheck' && data.type === 'text') ||
-      (functionName === 'meditationManager' && ['recordMeditation', 'getAllRecords', 'getUserStats'].includes(data.type))
+      (functionName === 'meditationManager' && ['recordMeditation', 'editMeditationRecord', 'getAllRecords', 'getUserStats'].includes(data.type))
     );
     const deadlineAt = needsTimeout ? Math.min(Date.now() + timeoutMs,
       Number.isFinite(options.deadlineAt) ? options.deadlineAt : Infinity) : null;
@@ -199,6 +200,35 @@ const cloudApi = {
         code: error && ['CLOUD_TIMEOUT', 'UPLOAD_PAUSED'].includes(error.code) ? error.code : 'NETWORK_ERROR',
         error: error && ['CLOUD_TIMEOUT', 'UPLOAD_PAUSED'].includes(error.code) ? error.message : '网络错误，请手动重试'
       };
+    }
+  },
+
+  // 原静坐完整编辑；正文先补审，固定 requestId 由调用方保留用于超时重试。
+  editMeditationRecord: async function(input) {
+    try {
+      const content = input && input.updates && input.updates.reflection;
+      if (typeof content === 'string' && content.trim()) {
+        const checked = await this.callCloudFunction('contentSecCheck', { type: 'text', content: content.trim(), scene: 2 });
+        const check = checked && checked.result;
+        if (check && check.success === true && check.safe === false) {
+          return { success: false, code: 'CONTENT_REJECTED', error: '所发布内容含违规信息' };
+        }
+        if (!check || check.success !== true || check.safe !== true) {
+          return { success: false, code: 'CONTENT_CHECK_UNAVAILABLE', error: '内容安全检测暂不可用，请重试' };
+        }
+      }
+      const response = await this.callCloudFunction('meditationManager', { type: 'editMeditationRecord', data: input });
+      const result = response && response.result;
+      if (result && result.success === false) return result;
+      const saved = result && result.success === true && result.data;
+      if (saved && typeof saved.recordId === 'string' && saved.recordId &&
+          (!input.recordId || saved.recordId === input.recordId) && /^me_[a-f0-9]{64}$/.test(saved.editId || '') &&
+          Number.isSafeInteger(saved.timestamp) && saved.timestamp > 0 && Number.isInteger(saved.duration) &&
+          saved.duration >= 1 && saved.duration <= 1440 && Array.isArray(saved.experience)) return result;
+      return { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认修改，请重试' };
+    } catch (error) {
+      return { success: false, code: error && error.code || 'NETWORK_ERROR',
+        error: error && error.code === 'CLOUD_TIMEOUT' ? '保存超时，请重试；重试不会新增记录' : '网络错误，请重试' };
     }
   },
 

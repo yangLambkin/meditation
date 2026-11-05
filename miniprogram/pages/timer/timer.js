@@ -5,6 +5,7 @@ const contentSec = require('../../utils/contentSec');
 const dailyCardImage = require('../../utils/dailyCardImage');
 const { isExplicitTimerExit } = require('../../utils/timerInterruption');
 const { timerAudioMethods } = require('../../utils/timerAudio');
+const { queueEndReminder } = require('../../utils/timerEndReminder');
 const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
 const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
 const MAX_SESSION_SECONDS = 24 * 60 * 60;
@@ -202,7 +203,7 @@ Page({
       this.syncTimerTime();
       this.startBrightnessControl();
     }
-    this.safeTimerEffect('resume_audio', () => this.resumeInterruptedAudio());
+    this.safeTimerEffect('resume_audio', () => this.resumeInterruptedAudio({ allowEndRetry: true }));
   },
 
   onHide() {
@@ -246,7 +247,9 @@ Page({
       }
       this.isAppHidden = true;
       this.safeTimerEffect('exit_screen', () => this.restoreScreenSettings());
-      if (exiting) {
+      const countdown = this.data.isCountdown && this.countdownSession.getSnapshot();
+      const continuingCountdown = countdown && (countdown.isRunning || countdown.isPaused);
+      if (exiting && !continuingCountdown) {
         this.safeTimerEffect('exit_cue', () => this.destroyAudioPlayer());
         this.safeTimerEffect('exit_guide', () => this.stopBackgroundMusic());
       } else {
@@ -397,8 +400,10 @@ Page({
     const sessionId = this.sessionId || `timer_${this.data.startTimestamp}_${Math.random().toString(36).slice(2)}`;
     if (duration >= 1) {
       this.pendingCompletion = { sessionId, duration, endedAt, text: '' };
-      wx.setStorageSync('timerPendingCompletion', this.pendingCompletion);
+      this.safeTimerEffect('save_completion_draft', () => wx.setStorageSync('timerPendingCompletion', this.pendingCompletion));
     }
+    // 退出、页面卸载和冷恢复也保留结束提醒；音频可用时再领取。
+    queueEndReminder(wx, sessionId);
     this.stopTimer({ playEndSound: !silent });
     // 手动结束保留 stopTimer 的初始显示，本次实际时长已存入完成记录。
     if (!resetDisplay) {

@@ -12,9 +12,16 @@ function deferred() { let resolve; const promise = new Promise(done => { resolve
 function createPage({ cloud, query } = {}) {
   let definition;
   let account = 'viewer';
+  let binding = { studentNumber: 'BJ001', bindingVersion: 'v1' };
   const calls = [];
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/teamGateway.js')) return { getViewerKey(teamId) {
+        return /^bijing_/.test(teamId) ? JSON.stringify([account, binding && binding.studentNumber, binding && binding.bindingVersion]) : account;
+      }, callTeam(type, requestData) {
+        calls.push(structuredClone({ name: 'teamManager', data: { type, data: requestData } }));
+        return cloud ? cloud(requestData, calls.length) : Promise.resolve(success(data()));
+      } };
       if (name.endsWith('/dateUtil.js')) return { getBusinessDate: () => '2026-09-19' };
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       throw new Error(name);
@@ -27,7 +34,7 @@ function createPage({ cloud, query } = {}) {
   }, { filename: pagePath });
   const page = { ...definition, data: structuredClone(definition.data), setData(values) { Object.assign(this.data, values); } };
   page.onLoad(query || { teamId: 'bijing_1', memberOpenid: 'bijing_member_2', month: '2026-09' });
-  return { page, calls, setAccount(value) { account = value; } };
+  return { page, calls, setAccount(value) { account = value; }, setBinding(value) { binding = value; } };
 }
 
 test('member records preserve practice quantity and paginate with opaque cursors without duplicate entries', async () => {
@@ -142,4 +149,44 @@ test('cursor recovery stops after one first-page retry and exposes a recoverable
   assert.equal(page.data.loadError, '团队规则已变更');
   assert.equal(page.data.isLoading, false);
   assert.equal(page.data.isLoadingMore, false);
+});
+
+test('returning to member records after rebinding reloads the same period and clears the former profile', async () => {
+  const refreshed = deferred();
+  const { page, calls, setBinding } = createPage({ cloud: (_, count) => count === 1
+    ? success({ ...data([record('owner-a')]), member: { openid: 'bijing_member_2', nickname: '原成员', avatarUrl: 'https://data.example/old.png' } })
+    : refreshed.promise });
+  await page.onShow();
+  page.onHide();
+  setBinding({ studentNumber: 'BJ002', bindingVersion: 'v2' });
+  const loading = page.onShow();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].data.data.month, '2026-09');
+  assert.equal('cursor' in calls[1].data.data, false);
+  assert.equal(page.data.records.length, 0);
+  assert.equal(page.data.memberName, '团队成员');
+  assert.equal(page.data.memberAvatar, '/images/avatar.png');
+  assert.equal(page.data.startDate, '');
+  refreshed.resolve(success(data([record('owner-b')])));
+  await loading;
+  assert.deepEqual(Array.from(page.data.records, item => item._id), ['owner-b']);
+});
+
+test('a member-record append received after same-account rebinding discards records and profile', async () => {
+  const more = deferred();
+  const { page, setBinding } = createPage({ cloud: (_, count) => count === 1
+    ? success(data([record('owner-a')], 'old-cursor')) : more.promise });
+  await page.onShow();
+  const loading = page.loadMore();
+  setBinding({ studentNumber: 'BJ002', bindingVersion: 'v2' });
+  more.resolve(success(data([record('old-late-record')])));
+  await loading;
+  assert.equal(page.data.records.length, 0);
+  assert.equal(page.data.nextCursor, null);
+  assert.equal(page.data.hasLoaded, false);
+  assert.equal(page.data.memberName, '团队成员');
+  assert.equal(page.data.memberAvatar, '/images/avatar.png');
+  assert.equal(page.data.startDate, '');
+  assert.equal(page.data.isLoadingMore, false);
+  assert.match(page.data.loadError, /账号或绑定已变化/);
 });

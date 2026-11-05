@@ -59,7 +59,7 @@ function sameIdentity(task, identity) {
 }
 function beforeCloudMutation(functionName, event) {
   if (config.sittingMirrorEnabled !== true || functionName !== 'meditationManager' || !event) return null;
-  if (!['recordMeditation', 'updateMeditationRecord', 'deleteMeditationRecord', 'deleteExperienceRecord'].includes(event.type)) return null;
+  if (!['recordMeditation', 'updateMeditationRecord', 'editMeditationRecord', 'deleteMeditationRecord', 'deleteExperienceRecord'].includes(event.type)) return null;
   try {
     const owner = auth.getOwner();
     if (!owner) return null;
@@ -79,12 +79,14 @@ function beforeCloudMutation(functionName, event) {
     const identity = event.type === 'updateMeditationRecord' ? { timestamp: event.recordId } :
       { ...(data.recordId ? { recordId: data.recordId } : {}), ...(data.localId ? { localId: data.localId } : {}), timestamp: data.timestamp };
     const snapshot = event.type === 'recordMeditation' ? data : { ...localSnapshot(identity),
-      ...(operation === 'update' ? { expectedExperience: event.experience } : {}) };
+      ...(event.type === 'editMeditationRecord' ? { expectedEdit: data.updates }
+        : operation === 'update' ? { expectedExperience: event.experience } : {}) };
     if (!identity.recordId && snapshot._id) identity.recordId = snapshot._id;
     if (!identity.localId && snapshot.localId) identity.localId = snapshot.localId;
     // 云上传重试沿用首次登记意图。真实的新体验更新具有不同的期望内容。
     const existing = queue.getPending().find(task => task.kind === 'mirror' && task.operation === operation &&
-      sameIdentity(task, identity) && JSON.stringify(task.snapshot.expectedExperience) === JSON.stringify(snapshot.expectedExperience));
+      sameIdentity(task, identity) && JSON.stringify(task.snapshot.expectedExperience) === JSON.stringify(snapshot.expectedExperience) &&
+      JSON.stringify(task.snapshot.expectedEdit) === JSON.stringify(snapshot.expectedEdit));
     if (existing) return existing;
     return queue.enqueueSourceIntent({ operation, identity, snapshot, owner });
   } catch (error) { visibleWarning(error); return null; }
@@ -127,6 +129,12 @@ function verifiesCreate(task, record) {
       record.localId === task.identity.localId || record.idempotencyKey === task.identity.localId);
 }
 function verifiesUpdate(task, record) {
+  const edit = task.snapshot.expectedEdit;
+  if (edit) {
+    const experiences = Array.isArray(record.experience) ? record.experience : [];
+    return record.experienceEdited === true && time(record.timestamp) === edit.timestamp && Number(record.duration) === edit.duration &&
+      experiences.map(item => item && typeof item.text === 'string' ? item.text : '').filter(Boolean).join('\n\n') === edit.reflection.trim();
+  }
   const expected = task.snapshot.expectedExperience;
   return !expected || (Array.isArray(record.experience) ? record.experience : [record.experience]).includes(expected);
 }

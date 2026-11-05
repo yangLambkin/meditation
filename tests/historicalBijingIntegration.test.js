@@ -108,6 +108,34 @@ function harness({ online = true } = {}) {
   };
 }
 
+test('confirmed edits rely on the durable scheduled repair without requesting a new Bijing cloud operation', async () => {
+  for (const late of [false, true]) {
+    const app = harness();
+    const pending = app.api.editMeditationRecord({ recordId: 'med_first', expectedOpenid: OWNER,
+      requestId: 'edit-one', updates: { duration: 40,
+        timestamp: Date.parse('2026-10-04T04:00:00Z'), reflection: '' } });
+    await flush();
+    const edit = app.requests.find(request => request.name === 'meditationManager' && request.data.type === 'editMeditationRecord');
+    assert.ok(edit);
+    if (late) {
+      await app.advance(5000);
+      assert.equal((await pending).code, 'CLOUD_TIMEOUT');
+    }
+    edit.success({ result: { success: true, data: {
+      editId: 'me_' + 'a'.repeat(64), recordId: 'med_first', previousDate: HISTORICAL_DATE,
+      date: '2026-10-04', timestamp: Date.parse('2026-10-04T04:00:00Z'), duration: 40,
+      experience: [], autoSyncBijing: true
+    } } });
+    if (!late) assert.equal((await pending).success, true);
+    await flush();
+    assert.equal(app.requests.filter(request => request.name === 'bijingSync').length, 0,
+      'even a late confirmation must not call an unsupported edit route or sync only the new date');
+    assert.deepEqual(plain(app.sync.getTasks()), []);
+    assert.equal(app.storageWrites.length, 0, 'editing does not create personal immediate-sync tasks');
+    assert.equal(app.timers.size, 0);
+  }
+});
+
 test('confirmed deletion syncs through its receipt and accepts zero without delaying the deletion result', async () => {
   const app = harness();
   const deletion = app.remove(); await flush();

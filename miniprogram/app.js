@@ -60,7 +60,7 @@ App({
   onHide(options = {}) {
     this._timerForeground = false;
     this._timerHideOptions = options || {};
-    // 保留完整切后台原因，由计时控制器区分明确退出与来电等临时中断。
+    // 保留完整后台原因用于诊断；未到期倒计时始终保留，正计时另行处理明确退出。
     if (this._countdownSession) this._countdownSession.appHide(this._timerHideOptions);
     this.finishDetachedCountup(this._timerHideOptions);
     this._syncAlertVisible = false;
@@ -111,6 +111,9 @@ App({
     const endedAt = elapsed >= 24 * 60 * 60
       ? Math.min(exitAt, state.startTimestamp + state.totalPausedTime + 24 * 60 * 60 * 1000) : exitAt;
     const completion = duration >= 1 ? { sessionId, duration, endedAt, text: '' } : null;
+    // 页面已卸载时仍须登记提醒，返回计时页后补播收坐。
+    const { queueEndReminder } = require('./utils/timerEndReminder');
+    queueEndReminder(wx, sessionId);
     // 先保存可重试草稿，再撤销运行状态；保存失败也不能恢复成继续累计的会话。
     if (completion) wx.setStorageSync('timerPendingCompletion', completion);
     wx.setStorageSync('timerState', null);

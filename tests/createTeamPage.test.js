@@ -6,6 +6,8 @@ const vm = require('node:vm');
 
 const pagePath = path.join(__dirname, '../miniprogram/subpackages/team/pages/createTeam/createTeam.js');
 const source = fs.readFileSync(pagePath, 'utf8');
+const dataIcon = 'https://data.bijing.life/api/public/teams/avatar?key=existing-icon';
+const uploadedIcon = 'https://data.bijing.life/api/public/teams/avatar?key=approved-icon';
 
 function deferred() {
   let resolve;
@@ -13,7 +15,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function createPage({ openid = 'openid-user', create, checkText, checkImage, navigateBackFails = false, now = '2026-09-19T12:00:00+08:00' } = {}) {
+function createPage({ openid = 'openid-user', create, checkText, checkImage, uploadIcon, navigateBackFails = false, now = '2026-09-19T12:00:00+08:00' } = {}) {
   let definition;
   let currentTime = Date.parse(now);
   class FixedDate extends Date {
@@ -23,13 +25,17 @@ function createPage({ openid = 'openid-user', create, checkText, checkImage, nav
   let currentOpenid = openid;
   let timerId = 0;
   const timers = new Map();
-  const calls = { create: [], text: [], image: [], toast: [], navigation: [], actionSheets: [], media: [], updates: [] };
+  const calls = { uploads: [], create: [], text: [], image: [], toast: [], navigation: [], actionSheets: [], media: [], updates: [] };
   vm.runInNewContext(source, {
     Page: value => { definition = value; },
     Date: FixedDate,
     require(name) {
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
+      if (name.endsWith('/teamGateway.js')) return {
+        isDataTeamIcon: value => typeof value === 'string' && value.startsWith('https://data.bijing.life/api/public/teams/avatar?'),
+        async uploadTeamIcon(file) { calls.uploads.push(file); return uploadIcon ? uploadIcon(file) : uploadedIcon; }
+      };
       if (name.endsWith('/teamManager.js')) return { createTeam: async info => {
         calls.create.push({ ...info });
         return create ? create(info) : { success: true, team: { _id: 'cloud-team', ...info } };
@@ -63,7 +69,7 @@ function createPage({ openid = 'openid-user', create, checkText, checkImage, nav
   }, { filename: pagePath });
   const page = {
     ...definition,
-    data: { ...structuredClone(definition.data), teamName: '觉察小组', teamDescription: '一起练习', selectedIcon: 1, customIconPath: 'cloud://existing-icon' },
+    data: { ...structuredClone(definition.data), teamName: '觉察小组', teamDescription: '一起练习', selectedIcon: 1, customIconPath: dataIcon },
     setData(values) { calls.updates.push(values); Object.assign(this.data, values); }
   };
   page.onLoad();
@@ -90,7 +96,8 @@ test('creation and icon upload reject guest and local identities before network 
 test('validation rejects incomplete forms, oversized values and nonpermanent icons', async () => {
   for (const values of [
     { teamName: '   ' }, { teamName: '名'.repeat(21) }, { teamDescription: '介'.repeat(101) },
-    { customIconPath: '' }, { customIconPath: true }, { customIconPath: 'wxfile://tmp_icon' }
+    { customIconPath: '' }, { customIconPath: true }, { customIconPath: 'wxfile://tmp_icon' },
+    { customIconPath: 'cloud://old-team-icon' }
   ]) {
     const { page, calls } = createPage();
     Object.assign(page.data, values);
@@ -114,7 +121,7 @@ test('submitted fields are the same trimmed snapshot that passed moderation', as
   pending.resolve(true);
   await creation;
   assert.deepEqual(calls.text, [['原名称', 2], ['原介绍', 2]]);
-  assert.deepEqual(calls.create, [{ name: '原名称', description: '原介绍', icon: 'cloud://existing-icon', practiceType: 'sitting', practiceStartDate: null, dailyGoalMinutes: null }]);
+  assert.deepEqual(calls.create, [{ name: '原名称', description: '原介绍', icon: dataIcon, practiceType: 'sitting', practiceStartDate: null, dailyGoalMinutes: null }]);
 });
 
 test('duplicate submission remains blocked through moderation, creation and success navigation delay', async () => {
@@ -222,10 +229,11 @@ test('avatar moderation blocks concurrent selection and submission and reuses it
   pending.resolve('cloud://approved-icon');
   await upload;
   assert.equal(page.data.isChoosingIcon, false);
-  assert.equal(page.data.customIconPath, 'cloud://approved-icon');
+  assert.equal(page.data.customIconPath, uploadedIcon);
+  assert.deepEqual(calls.uploads, ['cloud://approved-icon']);
   assert.equal(page.data.teamIcons[0].path, 'wxfile://tmp_new');
   await page.createTeam();
-  assert.equal(calls.create[0].icon, 'cloud://approved-icon');
+  assert.equal(calls.create[0].icon, uploadedIcon);
   assert.equal(calls.image[0].options.returnFileID, true);
 });
 
@@ -235,7 +243,7 @@ test('cancelled or rejected avatar selection keeps the previous approved icon an
     page.chooseImageFromAlbum();
     calls.actionSheets[0].success({ tapIndex: 0 });
     await calls.media[0].success({ tempFiles: [{ tempFilePath: 'wxfile://tmp_new' }] });
-    assert.equal(page.data.customIconPath, 'cloud://existing-icon');
+    assert.equal(page.data.customIconPath, dataIcon);
     assert.equal(page.data.isChoosingIcon, false);
   }
   const { page, calls } = createPage();
@@ -247,6 +255,34 @@ test('cancelled or rejected avatar selection keeps the previous approved icon an
   calls.media[0].fail({ errMsg: 'chooseMedia:fail cancel' });
   assert.equal(page.data.isChoosingIcon, false);
   assert.equal(calls.toast.length, 0);
+});
+
+test('failed data avatar uploads preserve the last icon and do not turn cloud audit files into team data', async () => {
+  for (const uploadIcon of [() => { throw new Error('团队服务暂时无法连接'); }, () => 'cloud://unexpected-icon']) {
+    const { page, calls } = createPage({ uploadIcon });
+    page.chooseImageFromAlbum();
+    calls.actionSheets[0].success({ tapIndex: 1 });
+    await calls.media[0].success({ tempFiles: [{ tempFilePath: 'wxfile://tmp_new' }] });
+    assert.equal(page.data.customIconPath, dataIcon);
+    assert.equal(page.data.isChoosingIcon, false);
+    assert.deepEqual(calls.uploads, ['cloud://checked-icon']);
+    assert.equal(calls.create.length, 0);
+    assert.equal(calls.toast.at(-1).icon, 'none');
+  }
+});
+
+test('an avatar approved for an old account is never uploaded or installed for its replacement', async () => {
+  const approved = deferred();
+  const { page, calls, setOpenid } = createPage({ checkImage: () => approved.promise });
+  page.chooseImageFromAlbum();
+  calls.actionSheets[0].success({ tapIndex: 1 });
+  const pending = calls.media[0].success({ tempFiles: [{ tempFilePath: 'wxfile://tmp_new' }] });
+  setOpenid('replacement');
+  approved.resolve('cloud://old-account-icon');
+  await pending;
+  assert.equal(calls.uploads.length, 0);
+  assert.equal(page.data.customIconPath, dataIcon);
+  assert.equal(page.data.isChoosingIcon, false);
 });
 
 

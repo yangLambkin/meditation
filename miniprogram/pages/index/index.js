@@ -50,6 +50,21 @@ Page({
     checkinUploadBlockedRecords: [],
     checkinDeleting: false,
     checkinActionsOpen: false,
+    showForm: false,
+    formEditing: true,
+    formType: 'sitting',
+    formTypeName: '静坐',
+    formUnit: '分钟',
+    formDate: '',
+    formTime: '',
+    formMinDate: '',
+    today: '',
+    formValue: '',
+    formReflection: '',
+    formMaxReflection: 5000,
+    formBusy: false,
+    formPending: false,
+    formError: '',
     deletingCheckinId: '',
     checkinRecords: [],
     checkinGroups: [],
@@ -75,7 +90,7 @@ Page({
   },
 
   openCheckinModal() {
-    if (this.data.checkinSubmitting) return;
+    if (this.data.checkinSubmitting || this.data.formBusy || this.data.showForm) return;
     this._backfillFormVersion = (this._backfillFormVersion || 0) + 1;
     this._checkinDateEdited = false;
     this._checkinTimeEdited = false;
@@ -448,35 +463,201 @@ Page({
   },
 
   openCheckinHistory(e) {
+    if (this.data.checkinActionsOpen || this.data.showForm || this.data.checkinDeleting) return;
     const date = e.currentTarget.dataset.date;
     if (date) wx.navigateTo({ url: `/pages/history/history?date=${date}` });
   },
 
+  getCheckinActionAccount() {
+    return JSON.stringify([wx.getStorageSync('userOpenId') || '',
+      typeof checkinManager.getUserId === 'function' ? checkinManager.getUserId() : '']);
+  },
+
+  async openCheckinEditor(record) {
+    if (!record || this.data.formBusy || this.data.checkinDeleting || this.data.checkinSubmitting) return;
+    const account = this.getCheckinActionAccount();
+    const version = this._checkinActionVersion || 0;
+    const token = {};
+    this._checkinEditToken = token;
+    let reflection;
+    try {
+      reflection = checkinManager.getEditableCheckinReflection(record.date, {
+        recordId: record._id, localId: record.localId, timestamp: record.timestamp
+      });
+      if (reflection && typeof reflection.then === 'function') {
+        this._checkinEditLoading = token;
+        this.setData({ formBusy: true });
+        if (wx.showLoading) wx.showLoading({ title: '读取原感悟', mask: true });
+        reflection = await reflection;
+      }
+      if (this._checkinEditToken !== token || account !== this.getCheckinActionAccount()
+        || version !== (this._checkinActionVersion || 0) || this._checkinPageHidden) return;
+    } catch (error) {
+      if (this._checkinEditToken === token && account === this.getCheckinActionAccount()
+        && version === (this._checkinActionVersion || 0) && !this._checkinPageHidden) {
+        wx.showToast({ title: error.message || '原感悟读取失败，请重新打开记录', icon: 'none', duration: 3500 });
+      }
+      return;
+    } finally {
+      if (this._checkinEditLoading === token) {
+        this._checkinEditLoading = null;
+        this.setData({ formBusy: false });
+        if (wx.hideLoading) wx.hideLoading();
+      }
+    }
+    this._checkinEditRecord = { ...record };
+    this._checkinEditAccount = account;
+    this._checkinEditPayload = null;
+    this._checkinEditRequestId = null;
+    this._formTimeEdited = false;
+    this._formOriginalTimestamp = dateUtil.getRecordTimestamp(record.timestamp);
+    const original = Number.isFinite(this._formOriginalTimestamp)
+      ? homeCheckin.getDateTime(this._formOriginalTimestamp) : { date: record.dayDate, time: '' };
+    this.setData({
+      showForm: true, formEditing: true, formDate: original.date, formTime: original.time,
+      formValue: String(record.duration), formReflection: reflection,
+      formBusy: false, formPending: false, formError: ''
+    });
+    this.refreshFormDates();
+  },
+
+  refreshFormDates() {
+    this.setData({ today: homeCheckin.getDateTime().date, formMinDate: '' });
+  },
+
+  closeForm() {
+    if (this.data.formBusy) return;
+    this._checkinEditToken = null;
+    this.setData({ showForm: false });
+  },
+
+  noop() {},
+
+  onFormDate(event) {
+    if (this.data.formBusy) return;
+    this._formTimeEdited = true;
+    this.setData({ formDate: event.detail.value, formError: '' });
+    this.refreshFormDates();
+  },
+
+  onFormTime(event) {
+    if (this.data.formBusy) return;
+    this._formTimeEdited = true;
+    this.setData({ formTime: event.detail.value, formError: '' });
+  },
+
+  onFormValue(event) {
+    if (!this.data.formBusy) this.setData({ formValue: event.detail.value, formError: '' });
+  },
+
+  onFormReflection(event) {
+    if (!this.data.formBusy) this.setData({ formReflection: event.detail.value, formError: '' });
+  },
+
+  checkinEditPayload() {
+    this.refreshFormDates();
+    const { formDate, formTime } = this.data;
+    const selected = Date.parse(`${formDate}T${formTime}:00+08:00`);
+    if (!homeCheckin.isValidDateKey(formDate) || formDate > this.data.today ||
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(formTime) || !Number.isFinite(selected) || selected > Date.now()) {
+      throw new Error(formTime ? '请选择有效且不晚于当前的北京时间' : '原记录仅有日期，请选择真实发生时间后保存');
+    }
+    // 只改时长或感悟时，保留原记录的秒、毫秒以及手动选择的归属日期。
+    const timestamp = !this._formTimeEdited && Number.isFinite(this._formOriginalTimestamp)
+      ? this._formOriginalTimestamp : selected;
+    const record = this._checkinEditRecord;
+    const day = homeCheckin.getCheckinDay(timestamp);
+    const today = homeCheckin.getCheckinDay();
+    if (timestamp !== this._formOriginalTimestamp && day !== record.dayDate &&
+        (record.isBackfill || day < homeCheckin.shiftCheckinDate(today, -1) || day > today)) {
+      throw new Error(record.isBackfill ? '补录记录只能在原归属日期内修改时间' : '请选择原归属日期、今天或昨天的时间');
+    }
+    const value = String(this.data.formValue).trim();
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 1440) {
+      throw new Error('请输入 1 至 1440 分钟的整数');
+    }
+    const reflection = this.data.formReflection.trim();
+    if (reflection.length > this.data.formMaxReflection) throw new Error(`感悟不能超过 ${this.data.formMaxReflection} 字`);
+    return { duration: Number(value), timestamp, reflection };
+  },
+
+  async saveForm() {
+    if (!this.data.showForm || this.data.formBusy) return;
+    if (this._checkinEditAccount !== this.getCheckinActionAccount()) {
+      this.setData({ formError: '账号已变化，请关闭后重新打开记录' });
+      return;
+    }
+    let updates;
+    try { updates = this.checkinEditPayload(); }
+    catch (error) { this.setData({ formError: error.message }); return; }
+    const payloadKey = JSON.stringify(updates);
+    if (this._checkinEditPayload !== payloadKey) {
+      this._checkinEditPayload = payloadKey;
+      this._checkinEditRequestId = `edit_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+    const token = this._checkinEditToken;
+    const account = this._checkinEditAccount;
+    const current = () => this._checkinEditToken === token && account === this.getCheckinActionAccount();
+    this.setData({ formBusy: true, formError: '' });
+    try {
+      if (updates.reflection && !(await contentSec.checkText(updates.reflection, 2, { allowOffline: true, timeoutMs: 1500 }))) {
+        if (current()) this.setData({ formError: '感悟内容未通过检查，请修改后重试' });
+        return;
+      }
+      if (!current()) return;
+      const record = this._checkinEditRecord;
+      const result = await checkinManager.updateCheckin(record.date, {
+        recordId: record._id, localId: record.localId, timestamp: record.timestamp
+      }, updates, { requestId: this._checkinEditRequestId });
+      if (!current()) return;
+      if (!result || !result.success) throw new Error(result && result.error || '保存失败，请重试');
+      this.setData({ showForm: false });
+      this.refreshCalendarData();
+      if (!this._checkinPageHidden) wx.showToast({ title: '已更新', icon: 'success' });
+    } catch (error) {
+      if (current()) this.setData({ formError: error.message || '保存失败，填写内容已保留，请重试' });
+    } finally {
+      if (this._checkinEditToken === token) this.setData({ formBusy: false });
+    }
+  },
+
   async showCheckinActions(e) {
-    if (this.data.checkinDeleting || this.data.checkinActionsOpen) return;
+    if (this.data.checkinDeleting || this.data.checkinActionsOpen || this.data.formBusy || this.data.showForm || this.data.showCheckinModal) return;
     if (!this.data.checkinRecords.some(record => record.id === e.currentTarget.dataset.id)) return;
+    const account = this.getCheckinActionAccount();
+    const version = this._checkinActionVersion || 0;
     this.setData({ checkinActionsOpen: true });
     try {
       const selection = await new Promise(resolve => {
         const menu = wx.showActionSheet({
-          itemList: ['删除记录'],
+          itemList: ['编辑功课', '删除记录'],
           success: resolve,
           fail: () => resolve(null)
         });
         if (menu && typeof menu.then === 'function') menu.then(resolve, () => resolve(null));
       });
-      if (selection && selection.tapIndex === 0) await this.deleteCheckinRecord(e);
+      if (!selection || version !== (this._checkinActionVersion || 0)) return;
+      if (account !== this.getCheckinActionAccount()) {
+        wx.showToast({ title: '账号已变化，请重新打开记录', icon: 'none' });
+        return;
+      }
+      const record = this.data.checkinRecords.find(item => item.id === e.currentTarget.dataset.id);
+      if (!record) return;
+      if (selection.tapIndex === 0) await this.openCheckinEditor(record);
+      if (selection.tapIndex === 1) await this.deleteCheckinRecord(e);
     } catch (error) {
       console.warn('打开记录操作菜单失败:', error);
     } finally {
-      this.setData({ checkinActionsOpen: false });
+      if (version === (this._checkinActionVersion || 0)) this.setData({ checkinActionsOpen: false });
     }
   },
 
   async deleteCheckinRecord(e) {
-    if (this.data.checkinDeleting) return;
+    if (this.data.checkinDeleting || this.data.formBusy || this.data.showForm) return;
     const record = this.data.checkinRecords.find(item => item.id === e.currentTarget.dataset.id);
     if (!record) return;
+    const account = this.getCheckinActionAccount();
+    const version = this._checkinActionVersion || 0;
 
     this.setData({ checkinDeleting: true });
     try {
@@ -492,7 +673,11 @@ Page({
         });
         if (modal && typeof modal.then === 'function') modal.then(resolve, reject);
       });
-      if (!confirmation.confirm) return;
+      if (!confirmation.confirm || version !== (this._checkinActionVersion || 0)) return;
+      if (account !== this.getCheckinActionAccount()) {
+        wx.showToast({ title: '账号已变化，请重新打开记录', icon: 'none' });
+        return;
+      }
 
       this.setData({ deletingCheckinId: record.id });
       const result = await checkinManager.deleteCheckin(record.date, {
@@ -500,6 +685,7 @@ Page({
         localId: record.localId,
         timestamp: record.timestamp
       });
+      if (account !== this.getCheckinActionAccount() || version !== (this._checkinActionVersion || 0)) return;
       if (!result || !result.success) {
         wx.showToast({ title: (result && result.error) || '删除失败，请重试', icon: 'none' });
         return;
@@ -1550,6 +1736,11 @@ Page({
    * 生命周期函数--监听页面显示
    */
   onShow() {
+    this._checkinPageHidden = false;
+    if (this.data.showForm && this._checkinEditAccount !== this.getCheckinActionAccount()) {
+      this._checkinEditToken = null;
+      this.setData({ showForm: false, formBusy: false, formReflection: '', formError: '' });
+    }
     this.refreshRecordVisibility();
     this.initHomeBackfill();
     this.watchBijingRecordSync();
@@ -1597,6 +1788,15 @@ Page({
    * 生命周期函数--监听页面隐藏
    */
   onHide() {
+    this._checkinPageHidden = true;
+    this._checkinActionVersion = (this._checkinActionVersion || 0) + 1;
+    if (this._checkinEditLoading) {
+      this._checkinEditToken = null;
+      this._checkinEditLoading = null;
+      this.setData({ formBusy: false });
+      if (wx.hideLoading) wx.hideLoading();
+    }
+    this.setData({ checkinActionsOpen: false });
     this.stopHomeBackfill();
     this.stopBijingRecordSync();
     clearInterval(this._checkinClock);
@@ -1610,6 +1810,13 @@ Page({
    * 生命周期函数--监听页面卸载
    */
   onUnload() {
+    this._checkinPageHidden = true;
+    this._checkinActionVersion = (this._checkinActionVersion || 0) + 1;
+    this._checkinEditToken = null;
+    if (this._checkinEditLoading) {
+      this._checkinEditLoading = null;
+      if (wx.hideLoading) wx.hideLoading();
+    }
     this.stopHomeBackfill();
     this.stopBijingRecordSync();
     clearInterval(this._checkinClock);

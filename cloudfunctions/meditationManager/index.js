@@ -81,6 +81,8 @@ exports.main = async (event = {}, context) => {
       return await recordMeditation(openid, event.data, event.localUserId);
     case "deleteMeditationRecord":
       return await deleteMeditationRecord(openid, event.data);
+    case "editMeditationRecord":
+      return await editMeditationRecord(openid, event.data);
     case "getUserRecords":
       return await getUserRecords(openid, event.date);
     case "migrateBusinessDates":
@@ -524,6 +526,122 @@ function rebuildMeditationStats(records) {
     monthlyStats,
     updatedAt: new Date()
   };
+}
+
+// 编辑原记录和统计共同提交，固定请求凭据支持超时重试；不改变来源身份。
+async function editMeditationRecord(openid, data = {}) {
+  if (!openid) return { success: false, code: 'AUTH_REQUIRED', error: '请先登录后再编辑记录' };
+  try {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw deletionError('INVALID_RECORD', '编辑记录参数无效');
+    if (data.expectedOpenid !== undefined && data.expectedOpenid !== openid) {
+      throw deletionError('ACCOUNT_CHANGED', '登录账号已变化，请切换回编辑记录时的账号后重试');
+    }
+    const recordId = data.recordId, localId = data.localId;
+    const validId = value => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 200;
+    if (recordId !== undefined && recordId !== null && recordId !== '' && !validId(recordId) ||
+        !recordId && localId !== undefined && localId !== null && localId !== '' && !validId(localId)) {
+      throw deletionError('INVALID_RECORD', '记录标识无效');
+    }
+    const originalTimestamp = meditationTimestamp(data.timestamp);
+    if (!recordId && !localId && (!Number.isFinite(originalTimestamp) || !isDateLabel(data.date))) {
+      throw deletionError('INVALID_RECORD', '缺少记录标识或原始日期、时间');
+    }
+    if (!validId(data.requestId)) throw deletionError('INVALID_REQUEST_ID', '缺少有效的编辑请求标识，请重新打开记录');
+    const updates = data.updates;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates) ||
+        !Number.isInteger(updates.duration) || updates.duration < 1 || updates.duration > 1440 ||
+        !Number.isSafeInteger(updates.timestamp) || updates.timestamp <= 0 ||
+        updates.timestamp > Date.now() || !Number.isFinite(new Date(updates.timestamp).getTime()) ||
+        typeof updates.reflection !== 'string' || updates.reflection.length > 5000) {
+      throw deletionError('INVALID_RECORD', '请核对日期、时间、1–1440 分钟的整数时长及不超过 5000 字的感悟');
+    }
+    const reflection = updates.reflection.trim();
+    // 定位可从 localId 升级为云 ID；幂等绑定实际源记录，不能把定位升级当作新内容。
+    const signature = JSON.stringify([updates.duration, updates.timestamp, reflection]);
+    const editId = stableDocumentId('me_', openid, data.requestId);
+    const result = await withMeditationSnapshot(openid, async (transaction, records, statsRows, bindingSnapshot) => {
+      const receipt = await optionalDocument(transaction, 'meditation_locks', editId);
+      if (receipt) {
+        if (receipt.kind !== 'edit_receipt' || receipt.ownerOpenid !== openid || receipt.signature !== signature) {
+          throw deletionError('REQUEST_ID_REUSED', '编辑请求已用于其他内容，请重新打开记录后保存');
+        }
+        const currentRecord = records.find(record => record._id === receipt.recordId);
+        if (!currentRecord) throw deletionError('RECORD_DELETED', '这条记录已删除，请刷新后查看');
+        const sameRecord = recordId ? recordId === receipt.recordId : localId
+          ? currentRecord.localId === localId || currentRecord.idempotencyKey === localId
+          : data.date === receipt.originalDate && originalTimestamp === receipt.originalTimestamp;
+        if (!sameRecord) throw deletionError('REQUEST_ID_REUSED', '编辑请求已用于另一条记录，请重新打开后保存');
+        await assertMeditationNotDeleted(transaction, openid, currentRecord);
+        if (currentRecord.lastEditId !== editId ||
+            meditationTimestamp(currentRecord.updatedAt) !== meditationTimestamp(receipt.result.updatedAt)) {
+          throw deletionError('EDIT_SUPERSEDED', '这条记录已有更新，请刷新后重新编辑');
+        }
+        return { ...receipt.result, duplicate: true };
+      }
+      const matches = records.filter(record => recordId ? record._id === recordId : localId
+        ? record.localId === localId || record.idempotencyKey === localId
+        : getRecordBusinessDate(record) === data.date && meditationTimestamp(record.timestamp) === originalTimestamp);
+      if (!matches.length) throw deletionError('RECORD_NOT_FOUND', '记录不存在或已被删除，请刷新后重试');
+      if (matches.length !== 1) throw deletionError('AMBIGUOUS_RECORD', '存在多条匹配记录，请刷新后重试');
+      const target = matches[0];
+      const aliases = new Set([target.localId, target.idempotencyKey].filter(value => typeof value === 'string' && value));
+      if (aliases.size && records.some(record => record._id !== target._id &&
+          [record.localId, record.idempotencyKey].some(value => aliases.has(value)))) {
+        throw deletionError('AMBIGUOUS_RECORD', '云端存在相同标识的多条记录，请先核对记录后再编辑');
+      }
+      await assertMeditationNotDeleted(transaction, openid, target);
+      const previousDate = getRecordBusinessDate(target);
+      if (!isDateLabel(previousDate)) throw deletionError('INVALID_STORED_RECORD', '原记录日期异常，请刷新后重试');
+      const changedTime = meditationTimestamp(target.timestamp) !== updates.timestamp;
+      const date = changedTime ? getBusinessDate(updates.timestamp) : previousDate;
+      const today = getBusinessDate();
+      const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+      if (date !== previousDate && (date < yesterday || date > today || target.backfillRequestId || target.recordType === 'backfill')) {
+        throw deletionError('DATE_OUT_OF_RANGE', '只能保留原练习日期或调整为今天、昨天；补录记录请保留原练习日期');
+      }
+      const others = records.filter(record => record._id !== target._id);
+      if (date !== previousDate || updates.duration !== Number(target.duration)) {
+        const daily = mergeDuplicateRecords(others).records.filter(record => getRecordBusinessDate(record) === date)
+          .reduce((sum, record) => sum + Math.max(0, Number(record.duration) || 0), 0);
+        if (daily + updates.duration > 1440) throw deletionError('DAILY_DURATION_EXCEEDED', '当天记录合计不能超过 24 小时');
+      }
+      const emotion = Array.isArray(target.emotion) ? target.emotion : [];
+      const experience = reflection ? [{ text: reflection, timestamp: updates.timestamp,
+        duration: `${updates.duration}分钟`, emotion }] : [];
+      const updatedAt = new Date(Math.max(Date.now(), (meditationTimestamp(target.updatedAt) || 0) + 1));
+      const replacement = { ...target, date, timestamp: updates.timestamp, duration: updates.duration,
+        experience, experienceEdited: true, lastEditId: editId, updatedAt, businessDayVersion: 2 };
+      const updated = await transaction.collection('meditation_records').doc(target._id).update({ data: {
+        date, timestamp: updates.timestamp, duration: updates.duration, experience,
+        experienceEdited: true, lastEditId: editId, updatedAt, businessDayVersion: 2
+      } });
+      if (!updated.stats || updated.stats.updated !== 1) throw deletionError('RECORD_NOT_FOUND', '记录已变更，请刷新后重试');
+      const after = [...others, replacement];
+      await writeRebuiltStats(transaction, openid, statsRows, rebuildMeditationStats(after));
+      const changedDates = [...new Set([previousDate, date])];
+      for (const recordDate of changedDates) {
+        if (recordDate < today) await require('./syncQueue').queueChangedDate({ transaction, snapshot: bindingSnapshot,
+          openid, recordDate, today, records: after, getRecordBusinessDate, readDocument: optionalDocument, timestamp: Date.now() });
+      }
+      const response = { editId, recordId: target._id, previousDate, date, timestamp: updates.timestamp,
+        duration: updates.duration, experience, experienceEdited: true, emotion, updatedAt,
+        ...(changedDates.some(recordDate => recordDate < today) ? { autoSyncBijing: true } : {}) };
+      await transaction.collection('meditation_locks').doc(editId).set({ data: {
+        kind: 'edit_receipt', ownerOpenid: openid, signature, recordId: target._id,
+        originalDate: previousDate, originalTimestamp: Number.isFinite(meditationTimestamp(target.timestamp))
+          ? meditationTimestamp(target.timestamp) : null,
+        date, previousDate, result: response, createdAt: new Date()
+      } });
+      return response;
+    }, false, records => getBusinessDate(updates.timestamp) < getBusinessDate() || records.some(record =>
+      (recordId ? record._id === recordId : localId ? record.localId === localId || record.idempotencyKey === localId
+        : getRecordBusinessDate(record) === data.date && meditationTimestamp(record.timestamp) === originalTimestamp) &&
+      getRecordBusinessDate(record) < getBusinessDate()));
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('编辑静坐记录失败:', error);
+    return { success: false, code: error.code || 'EDIT_FAILED', error: error.message || '编辑失败，请重试' };
+  }
 }
 
 // 删除记录和重算统计共同提交；统计写入失败时，原记录仍然保留。

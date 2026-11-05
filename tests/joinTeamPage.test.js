@@ -7,12 +7,58 @@ const pagePath = path.join(__dirname, '../miniprogram/subpackages/team/pages/joi
 const preview = { _id: 'team-a', name: '一起冥想', isMember: false, members: [{ nickname: '团长', isCreator: true }] };
 const success = data => ({ result: { success: true, data } });
 
+test('a preview finishing after a same-WeChat binding change cannot restore previous membership', async () => {
+  let finish;
+  const current = { ...structuredClone(preview), _id: 'bijing_8', isMember: true, practiceType: 'instant' };
+  const { page, storage, calls } = createPage({ cloud: () => new Promise(resolve => { finish = resolve; }) });
+  const pending = page.onLoad({ teamId: current._id, inviteId: 'invite' });
+  storage.set('bijingStudentNumber', 'BJ008');
+  finish(success(current));
+  await pending;
+  assert.equal(page.data.teamInfo, null);
+  assert.equal(page.data.isMember, false);
+  assert.equal(page.data.members.length, 0);
+  assert.equal(calls.redirects.length, 0);
+});
+
+test('a loaded data invitation loses its old membership immediately and refreshes on a binding change', async () => {
+  const current = { ...structuredClone(preview), _id: 'bijing_8', isMember: true, practiceType: 'instant' };
+  let count = 0;
+  const { page, storage, calls } = createPage({ cloud: () => success(++count === 1 ? current : { ...current, isMember: false, members: [] }) });
+  await page.onLoad({ teamId: current._id, inviteId: 'invite' });
+  assert.equal(page.data.isMember, true);
+  storage.set('bijingBindingVersion', 'v2');
+  page.enterTeamDetails();
+  assert.equal(calls.redirects.length, 0);
+  await page.onShow();
+  assert.equal(page.data.isMember, false);
+  assert.equal(page.data.members.length, 0);
+  assert.deepEqual(calls.cloud.map(call => call.type), ['getTeamInfo', 'getTeamInfo']);
+});
+
 function createPage({ cloud, openid = 'wechat-any-prefix', stored = {}, refresh } = {}) {
   let definition;
   const storage = new Map(Object.entries({ userOpenId: openid, ...stored }));
   const calls = { cloud: [], navigate: [], redirects: [], modals: [], toasts: [], joined: [], refresh: 0, hiddenShares: [] };
+  const invitationModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/teamInvitation.js'), 'utf8'), {
+    module: invitationModule,
+    require() { throw new Error('Binding recovery is covered by teamInvitationFlow.test.js'); },
+    wx: { getStorageSync: key => storage.get(key), setStorageSync: (key, value) => storage.set(key, value),
+      removeStorageSync: key => storage.delete(key) }
+  });
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     require(name) {
+      if (name.endsWith('/teamGateway.js')) return {
+        isDataTeam: id => typeof id === 'string' && id.startsWith('bijing_'),
+        getDataOwner: () => ({ openid: storage.get('userOpenId'), studentNumber: storage.get('bijingStudentNumber') || 'BJ007' }),
+        getViewerKey: id => typeof id === 'string' && id.startsWith('bijing_')
+          ? JSON.stringify([storage.get('userOpenId'), storage.get('bijingStudentNumber') || 'BJ007', storage.get('bijingBindingVersion') || 'v1']) : storage.get('userOpenId'),
+        async callTeam(type, data) {
+        calls.cloud.push({ type, data });
+        return cloud ? cloud(type, data) : success(structuredClone(preview));
+      } };
+      if (name.endsWith('/teamInvitation.js')) return invitationModule.exports;
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (!name.endsWith('/teamManager.js')) throw new Error(name);
       return {

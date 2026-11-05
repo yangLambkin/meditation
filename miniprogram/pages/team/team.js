@@ -1,3 +1,4 @@
+const { callTeam, isDataTeam } = require('../../utils/teamGateway.js');
 const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
 const { PRACTICES } = require('../../utils/practicePreferences.js');
@@ -11,7 +12,7 @@ Page({
   data: {
     myTeams: [], joinedTeams: [], mergedJoinedTeams: [], allTeams: [],
     isLoading: false, currentTab: 'created', userNickname: '匿名用户',
-    hasUserInfo: false, totalJoinedTeams: 0, showCreateTeam: false
+    hasUserInfo: false, totalJoinedTeams: 0, showCreateTeam: false, refreshWarning: ''
   },
 
   onHeroTap() {
@@ -80,12 +81,12 @@ Page({
   },
 
   async getAllTeamsFromCloud() {
-    const response = await wx.cloud.callFunction({ name: 'teamManager', data: { type: 'getAllTeams' } });
+    const response = await callTeam('getAllTeams');
     const result = response && response.result;
     if (!result || !result.success || !result.data || !Array.isArray(result.data.teams)) {
       throw new Error((result && result.error) || '获取公开团队失败');
     }
-    return result.data.teams;
+    return { success: true, data: result.data.teams, failedSources: result.failedSources || [], warning: result.warning || '' };
   },
 
   getCachedAllTeams() {
@@ -130,17 +131,28 @@ Page({
     const sequence = (this._loadSequence || 0) + 1;
     this._loadSequence = sequence;
     this._loadingUser = openid;
-    this.setData({ isLoading: true });
+    this.setData({ isLoading: true, refreshWarning: '' });
     // 两个列表先展示缓存；公开列表仅供浏览，不提供进入团队的入口。
     this.renderTeams();
     const load = async () => {
       try {
         const [privateResult, publicResult] = await Promise.all([
           forceCloud ? teamManager.loadTeamsFromCloud() : Promise.resolve({ success: true }),
-          this.getAllTeamsFromCloud().then(data => ({ success: true, data }), error => ({ success: false, error: error.message }))
+          this.getAllTeamsFromCloud().catch(error => ({ success: false, error: error.message }))
         ]);
         if (sequence !== this._loadSequence || openid !== (wx.getStorageSync('userOpenId') || '')) return;
-        if (publicResult.success) wx.setStorageSync('allTeams_cache', publicResult.data);
+        if (publicResult.success) {
+          const failedSources = publicResult.failedSources || [];
+          const failedCache = this.getCachedAllTeams().filter(team => failedSources.includes(
+            isDataTeam(team.cloudId || team._id) ? 'bijing' : 'wechat'));
+          const teams = new Map(publicResult.data.map(team => [team.cloudId || team._id, team]));
+          for (const team of failedCache) {
+            const id = team.cloudId || team._id;
+            if (!teams.has(id)) teams.set(id, team);
+          }
+          wx.setStorageSync('allTeams_cache', [...teams.values()]);
+        }
+        this.setData({ refreshWarning: privateResult.warning || publicResult.warning || '' });
         this.renderTeams();
         if (!privateResult.success || !publicResult.success) {
           wx.showToast({ title: '团队刷新失败，请稍后重试', icon: 'none' });

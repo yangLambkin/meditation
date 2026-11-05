@@ -8,38 +8,75 @@ const source = fs.readFileSync(path.join(__dirname, '../miniprogram/utils/teamMa
 const pageSource = fs.readFileSync(path.join(__dirname, '../miniprogram/pages/team/team.js'), 'utf8');
 const quiet = { log() {}, warn() {}, error() {} };
 const team = (id, creator = 'owner') => ({ _id: id, name: id, creator, members: [creator], memberCount: 1, isActive: true });
+const dataIcon = 'https://data.bijing.life/api/public/teams/avatar?key=checked-icon';
+const created = (id, input = {}, overrides = {}) => {
+  const teamId = `bijing_${id}`;
+  return { success: true, data: { teamId, team: {
+    ...team(teamId, input.creator || 'owner'), cloudId: teamId, source: 'bijing',
+    name: input.name || teamId, description: input.description || '', icon: input.icon || '/images/icons/team.png',
+    practiceType: input.practiceType || 'sitting', creatorName: '服务端团长', deputyLeaders: [],
+    practiceStartDate: input.practiceStartDate ?? null, dailyGoalMinutes: input.dailyGoalMinutes ?? null,
+    ...overrides
+  } } };
+};
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function harness({ stored = {}, cloud = async () => ({ success: true, data: [] }), uploadFail = false } = {}) {
-  const storage = { userOpenId: 'owner', ...clone(stored) };
+function harness({ stored = {}, cloud = async () => ({ success: true, data: [] }), uploadFail = false, seedOwnerAnnotation = true, failSetKeys = [] } = {}) {
+  const storage = { userOpenId: 'owner', bijingBound: true, bijingStudentNumber: 'BJ007', bijingBindingVersion: 'v1', ...clone(stored) };
+  const getDataOwner = () => storage.userOpenId && storage.bijingBound === true && typeof storage.bijingStudentNumber === 'string' && storage.bijingStudentNumber.trim()
+    ? { openid: storage.userOpenId, studentNumber: storage.bijingStudentNumber.trim().toUpperCase(), bindingVersion: storage.bijingBindingVersion || '' } : null;
+  const owner = getDataOwner();
+  if (seedOwnerAnnotation && owner) {
+    const fingerprint = JSON.stringify([owner.openid, owner.studentNumber, String(owner.bindingVersion || '')]);
+    for (const key of [`userTeams_${owner.openid}`, `joinedTeams_${owner.openid}`]) {
+      if (Array.isArray(storage[key])) storage[key] = storage[key].map(team =>
+        /^bijing_[1-9]\d*$/.test(team.cloudId || team._id) && !Object.hasOwn(team, '_dataOwner')
+          ? { ...team, _dataOwner: fingerprint } : team);
+    }
+  }
+  const failedWrites = new Set(failSetKeys);
   const calls = [], uploads = [], toasts = [], navigations = [], modals = [];
+  const gateway = {
+    getDataOwner,
+    isDataTeam: id => typeof id === 'string' && /^bijing_[1-9]\d*$/.test(id),
+    async callTeam(type, data, openid = storage.userOpenId || '') {
+      const request = { type, data, openid };
+      calls.push(clone(request));
+      return { result: await cloud(request) };
+    },
+    async uploadTeamIcon(icon) {
+      uploads.push(icon);
+      if (uploadFail || typeof icon !== 'string' || !icon.startsWith('cloud://')) throw new Error('请重新选择并审核团队头像');
+      return dataIcon;
+    }
+  };
   const wx = {
     getStorageSync: key => clone(storage[key]),
-    setStorageSync: (key, value) => { storage[key] = clone(value); },
+    setStorageSync: (key, value) => {
+      if (failedWrites.has(key)) throw new Error(`storage unavailable: ${key}`);
+      storage[key] = clone(value);
+    },
     removeStorageSync: key => { delete storage[key]; },
     showToast: value => toasts.push(value), showModal: value => modals.push(value),
     showLoading() {}, hideLoading() {}, stopPullDownRefresh() {},
     navigateTo: value => navigations.push(value),
-    cloud: {
-      async callFunction(request) { calls.push(clone(request.data)); return { result: await cloud(request.data) }; },
-      uploadFile(request) {
-        uploads.push(request.filePath);
-        if (uploadFail) request.fail(new Error('offline')); else request.success({ fileID: 'cloud://icon' });
-      }
-    }
+    cloud: { callFunction() { throw new Error('team pages and manager must use teamGateway'); } }
   };
   const module = { exports: {} };
-  vm.runInNewContext(source, { module, wx, console: quiet });
+  vm.runInNewContext(source, { module, wx, console: quiet, require(name) {
+    assert.equal(name, './teamGateway.js');
+    return gateway;
+  } });
   let definition;
   vm.runInNewContext(pageSource, {
-    wx, console: quiet, require: name => name.endsWith('/dateUtil.js') ? require('../miniprogram/utils/dateUtil.js') :
+    wx, console: quiet, require: name => name.endsWith('/teamGateway.js') ? gateway : name.endsWith('/dateUtil.js') ? require('../miniprogram/utils/dateUtil.js') :
       name.endsWith('/practicePreferences.js') ? require('../miniprogram/utils/practicePreferences.js') : module.exports, Page: page => { definition = page; }
   });
   const page = { ...definition, data: clone(definition.data), setData(data) { Object.assign(this.data, data); } };
-  return { manager: module.exports, page, storage, calls, uploads, toasts, navigations, modals };
+  return { manager: module.exports, page, storage, calls, uploads, toasts, navigations, modals, failedWrites };
 }
 
 test('member practice records use the cloud wrapper without modifying personal or team caches', async () => {
@@ -99,14 +136,14 @@ test('creation waits for cloud confirmation, shares duplicate submits and return
   assert.equal(app.calls.length, 1);
   assert.equal(app.manager.getMyTeams().length, 0);
   assert.equal(app.storage.userTeams_owner, undefined);
-  pending.resolve({ success: true, data: { teamId: 'cloud-id' } });
+  pending.resolve(created(1, app.calls[0].data));
   const result = await first;
   assert.equal(result.success, true);
-  assert.equal(result.team._id, 'cloud-id');
-  assert.equal(result.team.cloudId, 'cloud-id');
+  assert.equal(result.team._id, 'bijing_1');
+  assert.equal(result.team.cloudId, 'bijing_1');
   assert.equal(result.team.name, '静心');
   assert.deepEqual(clone(result.team.members), ['owner']);
-  assert.equal((await second).team._id, 'cloud-id');
+  assert.equal((await second).team._id, 'bijing_1');
   assert.equal(app.storage.userTeams_owner.length, 1);
   assert.equal(app.manager.getJoinedTeams().length, 1);
 });
@@ -114,7 +151,7 @@ test('creation waits for cloud confirmation, shares duplicate submits and return
 test('joined and inactive cached teams never block creation of another team', async () => {
   const joined = { ...team('joined', 'someone'), members: ['someone', 'owner'] };
   const app = harness({ stored: { userTeams_owner: [joined, { ...team('deleted'), isActive: false }] },
-    cloud: async () => ({ success: true, data: { teamId: 'own' } }) });
+    cloud: async request => created(1, request.data) });
   assert.equal((await app.manager.createTeam({ name: 'own' })).success, true);
   assert.equal(app.manager.getMyTeams().length, 1);
 });
@@ -128,15 +165,54 @@ test('creation rejection and network failure never create a local phantom team',
   }
 });
 
-test('wxfile and https temp avatars are uploaded; upload failure prevents creating the team', async () => {
+test('creation rejects legacy IDs, missing server teams and unconfirmed practice types without caching a phantom', async () => {
+  const valid = created(10, { name: '即刻组', practiceType: 'instant' }).data;
+  for (const data of [
+    { teamId: 'team_old', team: { ...team('team_old'), practiceType: 'instant', source: 'bijing' } },
+    { teamId: 'bijing_10' },
+    { ...valid, team: { ...valid.team, source: 'wechat' } },
+    { ...valid, team: { ...valid.team, source: undefined } },
+    { ...valid, team: { ...valid.team, practiceType: 'sitting' } },
+    { ...valid, team: { ...valid.team, practiceType: undefined } },
+    { ...valid, teamId: 'bijing_0' }
+  ]) {
+    const app = harness({ cloud: async () => ({ success: true, data }) });
+    const result = await app.manager.createTeam({ name: '即刻组', practiceType: 'instant' });
+    assert.equal(result.success, false);
+    assert.match(result.error, /未确认所选功课类型/);
+    assert.equal(app.storage.userTeams_owner, undefined);
+    assert.equal(app.storage.joinedTeams_owner, undefined);
+    assert.equal(app.manager.getMyTeams().length, 0);
+    assert.equal(app.storage.teamCreateOperations_v1_owner.length, 1);
+  }
+});
+
+test('confirmed creation stores only the canonical server team instead of merging the submitted draft', async () => {
+  const server = created(10, { name: '服务端名称', practiceType: 'instant' },
+    { icon: dataIcon, creatorName: '服务端团长', dailyGoalMinutes: 3, description: '服务端介绍' });
+  const app = harness({ cloud: async () => server });
+  const result = await app.manager.createTeam({ name: '草稿名称', practiceType: 'instant', description: '草稿介绍', dailyGoalMinutes: 10 });
+  assert.equal(result.success, true);
+  assert.deepEqual(clone(result.team), server.data.team);
+  assert.deepEqual(app.storage.userTeams_owner, [{ ...server.data.team, _dataOwner: JSON.stringify(['owner', 'BJ007', 'v1']) }]);
+  assert.equal(result.team._dataOwner, undefined);
+  assert.equal(result.team.createdAt, undefined, 'the local draft timestamp must not replace server data');
+});
+
+test('only approved cloud audit files can be uploaded to data before team creation', async () => {
+  const app = harness({ cloud: async request => created(1, request.data) });
+  const result = await app.manager.createTeam({ name: 'demo', icon: 'cloud://approved-icon' });
+  assert.equal(result.success, true);
+  assert.equal(result.team.icon, dataIcon);
+  assert.deepEqual(app.uploads, ['cloud://approved-icon']);
+  assert.equal(app.calls[0].data.icon, dataIcon);
   for (const icon of ['wxfile://tmp_avatar.png', 'https://tmp/avatar.png', 'http://tmp/avatar.png']) {
-    const app = harness({ cloud: async () => ({ success: true, data: { teamId: 'own' } }) });
-    assert.equal((await app.manager.createTeam({ name: 'demo', icon })).team.icon, 'cloud://icon');
-    assert.deepEqual(app.uploads, [icon]);
-    assert.equal(app.calls[0].data.icon, 'cloud://icon');
+    const invalid = harness();
+    assert.equal((await invalid.manager.createTeam({ name: 'demo', icon })).success, false);
+    assert.equal(invalid.calls.length, 0);
   }
   const failed = harness({ uploadFail: true });
-  assert.equal((await failed.manager.createTeam({ name: 'demo', icon: 'wxfile://tmp_a' })).success, false);
+  assert.equal((await failed.manager.createTeam({ name: 'demo', icon: 'cloud://approved-icon' })).success, false);
   assert.equal(failed.calls.length, 0);
 });
 
@@ -195,13 +271,13 @@ test('late refresh cannot resurrect a deleted team or erase a newly created team
     const pending = deferred();
     const saved = team('one');
     const app = harness({ stored: { userTeams_owner: mutation === 'delete' ? [saved] : [] },
-      cloud: request => request.type === 'getUserTeams' ? pending.promise : Promise.resolve({ success: true, data: { teamId: 'new' } }) });
+      cloud: request => request.type === 'getUserTeams' ? pending.promise : Promise.resolve(created(1, request.data)) });
     const refresh = app.manager.loadTeamsFromCloud();
     if (mutation === 'delete') await app.manager.deleteTeam('one');
     else await app.manager.createTeam({ name: 'new' });
     pending.resolve({ success: true, data: mutation === 'delete' ? [saved] : [] });
     await refresh;
-    assert.deepEqual(app.storage.userTeams_owner.map(item => item._id), mutation === 'delete' ? [] : ['new']);
+    assert.deepEqual(app.storage.userTeams_owner.map(item => item._id), mutation === 'delete' ? [] : ['bijing_1']);
   }
 });
 
@@ -253,6 +329,147 @@ test('list displays public cache immediately and deduplicates concurrent persona
   assert.deepEqual(clone(app.page.data.allTeams), []);
   assert.deepEqual(app.storage.allTeams_cache, []);
   assert.equal(app.page.data.isLoading, false);
+});
+
+test('personal and public lists preserve only a failed source cache and clear it after a healthy empty snapshot', async () => {
+  for (const failedSource of ['wechat', 'bijing']) {
+    // Source routing follows the ID, including stale cache objects with incorrect source tags.
+    const legacy = { ...team('team_old'), source: 'bijing' };
+    const remote = { ...team('bijing_1'), source: 'wechat', practiceType: 'instant' };
+    const freshPersonal = team(failedSource === 'bijing' ? 'team_new' : 'bijing_2');
+    const freshPublic = team(failedSource === 'bijing' ? 'team_public_new' : 'bijing_3', 'other');
+    let partial = true;
+    const warning = '部分团队暂未更新，已保留上次结果';
+    const app = harness({ stored: { userTeams_owner: [legacy, remote], joinedTeams_owner: [legacy, remote], allTeams_cache: [legacy, remote] },
+      cloud: async request => ({ success: true, failedSources: partial ? [failedSource] : [], warning: partial ? warning : '',
+        data: request.type === 'getAllTeams' ? { teams: partial ? [freshPublic] : [] } : partial ? [freshPersonal] : [] }) });
+    await app.page.loadTeamData();
+    const retainedId = failedSource === 'bijing' ? 'bijing_1' : 'team_old';
+    assert.deepEqual(app.storage.userTeams_owner.map(item => item._id).sort(), [retainedId, freshPersonal._id].sort());
+    assert.deepEqual(app.storage.joinedTeams_owner.map(item => item._id).sort(), [retainedId, freshPersonal._id].sort());
+    assert.deepEqual(app.storage.allTeams_cache.map(item => item._id).sort(), [retainedId, freshPublic._id].sort());
+    assert.equal(app.page.data.refreshWarning, warning);
+    assert.equal(app.toasts.length, 0);
+    partial = false;
+    await app.page.loadTeamData();
+    assert.deepEqual(app.storage.userTeams_owner, []);
+    assert.deepEqual(app.storage.joinedTeams_owner, []);
+    assert.deepEqual(app.storage.allTeams_cache, []);
+    assert.equal(app.page.data.refreshWarning, '');
+  }
+});
+
+test('data cache is visible only with a per-record annotation matching the current bound account, student and binding version', () => {
+  const legacy = team('team_legacy');
+  const data = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  for (const annotation of [undefined, JSON.stringify(['other', 'BJ007', 'v1']),
+    JSON.stringify(['owner', 'BJ008', 'v1']), JSON.stringify(['owner', 'BJ007', 'v0'])]) {
+    const annotatedData = { ...data, _dataOwner: annotation };
+    const app = harness({ seedOwnerAnnotation: false, stored: {
+      userTeams_owner: [legacy, annotatedData], joinedTeams_owner: [legacy, annotatedData],
+      teamDataOwner_owner: JSON.stringify(['owner', 'BJ007', 'v1'])
+    } });
+    assert.deepEqual(clone(app.manager.getJoinedTeams()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadTeamsFromStorage()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadJoinedTeamsFromStorage()), [legacy]);
+  }
+  const bound = harness({ stored: { userTeams_owner: [legacy, data], joinedTeams_owner: [legacy, data] } });
+  assert.deepEqual(clone(bound.manager.getJoinedTeams()), [legacy, data]);
+  assert.equal(bound.storage.userTeams_owner[1]._dataOwner, JSON.stringify(['owner', 'BJ007', 'v1']));
+  assert.equal(bound.storage.joinedTeams_owner[1]._dataOwner, JSON.stringify(['owner', 'BJ007', 'v1']));
+  assert.equal(bound.storage.teamDataOwner_owner, undefined);
+});
+
+test('changing student, binding version or unbinding clears only data membership before any refresh', () => {
+  const legacy = team('team_legacy');
+  const data = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  for (const change of [{ bijingStudentNumber: 'BJ008' }, { bijingBindingVersion: 'v2' },
+    { bijingBound: false }, { bijingStudentNumber: '' }]) {
+    const app = harness({ stored: { userTeams_owner: [legacy, data], joinedTeams_owner: [legacy, data] } });
+    assert.equal(app.manager.getJoinedTeams().length, 2);
+    Object.assign(app.storage, change);
+    assert.deepEqual(clone(app.manager.getJoinedTeams()), [legacy]);
+    assert.deepEqual(clone(app.manager.getMyTeams()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadTeamsFromStorage()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadJoinedTeamsFromStorage()), [legacy]);
+    assert.deepEqual(app.storage.joinedTeams_owner, [legacy]);
+    assert.equal(app.calls.length, 0);
+  }
+});
+
+test('failed data refresh after a binding change cannot retain or relabel teams belonging to the former student', async () => {
+  const legacy = team('team_legacy');
+  const staleData = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  const newLegacy = team('team_updated');
+  for (const change of [{ bijingStudentNumber: 'BJ008' }, { bijingBindingVersion: 'v2' }, { bijingBound: false }]) {
+    const app = harness({ stored: { userTeams_owner: [legacy, staleData], joinedTeams_owner: [legacy, staleData] },
+      cloud: async () => ({ success: true, data: [newLegacy], failedSources: ['bijing'], warning: '新团队暂时无法加载' }) });
+    Object.assign(app.storage, change);
+    const result = await app.manager.loadTeamsFromCloud();
+    assert.equal(result.success, true);
+    assert.deepEqual(clone(result.data).map(item => item._id), ['team_updated']);
+    assert.deepEqual(app.storage.userTeams_owner.map(item => item._id), ['team_updated']);
+    assert.deepEqual(app.storage.joinedTeams_owner.map(item => item._id), ['team_updated']);
+    assert.equal(app.manager.getJoinedTeams().some(item => item._id === 'bijing_1'), false);
+    assert.equal(app.storage.teamDataOwner_owner, undefined);
+  }
+});
+
+test('total refresh failure after a binding change never exposes the former data team from disk', async () => {
+  const legacy = team('team_legacy');
+  const data = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  for (const change of [{ bijingStudentNumber: 'BJ008' }, { bijingBindingVersion: 'v2' }, { bijingBound: false }]) {
+    const app = harness({ stored: { userTeams_owner: [legacy, data], joinedTeams_owner: [legacy, data] },
+      cloud: async () => { throw new Error('offline'); } });
+    Object.assign(app.storage, change);
+    assert.equal((await app.manager.loadTeamsFromCloud()).success, false);
+    assert.deepEqual(clone(app.manager.getJoinedTeams()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadTeamsFromStorage()), [legacy]);
+    assert.deepEqual(clone(app.manager.loadJoinedTeamsFromStorage()), [legacy]);
+  }
+});
+
+test('a list response started for the old binding cannot be saved or tagged as belonging to its replacement', async () => {
+  const legacy = team('team_legacy');
+  const oldData = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  const response = deferred();
+  const app = harness({ stored: { userTeams_owner: [legacy, oldData], joinedTeams_owner: [legacy, oldData] },
+    cloud: () => response.promise });
+  const pending = app.manager.loadTeamsFromCloud();
+  app.storage.bijingStudentNumber = 'BJ008';
+  response.resolve({ success: true, data: [legacy, oldData] });
+  const result = await pending;
+  assert.equal(result.success, false);
+  assert.match(result.error, /绑定已变化/);
+  assert.equal(app.storage.userTeams_owner[1]._dataOwner, JSON.stringify(['owner', 'BJ007', 'v1']));
+  assert.deepEqual(clone(app.manager.getJoinedTeams()), [legacy]);
+  assert.deepEqual(clone(app.manager.loadTeamsFromStorage()), [legacy]);
+  assert.deepEqual(clone(app.manager.loadJoinedTeamsFromStorage()), [legacy]);
+});
+
+test('a failed cache-array write cannot relabel older records left in either personal or joined storage', async () => {
+  const legacy = team('team_legacy');
+  const oldData = { ...team('bijing_1'), source: 'bijing', practiceType: 'instant' };
+  const newData = { ...team('bijing_2'), source: 'bijing', practiceType: 'walking' };
+  const oldFingerprint = JSON.stringify(['owner', 'BJ007', 'v1']);
+  const newFingerprint = JSON.stringify(['owner', 'BJ008', 'v1']);
+  for (const failedKey of ['userTeams_owner', 'joinedTeams_owner']) {
+    const app = harness({ failSetKeys: [failedKey],
+      stored: { userTeams_owner: [legacy, oldData], joinedTeams_owner: [legacy, oldData] },
+      cloud: async () => ({ success: true, data: [legacy, newData] }) });
+    app.storage.bijingStudentNumber = 'BJ008';
+    assert.equal((await app.manager.loadTeamsFromCloud()).success, true);
+    assert.equal(app.storage[failedKey].find(item => item._id === 'bijing_1')._dataOwner, oldFingerprint);
+    const successfulKey = failedKey === 'userTeams_owner' ? 'joinedTeams_owner' : 'userTeams_owner';
+    assert.equal(app.storage[successfulKey].find(item => item._id === 'bijing_2')._dataOwner, newFingerprint);
+    assert.equal(app.manager.loadTeamsFromStorage().some(item => item._id === 'bijing_1'), false);
+    assert.equal(app.manager.loadJoinedTeamsFromStorage().some(item => item._id === 'bijing_1'), false);
+    assert.equal(app.manager.getJoinedTeams().some(item => item._id === 'bijing_1'), false);
+    assert.equal(app.storage.teamDataOwner_owner, undefined);
+    const restarted = harness({ stored: app.storage });
+    assert.equal(restarted.manager.getJoinedTeams().some(item => item._id === 'bijing_1'), false);
+    assert.equal(restarted.manager.loadJoinedTeamsFromStorage().some(item => item._id === 'bijing_1'), false);
+  }
 });
 
 test('discovered teams cannot open details even when already joined, while personal teams can', () => {
@@ -321,7 +538,7 @@ test('late personal and public list responses cannot restore stale teams after a
 
 test('a user can create multiple teams and each retains its own practice rules', async () => {
   let count = 0;
-  const app = harness({ cloud: async request => ({ success: true, data: { teamId: `team-${++count}` } }) });
+  const app = harness({ cloud: async request => created(++count, request.data) });
   const first = await app.manager.createTeam({ name: '晨间组', practiceStartDate: '2026-09-01', dailyGoalMinutes: 20 });
   const second = await app.manager.createTeam({ name: '进阶组', practiceStartDate: '2026-09-10', dailyGoalMinutes: 45 });
   assert.equal(first.success, true);
@@ -377,7 +594,7 @@ test('a different team submitted during a pending creation is not reported as th
   assert.equal(other.success, false);
   assert.match(other.error, /正在创建/);
   assert.equal(app.calls.length, 1);
-  pending.resolve({ success: true, data: { teamId: 'first-team' } });
+  pending.resolve(created(1, app.calls[0].data));
   assert.equal((await first).team.name, '团队甲');
   assert.equal(app.storage.userTeams_owner.length, 1);
 });
@@ -535,8 +752,7 @@ test('removing a deputy releases the cached deputy slot', async () => {
 });
 
 test('creation keeps practice type and server source in user caches but excludes the operation key', async () => {
-  const app = harness({ cloud: async () => ({ success: true,
-    data: { teamId: 'bijing_10', team: { source: 'bijing', practiceType: 'walking' } } }) });
+  const app = harness({ cloud: async request => created(10, request.data) });
   const result = await app.manager.createTeam({ name: '行走组', practiceType: 'walking' });
   assert.equal(result.success, true);
   assert.equal(app.calls[0].data.practiceType, 'walking');
@@ -548,10 +764,10 @@ test('creation keeps practice type and server source in user caches but excludes
 });
 
 test('failed creation retries after a new manager instance with the same operation key and uploaded icon', async () => {
-  const draft = { name: '行走组', icon: 'wxfile://tmp_team', practiceType: 'walking' };
+  const draft = { name: '行走组', icon: 'cloud://approved-team', practiceType: 'walking' };
   const first = harness({ cloud: async () => { throw new Error('response lost'); } });
   assert.equal((await first.manager.createTeam(draft)).success, false);
-  const retry = harness({ stored: first.storage, cloud: async () => ({ success: true, data: { teamId: 'bijing_10' } }) });
+  const retry = harness({ stored: first.storage, cloud: async request => created(10, request.data) });
   assert.equal((await retry.manager.createTeam(draft)).success, true);
   assert.equal(retry.calls[0].data.operationKey, first.calls[0].data.operationKey);
   assert.equal(retry.calls[0].data.icon, first.calls[0].data.icon);
@@ -579,7 +795,7 @@ test('pending creation cannot merge a different practice type and invalid types 
   const app = harness({ cloud: () => pending.promise });
   const first = app.manager.createTeam({ name: '组', practiceType: 'walking' });
   assert.equal((await app.manager.createTeam({ name: '组', practiceType: 'instant' })).success, false);
-  pending.resolve({ success: true, data: { teamId: 'bijing_10' } });
+  pending.resolve(created(10, app.calls[0].data));
   await first;
   assert.equal(app.calls.length, 1);
   assert.equal((await app.manager.createTeam({ name: '组', practiceType: 'unknown' })).success, false);

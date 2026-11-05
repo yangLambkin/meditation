@@ -1,4 +1,5 @@
 const { isExplicitTimerExit } = require('./timerInterruption');
+const { queueEndReminder } = require('./timerEndReminder');
 
 const SCHEMA_VERSION = 2;
 const MAX_SECONDS = 24 * 60 * 60;
@@ -52,7 +53,6 @@ function createCountdownSessionController({
   let revision = 0;
   let state = null;
   let pendingCompletion = null;
-  let deferredCompletionEvent = null;
   let completionNotice = '';
   let restored = false;
   let disposed = false;
@@ -63,7 +63,6 @@ function createCountdownSessionController({
   let watchdog = null;
   let lastTickAt = 0;
   let lastCheckpointAt = 0;
-
   function read(key) {
     try { return api.getStorageSync(key); }
     catch (_) { return undefined; }
@@ -218,23 +217,7 @@ function createCountdownSessionController({
     write('timerCompletionNotice', text);
   }
 
-  function saveSilentCompletion() {
-    if (!pendingCompletion) return;
-    const completion = pendingCompletion;
-    try {
-      const result = recordCheckin(completion.duration, [], [], completion.endedAt, completion.sessionId);
-      if (!result || !result.success) throw new Error('Local record save failed');
-      pendingCompletion = null;
-      write('timerPendingCompletion', null);
-      persist();
-      notice(`倒计时已结束，${completion.duration}分钟已存本机`);
-    } catch (error) {
-      diagnose('record_save_error', { message: error && error.message || String(error) });
-      notice('倒计时已结束，请确认保存记录');
-    }
-  }
-
-  function terminate(reason, { silent = false, seconds = elapsed(), endedAt = now(), cancelled = false } = {}) {
+  function terminate(reason, { seconds = elapsed(), endedAt = now(), cancelled = false } = {}) {
     if (!active()) return null;
     const targetEnd = state.startTimestamp + state.totalPausedTime + state.totalTime * 1000;
     const finalSeconds = Math.min(state.totalTime, Math.max(0, Math.floor(seconds)));
@@ -245,24 +228,21 @@ function createCountdownSessionController({
 
     // Commit terminal intent before storage, callbacks, or cleanup can fail or re-enter.
     revision += 1;
-    state.status = cancelled ? 'cancelled' : silent ? 'exited' : 'completed';
+    state.status = cancelled ? 'cancelled' : 'completed';
     state.terminalReason = reason;
     state.elapsedTime = finalSeconds;
     pendingCompletion = completion;
+    if (!cancelled) {
+      // Persist the cue independently of a page or completion draft. Even a
+      // sub-minute sit must announce its end after navigation or reconstruction.
+      try { queueEndReminder(api, state.sessionId); }
+      catch (error) { diagnose('end_reminder_error', { message: error && error.message || String(error) }); }
+    }
     persist(); // Includes a recovery copy of the draft before separate-key writes.
     if (completion) write('timerPendingCompletion', completion);
     clearTimers();
-    diagnose(cancelled ? 'cancel' : 'finish', { reason, silent, elapsedTime: finalSeconds, totalTime: state.totalTime });
-    if (silent && !cancelled) {
-      if (completion) saveSilentCompletion();
-      else notice('倒计时已结束，不足1分钟未记录');
-    }
-    const event = { type: silent || cancelled ? 'exit' : 'complete', reason, silent, cancelled, completion };
-    if (event.type === 'complete' && (reason === 'timeout' || reason === 'deadline')
-      && foreground && listeners.size === 0 && completion) {
-      deferredCompletionEvent = { ...event, completion: { ...completion } };
-    }
-    emit(event);
+    diagnose(cancelled ? 'cancel' : 'finish', { reason, elapsedTime: finalSeconds, totalTime: state.totalTime });
+    emit({ type: cancelled ? 'exit' : 'complete', reason, cancelled, completion });
     return completion ? { ...completion } : null;
   }
 
@@ -312,7 +292,20 @@ function createCountdownSessionController({
       return getSnapshot();
     }
     diagnose('cold_start_checkpoint', { elapsedTime: saved.elapsedTime, savedRuntimeId: saved.runtimeId || 'legacy' });
-    terminate('cold_start_checkpoint', { silent: true, seconds: saved.elapsedTime, endedAt: saved.saveTime });
+    if (saved.elapsedTime >= saved.totalTime) {
+      terminate('deadline', { seconds: saved.totalTime, endedAt: saved.saveTime });
+      return getSnapshot();
+    }
+    // A killed runtime cannot prove how much time passed outside it. Preserve
+    // confirmed progress and require an explicit resume instead of ending early
+    // or counting offline time toward the configured duration.
+    state.status = 'paused';
+    state.pauseTimestamp = saved.isPaused ? saved.pauseTimestamp : saved.saveTime;
+    state.pauseTimestamp = Math.min(state.pauseTimestamp, now());
+    state.startTimestamp = state.pauseTimestamp - state.totalPausedTime - state.elapsedTime * 1000;
+    state.terminalReason = null;
+    persist();
+    notice('上次计时中断，已保留剩余时间，点击继续');
     return getSnapshot();
   }
 
@@ -321,15 +314,7 @@ function createCountdownSessionController({
     restore();
     if (disposed) return () => {};
     listeners.add(listener);
-    const deferred = deferredCompletionEvent;
-    // Claim the in-memory cue before notifying; nested attach must not play it twice.
-    deferredCompletionEvent = null;
-    if (deferred && foreground && pendingCompletion
-      && deferred.completion.sessionId === pendingCompletion.sessionId) {
-      notifyOne(listener, { ...deferred, completion: pendingCompletion });
-    } else {
-      notifyOne(listener, { type: 'restore', reason: 'attach', completion: pendingCompletion });
-    }
+    notifyOne(listener, { type: 'restore', reason: 'attach', completion: pendingCompletion });
     return () => listeners.delete(listener);
   }
 
@@ -342,7 +327,6 @@ function createCountdownSessionController({
       || !Number.isInteger(totalTime) || totalTime < 1 || totalTime > MAX_SECONDS
       || !Number.isFinite(startTimestamp) || startTimestamp <= 0) return false;
     if (state && state.sessionId === sessionId && TERMINAL.has(state.status)) return false;
-    deferredCompletionEvent = null;
     revision += 1;
     state = { sessionId, totalTime, startTimestamp, pauseTimestamp: 0, totalPausedTime: 0,
       elapsedTime: 0, status: 'running', terminalReason: null };
@@ -378,7 +362,12 @@ function createCountdownSessionController({
   function resume() {
     if (!state || state.status !== 'paused' || !foreground || disposed) return getSnapshot();
     revision += 1;
-    state.totalPausedTime += Math.max(0, now() - state.pauseTimestamp);
+    const resumedAt = now();
+    if (resumedAt < state.pauseTimestamp) {
+      state.startTimestamp = resumedAt - state.totalPausedTime - state.elapsedTime * 1000;
+    } else {
+      state.totalPausedTime += resumedAt - state.pauseTimestamp;
+    }
     state.pauseTimestamp = 0;
     state.status = 'running';
     lastTickAt = now();
@@ -405,17 +394,15 @@ function createCountdownSessionController({
 
   function appHide(options = {}) {
     if (disposed) return null;
-    deferredCompletionEvent = null;
     const wasForeground = foreground;
     if (foreground) {
       foreground = false;
       diagnose('app_hide', { reason: options && options.reason,
         explicitExit: isExplicitTimerExit(options) });
     }
-    if (isExplicitTimerExit(options)) return terminate('app_hide', { silent: true });
     if (!wasForeground) return null;
-    // A system interruption is not a completed sitting. Persist its boundary
-    // now, because background timers and later lifecycle callbacks may not run.
+    // Hiding the app never expresses a timer stop. Persist its boundary now,
+    // because background timers and later lifecycle callbacks may not run.
     // Duplicate hides must not move this cold-start recovery checkpoint forward.
     if (active()) {
       state.elapsedTime = elapsed();
@@ -427,7 +414,6 @@ function createCountdownSessionController({
 
   function markCompletionSaved(sessionId) {
     if (!pendingCompletion || pendingCompletion.sessionId !== sessionId) return false;
-    deferredCompletionEvent = null;
     pendingCompletion = null;
     const stored = read('timerPendingCompletion');
     if (stored && stored.sessionId === sessionId) write('timerPendingCompletion', null);
@@ -484,7 +470,7 @@ function createCountdownSessionController({
       diagnose('recovery_setting', { enabled: recoveryEnabled });
       return getSnapshot();
     },
-    dispose() { disposed = true; revision += 1; deferredCompletionEvent = null; clearTimers(); listeners.clear(); }
+    dispose() { disposed = true; revision += 1; clearTimers(); listeners.clear(); }
   };
 }
 

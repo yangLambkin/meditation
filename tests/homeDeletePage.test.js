@@ -41,7 +41,7 @@ function createPage({ records = [], dailyRecords: storedRecords, now = '2026-09-
     showActionSheet(options) {
       calls.menu.push(options);
       if (showActionSheet) return showActionSheet(options);
-      options.success({ tapIndex: 0 });
+      options.success({ tapIndex: 1 });
     },
     showModal(options) {
       calls.modal.push(options);
@@ -99,7 +99,7 @@ test('cancelling the record menu never opens confirmation or changes the records
   });
   const before = JSON.stringify(page.data);
   await tapMore(page);
-  assert.deepEqual(Array.from(calls.menu[0].itemList), ['删除记录']);
+  assert.deepEqual(Array.from(calls.menu[0].itemList), ['编辑功课', '删除记录']);
   assert.equal(calls.modal.length, 0);
   assert.equal(calls.remove.length, 0);
   assert.equal(JSON.stringify(page.data), before);
@@ -120,7 +120,7 @@ test('record menu waits for confirmation and blocks repeat taps until deletion f
   await tapMore(page);
   assert.equal(calls.menu.length, 1);
   assert.equal(calls.modal.length, 0);
-  menuOptions.success({ tapIndex: 0 });
+  menuOptions.success({ tapIndex: 1 });
   await Promise.resolve();
   await tapMore(page);
   assert.equal(calls.modal.length, 1);
@@ -138,7 +138,7 @@ test('record menu waits for confirmation and blocks repeat taps until deletion f
 });
 
 test('selecting delete can still be cancelled and Promise-style menus release their lock', async () => {
-  const cancelled = createPage({ records: [example], confirm: false, showActionSheet: () => Promise.resolve({ tapIndex: 0 }) });
+  const cancelled = createPage({ records: [example], confirm: false, showActionSheet: () => Promise.resolve({ tapIndex: 1 }) });
   await tapMore(cancelled.page);
   assert.equal(cancelled.calls.modal.length, 1);
   assert.equal(cancelled.calls.remove.length, 0);

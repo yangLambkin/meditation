@@ -94,33 +94,39 @@ test('foreground countdown survives page detach and reattach with the same ident
   assert.equal(h.records.length, 0, 'normal completion waits for the existing confirmation flow');
 });
 
-test('explicit app exit ends at actual minutes even after every page has detached and immediate return never revives it', () => {
-  for (const seconds of [65, 125]) {
+test('closing the app without a page preserves the remaining countdown and only its deadline completes it', () => {
+  for (const reason of [0, 1]) {
     const h = harness();
     h.start();
-    h.advance(seconds * 1000);
+    h.advance(65000);
     const queuedTick = h.dropTicker();
     h.detach();
-    h.controller.appHide({ reason: 0 });
-    assert.equal(h.snapshot().status, 'exited');
-    assert.equal(h.records.length, 1);
-    assert.equal(h.records[0][0], Math.floor(seconds / 60));
-    assert.equal(h.records[0][4], 'session-one');
-    assert.equal(h.storage.get('timerState').status, 'exited');
-    assert.equal(h.storage.get('timerPendingCompletion'), null);
+    h.controller.appHide({ reason });
+    assert.equal(h.snapshot().status, 'running');
+    assert.equal(h.snapshot().remainingTime, 355);
+    assert.equal(h.storage.get('timerState').status, 'running');
+    assert.equal(h.storage.get('timerPendingEndReminder'), undefined);
+    assert.equal(h.records.length, 0);
+    assert.equal(h.timers.size, 0);
+    h.advance(45000);
     h.controller.appShow();
     queuedTick();
     h.controller.attach(() => {});
-    h.controller.appHide({ reason: 0 });
-    h.advance(600000);
+    assert.equal(h.snapshot().remainingTime, 310);
+    h.advance(309999);
+    assert.equal(h.snapshot().isRunning, true);
+    assert.equal(h.storage.get('timerPendingEndReminder'), undefined);
+    h.advance(1);
     assert.equal(h.snapshot().isRunning, false);
-    assert.equal(h.records.length, 1);
+    assert.equal(h.snapshot().pendingCompletion.duration, 7);
+    assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+    assert.equal(h.records.length, 0);
     assert.equal(h.timers.size, 0);
   }
 });
 
-test('system and unclassified interruptions retain one countdown and include ringing time on return', () => {
-  for (const options of [{ reason: 2 }, { reason: 3 }, undefined, null, {}]) {
+test('every background reason retains one countdown and includes interruption time on return', () => {
+  for (const options of [{ reason: 0 }, { reason: 1 }, { reason: 2 }, { reason: 3 }, undefined, null, {}]) {
     const h = harness();
     h.start();
     h.advance(65000);
@@ -204,22 +210,23 @@ test('a countdown reaching its deadline during an interruption completes once at
   assert.equal(h.timers.size, 0);
 });
 
-test('a completed interrupted countdown with no page delivers its completion once when a page attaches', () => {
+test('a completed interrupted countdown with no page preserves its draft and durable end reminder', () => {
   const h = harness();
   h.start(120); h.advance(65000); h.detach();
   h.controller.appHide({ reason: 3 });
   h.advance(90000); h.controller.appShow();
   const events = [];
   const detach = h.controller.attach((snapshot, event) => events.push({ snapshot, event }));
-  assert.equal(events[0].event.type, 'complete');
+  assert.equal(events[0].event.type, 'restore');
   assert.equal(events[0].snapshot.pendingCompletion.endedAt, INITIAL_TIME + 120000);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
   detach();
   h.controller.attach((snapshot, event) => events.push({ snapshot, event }));
   assert.equal(events.at(-1).event.type, 'restore');
-  assert.equal(events.filter(item => item.event.type === 'complete').length, 1);
+  assert.equal(events.filter(item => item.event.type === 'complete').length, 0);
 });
 
-test('cold startup after a system interruption settles only the persisted hide boundary', () => {
+test('cold startup after an interruption preserves confirmed progress paused until an explicit resume', () => {
   for (const paused of [false, true]) {
     const h = harness();
     h.start(); h.advance(65000);
@@ -228,54 +235,60 @@ test('cold startup after a system interruption settles only the persisted hide b
     h.advance(3600000);
     h.controller.appHide({ reason: 3 });
     const reopened = harness({ initialStorage: h.data(), initialTime: h.now() });
-    assert.equal(reopened.snapshot().status, 'exited');
+    assert.equal(reopened.snapshot().status, 'paused');
     assert.equal(reopened.snapshot().elapsedTime, 65);
-    assert.equal(reopened.records.length, 1);
-    assert.equal(reopened.records[0][0], 1);
-    assert.equal(reopened.records[0][3], INITIAL_TIME + 65000);
+    assert.equal(reopened.snapshot().remainingTime, 355);
+    assert.equal(reopened.snapshot().sessionId, 'session-one');
+    assert.match(reopened.snapshot().completionNotice, /保留剩余时间/);
+    assert.equal(reopened.records.length, 0);
+    assert.equal(reopened.storage.get('timerPendingEndReminder'), undefined);
     reopened.controller.appShow(); reopened.controller.tick();
-    assert.equal(reopened.records.length, 1);
+    reopened.advance(3600000);
+    assert.equal(reopened.snapshot().elapsedTime, 65);
     assert.equal(reopened.timers.size, 0);
+    reopened.controller.resume(); reopened.advance(354999);
+    assert.equal(reopened.snapshot().isRunning, true);
+    reopened.advance(1);
+    assert.equal(reopened.snapshot().pendingCompletion.duration, 7);
+    assert.equal(reopened.records.length, 0);
   }
 });
 
-test('an explicit exit after a protected interruption still ends the session and saves once', () => {
+test('a close callback after a system interruption cannot turn it into an early completion', () => {
   for (const reason of [0, 1]) {
     const h = harness();
     h.start(); h.advance(65000);
     h.controller.appHide({ reason: 3 });
     h.advance(30000);
     h.controller.appHide({ reason });
-    assert.equal(h.snapshot().status, 'exited');
-    assert.equal(h.records.length, 1);
-    assert.equal(h.records[0][0], 1);
-    assert.equal(h.records[0][3], INITIAL_TIME + 95000);
-    h.controller.appShow(); h.controller.appHide({ reason });
-    assert.equal(h.records.length, 1);
+    assert.equal(h.snapshot().status, 'running');
+    assert.equal(h.snapshot().elapsedTime, 95);
+    assert.equal(h.storage.get('timerState').elapsedTime, 65);
+    assert.equal(h.records.length, 0);
+    assert.equal(h.storage.get('timerPendingEndReminder'), undefined);
+    h.controller.appShow(); h.advance(325000);
+    assert.equal(h.snapshot().pendingCompletion.duration, 7);
+    assert.equal(h.events.filter(item => item.event.type === 'complete').length, 1);
   }
 });
 
-test('terminal state is durable before record saving or an exit listener can fail or re-enter', () => {
-  let h;
-  h = harness({ recordCheckin() {
-    assert.equal(h.storage.get('timerState').status, 'exited');
-    assert.equal(h.snapshot().isRunning, false);
-    h.controller.appShow();
-    h.controller.tick();
-    h.controller.appHide({ reason: 0 });
-    return { success: true };
-  } });
+test('terminal state and its reminder are durable before a completion listener can fail or re-enter', () => {
+  const h = harness();
   h.controller.attach((snapshot, event) => {
-    if (event.type === 'exit') {
-      assert.equal(h.storage.get('timerState').status, 'exited');
+    if (event.type === 'complete') {
+      assert.equal(h.storage.get('timerState').status, 'completed');
+      assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+      assert.equal(h.controller.finish('manual'), null);
+      h.controller.appHide({ reason: 0 });
       throw new Error('unloaded page cannot render');
     }
   });
   h.start();
   h.advance(125000);
-  h.controller.appHide({ reason: 0 });
-  assert.equal(h.records.length, 1);
-  assert.equal(h.snapshot().status, 'exited');
+  h.controller.finish('manual');
+  assert.equal(h.records.length, 0);
+  assert.equal(h.snapshot().status, 'completed');
+  assert.equal(h.events.filter(item => item.event.type === 'complete').length, 1);
   assert.ok(h.storage.get('timerDiagnostics').some(item => item.type === 'listener_error'));
 });
 
@@ -329,7 +342,7 @@ test('pause excludes elapsed wall time and queued running callbacks cannot resum
   assert.equal(h.snapshot().pendingCompletion.endedAt, INITIAL_TIME + 480000);
 });
 
-test('explicit app exit while paused records only the running portion and never automatically resumes', () => {
+test('closing and returning keeps a paused countdown paused until explicitly resumed', () => {
   const h = harness();
   h.start();
   h.advance(125000);
@@ -337,11 +350,15 @@ test('explicit app exit while paused records only the running portion and never 
   h.advance(3600000);
   h.controller.appHide({ reason: 0 });
   h.controller.appShow();
+  assert.equal(h.snapshot().isPaused, true);
+  assert.equal(h.snapshot().elapsedTime, 125);
+  assert.equal(h.storage.get('timerPendingEndReminder'), undefined);
   h.controller.resume();
-  assert.equal(h.records.length, 1);
-  assert.equal(h.records[0][0], 2);
+  assert.equal(h.records.length, 0);
   assert.equal(h.snapshot().isPaused, false);
-  assert.equal(h.snapshot().isRunning, false);
+  assert.equal(h.snapshot().isRunning, true);
+  h.advance(295000);
+  assert.equal(h.snapshot().pendingCompletion.duration, 7);
 });
 
 test('manual finish preserves the short draft and repeated finish, hide, and late callbacks cannot resubmit it', () => {
@@ -376,6 +393,7 @@ test('reset, mode change, and duration change are terminal cancellations with no
     queued.forEach(callback => callback());
     assert.equal(h.snapshot().status, 'cancelled');
     assert.equal(h.snapshot().pendingCompletion, null);
+    assert.equal(h.storage.get('timerPendingEndReminder'), undefined);
     assert.equal(h.records.length, 0);
     assert.equal(h.timers.size, 0);
     assert.equal(h.start(420, 'session-one'), false, 'a terminal identity cannot be reused');
@@ -390,22 +408,25 @@ test('normal completion and app exit racing at the deadline produce at most one 
     h.jump(60000);
     if (exitFirst) { h.controller.appHide({ reason: 0 }); h.controller.tick(); }
     else { h.controller.tick(); h.controller.appHide({ reason: 0 }); }
-    assert.equal(h.records.length, exitFirst ? 1 : 0);
+    h.controller.appShow();
+    assert.equal(h.records.length, 0);
     assert.equal(h.events.filter(item => ['complete', 'exit'].includes(item.event.type)).length, 1);
     const completion = h.events.find(item => ['complete', 'exit'].includes(item.event.type)).event.completion;
     assert.equal(completion.duration, 1);
     assert.equal(completion.endedAt, INITIAL_TIME + 60000);
+    assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
   }
 });
 
-test('silent save failure keeps the completion draft while the session remains irreversibly exited', () => {
-  const h = harness({ recordCheckin: () => ({ success: false }) });
+test('reminder storage failure cannot discard the completed draft or stop terminal callbacks', () => {
+  const h = harness({ failWrite: key => key === 'timerPendingEndReminder' });
   h.start();
   h.advance(125000);
-  h.controller.appHide({ reason: 0 });
-  assert.equal(h.snapshot().status, 'exited');
+  h.controller.finish('manual');
+  assert.equal(h.snapshot().status, 'completed');
   assert.equal(h.snapshot().pendingCompletion.duration, 2);
   assert.equal(h.storage.get('timerPendingCompletion').sessionId, 'session-one');
+  assert.equal(h.events.filter(item => item.event.type === 'complete').length, 1);
   h.controller.appShow();
   h.controller.tick();
   assert.equal(h.start(420, 'another'), false);
@@ -415,25 +436,75 @@ test('silent save failure keeps the completion draft while the session remains i
   assert.equal(reopened.snapshot().isRunning, false);
 });
 
-test('cold startup uses only the final checkpoint for both legacy and current running or paused sessions', () => {
+test('legacy and current checkpoints recover their remaining time without recording or counting offline time', () => {
   for (const paused of [false, true]) {
     for (const current of [false, true]) {
       const state = checkpoint({ isRunning: !paused, isPaused: paused,
         pauseTimestamp: paused ? INITIAL_TIME : 0,
         ...(current ? { schemaVersion: 2, runtimeId: 'previous-runtime', status: paused ? 'paused' : 'running' } : {}) });
       const h = harness({ initialStorage: { timerState: state }, initialTime: INITIAL_TIME + 86400000 });
-      assert.equal(h.records.length, 1);
-      assert.equal(h.records[0][0], 2);
-      assert.equal(h.records[0][3], INITIAL_TIME);
-      assert.equal(h.records[0][4], 'old-session');
+      assert.equal(h.records.length, 0);
       assert.equal(h.snapshot().elapsedTime, 125);
-      assert.equal(h.snapshot().status, 'exited');
+      assert.equal(h.snapshot().status, 'paused');
+      assert.equal(h.snapshot().remainingTime, 295);
+      assert.equal(h.snapshot().sessionId, 'old-session');
+      assert.equal(h.storage.get('timerState').status, 'paused');
       h.controller.restore();
       h.controller.attach(() => {});
-      assert.equal(h.records.length, 1);
+      assert.equal(h.records.length, 0);
       assert.equal(h.timers.size, 0);
+      h.controller.resume(); h.advance(294999);
+      assert.equal(h.snapshot().isRunning, true);
+      h.advance(1);
+      assert.equal(h.snapshot().pendingCompletion.duration, 7);
+      assert.equal(h.records.length, 0);
     }
   }
+});
+
+test('cold recovery resumes exactly the saved progress even when the old wall timestamps include unconfirmed seconds', () => {
+  const h = harness({ initialStorage: { timerState: checkpoint({ elapsedTime: 120 }) },
+    initialTime: INITIAL_TIME + 3600000 });
+  assert.equal(h.snapshot().elapsedTime, 120);
+  assert.equal(h.snapshot().remainingTime, 300);
+  h.controller.resume();
+  assert.equal(h.snapshot().elapsedTime, 120);
+  h.advance(299999);
+  assert.equal(h.snapshot().isRunning, true);
+  h.advance(1);
+  assert.equal(h.snapshot().pendingCompletion.duration, 7);
+});
+
+test('a checkpoint already confirmed at its deadline completes and queues its bell on cold startup', () => {
+  for (const totalTime of [2, 120]) {
+    const state = checkpoint({ elapsedTime: totalTime, totalTime,
+      startTimestamp: INITIAL_TIME - totalTime * 1000,
+      schemaVersion: 2, runtimeId: 'previous-runtime', status: 'running' });
+    const h = harness({ initialStorage: { timerState: state }, initialTime: INITIAL_TIME + 3600000 });
+    assert.equal(h.snapshot().status, 'completed');
+    assert.equal(h.snapshot().remainingTime, 0);
+    assert.equal(h.snapshot().pendingCompletion?.duration || 0, Math.floor(totalTime / 60));
+    assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'old-session');
+    assert.equal(h.records.length, 0);
+    const cueWrite = h.writes.findIndex(item => item.key === 'timerPendingEndReminder');
+    const terminalWrite = h.writes.findIndex(item => item.key === 'timerState' && item.value.status === 'completed');
+    assert.ok(cueWrite >= 0 && cueWrite < terminalWrite, 'persist the bell before the terminal checkpoint');
+  }
+});
+
+test('a clock rollback while paused cannot make resumed or cold-restored checkpoints invalid', () => {
+  const h = harness();
+  h.start(); h.advance(125000); h.controller.pause(); h.jump(-3600000);
+  h.controller.resume();
+  assert.equal(h.snapshot().elapsedTime, 125);
+  const reopened = harness({ initialStorage: h.data(), initialTime: h.now() });
+  assert.equal(reopened.snapshot().status, 'paused');
+  assert.equal(reopened.snapshot().elapsedTime, 125);
+  const secondRecovery = harness({ initialStorage: reopened.data(), initialTime: reopened.now() - 3600000 });
+  assert.equal(secondRecovery.snapshot().status, 'paused');
+  assert.equal(secondRecovery.snapshot().elapsedTime, 125);
+  secondRecovery.controller.resume(); secondRecovery.advance(295000);
+  assert.equal(secondRecovery.snapshot().pendingCompletion.duration, 7);
 });
 
 test('pending completion takes precedence over a stale active checkpoint and also supports count-up drafts', () => {
@@ -480,7 +551,7 @@ test('invalid countdown checkpoints are rejected and unrelated count-up state is
   assert.equal(h.records.length, 0);
 });
 
-test('a sub-minute countdown completes without a draft and exit below one minute never records', () => {
+test('sub-minute natural and manual completions still queue a bell without creating a record', () => {
   const h = harness();
   h.start(2);
   h.advance(2000);
@@ -488,12 +559,18 @@ test('a sub-minute countdown completes without a draft and exit below one minute
   assert.equal(h.events.at(-1).event.type, 'complete');
   assert.equal(h.events.at(-1).event.completion, null);
   assert.equal(h.records.length, 0);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
   assert.equal(h.start(420, 'second'), true);
   h.advance(59000);
   h.controller.appHide({ reason: 0 });
   assert.equal(h.records.length, 0);
   assert.equal(h.snapshot().pendingCompletion, null);
-  assert.match(h.snapshot().completionNotice, /不足1分钟/);
+  assert.equal(h.snapshot().isRunning, true);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+  h.controller.appShow();
+  h.controller.finish('manual');
+  assert.equal(h.snapshot().status, 'completed');
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'second');
 });
 
 test('a first tick install failure is recovered by the independent watchdog', () => {
@@ -510,17 +587,19 @@ test('a first tick install failure is recovered by the independent watchdog', ()
   assert.ok(h.events.some(item => item.event.type === 'recover'));
 });
 
-test('recovery can be disabled without changing actual exit or normal completion behavior', () => {
+test('disabling recovery does not turn app hiding into an early completion', () => {
   const h = harness();
   h.start();
   h.controller.setRecoveryEnabled(false);
   assert.equal([...h.timers.values()].filter(item => item.delay === 5000).length, 0);
   h.advance(65000);
   h.controller.appHide({ reason: 0 });
-  assert.equal(h.records[0][0], 1);
+  assert.equal(h.records.length, 0);
   h.controller.appShow();
   h.controller.setRecoveryEnabled(true);
-  assert.equal(h.snapshot().isRunning, false);
+  assert.equal(h.snapshot().isRunning, true);
+  h.advance(355000);
+  assert.equal(h.snapshot().pendingCompletion.duration, 7);
   assert.equal(h.timers.size, 0);
 });
 
@@ -680,40 +759,45 @@ test('an interrupted separate-key draft write is recovered from the terminal che
   assert.equal(reopened.records.length, 0);
 });
 
-test('natural completion with no page delivers one deferred complete on same-runtime foreground attach', () => {
+test('natural completion without a page persists its reminder independently of later attaches', () => {
   const h = harness();
   h.start(60);
   h.advance(55000);
   h.detach();
   h.advance(10000);
   assert.equal(h.snapshot().pendingCompletion.duration, 1);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+  const reminderWrites = h.writes.filter(item => item.key === 'timerPendingEndReminder').length;
   const nextEvents = [];
   const detach = h.controller.attach((snapshot, event) => nextEvents.push({ snapshot, event }));
   assert.equal(nextEvents.length, 1);
-  assert.equal(nextEvents[0].event.type, 'complete');
-  assert.equal(nextEvents[0].event.reason, 'timeout');
+  assert.equal(nextEvents[0].event.type, 'restore');
   assert.equal(nextEvents[0].event.completion.endedAt, INITIAL_TIME + 60000);
   detach();
   h.controller.attach((snapshot, event) => nextEvents.push({ snapshot, event }));
   assert.equal(nextEvents.at(-1).event.type, 'restore');
-  assert.equal(nextEvents.filter(item => item.event.type === 'complete').length, 1);
+  assert.equal(nextEvents.filter(item => item.event.type === 'complete').length, 0);
+  assert.equal(h.writes.filter(item => item.key === 'timerPendingEndReminder').length, reminderWrites);
   assert.equal(h.records.length, 0);
 });
 
-test('a nested attach cannot claim an already claimed deferred completion', () => {
+test('nested attaches cannot queue duplicate reminders for an already completed countdown', () => {
   const h = harness();
   h.start(60);
   h.detach();
   h.advance(60000);
   const events = [];
+  const reminderWrites = h.writes.filter(item => item.key === 'timerPendingEndReminder').length;
   h.controller.attach((snapshot, event) => {
     events.push(event.type);
-    if (event.type === 'complete') h.controller.attach((_, nested) => events.push(nested.type));
+    h.controller.attach((_, nested) => events.push(nested.type));
   });
-  assert.deepEqual(events, ['complete', 'restore']);
+  assert.deepEqual(events, ['restore', 'restore']);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+  assert.equal(h.writes.filter(item => item.key === 'timerPendingEndReminder').length, reminderWrites);
 });
 
-test('app hide discards a deferred completion cue even when immediately returning to the same runtime', () => {
+test('app hide cannot discard an unplayed completion bell even without an attached page', () => {
   const h = harness();
   h.start(60);
   h.detach();
@@ -724,17 +808,21 @@ test('app hide discards a deferred completion cue even when immediately returnin
   h.controller.attach((snapshot, event) => events.push(event.type));
   assert.deepEqual(events, ['restore']);
   assert.equal(h.snapshot().pendingCompletion.duration, 1);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
   assert.equal(h.records.length, 0, 'a normal completion remains a confirmation draft');
 });
 
-test('saved or cold-restored completions never replay a deferred cue', () => {
+test('saving or cold-restoring a completion preserves its unplayed bell without queuing another', () => {
   const h = harness();
   h.start(60);
   h.detach();
   h.advance(60000);
   const reopened = harness({ initialStorage: h.data() });
   assert.deepEqual(reopened.events.map(item => item.event.type), ['restore']);
+  assert.equal(reopened.storage.get('timerPendingEndReminder').sessionId, 'session-one');
+  assert.equal(reopened.writes.filter(item => item.key === 'timerPendingEndReminder').length, 0);
   h.controller.markCompletionSaved('session-one');
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
   const events = [];
   const detach = h.controller.attach((snapshot, event) => events.push(event.type));
   assert.deepEqual(events, ['restore']);
@@ -744,7 +832,7 @@ test('saved or cold-restored completions never replay a deferred cue', () => {
   assert.deepEqual(events, ['restore', 'restore']);
 });
 
-test('manual finish without a page is a draft but never a deferred natural completion cue', () => {
+test('manual finish without a page still preserves the draft and a durable end bell', () => {
   const h = harness();
   h.start();
   h.detach();
@@ -754,4 +842,5 @@ test('manual finish without a page is a draft but never a deferred natural compl
   h.controller.attach((snapshot, event) => events.push(event.type));
   assert.deepEqual(events, ['restore']);
   assert.equal(h.snapshot().pendingCompletion.duration, 2);
+  assert.equal(h.storage.get('timerPendingEndReminder').sessionId, 'session-one');
 });

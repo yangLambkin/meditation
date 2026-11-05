@@ -26,17 +26,13 @@ exports.main = async (event = {}) => {
       if (!authorization.success) return authorization;
     }
     if (type !== 'getAllTeams' && type !== 'getTeamInfo') requireLogin(openid);
-    // 新团队只由 data OpenAPI 管理；旧微信团队按原 ID 继续读写，不双写或自动迁移。
-    const bijing = () => require('./bijingTeams').createBijingTeams({ db, cloud });
-    if (type === 'createTeam' || (data && typeof data.teamId === 'string' && data.teamId.startsWith('bijing_'))) {
-      return await bijing().run(type, data, openid);
-    }
     switch (type) {
       case 'adminListTeams': return await adminListTeams(data);
       case 'adminTeamMembers': return await adminTeamMembers(data);
       case 'adminTransferLeader': return await adminTransferLeader(data, openid);
       case 'adminAuditLogs': return await adminAuditLogs(data);
-      case 'getUserTeams': return { success: true, data: [...await userTeams(openid), ...await bijing().list('mine', openid)] };
+      case 'createTeam': return await createTeam(data, openid);
+      case 'getUserTeams': return { success: true, data: await userTeams(openid) };
       case 'deleteTeam': return await deleteTeam(data.teamId, openid);
       case 'joinTeam': return await joinTeam(data, openid);
       case 'leaveTeam': return await leaveTeam(data.teamId, openid);
@@ -57,11 +53,7 @@ exports.main = async (event = {}) => {
       case 'generateInvite': return await generateInvite(data, openid);
       case 'recordInviteAction': return await recordInviteAction(data, openid);
       case 'recordInviteRelation': return await recordInviteRelation(data, openid);
-      case 'getAllTeams': {
-        const legacy = await getAllTeams();
-        const teams = [...legacy.data.teams, ...await bijing().list('public', openid)];
-        return { success: true, data: { teams, count: teams.length } };
-      }
+      case 'getAllTeams': return await getAllTeams();
       default: throw new Error('未知的操作类型');
     }
   } catch (error) {
@@ -346,6 +338,27 @@ async function reserveUniqueField(transaction, field, value, teamId) {
     isActive: false, _type: 'team_uniqueness_reservation',
     targetTeamId: teamId, lockField: field, updatedAt: db.serverDate()
   } });
+}
+
+async function createTeam(data, openid) {
+  const fields = teamFields(data, true);
+  const team = {
+    ...fields, creator: openid,
+    creatorName: typeof data.creatorName === 'string' ? data.creatorName : '匿名用户',
+    members: [openid], memberCount: 1, deputyLeaders: [],
+    createdAt: db.serverDate(), updatedAt: db.serverDate(), isActive: true
+  };
+  // 兼容尚未拥有预留文档的历史团队；事务内部不能使用 where/add。
+  const named = await db.collection('teams').where({ name: fields.name, isActive: true }).limit(1).get();
+  if (named.data.length) throw new Error('团队名称已存在');
+  const teamId = `team_${crypto.randomBytes(16).toString('hex')}`;
+  await db.runTransaction(async transaction => {
+    await reserveUniqueField(transaction, 'name', fields.name, teamId);
+    await transaction.collection('teams').doc(teamId).set({ data: team });
+  });
+  return { success: true, data: { teamId, team: {
+    ...team, _id: teamId, createdAt: new Date(), updatedAt: new Date()
+  } } };
 }
 
 async function updateTeam(teamId, data, openid) {

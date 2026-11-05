@@ -168,7 +168,6 @@ function harness(initial = {}, options = {}) {
       require(name) {
         if (name === 'crypto') return crypto;
         if (name === './maintenanceAuth') return require('../cloudfunctions/teamManager/maintenanceAuth');
-        if (name === './bijingTeams') return { createBijingTeams: () => ({ async list() { return []; } }) };
         assert.equal(name, 'wx-server-sdk');
         const wxContext = { OPENID: openid, ...(options.wxContext || {}) };
         return { init() {}, DYNAMIC_CURRENT_ENV: 'test', database: () => database, getWXContext: () => wxContext,

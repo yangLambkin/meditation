@@ -44,6 +44,7 @@ function deferred() {
 function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', now = '2026-09-19T12:00:00+08:00' } = {}) {
   let definition;
   let currentAccount = account;
+  let binding = { studentNumber: 'BJ001', bindingVersion: 'v1' };
   const calls = { cloud: [], navigation: [], refreshStopped: 0, updates: 0 };
   let timestamp = new Date(now).getTime();
   let timerId = 0;
@@ -60,7 +61,15 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
   });
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     Date: ClockDate,
-    require: name => name.endsWith('/practicePreferences.js') ? require('../miniprogram/utils/practicePreferences.js') : dateModule.exports,
+    require(name) {
+      if (name.endsWith('/teamGateway.js')) return { getViewerKey(teamId) {
+        return /^bijing_/.test(teamId) ? JSON.stringify([currentAccount, binding && binding.studentNumber, binding && binding.bindingVersion]) : currentAccount;
+      }, callTeam(type, data) {
+        calls.cloud.push(plain({ name: 'teamManager', data: { type, data } }));
+        return cloud ? cloud(data, calls.cloud.length) : Promise.resolve(success(details()));
+      } };
+      return name.endsWith('/practicePreferences.js') ? require('../miniprogram/utils/practicePreferences.js') : dateModule.exports;
+    },
     Page(value) { definition = value; },
     wx: {
       getStorageSync: key => key === 'userOpenId' ? currentAccount : undefined,
@@ -75,7 +84,8 @@ function createPage({ query = { teamId: 'team-a' }, cloud, account = 'viewer', n
   const page = { ...definition, data: structuredClone(definition.data),
     setData(values) { Object.assign(this.data, values); calls.updates++; } };
   page.onLoad(query);
-  return { page, calls, timers, setNow(value) { timestamp = Date.parse(value); }, setAccount(value) { currentAccount = value; } };
+  return { page, calls, timers, setNow(value) { timestamp = Date.parse(value); }, setAccount(value) { currentAccount = value; },
+    setBinding(value) { binding = value; } };
 }
 const rendered = page => plain(page.data.groups.flatMap(group => group.items));
 
@@ -691,4 +701,46 @@ test('bijing history preserves opaque cursors and count units when opening day r
   assert.equal(page.data.itemCount, 2);
   page.openDayRecords(event({ key: page.data.groups[0].items[0].key }));
   assert.match(calls.navigation.at(-1).url, /^\/subpackages\/team\/pages\/memberRecords\/memberRecords\?/);
+});
+
+test('returning to data history after rebinding the same WeChat account clears old metadata and reloads', async () => {
+  const refreshed = deferred();
+  const teamId = 'bijing_6';
+  const report = items => details(items, { teamId, practiceType: 'instant', unit: '次' });
+  const { page, calls, setBinding } = createPage({ query: { teamId },
+    cloud: (_, count) => count === 1 ? success(report([row('owner-a')])) : refreshed.promise });
+  await page.onShow();
+  assert.equal(page.data.hasLoaded, true);
+  page.onHide();
+  setBinding({ studentNumber: 'BJ002', bindingVersion: 'v2' });
+  const loading = page.onShow();
+  assert.equal(calls.cloud.length, 2);
+  assert.equal(page.data.hasLoaded, false);
+  assert.equal(page.data.itemCount, 0);
+  assert.equal(page.data.settings, null);
+  assert.equal(page.data.history, null);
+  refreshed.resolve(success(report([row('owner-b')])));
+  await loading;
+  assert.deepEqual(rendered(page).map(item => item.openid), ['owner-b']);
+});
+
+test('a history page completed after same-account rebinding cannot append or open old member records', async () => {
+  const more = deferred();
+  const teamId = 'bijing_6';
+  const report = (items, nextCursor = null) => details(items, { teamId, practiceType: 'instant', unit: '次', nextCursor });
+  const { page, calls, setBinding } = createPage({ query: { teamId }, cloud: (_, count) => count === 1
+    ? success(report([row('owner-a')], 'old-cursor')) : more.promise });
+  await page.onShow();
+  const oldKey = page.data.groups[0].items[0].key;
+  const loading = page.loadMore();
+  setBinding({ studentNumber: 'BJ002', bindingVersion: 'v2' });
+  more.resolve(success(report([row('old-late-member')])));
+  await loading;
+  assert.equal(page.data.itemCount, 0);
+  assert.equal(page.data.nextCursor, null);
+  assert.equal(page.data.hasLoaded, false);
+  assert.equal(page.data.settings, null);
+  assert.equal(page.data.isLoadingMore, false);
+  page.openDayRecords(event({ key: oldKey }));
+  assert.equal(calls.navigation.length, 0);
 });

@@ -25,6 +25,7 @@ button::after { border: none; }
 .tab { flex: 1; color: #7a8493; font-size: 28rpx; font-weight: 500; line-height: 68rpx; text-align: center; border-radius: 12rpx; }
 .tab.selected { color: #a68a57; background-color: #b2976414; font-weight: 600; }
 .list-caption { color: #99a1ae; font-size: 22rpx; line-height: 1.6; padding: 0 8rpx 18rpx; }
+.refresh-warning { margin-bottom: 20rpx; padding: 20rpx 24rpx; border-radius: 14rpx; background-color: #fff8eb; color: #94784b; font-size: 24rpx; line-height: 1.6; }
 .team-card { background-color: #ffffff; border: 2rpx solid #f0f2f5; border-radius: 20rpx; padding: 28rpx; margin-bottom: 20rpx; }
 .team-card-clickable:active { background-color: #f7f4ee; }
 .card-top { display: flex; align-items: center; gap: 20rpx; }

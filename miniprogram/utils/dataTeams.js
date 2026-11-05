@@ -1,4 +1,5 @@
-const crypto = require('crypto');
+const configDefault = require('./teamConfig.js');
+const authDefault = require('./practiceAuth.js');
 
 const PREFIX = 'bijing_';
 const MEMBER_PREFIX = 'bijing_member_';
@@ -25,68 +26,74 @@ const isoTime = value => {
   return new Date(time).toISOString();
 };
 
-function createBijingTeams({ db, cloud, http, env = process.env }) {
+function createDataTeams({ auth = authDefault, config = configDefault, wxApi = () => wx } = {}) {
+  const wxClient = () => typeof wxApi === 'function' ? wxApi() : wxApi;
   const base = () => {
-    if (!env.BIJING_API_BASE || !env.BIJING_ACCESS_TOKEN || typeof env.BIJING_TEAM_ACCESS_TOKEN !== 'string' ||
-        env.BIJING_TEAM_ACCESS_TOKEN.length < 32 || env.BIJING_TEAM_ACCESS_TOKEN === env.BIJING_ACCESS_TOKEN) {
-      throw new Error('团队服务尚未配置，请稍后重试');
-    }
-    return env.BIJING_API_BASE.replace(/\/+$/, '');
+    if (config.enabled !== true || !/^https:\/\//.test(config.baseUrl || '')) throw new Error('团队接口尚未开放，请稍后重试');
+    return config.baseUrl.replace(/\/+$/, '');
   };
   const displayUrl = value => value && value.startsWith('/api/public/teams/avatar?') ? base() + value : value || '/images/icons/team.png';
+  const sameOwner = (a, b) => !!(a && b && a.openid === b.openid && a.studentNumber === b.studentNumber && String(a.bindingVersion || '') === String(b.bindingVersion || ''));
+  const assertActor = actor => {
+    if (!actor) return;
+    if (!sameOwner(actor.owner, auth.getOwner())) throw Object.assign(new Error('账号或绑定已变化，请重新进入团队'), { code: 'ACCOUNT_CHANGED' });
+  };
   async function binding(openid, optional = false) {
-    if (!openid) { if (optional) return null; throw new Error('请先登录并绑定必经之路学号'); }
-    const rows = (await db.collection('users').where({ _openid: openid, bijingBound: true }).limit(2).get()).data;
-    if (!rows.length && optional) return null;
-    if (rows.length !== 1 || typeof rows[0].bijingStudentNumber !== 'string' || !rows[0].bijingStudentNumber.trim()) {
-      throw new Error('请先绑定本人必经之路学号');
+    const owner = auth.getOwner();
+    if (!owner || owner.openid !== openid) {
+      if (optional) return null;
+      throw Object.assign(new Error('请先在「我」中登录并绑定本人学号'), { code: 'AUTH_REQUIRED' });
     }
-    const user = rows[0];
-    const number = user.bijingStudentNumber.trim();
-    // 同一学号只接受一个已绑定微信账号；版本化绑定还须与双向登记一致。
-    const peers = (await db.collection('users').where({ bijingBound: true, bijingStudentNumber: number }).limit(2).get()).data;
-    if (peers.length !== 1 || peers[0]._openid !== openid) throw new Error('学号绑定状态异常，请重新绑定');
-    if (user.bijingBindingVersion) {
-      for (const [kind, value] of [['account', openid], ['student', number]]) {
-        const key = `${kind}_${crypto.createHash('sha256').update(value).digest('hex')}`;
-        let registry;
-        try { registry = (await db.collection('bijing_bindings').doc(key).get()).data; }
-        catch (_) { throw new Error('学号绑定已变化，请重新绑定'); }
-        if (!registry || registry.active !== true || registry.openid !== openid || registry.studentNumber !== number ||
-            registry.bindingVersion !== user.bijingBindingVersion || registry.userId !== user._id) {
-          throw new Error('学号绑定已变化，请重新绑定');
-        }
-      }
-    }
-    return { openid, number, version: user.bijingBindingVersion || null };
+    await auth.authorize();
+    if (!sameOwner(owner, auth.getOwner())) throw Object.assign(new Error('账号或绑定已变化，请重新进入团队'), { code: 'ACCOUNT_CHANGED' });
+    return { openid, number: owner.studentNumber, version: owner.bindingVersion, owner };
+  }
+  function transport(options, upload = false) {
+    return new Promise((resolve, reject) => {
+      let settled = false, task;
+      const finish = (callback, value) => { if (settled) return; settled = true; clearTimeout(timer); callback(value); };
+      const timer = setTimeout(() => {
+        finish(reject, Object.assign(new Error('团队请求超时，请使用原表单重试'), { code: 'REQUEST_TIMEOUT' }));
+        if (task && task.abort) task.abort();
+      }, 15000);
+      try {
+        task = wxClient()[upload ? 'uploadFile' : 'request']({ ...options, timeout: 15000,
+          success: value => finish(resolve, value),
+          fail: () => finish(reject, Object.assign(new Error('团队服务暂时无法连接，请稍后重试'), { code: 'NETWORK_ERROR' })) });
+      } catch (_) { finish(reject, new Error('团队服务暂时无法连接，请稍后重试')); }
+    });
+  }
+  function decode(result) {
+    let payload = result.data;
+    if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch (_) {} }
+    const status = Number(result.statusCode);
+    if (status >= 200 && status < 300 && payload && payload.success === true && payload.data && typeof payload.data === 'object') return payload.data;
+    const unavailable = status === 401 || status === 503 || status === 404 && (!payload || typeof payload !== 'object' || typeof payload.success !== 'boolean');
+    const message = unavailable ? '团队接口尚未就绪或凭据未配置，请稍后重试' : payload && (payload.message || payload.error) || '团队服务未返回完整确认，请重试';
+    throw Object.assign(new Error(typeof message === 'string' ? message : '团队操作失败，请重试'), { status, code: unavailable ? 'API_UNAVAILABLE' : 'TEAM_REQUEST_FAILED' });
+  }
+  async function headers(actor, extra = {}) {
+    // 与功课 OpenAPI 共用过渡服务凭据；学号和绑定版本用于请求归属核对。
+    const token = actor ? await auth.getAccessToken() : config.serviceAccessToken;
+    if (!token) throw new Error('团队接口凭据尚未配置');
+    assertActor(actor);
+    return { 'X-Access-Token': token, ...(actor ? { 'X-Expected-Student-Number': actor.number,
+      'X-Expected-Binding-Version': String(actor.version || '') } : {}), ...extra };
   }
   async function request(actor, method, path, data, params, extraHeaders = {}) {
-    const url = base() + '/api/openapi/teams' + path;
+    assertActor(actor);
+    const query = Object.entries(params || {}).filter(([,value]) => value !== undefined && value !== null && value !== '')
+      .map(([key,value]) => encodeURIComponent(key) + '=' + encodeURIComponent(value)).join('&');
+    const result = await transport({ url: base() + '/api/openapi/teams' + path + (query ? '?' + query : ''), method,
+      ...(data !== undefined ? { data } : {}), header: await headers(actor, { 'Content-Type': 'application/json', ...extraHeaders }) });
+    assertActor(actor);
+    const payload = decode(result);
+    if (actor && (!Number.isSafeInteger(payload.actorMemberId) || payload.actorMemberId < 1)) throw new Error('团队服务身份结果异常');
     if (actor) {
-      const current = await binding(actor.openid);
-      if (current.number !== actor.number || current.version !== actor.version) throw new Error('学号绑定已变化，请刷新后重试');
+      if (actor.memberId && actor.memberId !== payload.actorMemberId) throw new Error('团队服务身份已变化，请重新进入团队');
+      actor.memberId = payload.actorMemberId;
     }
-    try {
-      const response = await (http || require('axios')).request({ url, method, data, params, timeout: 15000,
-        maxContentLength: 4 * 1024 * 1024, maxBodyLength: 3 * 1024 * 1024,
-        headers: { 'X-Access-Token': env.BIJING_ACCESS_TOKEN, 'X-Team-Access-Token': env.BIJING_TEAM_ACCESS_TOKEN,
-          ...(actor ? { 'X-Expected-Student-Number': actor.number } : {}), ...extraHeaders } });
-      const payload = response.data;
-      if (!payload || payload.success !== true || !payload.data || typeof payload.data !== 'object') throw new Error('团队服务未返回完整结果，请重试');
-      if (actor && !Number.isSafeInteger(payload.data.actorMemberId)) throw new Error('团队服务身份结果异常');
-      if (actor) {
-        const current = await binding(actor.openid);
-        if (current.number !== actor.number || current.version !== actor.version) throw new Error('学号绑定已变化，请刷新后重试');
-      }
-      if (actor) actor.memberId = idOf(payload.data.actorMemberId);
-      return payload.data;
-    } catch (error) {
-      const status = error.response && error.response.status;
-      const message = error.response && error.response.data && error.response.data.message;
-      if (status >= 400 && status < 500 && typeof message === 'string') throw Object.assign(new Error(message), { status });
-      if (error.response || error.code) throw new Error('团队服务暂时无法连接，请稍后重试');
-      throw error;
-    }
+    return payload;
   }
   function memberKey(id, actor) { return actor && Number(id) === actor.memberId ? actor.openid : MEMBER_PREFIX + idOf(id); }
   function memberId(value, actor) {
@@ -138,26 +145,31 @@ function createBijingTeams({ db, cloud, http, env = process.env }) {
     } while (cursor);
     return teams;
   }
+  function isDataTeamIcon(value) {
+    return typeof value === 'string' && (value.startsWith(base() + '/api/public/teams/avatar?') || value.startsWith('/api/public/teams/avatar?'));
+  }
+  async function uploadTeamIcon(value, actor) {
+    actor = actor || await binding(wxClient().getStorageSync('userOpenId'));
+    if (isDataTeamIcon(value)) return displayUrl(value);
+    if (typeof value !== 'string' || !value.startsWith('cloud://')) throw new Error('请重新选择并审核团队头像');
+    assertActor(actor);
+    const file = await wxClient().cloud.downloadFile({ fileID: value });
+    assertActor(actor);
+    if (!file || !file.tempFilePath) throw new Error('团队头像读取失败，请重新选择');
+    const result = await transport({ url: base() + '/api/openapi/teams/avatar', filePath: file.tempFilePath,
+      name: 'file', header: await headers(actor) }, true);
+    assertActor(actor);
+    const uploaded = decode(result);
+    if (!Number.isSafeInteger(uploaded.actorMemberId) || uploaded.actorMemberId < 1 || actor.memberId && actor.memberId !== uploaded.actorMemberId) throw new Error('团队服务身份结果异常');
+    actor.memberId = uploaded.actorMemberId;
+    if (typeof uploaded.url !== 'string' || !uploaded.url.startsWith('/api/public/teams/avatar?')) throw new Error('团队头像上传结果异常');
+    return displayUrl(uploaded.url);
+  }
   async function iconUrl(value, actor) {
     if (!value || value === '/images/icons/team.png') return '';
-    const root = base();
-    const relative = value.startsWith(root + '/api/public/teams/avatar?') ? value.slice(root.length) : value;
-    if (relative.startsWith('/api/public/teams/avatar?')) return relative;
-    if (!value.startsWith('cloud://')) throw new Error('请重新选择并上传团队头像');
-    const result = await cloud.downloadFile({ fileID: value });
-    const content = result.fileContent;
-    if (!Buffer.isBuffer(content) || content.length < 1 || content.length > 2 * 1024 * 1024) throw new Error('请选择2MB以内的团队头像');
-    const mime = content[0] === 0xff && content[1] === 0xd8 ? 'image/jpeg' : content.toString('ascii', 0, 4) === 'RIFF' ? 'image/webp' : 'image/png';
-    const boundary = 'team-avatar-' + crypto.randomBytes(16).toString('hex');
-    const extension = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
-    const form = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="avatar.${extension}"\r\nContent-Type: ${mime}\r\n\r\n`),
-      content, Buffer.from(`\r\n--${boundary}--\r\n`)
-    ]);
-    const valueOut = await request(actor, 'POST', '/avatar', form, undefined,
-      { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(form.length) });
-    if (typeof valueOut.url !== 'string' || !valueOut.url.startsWith('/api/public/teams/avatar?')) throw new Error('团队头像上传结果异常');
-    return valueOut.url;
+    if (isDataTeamIcon(value)) return value.startsWith(base()) ? value.slice(base().length) : value;
+    const uploaded = await uploadTeamIcon(value, actor);
+    return uploaded.slice(base().length);
   }
   function rosterResult(team) {
     return { teamId: team._id, creator: team.creator, creatorName: team.creatorName,
@@ -172,6 +184,7 @@ function createBijingTeams({ db, cloud, http, env = process.env }) {
         practiceStartDate: data.practiceStartDate ?? null, dailyGoal: data.dailyGoalMinutes ?? null,
         iconUrl: await iconUrl(data.icon || '', actor) };
       const created = await request(actor, 'POST', '', input, undefined, { 'Idempotency-Key': data.operationKey });
+      if (created.practiceType !== input.practiceType) throw new Error('团队服务未确认所选功课类型，请稍后重试');
       const team = normalize(created, actor);
       return { success: true, data: { teamId: team._id, team } };
     }
@@ -218,7 +231,8 @@ function createBijingTeams({ db, cloud, http, env = process.env }) {
         practiceType: current.raw.team.practiceType, practiceStartDate: input.practiceStartDate === undefined ? current.raw.team.practiceStartDate : input.practiceStartDate,
         dailyGoal: input.dailyGoalMinutes === undefined ? current.raw.team.dailyGoal : input.dailyGoalMinutes,
         expectedVersion: data.expectedVersion ?? input.expectedVersion };
-      const updated = await request(actor, 'PATCH', path, body);
+      // wx.request does not support PATCH; data also accepts PUT for versioned edits.
+      const updated = await request(actor, 'PUT', path, body);
       return { success: true, data: { teamId: data.teamId, team: normalize(updated, actor, current.raw.members) } };
     }
     if (['setTeamDeputy', 'removeTeamMember', 'transferTeamLeader'].includes(type)) {
@@ -276,7 +290,7 @@ function createBijingTeams({ db, cloud, http, env = process.env }) {
     }
     throw new Error('该团队操作暂不支持，请刷新团队页面');
   }
-  return { list, run, binding };
+  return { list, run, uploadTeamIcon, isDataTeamIcon, getOwner: () => auth.getOwner() };
 }
 
-module.exports = { createBijingTeams, isBijingTeam };
+module.exports = { createDataTeams, isDataTeam: isBijingTeam };

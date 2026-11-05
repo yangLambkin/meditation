@@ -1,5 +1,6 @@
 /**index.wxss**/
 @import "../../styles/recordList.wxss";
+@import "../../styles/practiceForm.wxss";
 
 .ml-7 {
   margin-left: 12.35rpx;

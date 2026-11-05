@@ -1,5 +1,6 @@
 const { createCuePlayer } = require('./cuePlayer');
 const { getReminderSettings } = require('./timerReminderSettings');
+const { queueEndReminder, getEndReminder, clearEndReminder } = require('./timerEndReminder');
 
 // 计时页的音频和提醒副作用集中在这里；不修改计时、完成草稿或记录入账状态。
 const timerAudioMethods = {
@@ -10,13 +11,16 @@ const timerAudioMethods = {
     this.startSoundScheduledAt = 0;
     this.audioSuspended = false;
     this.deferredEndSound = false;
+    this.endReminderSessionId = null;
+    this.endReminderFailed = false;
+    this.lastEndReminderSessionId = null;
     this.audioPlayer = null;
     this.backgroundMusicPlayer = null;
     this.cuePlayer = createCuePlayer({
       api: wx,
       canPlay: () => this.canPlayTimerAudio(),
       onPlayerChange: player => { this.audioPlayer = player; },
-      onEnded: () => { if (!this.isUnloaded) this.handleSessionSoundEnded(); },
+      onEnded: result => { if (!this.isUnloaded) this.handleSessionSoundEnded(result); },
       diagnose: (type, details) => this.countdownSession.diagnose(type,
         { ...details, cue: this.currentSessionSound })
     });
@@ -27,6 +31,9 @@ const timerAudioMethods = {
     this.deferredEndSound = false;
     this.audioSuspended = false;
     if (!resume) {
+      const oldReminder = getEndReminder(wx);
+      if (oldReminder) clearEndReminder(wx, oldReminder.sessionId);
+      this.endReminderFailed = false;
       // 新一轮由用户主动开始，可以重新请求音频；不能用自动回前台清除来电占用。
       if (this.isPageVisible && !this.isAppHidden && this.timerApp._timerForeground !== false) {
         if (this.timerApp._timerAudioInterrupted) {
@@ -70,7 +77,7 @@ const timerAudioMethods = {
       && this.timerApp._timerForeground !== false && !this.timerApp._timerAudioInterrupted;
   },
 
-  // 只跨同进程页面重建保留音频；冷启动仍按计时检查点结算，不续播。
+  // 只跨同进程页面重建保留音频；冷启动不续播起坐或引导。
   saveSessionAudio() {
     this.timerApp._timerSessionAudio = null;
     if (!this.sessionId || (!this.data.isRunning && !this.data.isPaused)) return;
@@ -130,9 +137,28 @@ const timerAudioMethods = {
     this.pauseBackgroundMusic({ interrupted: true });
   },
 
-  resumeInterruptedAudio() {
+  resumeInterruptedAudio({ allowEndRetry = false } = {}) {
+    if (allowEndRetry) this.endReminderFailed = false;
     if (!this.isPageVisible || !this.canPlayTimerAudio()) return;
-    if (this.deferredEndSound) {
+    const pendingEnd = getEndReminder(wx);
+    const countdown = pendingEnd && this.data.isCountdown
+      && typeof this.countdownSession.getSnapshot === 'function'
+      ? this.countdownSession.getSnapshot() : null;
+    const ended = !this.data.isRunning && !this.data.isPaused
+      || countdown && countdown.sessionId === pendingEnd.sessionId
+        && (countdown.status === 'completed' || countdown.status === 'exited');
+    if (pendingEnd && ended) {
+      if (this.currentSessionSound === 'end' && this.endReminderSessionId === pendingEnd.sessionId) {
+        if (this.audioSuspended) {
+          this.audioSuspended = false;
+          this.cuePlayer.resume();
+        }
+      } else if (!this.endReminderFailed) {
+        this.playSessionSound('end');
+      }
+      return;
+    }
+    if (!pendingEnd && this.deferredEndSound && !this.endReminderFailed) {
       this.deferredEndSound = false;
       this.playSessionSound('end');
       return;
@@ -186,7 +212,21 @@ const timerAudioMethods = {
 
   playSessionSound(type) {
     if (this.isUnloaded) return;
+    let endReminder = null;
+    if (type === 'end') {
+      endReminder = getEndReminder(wx);
+      if (!endReminder) {
+        const sessionId = this.sessionId || this.pendingCompletion && this.pendingCompletion.sessionId;
+        if (sessionId && sessionId === this.lastEndReminderSessionId) return;
+        if (sessionId) endReminder = queueEndReminder(wx, sessionId);
+      }
+      // Repeated onShow/state events must not restart a playing or deferred cue.
+      if (this.currentSessionSound === 'end' && endReminder
+        && this.endReminderSessionId === endReminder.sessionId) return;
+      if (this.endReminderFailed) return;
+    }
     this.stopSessionSound();
+    if (type === 'end') this.endReminderSessionId = endReminder && endReminder.sessionId;
     if (!this.canPlayTimerAudio() || (type === 'end' && !this.isPageVisible)) {
       if (type === 'end') this.deferredEndSound = true;
       return;
@@ -214,14 +254,35 @@ const timerAudioMethods = {
     }
     this.startSoundRemaining = null;
     this.currentSessionSound = null;
+    this.endReminderSessionId = null;
     this.audioSuspended = false;
     this.resumeGuideAfterInterruption = false;
     this.cuePlayer.stop();
   },
 
-  handleSessionSoundEnded() {
+  handleSessionSoundEnded({ failed = false } = {}) {
     const wasStartSound = this.currentSessionSound === 'start';
+    const wasEndSound = this.currentSessionSound === 'end';
+    const endSessionId = this.endReminderSessionId;
     this.currentSessionSound = null;
+    this.endReminderSessionId = null;
+    if (wasEndSound) {
+      if (failed) {
+        this.endReminderFailed = true;
+        this.deferredEndSound = true;
+        if (this.isPageVisible && this.canPlayTimerAudio()) {
+          this.safeTimerEffect('end_fallback_vibration', () => wx.vibrateLong({}));
+          this.safeTimerEffect('end_fallback_notice', () => wx.showToast({
+            title: '静坐已结束，铃声播放失败，已尝试震动提醒', icon: 'none', duration: 3500
+          }));
+        }
+      } else {
+        if (endSessionId) clearEndReminder(wx, endSessionId);
+        this.lastEndReminderSessionId = endSessionId;
+        this.endReminderFailed = false;
+        this.deferredEndSound = false;
+      }
+    }
     // 起坐播完后才接着播放引导，避免两段音频同时播放。
     if (wasStartSound && this.data.isRunning && !this.isUnloaded) {
       if (!this.canPlayTimerAudio()) {

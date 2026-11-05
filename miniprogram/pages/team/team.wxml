@@ -28,6 +28,8 @@
     <view class="tab {{currentTab === 'joined' ? 'selected' : ''}}" bindtap="switchTab" data-tab="joined">发现团队</view>
   </view>
 
+  <view wx:if="{{refreshWarning}}" class="refresh-warning" role="status">{{refreshWarning}}</view>
+
   <block wx:if="{{currentTab === 'created'}}">
     <view class="team-card team-card-clickable" wx:for="{{mergedJoinedTeams}}" wx:key="_id" bindtap="viewTeamDetail" data-team-id="{{item._id}}">
       <view class="card-top">

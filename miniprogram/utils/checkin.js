@@ -4,6 +4,7 @@ const dateUtil = require('./dateUtil.js');
 const uploadNetwork = require('./uploadNetwork.js');
 const pendingBackups = new Map();
 const activeUploads = new Set();
+// 删除与编辑共享记录锁，阻止恢复快照和待上传任务覆盖正在修改的内容。
 const pendingDeletions = new Set();
 const userStorageRevisions = new Map();
 const pendingRefreshes = new Map();
@@ -166,13 +167,28 @@ function mergeCheckinExperiences(local, remote) {
 
 function findRecordIndex(records, identity) {
   const matches = records.map((record, index) => ({ record, index })).filter(({ record }) => {
-    if (identity.localId) return record.localId === identity.localId;
     if (identity.recordId) return record._id === identity.recordId;
+    if (identity.localId) return record.localId === identity.localId;
     const timestamp = recordTime(identity.timestamp);
     return Number.isFinite(timestamp) && timestamp > 0 && recordTime(record.timestamp) === timestamp;
   });
-  if (matches.length > 1) throw new Error('存在相同时间的记录，暂时无法确定要删除的记录');
+  if (matches.length > 1) throw new Error('存在相同身份的记录，暂时无法确定要操作的记录');
   return matches.length ? matches[0].index : -1;
+}
+
+// 编辑回包丢失后，云端刷新可能已把同一记录移到新日期；重试仍沿用原身份。
+function findStoredRecord(data, date, identity) {
+  const days = data.dailyRecords || {};
+  const inDay = dayDate => {
+    const records = (days[dayDate] || {}).records || [];
+    const index = findRecordIndex(records, identity);
+    return index === -1 ? null : { date: dayDate, index, record: records[index] };
+  };
+  const original = inDay(date);
+  if (original || (!identity.recordId && !identity.localId)) return original;
+  const matches = Object.keys(days).filter(dayDate => dayDate !== date).map(inDay).filter(Boolean);
+  if (matches.length > 1) throw new Error('记录身份存在冲突，请刷新后重试');
+  return matches[0] || null;
 }
 
 function backupKey(userId, timestamp, localId) {
@@ -675,7 +691,10 @@ const checkinManager = {
         };
         if (record._id) combined._id = record._id;
         if (record.localId) combined.localId = record.localId;
-        combined.experience = mergeCheckinExperiences(existing.experience, record.experience);
+        // 编辑后的感悟是完整替换（包含清空）；其它设备的旧缓存不可再合并回来。
+        combined.experience = record.experienceEdited === true
+          ? (Array.isArray(record.experience) ? record.experience : [])
+          : mergeCheckinExperiences(existing.experience, record.experience);
         if (combined._id) {
           if (existing.syncVersion === 1) combined.syncStatus = 'synced';
           ['syncError', 'syncErrorCode', 'syncAttempts', 'syncNextRetryAt', 'syncBlocked', 'syncIgnored'].forEach(key => {
@@ -889,6 +908,7 @@ const checkinManager = {
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
+      experienceEdited: cloudRecord.experienceEdited === true,
       createdAt: cloudRecord.createdAt,
       updatedAt: cloudRecord.updatedAt,
       created_at: cloudRecord.created_at
@@ -1035,6 +1055,7 @@ const checkinManager = {
       duration: cloudRecord.duration,
       emotion: cloudRecord.emotion || [],
       experience: cloudRecord.experience,
+      experienceEdited: cloudRecord.experienceEdited === true,
       createdAt: cloudRecord.createdAt,
       updatedAt: cloudRecord.updatedAt,
       created_at: cloudRecord.created_at
@@ -1140,6 +1161,7 @@ const checkinManager = {
         duration: record.duration || 0,
         emotion: record.emotion || [],
         experience: record.experience || [],
+        experienceEdited: record.experienceEdited === true,
         textCount: Array.isArray(record.experience) ? record.experience.length : 0,
         textPreview: Array.isArray(record.experience) && record.experience.length > 0 ? 
           `包含${record.experience.length}条体验记录` : ''
@@ -1758,6 +1780,201 @@ const checkinManager = {
     return result;
   },
 
+  // 原感悟可能是另一设备保存的体验引用，不能用列表中的部分预览填充完整编辑表单。
+  getEditableCheckinReflection: function(dateStr, identity = {}) {
+    const userId = this.getUserId();
+    const account = wx.getStorageSync('userOpenId') || '';
+    const stored = this.getUserCheckinDataByUserId(userId);
+    const entry = findStoredRecord(stored.checkinRecords || stored, dateStr, identity);
+    if (!entry) throw new Error('记录不存在，请刷新后重试');
+    const record = entry.record;
+    if ((record.syncOpenid && record.syncOpenid !== account) || (record._openid && record._openid !== account)) {
+      throw new Error('请切换回保存该记录时的账号后重试');
+    }
+    const original = JSON.stringify([record.timestamp, record.duration, record.experience, record.updatedAt]);
+    const reflection = require('./checkinReflection.js').resolveCheckinReflection(
+      record.experience, stored.experienceRecords || {}, account, wx);
+    const confirm = text => {
+      if (this.getUserId() !== userId || (wx.getStorageSync('userOpenId') || '') !== account) {
+        throw new Error('账号已变化，请重新打开记录');
+      }
+      const latest = this.getUserCheckinDataByUserId(userId);
+      const current = findStoredRecord(latest.checkinRecords || latest, entry.date, identity);
+      if (!current || JSON.stringify([current.record.timestamp, current.record.duration,
+        current.record.experience, current.record.updatedAt]) !== original) {
+        throw new Error('记录已更新，请刷新后重新打开');
+      }
+      return text;
+    };
+    return reflection && typeof reflection.then === 'function' ? reflection.then(confirm) : confirm(reflection);
+  },
+
+  // 原身份上修改记录；可能已上传的内容必须先由云端确认，不能删除后重建。
+  updateCheckin: async function(dateStr, identity = {}, updates = {}, options = {}) {
+    const userId = this.getUserId();
+    const account = wx.getStorageSync('userOpenId') || '';
+    const storageKey = `meditation_checkin_${userId}`;
+    let key;
+    let locked = false;
+    try {
+      const duration = updates.duration;
+      if (!Number.isInteger(duration) || duration < 1 || duration > 1440) {
+        throw new Error('请输入 1 至 1440 分钟的整数');
+      }
+      if (updates.timestamp === undefined) throw new Error('请选择真实发生时间后保存');
+      const timestamp = resolveCheckinTimestamp(updates.timestamp);
+      if (typeof updates.reflection !== 'string' || updates.reflection.trim().length > 5000) {
+        throw new Error('感悟不能超过 5000 字');
+      }
+      const reflection = updates.reflection.trim();
+      const requestId = options.requestId || `edit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 200) {
+        throw new Error('修改记录标识无效，请重新打开记录');
+      }
+      const initial = this.getUserCheckinDataByUserId(userId);
+      const initialData = initial.checkinRecords || initial;
+      const initialEntry = findStoredRecord(initialData, dateStr, identity);
+      if (!initialEntry) return { success: false, error: '记录不存在，请刷新后重试' };
+      const target = initialEntry.record;
+      key = backupKey(userId, target.timestamp, target.localId);
+      if (pendingDeletions.has(key)) return { success: false, code: 'RECORD_BUSY', error: '记录正在处理，请稍后重试' };
+      pendingDeletions.add(key);
+      locked = true;
+      const targetIdentity = { recordId: target._id, localId: target.localId, timestamp: target.timestamp };
+
+      // 首次上传可能已经入账；等待它结束，再用返回的云端身份编辑同一条记录。
+      if (pendingBackups.has(key)) await pendingBackups.get(key);
+      const sameAccount = () => (wx.getStorageSync('userOpenId') || '') === account && this.getUserId() === userId;
+      if (!sameAccount()) return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变化，请切换回原账号后重试' };
+      const latest = this.getUserCheckinDataByUserId(userId);
+      const latestData = latest.checkinRecords || latest;
+      const latestEntry = findStoredRecord(latestData, initialEntry.date, targetIdentity);
+      if (!latestEntry) return { success: false, error: '记录已变更，请刷新后重试' };
+      const record = latestEntry.record;
+      if ((record.syncOpenid && record.syncOpenid !== account) || (record._openid && record._openid !== account)) {
+        return { success: false, code: 'ACCOUNT_CHANGED', error: '请切换回保存该记录时的账号后重试' };
+      }
+      const previousDate = dateUtil.getRecordBusinessDate(record, latestEntry.date);
+      const nextDate = dateUtil.getRecordTimestamp(record.timestamp) === timestamp
+        ? previousDate : dateUtil.getBusinessDate(timestamp);
+      const backfill = record.recordType === 'backfill' || !!record.backfillRequestId;
+      const neverUploaded = !record._id && record.syncVersion === 1 && record.syncSourceAttempted === false;
+      // 云端记录由事务在完整快照上验证，并先处理幂等回放；本机快照可能已反映此前成功的编辑。
+      if (neverUploaded && nextDate !== previousDate && (backfill || !dateUtil.isRecentBusinessDate(nextDate))) {
+        return { success: false, code: 'DATE_OUT_OF_RANGE', error: backfill
+          ? '补录记录只能在原归属日期内修改时间' : '更改归属日期时只能选择今天或昨天' };
+      }
+      if (neverUploaded && (nextDate !== previousDate || duration !== Number(record.duration))) {
+        const dayDuration = Object.entries(latestData.dailyRecords || {}).reduce((sum, [dayDate, day]) =>
+          sum + (day.records || []).reduce((total, item) => item !== record &&
+            dateUtil.getRecordBusinessDate(item, dayDate) === nextDate
+            ? total + Math.max(0, Number(item.duration) || 0) : total, 0), 0);
+        if (dayDuration + duration > 1440) return { success: false, code: 'DAILY_DURATION_EXCEEDED', error: '当天静坐记录合计不能超过 24 小时' };
+      }
+      let saved;
+      if (!neverUploaded) {
+        if (!this.isUserLoggedIn()) return { success: false, code: 'AUTH_REQUIRED', error: '请登录后修改已上传或待确认的记录' };
+        const result = await cloudApi.editMeditationRecord({
+          // 用打开表单时的定位方式签名；超时后的刷新即便补齐 _id，也不能更换同一请求的身份。
+          ...(identity.recordId ? { recordId: identity.recordId } : {}),
+          ...(identity.localId ? { localId: identity.localId } : {}),
+          timestamp: identity.timestamp === undefined ? record.timestamp : identity.timestamp,
+          date: dateStr, expectedOpenid: account, requestId,
+          updates: { duration, timestamp, reflection }
+        });
+        if (!result || !result.success) return { success: false, code: result && result.code,
+          error: result && result.error || '修改失败，请重试' };
+        saved = result.data;
+        if (!saved || typeof saved.recordId !== 'string' || !saved.recordId || !dateUtil.isDateLabel(saved.date)) {
+          return { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认修改，请重试' };
+        }
+      }
+      if (!sameAccount()) return { success: false, code: 'ACCOUNT_CHANGED', error: '登录账号已变化，请切换回原账号后刷新记录' };
+
+      // 请求期间可能新增其它记录：在最新缓存中只替换目标，并一起保存受影响的统计。
+      const stored = this.getUserCheckinDataByUserId(userId);
+      const current = stored.checkinRecords || stored;
+      const currentEntry = findStoredRecord(current, latestEntry.date, targetIdentity);
+      if (!currentEntry) return { success: false, error: '记录已变更，请刷新后重试' };
+      const sourceDate = currentEntry.date;
+      const sourceDay = current.dailyRecords[sourceDate];
+      const currentIndex = currentEntry.index;
+      const currentVersion = dateUtil.getRecordTimestamp(currentEntry.record.updatedAt);
+      const savedVersion = saved && dateUtil.getRecordTimestamp(saved.updatedAt);
+      const confirmedVersions = saved ? Object.values(current.dailyRecords || {}).flatMap(day =>
+        (day.records || []).filter(item => item._id === saved.recordId).map(item => dateUtil.getRecordTimestamp(item.updatedAt))) : [];
+      if (Number.isFinite(savedVersion) && [currentVersion, ...confirmedVersions].some(version =>
+          Number.isFinite(version) && savedVersion < version)) {
+        return { success: false, code: 'EDIT_SUPERSEDED', error: '记录已有更新，请关闭后重新打开' };
+      }
+      const date = saved ? saved.date : nextDate;
+      const savedTimestamp = saved && saved.timestamp !== undefined ? resolveCheckinTimestamp(saved.timestamp) : timestamp;
+      const savedDuration = saved && saved.duration !== undefined ? saved.duration : duration;
+      if (!Number.isInteger(savedDuration) || savedDuration < 1 || savedDuration > 1440) {
+        return { success: false, code: 'INVALID_RESPONSE', error: '云端尚未确认修改，请重试' };
+      }
+      const emotion = saved && Array.isArray(saved.emotion) ? saved.emotion : Array.isArray(record.emotion) ? record.emotion : [];
+      const experience = saved && Array.isArray(saved.experience) ? saved.experience : reflection ? [{
+        text: reflection, timestamp: savedTimestamp, duration: `${savedDuration}分钟`, emotion
+      }] : [];
+      const updated = { ...sourceDay.records[currentIndex], date, timestamp: savedTimestamp, duration: savedDuration, experience,
+        experienceEdited: true, updatedAt: saved && saved.updatedAt || new Date(),
+        textCount: experience.length, textPreview: reflection.slice(0, 20) };
+      if (saved) updated._id = saved.recordId;
+      if (updated.syncVersion === 1) updated.syncStatus = saved ? 'synced' : 'pending';
+      ['syncError', 'syncErrorCode', 'syncAttempts', 'syncNextRetryAt', 'syncBlocked', 'syncIgnored'].forEach(field => delete updated[field]);
+      const data = { ...current, dailyRecords: { ...current.dailyRecords }, monthlyStats: Object.fromEntries(
+        Object.entries(current.monthlyStats || {}).map(([month, stats]) => [month, { ...stats }])) };
+      const changedDates = new Set([sourceDate, date]);
+      Object.entries(data.dailyRecords).forEach(([dayDate, day]) => {
+        const records = (day.records || []).filter((item, position) => {
+          if (dayDate === sourceDate && position === currentIndex) return false;
+          if (updated._id && item._id === updated._id) return false;
+          return !(updated.localId && item.localId === updated.localId &&
+            (!item.syncOpenid || item.syncOpenid === account) && (!item._openid || item._openid === account));
+        });
+        if (records.length !== (day.records || []).length) {
+          data.dailyRecords[dayDate] = { ...day, records };
+          changedDates.add(dayDate);
+        }
+      });
+      const destination = data.dailyRecords[date] || { count: 0, records: [] };
+      data.dailyRecords[date] = { ...destination, records: [...(destination.records || []), updated] };
+      changedDates.forEach(dayDate => {
+        const day = data.dailyRecords[dayDate];
+        const originalDay = current.dailyRecords[dayDate] || {};
+        const unknownCount = Math.max(0, (Number(originalDay.count) || 0) - (originalDay.records || []).length);
+        if (!day.records.length && !unknownCount) { delete data.dailyRecords[dayDate]; return; }
+        day.count = day.records.length + unknownCount;
+        if (day.records.length) {
+          day.lastCheckin = day.records.reduce((last, item) => recordTime(item.timestamp) > recordTime(last.timestamp) ? item : last).timestamp;
+        }
+      });
+      new Set([...changedDates].map(dayDate => dayDate.slice(0, 7))).forEach(month => {
+        this.updateMonthlyStats(data, month);
+        const monthRecords = Object.keys(data.dailyRecords).filter(dayDate => dayDate.startsWith(month))
+          .flatMap(dayDate => data.dailyRecords[dayDate].records || []);
+        data.monthlyStats[month].count = data.monthlyStats[month].total;
+        data.monthlyStats[month].totalDuration = monthRecords.reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
+      });
+      data.userStats = { ...(current.userStats || {}), ...this.getUserStats(data) };
+      wx.setStorageSync(storageKey, stored.checkinRecords ? { ...stored, checkinRecords: data } : data);
+      bumpUserStorageRevision(userId);
+      this.updateMonthlyStatsCache(data, 0, date.slice(0, 7));
+      try { wx.removeStorageSync('cloud_ranking_cache'); }
+      catch (error) { console.warn('清理排名缓存失败:', error.message); }
+      notifySyncState();
+      return { success: true, data: { ...(saved || {}), recordId: updated._id, date,
+        previousDate: saved && saved.previousDate || previousDate,
+        timestamp: savedTimestamp, duration: savedDuration, experience, emotion } };
+    } catch (error) {
+      console.error('修改静坐记录失败:', error);
+      return { success: false, code: error.code, error: error.message || '修改失败，请重试' };
+    } finally {
+      if (locked) pendingDeletions.delete(key);
+    }
+  },
+
   // 云端确认后再删除本地记录；失败保留列表，重试不会重复扣减统计。
   deleteCheckin: async function(dateStr, identity = {}) {
     const userId = this.getUserId();
@@ -2043,7 +2260,7 @@ const checkinManager = {
         run = (prevDayNum !== null && dayNum === prevDayNum + 1) ? run + 1 : 1;
         longestStreakCalc = Math.max(longestStreakCalc, run);
         prevDayNum = dayNum;
-        totalDuration += userData.dailyRecords[dateStr].records.reduce((sum, record) => sum + record.duration, 0);
+        totalDuration += (userData.dailyRecords[dateStr].records || []).reduce((sum, record) => sum + record.duration, 0);
       });
       
       // currentStreak = 以最后一个打卡日结尾的连续段长度

@@ -1,6 +1,7 @@
 const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 // pages/createTeam/createTeam.js
 const teamManager = require('../../../../utils/teamManager.js');
+const { uploadTeamIcon, isDataTeamIcon } = require('../../../../utils/teamGateway.js');
 const contentSec = require('../../../../utils/contentSec.js');
 const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 
@@ -83,19 +84,21 @@ Page({
    */
   chooseImageFromAlbum() {
     if (this.data.isCreating || this.data.isChoosingIcon || this.data.hasCreatedTeam) return;
-    if (!this.getLoggedInOpenId()) {
+    const openid = this.getLoggedInOpenId();
+    if (!openid) {
       wx.showToast({ title: '请先登录后再创建团队', icon: 'none' });
       return;
     }
 
     this.setData({ isChoosingIcon: true });
+    const isCurrent = () => !this._unloaded && this.getLoggedInOpenId() === openid;
     const finish = () => {
       if (!this._unloaded) this.setData({ isChoosingIcon: false });
     };
     wx.showActionSheet({
       itemList: ['拍照', '从相册选择'],
       success: (res) => {
-        if (this._unloaded) return;
+        if (!isCurrent()) { finish(); return; }
         wx.chooseMedia({
           count: 1,
           mediaType: ['image'],
@@ -104,26 +107,29 @@ Page({
           success: async (res) => {
             try {
               const tempFilePath = res.tempFiles && res.tempFiles[0] && res.tempFiles[0].tempFilePath;
-              if (!tempFilePath || this._unloaded) return;
-              // 保存审核通过的同一份云文件，避免重复上传或使用会失效的临时路径。
+              if (!tempFilePath || !isCurrent()) return;
+              // 内容审核复用现有服务；审核通过的同一份图片直传 data 保存。
               const iconFileID = await contentSec.checkImage(tempFilePath, {
                 scene: 1,
                 bizType: 'avatar',
                 returnFileID: true,
                 cloudPrefix: 'team_icons'
               });
-              if (!iconFileID || this._unloaded) return;
+              if (!iconFileID || !isCurrent()) return;
               if (typeof iconFileID !== 'string' || !iconFileID.startsWith('cloud://')) {
                 throw new Error('图片上传失败，请重新选择');
               }
+              const iconUrl = await uploadTeamIcon(iconFileID);
+              if (!isCurrent()) return;
+              if (!isDataTeamIcon(iconUrl)) throw new Error('图片上传失败，请重新选择');
               this.setData({
                 teamIcons: this.data.teamIcons.map(icon => ({ ...icon, path: tempFilePath, selected: true })),
                 selectedIcon: 1,
-                customIconPath: iconFileID
+                customIconPath: iconUrl
               });
               wx.showToast({ title: '图片选择成功', icon: 'success' });
             } catch (error) {
-              if (!this._unloaded) {
+              if (isCurrent()) {
                 wx.showToast({ title: error.message || '图片选择失败，请重试', icon: 'none' });
               }
             } finally {
@@ -131,7 +137,7 @@ Page({
             }
           },
           fail: (error) => {
-            if (!this._unloaded && !/cancel/i.test(error.errMsg || '')) {
+            if (isCurrent() && !/cancel/i.test(error.errMsg || '')) {
               wx.showToast({ title: '选择图片失败', icon: 'none' });
             }
             finish();
@@ -250,7 +256,7 @@ Page({
       wx.showToast({ title: '请选择有效的功课类型', icon: 'none' });
       return;
     }
-    if (typeof teamInfo.icon !== 'string' || !teamInfo.icon.startsWith('cloud://')) {
+    if (!isDataTeamIcon(teamInfo.icon)) {
       wx.showToast({ title: '请选择团队图标', icon: 'none' });
       return;
     }

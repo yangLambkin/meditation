@@ -1,3 +1,4 @@
+const { callTeam, getViewerKey } = require('../../../../utils/teamGateway.js');
 const { getBusinessDate } = require('../../../../utils/dateUtil.js');
 const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 
@@ -31,7 +32,8 @@ Page({
 
   onShow() {
     this._visible = true;
-    if (!this.data.hasLoaded || this._viewer !== wx.getStorageSync('userOpenId') || this.data.today !== getBusinessDate(Date.now())) {
+    if (!this.data.hasLoaded || this._viewer !== wx.getStorageSync('userOpenId') ||
+        this._viewerKey !== getViewerKey(this.data.teamId) || this.data.today !== getBusinessDate(Date.now())) {
       this._version = (this._version || 0) + 1;
       this.setData({ isLoading: false, isLoadingMore: false });
       const today = getBusinessDate(Date.now());
@@ -50,26 +52,43 @@ Page({
   },
   onReachBottom() { return this.loadMore(); },
 
-  async loadRecords(append = false) {
-    if (!this._visible || this._unloaded || this.data.isLoading || this.data.isLoadingMore) return;
+  synchronizeViewer() {
     const viewer = wx.getStorageSync('userOpenId');
+    const viewerKey = getViewerKey(this.data.teamId);
+    const changed = this._viewer !== viewer || this._viewerKey !== viewerKey;
+    if (changed) {
+      this._viewer = viewer;
+      this._viewerKey = viewerKey;
+      this._version = (this._version || 0) + 1;
+      this.setData({ records: [], nextCursor: null, hasLoaded: false, totalValueLabel: '0',
+        memberName: '团队成员', memberAvatar: '/images/avatar.png', startDate: '', startMonth: '',
+        practiceTypeName: '', unit: '分钟', isLoading: false, isLoadingMore: false, loadError: '', moreError: '' });
+    }
+    return { viewer, viewerKey, changed };
+  },
+
+  async loadRecords(append = false) {
+    if (!this._visible || this._unloaded) return;
+    const { viewer, viewerKey, changed } = this.synchronizeViewer();
+    if (this.data.isLoading || this.data.isLoadingMore) return;
     if (!viewer || !this.data.teamId || !this.data.memberOpenid) {
       this.setData({ records: [], hasLoaded: false, loadError: !viewer ? '请先登录后查看成员记录' : '成员链接不完整，请返回团队重新打开' });
       return;
     }
-    if (this._viewer !== viewer) append = false;
+    if (changed) append = false;
     if (append && !this.data.nextCursor) return;
     const version = this._version = (this._version || 0) + 1;
     this._viewer = viewer;
     const { teamId, memberOpenid, date, month, mode } = this.data;
     const cursor = append ? this.data.nextCursor : null;
-    const current = () => !this._unloaded && this._visible && this._version === version && viewer === wx.getStorageSync('userOpenId');
+    const current = () => !this._unloaded && this._visible && this._version === version &&
+      viewer === wx.getStorageSync('userOpenId') && viewerKey === getViewerKey(teamId);
     this.setData(append ? { isLoadingMore: true, moreError: '' } : {
       isLoading: true, loadError: '', moreError: '', records: [], totalValueLabel: '0', hasLoaded: false, nextCursor: null
     });
     try {
-      const response = await wx.cloud.callFunction({ name: 'teamManager', data: { type: 'getTeamMemberPracticeRecords',
-        data: { teamId, memberOpenid, ...(mode === 'day' ? { date } : { month }), ...(cursor ? { cursor } : {}), limit: 100 } } });
+      const response = await callTeam('getTeamMemberPracticeRecords',
+        { teamId, memberOpenid, ...(mode === 'day' ? { date } : { month }), ...(cursor ? { cursor } : {}), limit: 100 });
       if (!current()) return;
       const result = response && response.result;
       if (!result || !result.success) throw new Error(result && result.error || '成员记录暂时无法加载');
@@ -107,7 +126,11 @@ Page({
     } finally {
       if (!this._unloaded && this._version === version) {
         this.setData({ isLoading: false, isLoadingMore: false });
-        if (viewer !== wx.getStorageSync('userOpenId')) this.setData({ records: [], nextCursor: null, hasLoaded: false, loadError: '登录状态已变更，请重新加载' });
+        if (viewer !== wx.getStorageSync('userOpenId') || viewerKey !== getViewerKey(teamId)) {
+          const accountChanged = viewer !== wx.getStorageSync('userOpenId');
+          this.synchronizeViewer();
+          this.setData({ loadError: accountChanged ? '登录状态已变更，请重新加载' : '账号或绑定已变化，请重新加载' });
+        }
       }
     }
   },
