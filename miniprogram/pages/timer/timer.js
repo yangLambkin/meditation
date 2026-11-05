@@ -4,6 +4,7 @@ const checkinManager = require('../../utils/checkin');
 const contentSec = require('../../utils/contentSec');
 const dailyCardImage = require('../../utils/dailyCardImage');
 const { isExplicitTimerExit } = require('../../utils/timerInterruption');
+const { timerAudioMethods } = require('../../utils/timerAudio');
 const DEFAULT_DURATIONS = [7, 10, 15, 20, 30, 60];
 const DURATION_STORAGE_KEY = 'timerRecommendedDurations';
 const MAX_SESSION_SECONDS = 24 * 60 * 60;
@@ -14,6 +15,7 @@ function applySyncAlertDot() {
 }
 
 Page({
+  ...timerAudioMethods,
   data: {
     // 计时器状态
     isRunning: false,
@@ -48,9 +50,6 @@ Page({
     completionDailyFailed: false,
     completionNotice: '',
 
-    // 计时器控制
-    timerInterval: null,
-    
     // 进度显示
     progressAngleLeft: 0,
     progressAngleRight: 0,
@@ -69,9 +68,6 @@ Page({
     stopIcon: "/images/icons/timer-stop.svg",
     resetIcon: "/images/icons/timer-reset.svg",
     
-    // 音频播放器
-    audioPlayer: null,
-    
     // 背景音乐相关
     showMusicPicker: false,
     backgroundMusic: 'none',
@@ -80,7 +76,6 @@ Page({
       { value: 'default', text: '引导音频' },
       { value: 'none', text: '无音乐' }
     ],
-    backgroundMusicPlayer: null,
     defaultMusicFileID: 'cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/audio/万能引导片段.mp3',
     defaultMusicUrl: '',
     
@@ -92,6 +87,7 @@ Page({
 
   onLoad(options) {
     this.brightnessTimer = null;
+    this.timerInterval = null;
     this.screenBrightness = createScreenBrightnessController(wx);
     this.isPageVisible = false;
     this.isUnloaded = false;
@@ -103,9 +99,6 @@ Page({
       this.timerApp._timerRuntimeId = `timer_runtime_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     }
     this.isAppHidden = this.timerApp._timerForeground === false;
-    this.timerAudioInterrupted = !!this.timerApp._timerAudioInterrupted;
-    this.audioSuspended = false;
-    this.deferredEndSound = false;
     this.countdownSession = this.timerApp.getCountdownSession();
     this.pendingCompletion = wx.getStorageSync('timerPendingCompletion') || null;
     this.setData({ completionNotice: wx.getStorageSync('timerCompletionNotice') || '' });
@@ -113,8 +106,7 @@ Page({
 
     this.updateDisplay();
     this.updateButtonStates();
-    this.safeTimerEffect('create_cue', () => this.createAudioPlayer());
-    this.safeTimerEffect('check_audio_file', () => this.checkCloudFileExists());
+    this.initializeSessionAudio();
     this.safeTimerEffect('load_guide', () => this.getBackgroundMusicUrl());
     this.setupAppStateListeners();
     this.timerApp._detachedCountupSessionId = null;
@@ -263,12 +255,14 @@ Page({
     };
     this.audioInterruptionBeginHandler = () => {
       if (this.isUnloaded) return;
-      this.timerAudioInterrupted = true;
+      this.timerApp._timerAudioInterrupted = true;
+      this.countdownSession.diagnose('audio_interruption_begin');
       this.safeTimerEffect('interrupt_audio', () => this.suspendSessionAudio());
     };
     this.audioInterruptionEndHandler = () => {
       if (this.isUnloaded) return;
-      this.timerAudioInterrupted = false;
+      this.timerApp._timerAudioInterrupted = false;
+      this.countdownSession.diagnose('audio_interruption_end');
       this.safeTimerEffect('resume_audio', () => this.resumeInterruptedAudio());
     };
     wx.onAppShow(this.appShowHandler);
@@ -277,47 +271,15 @@ Page({
     if (wx.onAudioInterruptionEnd) wx.onAudioInterruptionEnd(this.audioInterruptionEndHandler);
   },
 
-  // 时间同步（屏幕重新打开时校正时间）
+  // 前台刷新和回到页面共用墙钟计算，不再维护第二套校正公式。
   syncTimerTime() {
-    if (this.data.isCountdown) { this.countdownSession.tick(); return; }
-    if (!this.data.isRunning || !this.data.startTimestamp) return;
-    
-    const currentTime = Date.now();
-    const pausedTime = this.data.pauseTimestamp > 0 ? 
-      (currentTime - this.data.pauseTimestamp) : 0;
-    const expectedElapsed = Math.floor(
-      (currentTime - this.data.startTimestamp - this.data.totalPausedTime - pausedTime) / 1000
-    );
-    const actualElapsed = this.data.elapsedTime;
-    
-    // 如果时间差异较大（超过2秒），重新校正
-    if (Math.abs(expectedElapsed - actualElapsed) > 2) {
-      console.log('🔄 时间同步校正:', {
-        预期: expectedElapsed + '秒',
-        实际: actualElapsed + '秒',
-        差异: (expectedElapsed - actualElapsed) + '秒'
-      });
-      
-      this.setData({
-        elapsedTime: expectedElapsed,
-        remainingTime: Math.max(0, this.data.totalTime - expectedElapsed)
-      });
-      
-      this.updateDisplay();
-    }
-    if (this.data.isCountdown && expectedElapsed >= this.data.totalTime) {
-      this.handleTimerFinished();
-    } else if (!this.data.isCountdown && expectedElapsed >= MAX_SESSION_SECONDS) {
-      this.finishSession(expectedElapsed);
-    }
+    this.updateForegroundTimer({ sync: true });
   },
 
   // 开始计时器
   startTimer() {
     if (this.data.isRunning || this.pendingCompletion || this.data.isSavingCompletion || this.data.isCompletionSaved) return;
     const isResuming = this.data.isPaused;
-    this.deferredEndSound = false;
-    this.audioSuspended = false;
 
     // 清理之前的计时器
     this.cleanupTimers();
@@ -357,21 +319,7 @@ Page({
       this.createForegroundTimer();
     }
     this.safeTimerEffect('keep_screen_on', () => this.setKeepScreenOn());
-    this.safeTimerEffect('start_audio', () => {
-      if (!isResuming) {
-        this.stopBackgroundMusic();
-        this.stopSessionSound();
-        this.scheduleStartSound();
-      } else if (this.startSoundRemaining !== null) {
-        this.scheduleStartSound(this.startSoundRemaining);
-      } else if (this.currentSessionSound === 'start') {
-        // 暂停后继续未播完的起坐音频，不从头重播。
-        if (this.canPlayTimerAudio()) this.audioPlayer.play();
-        else this.suspendSessionAudio();
-      } else {
-        this.playBackgroundMusic();
-      }
-    });
+    this.safeTimerEffect('start_audio', () => this.startSessionAudio({ resume: isResuming }));
     // 屏幕和音频失败不会中止已经创建的会话。
     this.safeTimerEffect('start_brightness', () => this.startBrightnessControl());
     
@@ -385,15 +333,15 @@ Page({
   // 创建前台计时器
   createForegroundTimer() {
     this.cleanupTimers();
-    this.data.timerInterval = setInterval(() => {
+    this.timerInterval = setInterval(() => {
       this.updateForegroundTimer();
     }, 1000);
   },
 
   // 前台计时器更新（屏幕常亮模式）
-  updateForegroundTimer() {
+  updateForegroundTimer({ sync = false } = {}) {
     if (this.data.isCountdown) { this.countdownSession.tick(); return; }
-    if (!this.data.isRunning || this.isAppHidden) return;
+    if (!this.data.isRunning || (!sync && this.isAppHidden)) return;
     
     const elapsed = this.calculateElapsedTime();
     this.setData({
@@ -403,12 +351,9 @@ Page({
     
     this.updateDisplay();
     
-    // 检查是否完成（仅倒计时模式：到达设定时长才自动结束）
-    if (this.data.isCountdown && elapsed >= this.data.totalTime) {
-      this.handleTimerFinished();
-    } else if (!this.data.isCountdown && elapsed >= MAX_SESSION_SECONDS) {
+    if (elapsed >= MAX_SESSION_SECONDS) {
       this.finishSession(elapsed);
-    } else if (elapsed % 5 === 0) {
+    } else if (!sync && elapsed % 5 === 0) {
       // 若系统没有派发退出回调，最多恢复到最后一个前台检查点。
       this.saveTimerState();
     }
@@ -442,8 +387,8 @@ Page({
   finishSession(elapsedSeconds, { silent = false, endedAt = Date.now(), resetDisplay = false, reason = 'unknown' } = {}) {
     if (this.data.isCountdown) { this.countdownSession.finish(reason); return; }
     if (!this.data.isRunning && !this.data.isPaused) return;
-    const modeName = this.data.isCountdown ? '倒计时' : '正计时';
-    const sessionLimit = this.data.isCountdown ? Math.min(this.data.totalTime, MAX_SESSION_SECONDS) : MAX_SESSION_SECONDS;
+    const modeName = '正计时';
+    const sessionLimit = MAX_SESSION_SECONDS;
     if (elapsedSeconds >= sessionLimit) {
       elapsedSeconds = sessionLimit;
       endedAt = Math.min(endedAt, this.data.startTimestamp + this.data.totalPausedTime + sessionLimit * 1000);
@@ -623,21 +568,7 @@ Page({
       pauseTimestamp: Date.now()
     });
     
-    // 暂停背景音乐
-    this.safeTimerEffect('pause_guide', () => this.pauseBackgroundMusic());
-    if (this.startSoundTimer !== null) {
-      clearTimeout(this.startSoundTimer);
-      this.startSoundTimer = null;
-      this.startSoundRemaining = Math.max(0,
-        this.startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
-    } else if (this.audioSuspended && this.startSoundRemaining !== null) {
-      // 音频中断不暂停静坐；在手动暂停这一刻扣除中断期间已运行的准备时间。
-      this.startSoundRemaining = Math.max(0,
-        this.startSoundRemaining - (Date.now() - this.audioInterruptedAt));
-    }
-    if (this.currentSessionSound === 'start' && this.audioPlayer) {
-      this.safeTimerEffect('pause_cue', () => this.audioPlayer.pause());
-    }
+    this.safeTimerEffect('pause_audio', () => this.pauseSessionAudio());
     
     this.updateButtonStates();
     this.saveTimerState();
@@ -686,9 +617,9 @@ Page({
 
   // 停止所有计时器
   cleanupTimers() {
-    if (this.data.timerInterval) {
-      clearInterval(this.data.timerInterval);
-      this.setData({ timerInterval: null });
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
     }
   },
 
@@ -882,11 +813,7 @@ Page({
     if (wx.offAudioInterruptionEnd) wx.offAudioInterruptionEnd(this.audioInterruptionEndHandler);
     this.cleanupTimers();
     this.safeTimerEffect('unload_guide', () => this.stopBackgroundMusic());
-    this.safeTimerEffect('destroy_guide', () => {
-      const player = this.backgroundMusicPlayer;
-      this.backgroundMusicPlayer = null;
-      if (player) player.destroy();
-    });
+    this.safeTimerEffect('destroy_guide', () => this.destroyBackgroundMusicPlayer());
     this.safeTimerEffect('unload_cue', () => this.destroyAudioPlayer());
     if (!interruptedCountUp) this.saveTimerState();
     this.safeTimerEffect('unload_screen', () => this.restoreScreenSettings());
@@ -1026,324 +953,6 @@ Page({
     if (value === 'custom') return this.chooseCustomDuration();
     if (this.data.editingDurations) return this.editRecommendedDuration(e);
     this.applyDuration(Number(value));
-  },
-
-  canPlayTimerAudio() {
-    return !this.isUnloaded && !this.isAppHidden && !this.timerAudioInterrupted;
-  },
-
-  // 只跨同进程页面重建保留音频；冷启动仍按计时检查点结算，不续播。
-  saveSessionAudio() {
-    this.timerApp._timerSessionAudio = null;
-    if (!this.sessionId || (!this.data.isRunning && !this.data.isPaused)) return;
-    if (!this.isAppHidden && !this.timerAudioInterrupted && !this.audioSuspended) return;
-    const position = (player, fallback = 0) => Math.max(0,
-      Number.isFinite(player && player.currentTime) ? player.currentTime : 0,
-      Number.isFinite(player && player.startTime) ? player.startTime : 0, fallback);
-    let startSoundRemaining = this.startSoundRemaining;
-    if (startSoundRemaining !== null && this.startSoundTimer !== null) {
-      startSoundRemaining = Math.max(0, startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
-    }
-    this.timerApp._timerSessionAudio = {
-      sessionId: this.sessionId, isCountdown: this.data.isCountdown,
-      backgroundMusic: this.data.backgroundMusic, guideUrl: this.data.defaultMusicUrl,
-      guidePosition: position(this.backgroundMusicPlayer, this.guideResumePosition || 0),
-      guideWanted: !!(this.guidePlaybackWanted || this.resumeGuideAfterInterruption),
-      startSoundRemaining, currentSessionSound: this.currentSessionSound,
-      cuePosition: position(this.audioPlayer),
-      waitAt: this.audioSuspended ? this.audioInterruptedAt : Date.now()
-    };
-  },
-
-  restoreSessionAudio() {
-    const saved = this.timerApp._timerSessionAudio;
-    // 领取一次，结束、取消或另一会话都不能复活旧音频。
-    this.timerApp._timerSessionAudio = null;
-    if (!saved || saved.sessionId !== this.sessionId || saved.isCountdown !== this.data.isCountdown
-      || (!this.data.isRunning && !this.data.isPaused) || this.pendingCompletion) return;
-    this.setData({ backgroundMusic: saved.backgroundMusic,
-      musicText: saved.backgroundMusic === 'default' ? '引导音频' : '无音乐',
-      ...(saved.guideUrl ? { defaultMusicUrl: saved.guideUrl } : {}) });
-    this.guideResumePosition = saved.guidePosition;
-    this.resumeGuideAfterInterruption = saved.guideWanted;
-    this.startSoundRemaining = saved.startSoundRemaining;
-    this.audioInterruptedAt = saved.waitAt;
-    this.audioSuspended = true;
-    if (saved.currentSessionSound === 'start') {
-      if (!this.audioPlayer) this.createAudioPlayer();
-      this.currentSessionSound = 'start';
-      this.audioPlayer.src = '/audio/起坐.mp3';
-      this.audioPlayer.startTime = saved.cuePosition;
-    }
-  },
-
-  suspendSessionAudio() {
-    if (this.audioSuspended) return;
-    this.audioSuspended = true;
-    this.audioInterruptedAt = Date.now();
-    // 系统在 Begin 回调前可能已暂停播放器，恢复意图不能读取 native.paused。
-    this.resumeGuideAfterInterruption = !!this.guidePlaybackWanted;
-    if (this.startSoundTimer !== null) {
-      clearTimeout(this.startSoundTimer);
-      this.startSoundTimer = null;
-      this.startSoundRemaining = Math.max(0,
-        this.startSoundRemaining - (Date.now() - this.startSoundScheduledAt));
-    }
-    if (this.currentSessionSound && this.audioPlayer) this.audioPlayer.pause();
-    this.pauseBackgroundMusic({ interrupted: true });
-  },
-
-  resumeInterruptedAudio() {
-    if (!this.isPageVisible || !this.canPlayTimerAudio()) return;
-    if (this.deferredEndSound) {
-      this.deferredEndSound = false;
-      this.playSessionSound('end');
-      return;
-    }
-    if (!this.audioSuspended) return;
-    this.audioSuspended = false;
-    // 手动暂停的会话不能被系统中断结束事件恢复。
-    if (this.data.isPaused) return;
-    if (this.currentSessionSound === 'end' && this.audioPlayer) {
-      this.audioPlayer.play();
-    } else if (this.data.isRunning) {
-      if (this.startSoundRemaining !== null) {
-        const delay = Math.max(0, this.startSoundRemaining - (Date.now() - this.audioInterruptedAt));
-        this.scheduleStartSound(delay);
-      } else if (this.currentSessionSound === 'start' && this.audioPlayer) {
-        this.audioPlayer.play();
-      } else if (this.resumeGuideAfterInterruption) {
-        this.playBackgroundMusic();
-      }
-    }
-    this.resumeGuideAfterInterruption = false;
-  },
-
-  createAudioPlayer() {
-    if (this.audioPlayer || this.isUnloaded) return;
-    this.currentSessionSound = null;
-    this.startSoundTimer = null;
-    this.startSoundRemaining = null;
-    this.startSoundScheduledAt = 0;
-    const player = wx.createInnerAudioContext();
-    this.audioPlayer = player;
-    player.loop = false;
-    player.obeyMuteSwitch = false;
-
-    player.onPlay(() => {
-      if (this.audioPlayer !== player || this.isUnloaded) return;
-      console.log('🔔 打坐提示音开始播放:', this.currentSessionSound);
-    });
-
-    player.onEnded(() => {
-      if (this.audioPlayer !== player || this.isUnloaded) return;
-      this.handleSessionSoundEnded();
-    });
-    player.onError((err) => {
-      if (this.audioPlayer !== player || this.isUnloaded) return;
-      this.countdownSession.diagnose('cue_error', { code: err.errCode, cue: this.currentSessionSound });
-      console.error('❌ 打坐提示音播放失败:', err);
-      if (!this.canPlayTimerAudio()) return;
-      this.handleSessionSoundEnded();
-    });
-  },
-
-  destroyAudioPlayer() {
-    this.stopSessionSound();
-    this.deferredEndSound = false;
-    const player = this.audioPlayer;
-    this.audioPlayer = null;
-    if (player) player.destroy();
-  },
-
-  // 开始后留出 5 秒准备时间；暂停时保留剩余等待时间。
-  scheduleStartSound(delay = 5000) {
-    this.startSoundRemaining = delay;
-    this.startSoundScheduledAt = Date.now();
-    if (!this.canPlayTimerAudio()) {
-      this.audioSuspended = true;
-      this.audioInterruptedAt = Date.now();
-      return;
-    }
-    this.startSoundTimer = setTimeout(() => {
-      this.startSoundTimer = null;
-      this.startSoundRemaining = null;
-      if (this.data.isRunning && !this.isUnloaded) {
-        this.safeTimerEffect('start_cue', () => this.playSessionSound('start'));
-      }
-    }, delay);
-  },
-
-  playSessionSound(type) {
-    if (this.isUnloaded) return;
-    this.stopSessionSound();
-    if (!this.canPlayTimerAudio() || (type === 'end' && !this.isPageVisible)) {
-      if (type === 'end') this.deferredEndSound = true;
-      return;
-    }
-    this.deferredEndSound = false;
-    if (!this.audioPlayer) this.createAudioPlayer();
-    this.currentSessionSound = type;
-    this.audioPlayer.src = type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3';
-    this.audioPlayer.startTime = 0;
-    this.audioPlayer.play();
-  },
-
-  stopSessionSound() {
-    this.deferredEndSound = false;
-    if (this.startSoundTimer !== null) {
-      clearTimeout(this.startSoundTimer);
-      this.startSoundTimer = null;
-    }
-    this.startSoundRemaining = null;
-    this.currentSessionSound = null;
-    this.audioSuspended = false;
-    this.resumeGuideAfterInterruption = false;
-    if (this.audioPlayer) this.audioPlayer.stop();
-  },
-
-  handleSessionSoundEnded() {
-    const wasStartSound = this.currentSessionSound === 'start';
-    this.currentSessionSound = null;
-    // 起坐播完后才接着播放引导，避免两段音频同时播放。
-    if (wasStartSound && this.data.isRunning && !this.isUnloaded) {
-      if (!this.canPlayTimerAudio()) {
-        this.audioSuspended = true;
-        this.resumeGuideAfterInterruption = true;
-        return;
-      }
-      this.safeTimerEffect('start_guide', () => this.playBackgroundMusic());
-    }
-  },
-
-  showMusicPicker() { this.setData({ showMusicPicker: true }); },
-  hideMusicPicker() { this.setData({ showMusicPicker: false }); },
-
-  selectMusic(e) {
-    const value = e.currentTarget.dataset.value;
-    const option = this.data.musicOptions.find(opt => opt.value === value);
-    if (option) {
-      this.setData({
-        backgroundMusic: value,
-        musicText: option.text,
-        showMusicPicker: false
-      });
-    }
-  },
-
-  playBackgroundMusic() {
-    if (!this.canPlayTimerAudio()) {
-      if (this.data.isRunning && this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
-        this.audioSuspended = true;
-        this.resumeGuideAfterInterruption = true;
-      }
-      return;
-    }
-    if (this.startSoundRemaining !== null || this.currentSessionSound === 'start') return;
-    if (this.data.backgroundMusic === 'default' && this.data.defaultMusicUrl) {
-      console.log('🎵 开始播放背景音乐，URL:', this.data.defaultMusicUrl);
-      
-      if (!this.backgroundMusicPlayer) {
-        const player = wx.createInnerAudioContext();
-        this.backgroundMusicPlayer = player;
-        this.backgroundMusicPlayer.src = this.data.defaultMusicUrl;
-        this.backgroundMusicPlayer.startTime = this.guideResumePosition || 0;
-        this.guideResumePosition = 0;
-        this.backgroundMusicPlayer.loop = false; // 引导音频不循环播放
-        this.backgroundMusicPlayer.obeyMuteSwitch = false;
-        
-        // 添加后台音频播放支持
-        this.backgroundMusicPlayer.onPlay(() => {
-          console.log('✅ 背景音乐开始播放（支持后台）');
-        });
-        this.backgroundMusicPlayer.onEnded(() => {
-          if (this.backgroundMusicPlayer !== player || this.isUnloaded) return;
-          this.guidePlaybackWanted = false;
-        });
-        this.backgroundMusicPlayer.onError((err) => {
-          this.countdownSession.diagnose('guide_error', { code: err.errCode });
-          console.error('❌ 背景音乐播放失败:', err);
-          console.error('错误详情:', {
-            errCode: err.errCode,
-            errMsg: err.errMsg
-          });
-        });
-        this.backgroundMusicPlayer.onWaiting(() => {
-          console.log('⏳ 背景音乐正在缓冲');
-        });
-        this.backgroundMusicPlayer.onCanplay(() => {
-          console.log('🎶 背景音乐可以播放了');
-        });
-      }
-      
-      // 确保音频播放器存在再尝试播放
-      if (this.backgroundMusicPlayer) {
-        this.guidePlaybackWanted = true;
-        this.backgroundMusicPlayer.play();
-        console.log('🎵 已调用play()方法（支持后台）');
-      } else {
-        console.error('❌ 背景音乐播放器未创建');
-      }
-    } else {
-      console.log('🎵 背景音乐设置:', {
-        backgroundMusic: this.data.backgroundMusic,
-        defaultMusicUrl: this.data.defaultMusicUrl ? '已设置' : '未设置'
-      });
-    }
-  },
-
-  pauseBackgroundMusic({ interrupted = false } = {}) {
-    if (!interrupted) this.guidePlaybackWanted = false;
-    if (this.backgroundMusicPlayer) {
-      this.backgroundMusicPlayer.pause();
-    }
-  },
-
-  stopBackgroundMusic() {
-    this.guidePlaybackWanted = false;
-    this.guideResumePosition = 0;
-    if (this.backgroundMusicPlayer) {
-      this.backgroundMusicPlayer.stop();
-      this.backgroundMusicPlayer.startTime = 0;
-    }
-  },
-
-  // 原有的云存储音频获取功能（保持原样）
-  getBackgroundMusicUrl() {
-    wx.cloud.init({ env: 'cloud1-2g2rbxbu2c126d4a' });
-    wx.cloud.getTempFileURL({
-      fileList: [{ fileID: this.data.defaultMusicFileID }],
-      success: urlRes => {
-        if (urlRes.fileList && urlRes.fileList[0] && urlRes.fileList[0].tempFileURL) {
-          this.setData({ defaultMusicUrl: urlRes.fileList[0].tempFileURL });
-          console.log('✅ 获取背景音乐URL成功');
-        } else {
-          console.warn('❌ 临时URL为空，使用备选方案');
-          this.useFallbackAudio();
-        }
-      },
-      fail: err => {
-        console.error('❌ 获取背景音乐URL失败:', err);
-        this.useFallbackAudio();
-      }
-    });
-  },
-
-  useFallbackAudio() {
-    this.setData({ defaultMusicUrl: '/audio/30mins.MP3' });
-  },
-
-  checkCloudFileExists() {
-    wx.cloud.init({ env: 'cloud1-2g2rbxbu2c126d4a' });
-    wx.cloud.getTempFileURL({
-      fileList: [{ fileID: this.data.defaultMusicFileID }],
-      success: (res) => {
-        console.log('云存储文件检查结果:', res);
-      },
-      fail: (err) => {
-        console.error('❌ 云存储文件检查失败:', err);
-      }
-    });
   },
 
   onShareAppMessage() {

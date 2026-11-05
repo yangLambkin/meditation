@@ -1,4 +1,5 @@
 /**index.wxss**/
+@import "../../styles/recordList.wxss";
 
 .ml-7 {
   margin-left: 12.35rpx;
@@ -961,7 +962,7 @@
 }
 
 .checkin-history {
-  margin: 40rpx 28.24rpx 0;
+  margin: 40rpx 32rpx 0;
 }
 
 .checkin-history-heading {
@@ -1044,6 +1045,10 @@
   border: 2rpx solid #f2f4f6;
   border-radius: 20rpx;
   background-color: #ffffff;
+}
+
+.checkin-history .checkin-record {
+  margin-bottom: 0;
 }
 
 .checkin-record-brief {

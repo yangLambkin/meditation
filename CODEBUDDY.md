@@ -28,7 +28,7 @@ npm run cleanup:full    # delete ALL records (irreversible; prompts for "yes")
 These scripts invoke the `cleanupTestData` cloud function via the WeChat DevTools `cli`. They require WeChat DevTools to be installed, logged in, and the cloud function to be uploaded. Edit `CONFIG.testPeriod` in `scripts/runCleanup.js` to change the safe-cleanup date range.
 
 ### Tests
-There is no automated test harness. `npm test` is a placeholder that exits with an error. `test_redirect_flow.js` (repo root) and `miniprogram/pages/test/*` are manual/ad-hoc test pages, not a suite.
+`npm test` runs the Node.js regression suite in `tests/`. Timer checks can be run with `node --test tests/countdownSession.test.js tests/countdownAppLifecycle.test.js tests/timerAudioPage.test.js tests/timerBrightnessPage.test.js tests/cuePlayer.test.js`. `test_redirect_flow.js` and `miniprogram/pages/test/*` are separate manual/ad-hoc checks.
 
 ### Deploying cloud functions
 Upload via WeChat DevTools (right-click → "上传并部署：云端安装依赖" on each folder under `cloudfunctions/`). `uploadCloudFunction.sh` is a one-line template that calls the DevTools CLI for `quickstartFunctions` only — it is not a general deploy script.
@@ -43,7 +43,6 @@ miniprogram/                  Mini program source (miniprogramRoot)
   subpackages/team/pages/     Team subpackage (createTeam, teamDetails, joinTeam, testJoinTeam)
   utils/                      Front-end business modules (see "Front-end utils" below)
   config/images.js            Cloud fileID config for daily-poker images
-  workers/timer-worker.js     Timer worker (precise background timing)
   audio/风铃声.mp3             Bell sound effect
   images/                     Static icons and placeholder images
 
@@ -108,7 +107,7 @@ Field names use a mix of `camelCase` (front-end / `user_stats` / `meditation_rec
 Real-time ranking is computed on read in `getRankings`: query `user_stats` ordered by `dailyTotalDuration` desc, limit 100. The `rankings` collection is still written on every check-in for backward compatibility but is not read. Ranking snapshots (top 1000 by `dailyTotalDuration`) are materialized into `ranking_snapshots` every 6 hours by the timer trigger in `cloudfunctions/meditationManager/config.json`.
 
 ### Timer
-`pages/timer/timer.js` is the meditation timer page. It uses `wx.createBackgroundTimer` for foreground timing and a worker (`miniprogram/workers/timer-worker.js`) for precise second-by-second updates. On `wx.onAppShow` it calls `syncTimerTime()` to correct drift using wall-clock timestamps (`startTimestamp`, `pauseTimestamp`, `totalPausedTime`). The page also controls screen brightness (`saveCurrentBrightness` / `setKeepScreenOn`) and plays a guided audio file from cloud storage (`defaultMusicFileID`).
+`pages/timer/timer.js` projects the meditation timer state and handles user interaction. Countdown sessions are owned by `app.js` through `utils/countdownSession.js`, independently of page lifecycles. Elapsed time comes from wall-clock timestamps (`startTimestamp`, `pauseTimestamp`, `totalPausedTime`); a one-second foreground interval refreshes the state and an independent watchdog repairs a lost interval. Count-up timing remains page-owned and reconciles timestamps on `wx.onAppShow`. An explicit app exit ends the sitting; temporary system/audio interruptions preserve it, while a cold start settles only the last saved checkpoint. There is no Worker or `wx.createBackgroundTimer`. Screen settings use `utils/screenBrightness.js` and `wx.setKeepScreenOn`; opening/closing cues use `audio/起坐.mp3` and `audio/收坐.mp3`, with optional guided audio from `defaultMusicFileID`. Audio orchestration is in `utils/timerAudio.js`; `utils/cuePlayer.js` replaces failed or stalled native cue players with one bounded retry. Automatic interruption recovery waits for the system end callback; an explicit new sitting can clear a stale interruption flag. Timer and audio recovery diagnostics share the bounded `timerDiagnostics` storage log.
 
 ### Background images
 `config/images.js` lists the daily-poker image set (`m1.png`–`m13.png`, `t1.png`–`t4.png`, ...) under `cloud://.../bg_image/`, with a 12-hour local cache and a 6-hour image-list cache. `file_index.json` at the repo root tracks which numbered backgrounds have been uploaded.

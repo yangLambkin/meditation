@@ -15,7 +15,8 @@ function createPage({
   withGuide = false, isCountdown = true, initialStorage = {}, checkText = async () => true,
   recordCheckin, backgroundUpload = async () => ({ success: true }), networkType,
   contentSecRequest = () => new Promise(() => {}), navigateTo,
-  initialTime = Date.parse('2026-09-18T08:00:00+08:00'), withAppLifecycle = false
+  initialTime = Date.parse('2026-09-18T08:00:00+08:00'), withAppLifecycle = false,
+  audioBehavior = () => 'play'
 } = {}) {
   let definition;
   let now = initialTime;
@@ -56,9 +57,13 @@ function createPage({
           this.currentTime = this.startTime;
           firstPlay = false;
         }
-        this.paused = false;
         audioCalls.push({ action: 'play', player: this, src });
-        for (const callback of callbacks.play) callback();
+        const behavior = audioBehavior(this, src);
+        if (behavior === 'throw') throw new Error('native play failed');
+        if (behavior === 'error') { this.emitError(); return; }
+        if (behavior === 'silent') return;
+        this.paused = false;
+        for (const callback of [...callbacks.play]) callback();
       },
       pause() {
         this.paused = true;
@@ -81,11 +86,14 @@ function createPage({
       onPlay(callback) { callbacks.play.add(callback); },
       onEnded(callback) { callbacks.ended.add(callback); },
       onError(callback) { callbacks.error.add(callback); },
+      offPlay(callback) { callbacks.play.delete(callback); },
+      offEnded(callback) { callbacks.ended.delete(callback); },
+      offError(callback) { callbacks.error.delete(callback); },
       onWaiting() {},
       onCanplay() {},
       emitEnded() {
         this.paused = true;
-        // Retain registered callbacks so tests can deliver a queued callback after unload.
+        // Dispatch current listeners; cuePlayer tests also exercise captured, queued callbacks.
         for (const callback of callbacks.ended) callback();
       },
       emitError() {
@@ -196,6 +204,21 @@ function createPage({
     application.onLaunch();
   }
 
+  const audioModules = new Map();
+  function loadAudioModule(filename) {
+    if (audioModules.has(filename)) return audioModules.get(filename).exports;
+    const module = { exports: {} };
+    audioModules.set(filename, module);
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      module, wx, Date: ClockDate,
+      console: { log() {}, warn() {}, error() {} },
+      setTimeout: (callback, delay) => addTimer(callback, delay),
+      clearTimeout: id => timers.delete(id),
+      require: request => loadAudioModule(require.resolve(path.resolve(path.dirname(filename), request)))
+    }, { filename });
+    return module.exports;
+  }
+
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
     wx,
     getApp: () => application,
@@ -207,6 +230,7 @@ function createPage({
     clearInterval: id => timers.delete(id),
     require(request) {
       if (request === '../../utils/timerInterruption') return timerInterruption;
+      if (request === '../../utils/timerAudio') return loadAudioModule(require.resolve(path.resolve(path.dirname(pagePath), request)));
       if (request === '../../utils/checkin') return checkin;
       if (request === '../../utils/contentSec') return contentSec;
       if (request === '../../utils/dailyCardImage') return {
@@ -1021,7 +1045,7 @@ test('manual stop under one minute shows a toast without opening a record in eit
         assert.equal(toasts[0].icon, 'none');
         assert.equal(page.data.isRunning, false);
         assert.equal(page.data.isPaused, false);
-        assert.equal(page.data.timerInterval, null);
+        assert.equal(page.timerInterval, null);
         page.handleStop();
         assert.equal(toasts.length, 1, 'repeated stops must not show another toast');
       }
@@ -1043,7 +1067,7 @@ test('manual stop rounds elapsed minutes down once a full minute has elapsed in 
       assert.deepEqual(toasts, []);
       assert.equal(page.data.isRunning, false);
       assert.equal(page.data.isPaused, false);
-      assert.equal(page.data.timerInterval, null);
+      assert.equal(page.timerInterval, null);
     }
   }
 });
@@ -1772,7 +1796,7 @@ test('count-up ends on background with the actual duration and never accrues off
     assert.equal(page.data.elapsedTime, beforeHide);
     assert.equal(page.data.isRunning, false);
     assert.equal(page.data.isPaused, false);
-    assert.equal(page.data.timerInterval, null);
+    assert.equal(page.timerInterval, null);
     assert.equal(page.startSoundTimer, null);
     assert.equal(storage.get('timerState'), null);
     advance(3600000);
@@ -1812,7 +1836,7 @@ test('exiting a running or paused countdown stops it immediately and records onl
       assert.equal(page.data.isPaused, false);
       assert.equal(page.data.elapsedTime, 125);
       assert.equal(page.data.remainingTime, page.data.totalTime - 125);
-      assert.equal(page.data.timerInterval, null);
+      assert.equal(page.timerInterval, null);
       assert.equal(page.startSoundTimer, null);
       assert.equal(page.data.showStopButton, false);
       assert.equal(page.data.showResetButton, false);
@@ -2626,6 +2650,167 @@ test('manual pause during an audio interruption preserves the remaining five-sec
         h.advance(5000);
         assert.deepEqual(h.plays(), [START_AUDIO], 'the opening cue only plays once');
       }
+    }
+  }
+});
+
+
+test('a failed closing cue rebuilds once and later sittings sound without reopening the app', async () => {
+  for (const isCountdown of [true, false]) {
+    let failedContext;
+    const h = createPage({ isCountdown, audioBehavior: (player, src) =>
+      src === END_AUDIO && player === failedContext ? 'error' : 'play' });
+    h.page.setData({ totalTime: 60, remainingTime: 60 });
+    h.page.startTimer(); h.advance(5000);
+    failedContext = h.page.audioPlayer;
+    failedContext.emitEnded();
+    const sessionId = h.page.sessionId;
+    h.advance(55000);
+    if (!isCountdown) h.page.handleStop();
+    assert.equal(failedContext.destroyed, true, 'the failed native context is discarded immediately');
+    assert.equal(h.page.pendingCompletion.duration, 1);
+    assert.equal(h.page.pendingCompletion.sessionId, sessionId);
+    assert.equal(h.page.data.isRunning, false);
+    assert.equal(h.records.length, 0, 'audio repair cannot save or repeat a completion');
+    h.advance(150);
+    const recovered = h.page.audioPlayer;
+    assert.notEqual(recovered, failedContext);
+    assert.equal(recovered.src, END_AUDIO);
+    assert.equal(recovered.paused, false);
+    await h.page.confirmCompletion();
+    h.page.startTimer(); h.advance(5000);
+    assert.equal(h.page.audioPlayer.src, START_AUDIO);
+    assert.equal(h.page.audioPlayer.paused, false);
+    h.page.handleStop();
+    assert.equal(h.page.audioPlayer.src, END_AUDIO);
+    assert.equal(h.page.audioPlayer.paused, false);
+    assert.equal(h.records.length, 1);
+  }
+});
+
+test('silent native playback is repaired without altering the deadline or starting guidance early', () => {
+  for (const isCountdown of [true, false]) {
+    let silentContext;
+    const h = createPage({ isCountdown, withGuide: true,
+      audioBehavior: player => player === silentContext ? 'silent' : 'play' });
+    silentContext = h.page.audioPlayer;
+    h.page.startTimer();
+    const startedAt = h.page.data.startTimestamp;
+    h.advance(5000);
+    assert.equal(h.page.backgroundMusicPlayer, null);
+    h.advance(2650);
+    assert.equal(silentContext.destroyed, true);
+    assert.notEqual(h.page.audioPlayer, silentContext);
+    assert.equal(h.page.audioPlayer.paused, false);
+    assert.equal(h.page.data.startTimestamp, startedAt);
+    assert.equal(h.page.data.elapsedTime, 7);
+    assert.equal(h.page.backgroundMusicPlayer, null);
+    h.page.audioPlayer.emitEnded();
+    assert.equal(h.page.backgroundMusicPlayer.src, GUIDE_AUDIO);
+    assert.equal(h.plays().filter(src => src === GUIDE_AUDIO).length, 1);
+    assert.equal(h.records.length, 0);
+  }
+});
+
+test('reset, app exit and unload cancel a failed cue recovery before another native play', () => {
+  for (const action of ['reset', 'exit', 'unload']) {
+    const h = createPage({ audioBehavior: () => 'error', withGuide: true });
+    h.page.startTimer(); h.advance(5000);
+    assert.equal(h.page.audioPlayer, null);
+    if (action === 'reset') h.page.resetTimer();
+    if (action === 'exit') h.emitApp('hide');
+    if (action === 'unload') h.page.onUnload();
+    const before = h.plays().length;
+    h.advance(10000);
+    assert.equal(h.plays().length, before, action);
+    assert.equal(h.page.backgroundMusicPlayer, null);
+  }
+});
+
+test('a missing interruption-end callback cannot mute the next user-started sitting', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withAppLifecycle: true });
+    h.page.startTimer(); h.advance(5000);
+    h.emitAudio('begin');
+    h.page.handleStop();
+    assert.equal(h.application._timerAudioInterrupted, true);
+    const before = h.plays().length;
+    h.emitApp('show'); h.page.onShow(); h.advance(3000);
+    assert.equal(h.plays().length, before, 'automatic foregrounding cannot claim the call has ended');
+    h.page.startTimer();
+    assert.equal(h.application._timerAudioInterrupted, false, 'a new explicit sitting can request audio again');
+    h.advance(4999);
+    assert.equal(h.plays().length, before);
+    h.advance(1);
+    assert.equal(h.plays().at(-1), START_AUDIO);
+    h.page.handleStop();
+    assert.equal(h.plays().at(-1), END_AUDIO);
+  }
+});
+
+test('resuming a paused sitting still waits for the real audio interruption end', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withAppLifecycle: true });
+    h.page.startTimer(); h.advance(5000);
+    h.emitAudio('begin'); h.page.pauseTimer();
+    const before = h.plays().length;
+    h.page.startTimer(); h.advance(3000);
+    assert.equal(h.application._timerAudioInterrupted, true);
+    assert.equal(h.plays().length, before);
+    h.emitAudio('end');
+    assert.equal(h.plays().length, before + 1);
+    assert.equal(h.plays().at(-1), START_AUDIO);
+  }
+});
+
+test('a broken optional guide cannot prevent the next opening or closing cue', () => {
+  for (const failure of ['stop', 'pause', 'error']) {
+    const h = createPage({ withGuide: true });
+    h.page.startTimer(); h.advance(5000); h.page.audioPlayer.emitEnded();
+    const guide = h.page.backgroundMusicPlayer;
+    if (failure === 'error') guide.emitError();
+    else guide[failure] = () => { throw new Error('native guide unavailable'); };
+    if (failure === 'pause') h.page.pauseTimer();
+    h.page.resetTimer();
+    assert.equal(h.page.backgroundMusicPlayer, null);
+    h.page.startTimer(); h.advance(5000);
+    assert.equal(h.page.audioPlayer.src, START_AUDIO);
+    assert.equal(h.page.audioPlayer.paused, false);
+    h.page.handleStop();
+    assert.equal(h.page.audioPlayer.src, END_AUDIO);
+    assert.equal(h.page.audioPlayer.paused, false);
+  }
+});
+
+test('rebuilding during a cue repair preserves opening progress even after its native context is gone', () => {
+  for (const isCountdown of [true, false]) {
+    for (const fault of ['error', 'pause']) {
+      const h = createPage({ isCountdown, withGuide: true });
+      h.page.startTimer(); h.advance(5000);
+      const sessionId = h.page.sessionId;
+      const original = h.page.audioPlayer;
+      original.currentTime = 7;
+      if (fault === 'error') original.emitError();
+      else original.pause = () => { throw new Error('native pause failed'); };
+      h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide();
+      assert.equal(h.page.audioPlayer, null, 'the failed native context has already been released');
+      h.page.onUnload();
+      assert.equal(h.application._timerSessionAudio.cuePosition, 7,
+        'same-runtime reconstruction must keep trusted progress outside the native context');
+      h.advance(10000);
+      const fresh = h.recreatePage({ visible: false });
+      const before = h.plays().length;
+      h.emitApp('show'); fresh.onShow();
+      assert.equal(h.plays().length, before, 'the reconstructed cue waits for the audio interruption end');
+      h.emitAudio('end');
+      assert.equal(fresh.sessionId, sessionId);
+      assert.equal(fresh.audioPlayer.src, START_AUDIO);
+      assert.equal(fresh.audioPlayer.currentTime, 7);
+      assert.equal(fresh.audioPlayer.paused, false);
+      assert.equal(fresh.backgroundMusicPlayer, null);
+      fresh.audioPlayer.emitEnded();
+      assert.equal(h.plays().filter(src => src === GUIDE_AUDIO).length, 1);
+      assert.equal(h.records.length, 0);
     }
   }
 });

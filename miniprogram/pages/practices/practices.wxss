@@ -1,3 +1,5 @@
+@import "../../styles/recordList.wxss";
+
 page { background: #f8fafc; color: #354152; }
 button::after { border: none; }
 button { font-weight: 500; }
@@ -13,8 +15,7 @@ button { font-weight: 500; }
 .practice-home .home-date { color: #99a1ae; font-size: 24rpx; line-height: 1.5; white-space: nowrap; }
 .practice-home .home-heading .add-button { display: flex; align-items: center; justify-content: center; width: 152rpx; height: 80rpx; min-height: 44px; border-radius: 14rpx; font-size: 26rpx; line-height: 1.4; white-space: nowrap; }
 .practice-home .home-grid-hint { display: block; margin: 0; color: #99a1ae; font-size: 23rpx; line-height: 1.4; }
-.home-practice-grid, .practice-record-list { gap: 12rpx; }
-.home-practice-grid { display: flex; flex-wrap: wrap; }
+.home-practice-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
 button.home-practice-card { display: flex; flex-direction: column; justify-content: space-between; width: calc((100% - 24rpx) / 3); min-width: 0; height: 174rpx; margin: 0; padding: 24rpx 18rpx; box-sizing: border-box; border: 2rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #354152; text-align: left; line-height: 1.4; }
 button.home-practice-done { border-color: #e5d9c2; background: #faf7f0; }
 button.home-practice-hover { background: #f3eddf; }
@@ -41,7 +42,6 @@ button.home-records-link { padding: 0 4rpx 0 12rpx; }
 .home-day-heading { display: flex; align-items: baseline; gap: 14rpx; margin: 0 4rpx 14rpx; }
 .home-day-label { color: #7a8493; font-size: 25rpx; font-weight: 500; }
 .home-day-date { color: #a1a8b2; font-size: 22rpx; }
-.practice-record-list { display: flex; flex-direction: column; }
 .practice-record-card { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; min-height: 98rpx; padding: 22rpx 24rpx; box-sizing: border-box; border: 1rpx solid #edf0f3; border-radius: 20rpx; background: #fff; }
 .practice-record-copy { flex: 1; min-width: 0; }
 .practice-record-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 14rpx; }

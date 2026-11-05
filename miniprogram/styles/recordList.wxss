@@ -1,0 +1,6 @@
+/* 首页静坐与功课记录页共用卡片列表间距。 */
+.practice-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
