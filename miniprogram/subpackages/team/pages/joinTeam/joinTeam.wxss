@@ -256,4 +256,5 @@ page {
   opacity: 0.85;
 }
 
-.team-practice-tag { display: inline-block; align-self: flex-start; margin: 10rpx 0; padding: 4rpx 14rpx; border-radius: 8rpx; color: #a68a57; background: #f9f7f3; font-size: 22rpx; }
+.team-practice-tags { display: flex; flex-wrap: wrap; gap: 8rpx; margin: 10rpx 0; }
+.team-practice-tag { display: inline-block; align-self: flex-start; padding: 4rpx 14rpx; border-radius: 8rpx; color: #a68a57; background: #f9f7f3; font-size: 22rpx; white-space: nowrap; }

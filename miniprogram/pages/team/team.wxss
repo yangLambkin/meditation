@@ -35,7 +35,8 @@ button::after { border: none; }
 .team-name { font-size: 30rpx; font-weight: 600; color: #354152; line-height: 1.4; word-break: break-all; }
 .role-badge { font-size: 20rpx; border-radius: 8rpx; background-color: #f2f4f6; color: #7a8493; padding: 4rpx 10rpx; white-space: nowrap; }
 .role-badge.owner { background-color: #b2976414; color: #a68a57; }
-.practice-tag { display: inline-block; margin-top: 10rpx; padding: 4rpx 12rpx; border-radius: 8rpx; background-color: #f1f5f3; color: #60776a; font-size: 22rpx; line-height: 1.4; }
+.practice-tags { display: flex; flex-wrap: wrap; gap: 8rpx; margin-top: 10rpx; }
+.practice-tag { display: inline-block; padding: 4rpx 12rpx; border-radius: 8rpx; background-color: #f1f5f3; color: #60776a; font-size: 22rpx; line-height: 1.4; white-space: nowrap; }
 .team-owner { display: block; color: #697282; font-size: 24rpx; line-height: 1.5; margin-top: 10rpx; word-break: break-all; }
 .member-count { display: block; color: #99a1ae; font-size: 24rpx; margin-top: 10rpx; }
 .team-description { display: block; font-size: 26rpx; line-height: 1.6; color: #697282; margin-top: 22rpx; word-break: break-all; }

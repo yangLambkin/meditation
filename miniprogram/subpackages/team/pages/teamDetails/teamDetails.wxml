@@ -7,9 +7,12 @@
           <text class="team-name">{{teamInfo.name}}</text>
           <button wx:if="{{isCreator}}" class="hero-edit" size="mini" bindtap="openSettings">编辑</button>
         </view>
-        <view class="team-practice-options">
+        <text wx:if="{{practiceOptions.length <= 1}}" class="team-practice-tag">{{practiceTypeName}}</text>
+        <view wx:else class="team-practice-options" aria-label="选择功课">
           <button wx:for="{{practiceOptions}}" wx:key="practiceType" class="team-practice-choice {{selectedPracticeType === item.practiceType ? 'active' : ''}}"
-            data-type="{{item.practiceType}}" bindtap="switchPractice" disabled="{{isSaving || isDeleting || settingsOpen}}">{{item.name}}</button>
+            data-type="{{item.practiceType}}" bindtap="switchPractice" hover-class="team-practice-choice-hover"
+            aria-label="查看{{item.name}}记录{{selectedPracticeType === item.practiceType ? '，当前已选' : ''}}"
+            disabled="{{isSaving || isDeleting || settingsOpen || removingMemberId || roleChangingMemberId}}">{{item.name}}</button>
         </view>
         <text class="team-description">{{teamInfo.description || ''}}</text>
       </view>
@@ -259,14 +262,19 @@
             </view>
           </view>
           <view class="team-form-card">
-            <view wx:if="{{teamInfo.source === 'bijing'}}" class="team-form-field">
-              <text class="team-form-label">选择要设置的功课</text>
+            <view wx:if="{{teamInfo.source === 'bijing'}}" class="team-form-practice-selector">
+              <text class="team-form-label">当前设置的功课</text>
               <picker range="{{draftPractices}}" range-key="name" value="{{draftPracticeIndex}}" bindchange="selectDraftPractice" disabled="{{!isCreator || isSaving || isDeleting}}">
-                <view class="team-form-control"><text>{{draftPractices[draftPracticeIndex].name}}</text><text>›</text></view>
+                <view class="team-form-control"><text>{{draftPractices[draftPracticeIndex].name}}</text><text class="team-form-chevron">›</text></view>
               </picker>
-              <text class="team-form-help">所有成员共同参与，每项功课分别计算。已有功课保留。</text>
-              <view wx:if="{{isCreator && availablePractices.length}}" class="team-form-presets">
-                <button wx:for="{{availablePractices}}" wx:key="type" class="team-form-preset" data-type="{{item.type}}" bindtap="addDraftPractice" disabled="{{isSaving || isDeleting}}">+ {{item.name}}</button>
+              <text class="team-form-help">每项功课分别设置目标和统计起点，全体成员共同参与。</text>
+              <view wx:if="{{isCreator && availablePractices.length}}" class="team-form-practice-add">
+                <text class="team-form-label">添加功课 <text class="team-form-optional">选填</text></text>
+                <view class="team-form-presets">
+                  <button wx:for="{{availablePractices}}" wx:key="type" class="team-form-preset" data-type="{{item.type}}" bindtap="addDraftPractice"
+                    hover-class="team-form-button-hover" aria-label="添加{{item.name}}" disabled="{{isSaving || isDeleting}}">+ {{item.name}}</button>
+                </view>
+                <text class="team-form-help">新功课默认从今天统计，保存后全体成员可见。</text>
               </view>
             </view>
             <view class="team-form-heading team-form-rules-heading">
@@ -311,12 +319,8 @@
                   <view class="team-form-presets">
                     <button class="team-form-preset {{draftGoalMinutes === '' ? 'selected' : ''}}" data-minutes=""
                       bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">不设置</button>
-                    <button class="team-form-preset {{draftGoalMinutes == 20 ? 'selected' : ''}}" data-minutes="20"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">20 {{draftUnit || practiceUnit}}</button>
-                    <button class="team-form-preset {{draftGoalMinutes == 30 ? 'selected' : ''}}" data-minutes="30"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">30 {{draftUnit || practiceUnit}}</button>
-                    <button class="team-form-preset {{draftGoalMinutes == 60 ? 'selected' : ''}}" data-minutes="60"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">60 {{draftUnit || practiceUnit}}</button>
+                    <button wx:for="{{draftGoalPresets}}" wx:key="*this" class="team-form-preset {{draftGoalMinutes == item ? 'selected' : ''}}" data-minutes="{{item}}"
+                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">{{item}} {{draftUnit || practiceUnit}}</button>
                   </view>
                 </block>
               </view>

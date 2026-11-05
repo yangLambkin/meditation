@@ -3,6 +3,14 @@ const teamManager = require('../../../../utils/teamManager.js');
 const { PRACTICES } = require('../../../../utils/practicePreferences.js');
 const { getPendingInvitation, savePendingInvitation, clearPendingInvitation, restoreDataBinding } = require('../../../../utils/teamInvitation.js');
 
+function getPracticeLabels(team) {
+  const types = Array.isArray(team.practices) && team.practices.length
+    ? team.practices.map(practice => practice && practice.practiceType) : [team.practiceType];
+  const labels = [...new Set(types)].map(type => PRACTICES.find(practice => practice.type === type))
+    .filter(Boolean).map(practice => practice.name);
+  return labels.length ? labels : [PRACTICES[0].name];
+}
+
 function decodeParameter(value) {
   if (!value) return '';
   try { return decodeURIComponent(value); } catch (error) { return value; }
@@ -12,7 +20,7 @@ Page({
   data: {
     teamId: '', teamInfo: null, members: [], inviterId: '', inviteId: '',
     isLoading: false, isJoining: false, isCheckingBinding: false, isMember: false, loadError: '',
-    teamTotalCheckins: 0, teamActivityRate: 0, statsAvailable: false
+    teamTotalCheckins: 0, teamActivityRate: 0, statsAvailable: false, practiceLabels: []
   },
 
   async onLoad(options = {}) {
@@ -134,10 +142,10 @@ Page({
       }
       if (!isCurrent()) return false;
       wx.setNavigationBarTitle({ title: `加入${teamInfo.name}` });
+      const practiceLabels = getPracticeLabels(teamInfo);
       this.setData({
         teamInfo, members, isMember, statsAvailable,
-        practiceTypeName: Array.isArray(teamInfo.practices) && teamInfo.practices.length ? teamInfo.practices.map(row => (PRACTICES.find(item => item.type === row.practiceType) || PRACTICES[0]).name).join(' · ')
-          : (PRACTICES.find(item => item.type === teamInfo.practiceType) || PRACTICES[0]).name,
+        practiceLabels, practiceTypeName: practiceLabels.join(' · '),
         teamTotalCheckins: members.reduce((sum, member) => sum + member.checkInCount, 0),
         teamActivityRate: members.length ? Math.round(members.filter(member => member.monthlyCount > 0).length / members.length * 100) : 0
       });

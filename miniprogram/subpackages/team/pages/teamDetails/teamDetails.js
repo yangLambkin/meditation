@@ -24,7 +24,7 @@ function validDate(value) {
 Page({
   data: {
     teamId: '', teamInfo: null, report: null, selectedPracticeType: '', practiceOptions: [], selectedPractice: null,
-    draftPractices: [], draftPracticeType: '', draftPracticeIndex: 0, availablePractices: [], draftUnit: '', draftGoalMax: 1440,
+    draftPractices: [], draftPracticeType: '', draftPracticeIndex: 0, availablePractices: [], draftUnit: '', draftGoalMax: 1440, draftGoalPresets: [20, 30, 60],
     isLoading: false, isMember: false, isCreator: false, isDeputy: false, deputyCount: 0,
     loadError: '', reportError: '',
     currentTab: 'members', recordTab: 'today', todayFilter: 'attention',
@@ -601,6 +601,7 @@ Page({
       settingsOpen: true, keyboardHeight: 0, settingsScrollTarget: '',
       draftPractices, draftPracticeType, draftPracticeIndex: Math.max(0, draftPractices.findIndex(item => item.practiceType === draftPracticeType)),
       draftUnit: practiceConfig(draftPracticeType).unit, draftGoalMax: maxGoal(draftPracticeType),
+      draftGoalPresets: ['instant', 'kindness'].includes(draftPracticeType) ? [1, 3, 10] : [20, 30, 60],
       availablePractices: isDataTeam(this.data.teamId) ? PRACTICES.filter(item => !draftPractices.some(row => row.practiceType === item.type)) : [],
       draftName: team.name || '', draftDescription: team.description || '', draftIcon: team.icon || '/images/icons/team.png',
       draftStartDate: settings.practiceStartDate || '',
@@ -639,6 +640,7 @@ Page({
     const item = list[index];
     this.setData({ draftPractices: list, draftPracticeType: item.practiceType, draftPracticeIndex: index,
       draftUnit: practiceConfig(item.practiceType).unit, draftGoalMax: maxGoal(item.practiceType),
+      draftGoalPresets: ['instant', 'kindness'].includes(item.practiceType) ? [1, 3, 10] : [20, 30, 60],
       draftStartDate: item.practiceStartDate || '', draftGoalMinutes: item.dailyGoalMinutes == null ? '' : String(item.dailyGoalMinutes),
       draftPracticeRulesEnabled: Boolean(item.practiceStartDate || item.dailyGoalMinutes !== '' && item.dailyGoalMinutes != null),
       availablePractices: PRACTICES.filter(config => !list.some(row => row.practiceType === config.type)), settingsError: '' });

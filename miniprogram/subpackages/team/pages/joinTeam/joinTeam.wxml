@@ -7,7 +7,7 @@
       <image class="team-icon" src="{{teamInfo.icon || '/images/icons/team.png'}}"></image>
       <view class="team-details">
         <text class="team-name">{{teamInfo.name || '团队'}}</text>
-        <text class="team-practice-tag">{{practiceTypeName}}</text>
+        <view class="team-practice-tags"><text class="team-practice-tag" wx:for="{{practiceLabels}}" wx:for-item="practiceLabel" wx:key="*this">{{practiceLabel}}</text></view>
         <text class="team-description">{{teamInfo.description || ''}}</text>
         <view class="team-stats">
           <text class="stat-item">{{teamInfo.memberCount || members.length}} 成员</text>

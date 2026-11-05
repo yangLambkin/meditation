@@ -214,6 +214,10 @@ Page({
       ? { ...item, [field]: e.detail.value } : item) });
   },
 
+  clearAdditionalStartDate(e) {
+    this.changeAdditionalRule({ currentTarget: { dataset: { type: e.currentTarget.dataset.type, field: 'practiceStartDate' } }, detail: { value: '' } });
+  },
+
   onPracticeStartDateChange(e) {
     if (!this.data.practiceRulesEnabled || this.data.isCreating || this.data.hasCreatedTeam) return;
     const value = e.detail.value;

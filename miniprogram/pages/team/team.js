@@ -3,6 +3,14 @@ const { getBusinessDate } = require('../../utils/dateUtil.js');
 const teamManager = require('../../utils/teamManager.js');
 const { PRACTICES } = require('../../utils/practicePreferences.js');
 
+function getPracticeLabels(team) {
+  const types = Array.isArray(team.practices) && team.practices.length
+    ? team.practices.map(practice => practice && practice.practiceType) : [team.practiceType];
+  const labels = [...new Set(types)].map(type => PRACTICES.find(practice => practice.type === type))
+    .filter(Boolean).map(practice => practice.name);
+  return labels.length ? labels : [PRACTICES[0].name];
+}
+
 function syncTabBar(page) {
   const app = typeof getApp === 'function' ? getApp() : null;
   if (app && typeof app.syncTabBar === 'function') app.syncTabBar(page);
@@ -108,8 +116,8 @@ Page({
       ...team,
       _id: team.cloudId || team._id,
       practiceType: PRACTICES.some(practice => practice.type === team.practiceType) ? team.practiceType : 'sitting',
-      practiceTypeName: Array.isArray(team.practices) && team.practices.length ? team.practices.map(item => (PRACTICES.find(practice => practice.type === item.practiceType) || PRACTICES[0]).name).join(' · ')
-        : (PRACTICES.find(practice => practice.type === team.practiceType) || PRACTICES[0]).name,
+      practiceLabels: getPracticeLabels(team),
+      practiceTypeName: getPracticeLabels(team).join(' · '),
       icon: !team.icon || /^(wxfile:\/\/|https?:\/\/tmp\/)/.test(team.icon) ? '/images/icons/team.png' : team.icon,
       formattedCreateTime: this.formatCreateTime(team.createdAt),
       practiceStartDate: team.practiceStartDate === null ? null : team.practiceStartDate || this.getPracticeDate(team.createdAt),

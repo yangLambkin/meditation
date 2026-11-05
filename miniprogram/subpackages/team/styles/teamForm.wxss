@@ -295,3 +295,10 @@
 .team-form-button-hover {
   opacity: 0.85;
 }
+
+/* 新增功课继续使用同一套表单层级、分隔线与留白。 */
+.team-form-practice-list { margin-top: 28rpx; }
+.team-form-practice-section { padding-top: 28rpx; border-top: 2rpx solid #f2f4f6; }
+.team-form-practice-section + .team-form-practice-section { margin-top: 32rpx; }
+.team-form-practice-selector { padding-bottom: 28rpx; margin-bottom: 28rpx; border-bottom: 2rpx solid #f2f4f6; }
+.team-form-practice-add { margin-top: 28rpx; }
