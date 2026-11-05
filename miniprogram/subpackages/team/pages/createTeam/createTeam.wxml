@@ -38,105 +38,72 @@
         value="{{teamDescription}}" bindinput="onTeamDescriptionInput" maxlength="100"
         disabled="{{isCreating || hasCreatedTeam}}" />
     </view>
-    <view class="team-form-field">
-      <text class="team-form-label">默认功课</text>
-      <picker range="{{practiceTypes}}" range-key="name" value="{{practiceTypeIndex}}"
-        bindchange="onPracticeTypeChange" disabled="{{isCreating || hasCreatedTeam}}">
-        <view class="team-form-control">
-          <text>{{practiceTypes[practiceTypeIndex].name}}</text>
-          <text class="team-form-chevron">›</text>
-        </view>
-      </picker>
-      <text class="team-form-help">默认功课创建后保留；还可以添加其他功课，共用团队成员。</text>
+  </view>
+
+  <view class="team-form-card">
+    <view class="team-form-label-row">
+      <text class="team-form-title">选择功课</text>
+      <text class="team-form-selection-count">已选 {{selectedPracticeCards.length}} / 6</text>
+    </view>
+    <text class="team-form-help">至少选择一项，可同时选择多项，共用团队成员。</text>
+    <view class="team-form-practice-grid">
+      <button wx:for="{{practiceSelectionOptions}}" wx:key="type" class="team-form-practice-option {{item.selected ? 'selected' : ''}}"
+        data-type="{{item.type}}" bindtap="toggleCreatePractice" hover-class="team-form-button-hover"
+        aria-label="{{item.name}}，{{item.selected ? '已选择，点击取消' : '未选择，点击选择'}}" disabled="{{isCreating || hasCreatedTeam}}">
+        <text class="team-form-checkbox {{item.selected ? 'checked' : ''}}">{{item.selected ? '✓' : ''}}</text>
+        <text class="team-form-option-name">{{item.name}}</text>
+      </button>
     </view>
   </view>
 
   <view class="team-form-card">
-    <view class="team-form-heading team-form-rules-heading">
-      <view class="team-form-rules-summary">
-        <text class="team-form-title">{{practiceTypes[practiceTypeIndex].name}} · 练习规则</text>
-        <text class="team-form-help">{{practiceRulesEnabled ? '每日多次练习累计计算' : '开启后可设置统计日期和每日目标。'}}</text>
-      </view>
-      <switch class="team-form-rules-switch" checked="{{practiceRulesEnabled}}" bindchange="onPracticeRulesChange"
-        color="#b29764" aria-label="启用练习规则" disabled="{{isCreating || hasCreatedTeam}}" />
-    </view>
-    <view wx:if="{{practiceRulesEnabled}}" class="team-form-rules-content">
-      <view class="team-form-field">
-        <view class="team-form-label-row">
-          <text class="team-form-label">统计起始日期 <text class="team-form-optional">选填</text></text>
-          <button wx:if="{{practiceStartDate}}" class="team-form-clear" bindtap="clearPracticeStartDate"
-            disabled="{{isCreating || hasCreatedTeam}}">清空</button>
-        </view>
-        <picker mode="date" value="{{practiceStartDate || maxPracticeStartDate}}" end="{{maxPracticeStartDate}}"
-          bindchange="onPracticeStartDateChange" disabled="{{isCreating || hasCreatedTeam}}">
-          <view class="team-form-control">
-            <text class="{{!practiceStartDate ? 'team-form-placeholder' : ''}}">{{practiceStartDate || '不设置，默认从创建日统计'}}</text>
-            <text class="team-form-chevron">›</text>
+    <text class="team-form-title">功课规则</text>
+    <text class="team-form-help">每项分别设置，点击功课展开。未设置目标时只记录练习情况。</text>
+    <view class="team-form-rule-list">
+      <view wx:for="{{selectedPracticeCards}}" wx:key="practiceType" id="create-practice-{{item.practiceType}}" class="team-form-rule-item {{expandedPracticeType === item.practiceType ? 'expanded' : ''}}">
+        <button class="team-form-rule-toggle" data-type="{{item.practiceType}}" bindtap="expandCreatePractice"
+          hover-class="team-form-button-hover" aria-label="设置{{item.name}}规则" disabled="{{isCreating || hasCreatedTeam}}">
+          <view class="team-form-rule-identity"><text class="team-form-label">{{item.name}}</text><text class="team-form-rule-summary">{{item.summary}}</text></view>
+          <text class="team-form-rule-action">{{expandedPracticeType === item.practiceType ? '编辑中' : '设置 ›'}}</text>
+        </button>
+        <view wx:if="{{expandedPracticeType === item.practiceType}}" class="team-form-rule-editor">
+          <view class="team-form-heading team-form-rules-heading">
+            <view class="team-form-rules-summary"><text class="team-form-label">设置练习规则</text><text class="team-form-help">起始日期和每日目标均可不设。</text></view>
+            <switch class="team-form-rules-switch" checked="{{practiceEditor.rulesEnabled}}" data-type="{{item.practiceType}}" data-field="rulesEnabled"
+              bindchange="changeCreatePracticeRule" color="#b29764" aria-label="启用{{item.name}}练习规则" disabled="{{isCreating || hasCreatedTeam}}" />
           </view>
-        </picker>
-        <text class="team-form-help">全体当前成员从这一天开始统计，不区分加入时间。</text>
-      </view>
-      <view class="team-form-field">
-        <text class="team-form-label">每日目标 <text class="team-form-optional">选填</text></text>
-        <view class="team-form-control">
-          <input class="team-form-input" type="number" value="{{dailyGoalMinutes}}"
-            bindinput="onDailyGoalInput" maxlength="7" placeholder="手动填写目标" placeholder-class="team-form-placeholder"
-            disabled="{{isCreating || hasCreatedTeam}}" />
-          <text class="team-form-unit">{{practiceUnit}} / 天</text>
-        </view>
-        <text class="team-form-help">可选推荐值，也可输入 1–{{maxDailyGoal}} 的整数；留空则不设置。</text>
-        <view class="team-form-presets">
-          <button class="team-form-preset {{dailyGoalMinutes === '' ? 'selected' : ''}}"
-            bindtap="clearDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
-          <button wx:for="{{dailyGoalPresets}}" wx:key="*this"
-            class="team-form-preset {{dailyGoalMinutes == item ? 'selected' : ''}}"
-            data-minutes="{{item}}" bindtap="selectDailyGoal" disabled="{{isCreating || hasCreatedTeam}}">
-            {{item}} {{practiceUnit}}
-          </button>
-        </view>
-      </view>
-      <view class="team-form-note">
-        <text>练习日为北京时间 02:00 至次日 02:00。</text>
-        <text>当日多次练习累计计算；未设置目标时不判断达标。</text>
-      </view>
-    </view>
-  </view>
-
-  <view class="team-form-card">
-    <text class="team-form-title">添加其他功课</text>
-    <text class="team-form-help">每项功课分别设置目标、统计和提醒。可选，共六种。</text>
-    <view class="team-form-presets">
-      <button wx:for="{{additionalPracticeOptions}}" wx:key="type" class="team-form-preset {{item.selected ? 'selected' : ''}}"
-        data-type="{{item.type}}" bindtap="toggleAdditionalPractice" hover-class="team-form-button-hover" aria-label="{{item.selected ? '取消' : '添加'}}{{item.name}}" disabled="{{isCreating || hasCreatedTeam}}">{{item.selected ? '✓ ' : '+ '}}{{item.name}}</button>
-    </view>
-    <view wx:if="{{additionalPractices.length}}" class="team-form-practice-list">
-      <view class="team-form-practice-section" wx:for="{{additionalPractices}}" wx:key="practiceType">
-        <view class="team-form-heading">
-          <text class="team-form-title">{{item.name}}</text>
-          <text class="team-form-badge">独立统计</text>
-        </view>
-        <view class="team-form-field">
-          <view class="team-form-label-row">
-            <text class="team-form-label">统计起始日期 <text class="team-form-optional">选填</text></text>
-            <button wx:if="{{item.practiceStartDate}}" class="team-form-clear" data-type="{{item.practiceType}}" bindtap="clearAdditionalStartDate"
-              disabled="{{isCreating || hasCreatedTeam}}">清空</button>
+          <view wx:if="{{practiceEditor.rulesEnabled}}" class="team-form-rules-content">
+            <view class="team-form-field">
+              <view class="team-form-label-row">
+                <text class="team-form-label">统计起始日期 <text class="team-form-optional">选填</text></text>
+                <button wx:if="{{practiceEditor.practiceStartDate}}" class="team-form-clear" data-type="{{item.practiceType}}" data-field="practiceStartDate"
+                  bindtap="clearCreatePracticeRule" disabled="{{isCreating || hasCreatedTeam}}">清空</button>
+              </view>
+              <picker mode="date" value="{{practiceEditor.practiceStartDate || maxPracticeStartDate}}" end="{{maxPracticeStartDate}}"
+                data-type="{{item.practiceType}}" data-field="practiceStartDate" bindchange="changeCreatePracticeRule" disabled="{{isCreating || hasCreatedTeam}}">
+                <view class="team-form-control"><text class="{{!practiceEditor.practiceStartDate ? 'team-form-placeholder' : ''}}">{{practiceEditor.practiceStartDate || '不设置，默认从创建日统计'}}</text><text class="team-form-chevron">›</text></view>
+              </picker>
+            </view>
+            <view class="team-form-field">
+              <text class="team-form-label">每日目标 <text class="team-form-optional">选填</text></text>
+              <view class="team-form-control">
+                <input class="team-form-input" type="number" value="{{practiceEditor.dailyGoalMinutes}}" maxlength="7"
+                  data-type="{{item.practiceType}}" data-field="dailyGoalMinutes" bindinput="changeCreatePracticeRule"
+                  placeholder="手动填写目标" placeholder-class="team-form-placeholder" disabled="{{isCreating || hasCreatedTeam}}" />
+                <text class="team-form-unit">{{practiceEditor.unit}} / 天</text>
+              </view>
+              <text class="team-form-help">可输入 1–{{practiceEditor.maxGoal}} 的整数；留空则不设置。</text>
+              <view class="team-form-presets">
+                <button class="team-form-preset {{practiceEditor.dailyGoalMinutes === '' ? 'selected' : ''}}" data-type="{{item.practiceType}}" data-field="dailyGoalMinutes" bindtap="clearCreatePracticeRule" disabled="{{isCreating || hasCreatedTeam}}">不设置</button>
+                <button wx:for="{{practiceEditor.presets}}" wx:for-item="goal" wx:key="*this" class="team-form-preset {{practiceEditor.dailyGoalMinutes == goal ? 'selected' : ''}}"
+                  data-type="{{item.practiceType}}" data-goal="{{goal}}" bindtap="chooseCreatePracticeGoal" disabled="{{isCreating || hasCreatedTeam}}">{{goal}} {{practiceEditor.unit}}</button>
+              </view>
+            </view>
           </view>
-          <picker mode="date" end="{{maxPracticeStartDate}}" value="{{item.practiceStartDate || maxPracticeStartDate}}"
-            data-type="{{item.practiceType}}" data-field="practiceStartDate" bindchange="changeAdditionalRule" disabled="{{isCreating || hasCreatedTeam}}">
-            <view class="team-form-control"><text class="{{!item.practiceStartDate ? 'team-form-placeholder' : ''}}">{{item.practiceStartDate || '不设置，默认从创建日统计'}}</text><text class="team-form-chevron">›</text></view>
-          </picker>
-        </view>
-        <view class="team-form-field">
-          <text class="team-form-label">每日目标 <text class="team-form-optional">选填</text></text>
-          <view class="team-form-control">
-            <input class="team-form-input" type="number" maxlength="7" value="{{item.dailyGoalMinutes}}" placeholder="手动填写目标" placeholder-class="team-form-placeholder"
-              data-type="{{item.practiceType}}" data-field="dailyGoalMinutes" bindinput="changeAdditionalRule" disabled="{{isCreating || hasCreatedTeam}}" />
-            <text class="team-form-unit">{{item.unit}} / 天</text>
-          </view>
-          <text class="team-form-help">可输入 1–{{item.maxGoal}} 的整数；留空则不设置。</text>
         </view>
       </view>
     </view>
+    <view class="team-form-note"><text>练习日为北京时间 02:00 至次日 02:00；当日多次练习累计计算。</text></view>
   </view>
 
   <view class="team-form-actions">

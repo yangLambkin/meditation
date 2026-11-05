@@ -32,6 +32,7 @@ function createPage({ openid = 'openid-user', create, checkText, checkImage, upl
     require(name) {
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
+      if (name.endsWith('/teamPracticeSelection.js')) return require('../miniprogram/utils/teamPracticeSelection.js');
       if (name.endsWith('/teamGateway.js')) return {
         isDataTeamIcon: value => typeof value === 'string' && value.startsWith('https://data.bijing.life/api/public/teams/avatar?'),
         async uploadTeamIcon(file) { calls.uploads.push(file); return uploadIcon ? uploadIcon(file) : uploadedIcon; }
@@ -619,4 +620,101 @@ test('creation combines independent homework goals and rejects invalid secondary
   await invalid.page.createTeam();
   assert.equal(invalid.calls.create.length, 0);
   assert.equal(invalid.calls.text.length, 0);
+});
+
+const practiceEvent = (type, field, value) => ({ currentTarget: { dataset: { type, ...(field ? { field } : {}) } }, detail: { value } });
+
+test('unified selection keeps one homework, promotes the remaining first choice and preserves the single payload', async () => {
+  const { page, calls } = createPage();
+  page.toggleCreatePractice(practiceEvent('sitting'));
+  assert.match(calls.toast.at(-1).title, /至少选择一项/);
+  page.toggleCreatePractice(practiceEvent('walking'));
+  assert.equal(page.data.expandedPracticeType, 'walking');
+  page.toggleCreatePractice(practiceEvent('sitting'));
+  assert.equal(page.data.practiceType, 'walking');
+  assert.equal(page.data.selectedPracticeCards.length, 1);
+  await page.createTeam();
+  assert.equal(calls.create[0].practiceType, 'walking');
+  assert.equal(Object.hasOwn(calls.create[0], 'practices'), false);
+  assert.deepEqual(Object.keys(calls.create[0]).sort(), ['dailyGoalMinutes', 'description', 'icon', 'name', 'practiceStartDate', 'practiceType']);
+});
+
+test('unified creation retains raw rules across collapse, disabling, deselection and reselection', () => {
+  const { page } = createPage();
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'rulesEnabled', true));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'practiceStartDate', '2026-09-01'));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'dailyGoalMinutes', '3'));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'rulesEnabled', false));
+  page.expandCreatePractice(practiceEvent('sitting'));
+  page.expandCreatePractice(practiceEvent('kindness'));
+  assert.equal(page.data.practiceEditor.dailyGoalMinutes, '3');
+  assert.equal(page.data.practiceEditor.practiceStartDate, '2026-09-01');
+  assert.equal(page.data.practiceEditor.rulesEnabled, false);
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  assert.equal(page.data.practiceEditor.dailyGoalMinutes, '3');
+  assert.equal(page.data.practiceEditor.rulesEnabled, false);
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'rulesEnabled', true));
+  assert.match(page.data.selectedPracticeCards[1].summary, /每日 3 件/);
+});
+
+test('creation rejects late typed inputs, focuses invalid selected homework and excludes cancelled drafts', async () => {
+  const { page, calls } = createPage();
+  page.toggleCreatePractice(practiceEvent('walking'));
+  page.changeCreatePracticeRule(practiceEvent('walking', 'rulesEnabled', true));
+  page.changeCreatePracticeRule(practiceEvent('walking', 'dailyGoalMinutes', '0'));
+  page.expandCreatePractice(practiceEvent('sitting'));
+  page.changeCreatePracticeRule(practiceEvent('walking', 'dailyGoalMinutes', '30'));
+  assert.equal(page.data.additionalPractices[0].dailyGoalMinutes, '0');
+  await page.createTeam();
+  assert.equal(calls.create.length, 0);
+  assert.equal(calls.text.length, 0);
+  assert.equal(page.data.expandedPracticeType, 'walking');
+  page.toggleCreatePractice(practiceEvent('walking'));
+  await page.createTeam();
+  assert.equal(calls.create.length, 1);
+  assert.equal(Object.hasOwn(calls.create[0], 'practices'), false);
+});
+
+test('disabled homework drafts submit null while active ones preserve numeric zero validation', async () => {
+  const { page, calls } = createPage();
+  page.toggleCreatePractice(practiceEvent('instant'));
+  page.changeCreatePracticeRule(practiceEvent('instant', 'rulesEnabled', true));
+  page.changeCreatePracticeRule(practiceEvent('instant', 'dailyGoalMinutes', '0'));
+  page.changeCreatePracticeRule(practiceEvent('instant', 'rulesEnabled', false));
+  await page.createTeam();
+  assert.equal(calls.create[0].practices[1].dailyGoalMinutes, null);
+  assert.equal(page.data.additionalPractices[0].dailyGoalMinutes, '0');
+});
+
+test('unified selection and rule changes cannot alter the submitted moderation snapshot', async () => {
+  const pending = deferred();
+  const { page, calls } = createPage({ checkText: () => pending.promise });
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'rulesEnabled', true));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'dailyGoalMinutes', '3'));
+  const submission = page.createTeam();
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  page.changeCreatePracticeRule(practiceEvent('kindness', 'dailyGoalMinutes', '10'));
+  page.expandCreatePractice(practiceEvent('sitting'));
+  assert.equal(page.data.expandedPracticeType, 'kindness');
+  pending.resolve(true);
+  await submission;
+  assert.equal(calls.create[0].practices[1].dailyGoalMinutes, 3);
+});
+
+test('failed multi-homework retries retain payload order after cancelling and restoring an additional choice', async () => {
+  const { page, calls } = createPage({ create: () => ({ success: false, error: '响应丢失' }) });
+  page.toggleCreatePractice(practiceEvent('walking'));
+  page.toggleCreatePractice(practiceEvent('kindness'));
+  await page.createTeam();
+  page.toggleCreatePractice(practiceEvent('walking'));
+  page.toggleCreatePractice(practiceEvent('walking'));
+  await page.createTeam();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.create[0])), JSON.parse(JSON.stringify(calls.create[1])));
+  assert.deepEqual(Array.from(page.data.selectedPracticeCards, item => item.practiceType), ['sitting', 'walking', 'kindness']);
+  page.toggleCreatePractice(practiceEvent('sitting'));
+  page.toggleCreatePractice(practiceEvent('sitting'));
+  assert.equal(page.data.practiceType, 'walking');
 });

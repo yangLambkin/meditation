@@ -4,6 +4,7 @@ const teamManager = require('../../../../utils/teamManager.js');
 const { uploadTeamIcon, isDataTeamIcon } = require('../../../../utils/teamGateway.js');
 const contentSec = require('../../../../utils/contentSec.js');
 const { PRACTICES } = require('../../../../utils/practicePreferences.js');
+const { practiceDraft, selectionOptions, practiceCards, stablePracticeOrder } = require('../../../../utils/teamPracticeSelection.js');
 
 // 练习日按北京时间 02:00 切换，与全应用业务日期保持一致。
 function currentPracticeDay() {
@@ -37,6 +38,9 @@ Page({
     // 团队介绍
     teamDescription: '',
     practiceTypes: PRACTICES,
+    practiceSelectionOptions: selectionOptions([{ practiceType: 'sitting' }]),
+    selectedPracticeCards: practiceCards([{ practiceType: 'sitting' }]),
+    expandedPracticeType: 'sitting', practiceEditor: practiceDraft({ practiceType: 'sitting' }),
     practiceType: 'sitting',
     practiceTypeIndex: 0,
     additionalPractices: [],
@@ -174,6 +178,90 @@ Page({
     });
   },
 
+  creationDrafts() {
+    return [practiceDraft({ practiceType: this.data.practiceType, practiceStartDate: this.data.practiceStartDate,
+      dailyGoalMinutes: this.data.dailyGoalMinutes, rulesEnabled: this.data.practiceRulesEnabled }),
+      ...this.data.additionalPractices.map(item => practiceDraft(item))];
+  },
+
+  applyCreationDrafts(drafts, expanded = this.data.expandedPracticeType) {
+    this._practiceSelectionRanks = this._practiceSelectionRanks || {};
+    drafts = stablePracticeOrder(drafts, this._practiceSelectionRanks);
+    const first = drafts[0];
+    const editor = drafts.find(item => item.practiceType === expanded) || first;
+    this.setData({ practiceType: first.practiceType, practiceTypeIndex: PRACTICES.findIndex(item => item.type === first.practiceType),
+      practiceUnit: first.unit, maxDailyGoal: first.maxGoal, dailyGoalPresets: first.presets,
+      practiceRulesEnabled: first.rulesEnabled, practiceStartDate: first.practiceStartDate, dailyGoalMinutes: first.dailyGoalMinutes,
+      additionalPractices: drafts.slice(1), practiceSelectionOptions: selectionOptions(drafts), selectedPracticeCards: practiceCards(drafts),
+      expandedPracticeType: editor.practiceType, practiceEditor: { ...editor } });
+  },
+
+  toggleCreatePractice(event) {
+    if (this.data.isCreating || this.data.hasCreatedTeam || this._unloaded) return;
+    const type = event.currentTarget.dataset.type;
+    if (!PRACTICES.some(item => item.type === type)) return;
+    const drafts = this.creationDrafts();
+    if (typeof wx.hideKeyboard === 'function') wx.hideKeyboard();
+    const index = drafts.findIndex(item => item.practiceType === type);
+    this._practiceDraftCache = this._practiceDraftCache || {};
+    if (index >= 0) {
+      if (drafts.length === 1) { wx.showToast({ title: '请至少选择一项功课', icon: 'none' }); return; }
+      this._practiceDraftCache[type] = { ...drafts[index] };
+      drafts.splice(index, 1);
+      const expanded = this.data.expandedPracticeType === type ? drafts[Math.min(index, drafts.length - 1)].practiceType : this.data.expandedPracticeType;
+      this.applyCreationDrafts(drafts, expanded);
+    } else {
+      drafts.push(practiceDraft(this._practiceDraftCache[type] || { practiceType: type }));
+      this.applyCreationDrafts(drafts, type);
+    }
+  },
+
+  expandCreatePractice(event) {
+    if (this.data.isCreating || this.data.hasCreatedTeam || this._unloaded) return;
+    const type = event.currentTarget.dataset.type;
+    const drafts = this.creationDrafts();
+    if (!drafts.some(item => item.practiceType === type)) return;
+    if (typeof wx.hideKeyboard === 'function') wx.hideKeyboard();
+    this.applyCreationDrafts(drafts, type);
+  },
+
+  changeCreatePracticeRule(event) {
+    if (this.data.isCreating || this.data.hasCreatedTeam || this._unloaded) return;
+    const { type, field } = event.currentTarget.dataset;
+    if (type !== this.data.expandedPracticeType || !['rulesEnabled', 'practiceStartDate', 'dailyGoalMinutes'].includes(field)) return;
+    const drafts = this.creationDrafts();
+    const item = drafts.find(row => row.practiceType === type);
+    if (!item || field !== 'rulesEnabled' && !item.rulesEnabled) return;
+    const value = event.detail.value;
+    if (field === 'practiceStartDate' && value && (!isCalendarDate(value) || value > currentPracticeDay())) {
+      wx.showToast({ title: '请选择不晚于当前练习日的有效日期', icon: 'none' }); return;
+    }
+    item[field] = field === 'rulesEnabled' ? value === true : value;
+    this.applyCreationDrafts(drafts, type);
+  },
+
+  clearCreatePracticeRule(event) {
+    const { type, field } = event.currentTarget.dataset;
+    this.changeCreatePracticeRule({ currentTarget: { dataset: { type, field } }, detail: { value: '' } });
+  },
+
+  chooseCreatePracticeGoal(event) {
+    const { type, goal } = event.currentTarget.dataset;
+    this.changeCreatePracticeRule({ currentTarget: { dataset: { type, field: 'dailyGoalMinutes' } }, detail: { value: String(goal) } });
+  },
+
+  showCreatePracticeError(type, message) {
+    if (PRACTICES.some(item => item.type === type)) {
+      try { this.applyCreationDrafts(this.creationDrafts(), type); } catch (_) {}
+    }
+    if (typeof wx.hideKeyboard === 'function') wx.hideKeyboard();
+    wx.showToast({ title: message, icon: 'none' });
+    if (typeof wx.pageScrollTo === 'function') {
+      const locate = () => wx.pageScrollTo({ selector: `#create-practice-${type}`, duration: 200 });
+      if (typeof wx.nextTick === 'function') wx.nextTick(locate); else locate();
+    }
+  },
+
   onPracticeRulesChange(e) {
     if (this.data.isCreating || this.data.hasCreatedTeam) return;
     this.setData({ practiceRulesEnabled: e.detail.value === true });
@@ -199,8 +287,11 @@ Page({
     const config = PRACTICES.find(item => item.type === type);
     if (!config || type === this.data.practiceType) return;
     const rows = this.data.additionalPractices;
-    const next = rows.some(item => item.practiceType === type) ? rows.filter(item => item.practiceType !== type)
-      : [...rows, { practiceType: type, name: config.name, unit: config.unit, practiceStartDate: '', dailyGoalMinutes: '',
+    this._practiceDraftCache = this._practiceDraftCache || {};
+    const old = rows.find(item => item.practiceType === type);
+    if (old) this._practiceDraftCache[type] = { ...old };
+    const next = old ? rows.filter(item => item.practiceType !== type)
+      : [...rows, this._practiceDraftCache[type] || { practiceType: type, name: config.name, unit: config.unit, practiceStartDate: '', dailyGoalMinutes: '',
         maxGoal: type === 'instant' ? 1000000 : type === 'kindness' ? 100000 : 1440 }];
     this.setData({ additionalPractices: next, additionalPracticeOptions: PRACTICES.filter(item => item.type !== this.data.practiceType)
       .map(item => ({ ...item, selected: next.some(row => row.practiceType === item.type) })) });
@@ -306,27 +397,27 @@ Page({
     this.setData({ maxPracticeStartDate: today });
     if (teamInfo.practiceStartDate !== null &&
         (!isCalendarDate(teamInfo.practiceStartDate) || teamInfo.practiceStartDate > today)) {
-      wx.showToast({ title: '请选择不晚于当前练习日的有效日期', icon: 'none' });
+      this.showCreatePracticeError(teamInfo.practiceType, '请选择不晚于当前练习日的有效日期');
       return;
     }
     const maxGoal = teamInfo.practiceType === 'instant' ? 1000000 : teamInfo.practiceType === 'kindness' ? 100000 : 1440;
     if (rawGoal !== null &&
         ((typeof rawGoal !== 'number' && (typeof rawGoal !== 'string' || !/^\d+$/.test(rawGoal.trim()))) ||
         !Number.isInteger(teamInfo.dailyGoalMinutes) || teamInfo.dailyGoalMinutes < 1 || teamInfo.dailyGoalMinutes > maxGoal)) {
-      wx.showToast({ title: `每日目标须为1至${maxGoal}的整数`, icon: 'none' });
+      this.showCreatePracticeError(teamInfo.practiceType, `每日目标须为1至${maxGoal}的整数`);
       return;
     }
 
     if (this.data.additionalPractices.length) {
       const practices = [{ practiceType: teamInfo.practiceType, practiceStartDate: teamInfo.practiceStartDate, dailyGoalMinutes: teamInfo.dailyGoalMinutes }];
       for (const item of this.data.additionalPractices) {
-        const start = optionalRuleValue(item.practiceStartDate);
-        const goal = optionalRuleValue(item.dailyGoalMinutes);
+        const start = item.rulesEnabled === false ? null : optionalRuleValue(item.practiceStartDate);
+        const goal = item.rulesEnabled === false ? null : optionalRuleValue(item.dailyGoalMinutes);
         const max = item.practiceType === 'instant' ? 1000000 : item.practiceType === 'kindness' ? 100000 : 1440;
         if (!PRACTICES.some(config => config.type === item.practiceType) || practices.some(row => row.practiceType === item.practiceType) ||
             start !== null && (!isCalendarDate(start) || start > today) ||
             goal !== null && (!/^\d+$/.test(String(goal)) || !Number.isSafeInteger(Number(goal)) || Number(goal) < 1 || Number(goal) > max)) {
-          wx.showToast({ title: '请检查各项功课的起始日期和每日目标', icon: 'none' });
+          this.showCreatePracticeError(item.practiceType, '请检查这项功课的起始日期和每日目标');
           return;
         }
         practices.push({ practiceType: item.practiceType, practiceStartDate: start, dailyGoalMinutes: goal === null ? null : Number(goal) });
@@ -395,9 +486,12 @@ Page({
   onLoad(options) {
     this._unloaded = false;
     this._visible = true;
+    this._practiceDraftCache = {};
+    this._practiceSelectionRanks = {};
     const today = currentPracticeDay();
     this.setData({ practiceRulesEnabled: false, practiceStartDate: '', maxPracticeStartDate: today, dailyGoalMinutes: '',
       practiceType: 'sitting', practiceTypeIndex: 0, additionalPractices: [], additionalPracticeOptions: PRACTICES.filter(item => item.type !== 'sitting'), practiceUnit: '分钟', maxDailyGoal: 1440, dailyGoalPresets: [20, 30, 60] });
+    this.applyCreationDrafts([practiceDraft({ practiceType: 'sitting' })], 'sitting');
     console.log('=== createTeam页面加载 ===');
     
     // 获取用户信息

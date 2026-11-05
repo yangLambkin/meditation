@@ -94,6 +94,7 @@ function createPage({ initialTab = 'records', cloud, generateInvite, deleteTeam,
         isDataTeamIcon: value => typeof value === 'string' && value.startsWith('https://data.bijing.life/api/public/teams/avatar?'),
         async uploadTeamIcon(file) { calls.uploads.push(file); return uploadIcon ? uploadIcon(file) : 'https://data.bijing.life/api/public/teams/avatar?key=approved'; }
       };
+      if (name.endsWith('/teamPracticeSelection.js')) return require('../miniprogram/utils/teamPracticeSelection.js');
       if (name.endsWith('/practicePreferences.js')) return require('../miniprogram/utils/practicePreferences.js');
       if (name.endsWith('/dateUtil.js')) return require('../miniprogram/utils/dateUtil.js');
       if (name.endsWith('/teamManager.js')) return manager;
@@ -2925,4 +2926,84 @@ test('reminder generation uses selected homework and switching invalidates the e
   await h.page.switchPractice(event('type', 'sitting'));
   assert.equal(h.page.data.reminderDialogOpen, false);
   assert.equal(await h.page.getCurrentReminderContext(), null);
+});
+
+const draftEvent = (type, value) => ({ currentTarget: { dataset: { type } }, detail: { value } });
+async function dataSelectionPage(extra = {}) {
+  const h = createPage({ ...extra, cloud: extra.cloud || ((type, request) => success(type === 'getTeamInfo' ? dataTeamWithPractices() : dataReportFor(request.practiceType))) });
+  h.page.setData({ teamId: 'bijing_12' });
+  await h.page.onShow();
+  h.page.openSettings();
+  return h;
+}
+
+test('edit selection locks saved types while unsaved choices can be cancelled and restored with raw drafts', async () => {
+  const { page } = await dataSelectionPage();
+  page.toggleDraftPractice(draftEvent('sitting'));
+  assert.deepEqual(Array.from(page.data.draftPractices, item => item.practiceType), ['sitting', 'kindness', 'walking']);
+  page.toggleDraftPractice(draftEvent('instant'));
+  assert.equal(page.data.draftPracticeType, 'instant');
+  page.changeGoalMinutes(draftEvent('instant', '2000'));
+  page.changePracticeRulesEnabled(draftEvent('instant', false));
+  page.toggleDraftPractice(draftEvent('instant'));
+  assert.equal(page.data.draftPracticeType, 'walking');
+  page.toggleDraftPractice(draftEvent('instant'));
+  assert.equal(page.data.draftGoalMinutes, '2000');
+  assert.equal(page.data.draftPracticeRulesEnabled, false);
+  assert.equal(page.data.draftStartDate, '2026-09-19');
+  assert.deepEqual(Array.from(page.data.draftLockedPracticeTypes), ['sitting', 'kindness', 'walking']);
+});
+
+test('disabling rules and switching editors never destroys the hidden target or starting date', async () => {
+  const { page, calls } = await dataSelectionPage();
+  page.changeStartDate(draftEvent('sitting', '2026-09-02'));
+  page.changeGoalMinutes(draftEvent('sitting', '45'));
+  page.changePracticeRulesEnabled(draftEvent('sitting', false));
+  page.selectDraftPractice(draftEvent('kindness'));
+  page.selectDraftPractice(draftEvent('sitting'));
+  assert.equal(page.data.draftPracticeRulesEnabled, false);
+  assert.equal(page.data.draftStartDate, '2026-09-02');
+  assert.equal(page.data.draftGoalMinutes, '45');
+  page.changePracticeRulesEnabled(draftEvent('sitting', true));
+  assert.match(page.data.draftPracticeCards[0].summary, /每日 45 分钟/);
+  assert.ok(calls.keyboardHidden > 0);
+});
+
+test('edit late inputs cannot write another homework and invalid hidden choices open before saving', async () => {
+  const { page, calls } = await dataSelectionPage();
+  page.toggleDraftPractice(draftEvent('instant'));
+  page.changeGoalMinutes(draftEvent('instant', '0'));
+  page.selectDraftPractice(draftEvent('kindness'));
+  page.changeGoalMinutes(draftEvent('instant', '100'));
+  assert.equal(page.data.draftGoalMinutes, '1');
+  await page.saveSettings();
+  assert.equal(page.data.draftPracticeType, 'instant');
+  assert.equal(page.data.settingsScrollTarget, 'practice-rule-instant');
+  assert.equal(calls.cloud.some(call => call.type === 'updateTeam'), false);
+  page.closeSettings();
+  page.openSettings();
+  assert.deepEqual(Array.from(page.data.draftPractices, item => item.practiceType), ['sitting', 'kindness', 'walking']);
+});
+
+test('members can inspect other homework rules without gaining selection or save permissions', async () => {
+  const { page, calls } = await dataSelectionPage({ openid: 'member' });
+  assert.equal(page.data.isCreator, false);
+  page.selectDraftPractice(draftEvent('kindness'));
+  assert.equal(page.data.draftPracticeType, 'kindness');
+  page.toggleDraftPractice(draftEvent('instant'));
+  page.changeGoalMinutes(draftEvent('kindness', '10'));
+  await page.saveSettings();
+  assert.equal(page.data.draftGoalMinutes, '1');
+  assert.equal(page.data.draftPractices.length, 3);
+  assert.equal(calls.cloud.some(call => call.type === 'updateTeam'), false);
+});
+
+test('restoring a new edit choice keeps server order and the original order of unsaved additions', async () => {
+  const { page } = await dataSelectionPage();
+  page.toggleDraftPractice(draftEvent('instant'));
+  page.toggleDraftPractice(draftEvent('clapping'));
+  page.toggleDraftPractice(draftEvent('instant'));
+  page.toggleDraftPractice(draftEvent('instant'));
+  assert.deepEqual(Array.from(page.data.draftPractices, item => item.practiceType), ['sitting', 'kindness', 'walking', 'instant', 'clapping']);
+  assert.equal(page.data.draftPracticeType, 'instant');
 });

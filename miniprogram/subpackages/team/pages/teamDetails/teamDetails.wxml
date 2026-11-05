@@ -262,28 +262,37 @@
             </view>
           </view>
           <view class="team-form-card">
-            <view wx:if="{{teamInfo.source === 'bijing'}}" class="team-form-practice-selector">
-              <text class="team-form-label">当前设置的功课</text>
-              <picker range="{{draftPractices}}" range-key="name" value="{{draftPracticeIndex}}" bindchange="selectDraftPractice" disabled="{{!isCreator || isSaving || isDeleting}}">
-                <view class="team-form-control"><text>{{draftPractices[draftPracticeIndex].name}}</text><text class="team-form-chevron">›</text></view>
-              </picker>
-              <text class="team-form-help">每项功课分别设置目标和统计起点，全体成员共同参与。</text>
-              <view wx:if="{{isCreator && availablePractices.length}}" class="team-form-practice-add">
-                <text class="team-form-label">添加功课 <text class="team-form-optional">选填</text></text>
-                <view class="team-form-presets">
-                  <button wx:for="{{availablePractices}}" wx:key="type" class="team-form-preset" data-type="{{item.type}}" bindtap="addDraftPractice"
-                    hover-class="team-form-button-hover" aria-label="添加{{item.name}}" disabled="{{isSaving || isDeleting}}">+ {{item.name}}</button>
-                </view>
-                <text class="team-form-help">新功课默认从今天统计，保存后全体成员可见。</text>
+            <view wx:if="{{teamInfo.source === 'bijing'}}">
+              <view class="team-form-label-row"><text class="team-form-title">团队功课</text><text class="team-form-selection-count">已选 {{draftPractices.length}} / 6</text></view>
+              <text class="team-form-help">{{isCreator ? '已开启的功课保留；新勾选项保存后生效，保存前可取消。' : '点击下方功课查看练习规则。'}}</text>
+              <view wx:if="{{isCreator}}" class="team-form-practice-grid">
+                <button wx:for="{{draftSelectionOptions}}" wx:key="type" class="team-form-practice-option {{item.selected ? 'selected' : ''}} {{item.locked ? 'locked' : ''}}"
+                  data-type="{{item.type}}" bindtap="toggleDraftPractice" hover-class="team-form-button-hover"
+                  aria-label="{{item.name}}，{{item.locked ? '已开启，不能取消' : item.selected ? '已选择，点击取消' : '点击选择'}}"
+                  disabled="{{item.locked || !isCreator || isSaving || isDeleting}}">
+                  <text class="team-form-checkbox {{item.selected ? 'checked' : ''}}">{{item.selected ? '✓' : ''}}</text>
+                  <view class="team-form-option-identity"><text class="team-form-option-name">{{item.name}}</text><text wx:if="{{item.locked}}" class="team-form-option-status">已开启</text></view>
+                </button>
               </view>
+              <view wx:else class="team-form-presets"><text wx:for="{{draftPracticeCards}}" wx:key="practiceType" class="team-form-badge">{{item.name}}</text></view>
+              <text wx:if="{{isCreator}}" class="team-form-help">每项分别设置规则，新功课默认从今天统计。</text>
             </view>
+            <view class="team-form-rule-list">
+              <view wx:for="{{draftPracticeCards}}" wx:key="practiceType" id="practice-rule-{{item.practiceType}}"
+                class="team-form-rule-item {{draftPracticeType === item.practiceType ? 'expanded' : ''}}">
+                <button class="team-form-rule-toggle" data-type="{{item.practiceType}}" bindtap="selectDraftPractice"
+                  hover-class="team-form-button-hover" aria-label="{{isCreator ? '设置' : '查看'}}{{item.name}}规则" disabled="{{isSaving || isDeleting}}">
+                  <view class="team-form-rule-identity"><text class="team-form-label">{{item.name}}</text><text class="team-form-rule-summary">{{item.summary}}</text></view>
+                  <text class="team-form-rule-action">{{draftPracticeType === item.practiceType ? '当前' : isCreator ? '设置 ›' : '查看 ›'}}</text>
+                </button>
+                <view wx:if="{{draftPracticeType === item.practiceType}}" class="team-form-rule-editor">
             <view class="team-form-heading team-form-rules-heading">
               <view class="team-form-rules-summary">
                 <text class="team-form-title">练习规则</text>
                 <text class="team-form-help">{{draftPracticeRulesEnabled ? '每日多次练习累计计算' : isCreator ? '开启后可设置统计日期和每日目标。' : '未开启练习规则，按实际练习记录统计。'}}</text>
               </view>
               <switch wx:if="{{isCreator}}" class="team-form-rules-switch" checked="{{draftPracticeRulesEnabled}}"
-                bindchange="changePracticeRulesEnabled" color="#b29764" aria-label="启用练习规则"
+                data-type="{{draftPracticeType}}" bindchange="changePracticeRulesEnabled" color="#b29764" aria-label="启用练习规则"
                 disabled="{{isSaving || isDeleting}}" />
               <text wx:else class="team-form-badge">{{draftPracticeRulesEnabled ? '已开启' : '未开启'}}</text>
             </view>
@@ -291,11 +300,11 @@
               <view class="team-form-field">
                 <view class="team-form-label-row">
                   <text class="team-form-label">统计起始日期 <text class="team-form-optional">选填</text></text>
-                  <button wx:if="{{isCreator && draftStartDate}}" class="team-form-clear" bindtap="clearStartDate"
+                  <button wx:if="{{isCreator && draftStartDate}}" class="team-form-clear" data-type="{{draftPracticeType}}" bindtap="clearStartDate"
                     disabled="{{isSaving || isDeleting}}">清空</button>
                 </view>
                 <picker wx:if="{{isCreator}}" mode="date" value="{{draftStartDate || dateMax}}" end="{{dateMax}}"
-                  bindchange="changeStartDate" disabled="{{isSaving || isDeleting}}">
+                  data-type="{{draftPracticeType}}" bindchange="changeStartDate" disabled="{{isSaving || isDeleting}}">
                   <view class="team-form-control">
                     <text class="{{!draftStartDate ? 'team-form-placeholder' : ''}}">{{draftStartDate || '不设置，默认从该功课启用日统计'}}</text>
                     <text class="team-form-chevron">›</text>
@@ -308,7 +317,7 @@
                 <text class="team-form-label">每日目标 <text class="team-form-optional">选填</text></text>
                 <view wx:if="{{isCreator}}" class="team-form-control">
                   <input class="team-form-input" placeholder="手动填写目标值" placeholder-class="team-form-placeholder"
-                    type="number" value="{{draftGoalMinutes}}" bindinput="changeGoalMinutes"
+                    type="number" value="{{draftGoalMinutes}}" data-type="{{draftPracticeType}}" bindinput="changeGoalMinutes"
                     bindkeyboardheightchange="onGoalKeyboardHeightChange" adjust-position="{{false}}"
                     cursor-spacing="24" maxlength="7" disabled="{{isSaving || isDeleting}}" />
                   <text class="team-form-unit">{{draftUnit || practiceUnit}} / 天</text>
@@ -318,9 +327,9 @@
                   <text class="team-form-help">可选推荐值，也可输入 1–{{draftGoalMax || goalMax}} 的整数；留空则不设置。</text>
                   <view class="team-form-presets">
                     <button class="team-form-preset {{draftGoalMinutes === '' ? 'selected' : ''}}" data-minutes=""
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">不设置</button>
+                      data-type="{{draftPracticeType}}" bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">不设置</button>
                     <button wx:for="{{draftGoalPresets}}" wx:key="*this" class="team-form-preset {{draftGoalMinutes == item ? 'selected' : ''}}" data-minutes="{{item}}"
-                      bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">{{item}} {{draftUnit || practiceUnit}}</button>
+                      data-type="{{draftPracticeType}}" bindtap="chooseGoalMinutes" disabled="{{isSaving || isDeleting}}">{{item}} {{draftUnit || practiceUnit}}</button>
                   </view>
                 </block>
               </view>
@@ -328,6 +337,9 @@
                 <text>练习日为北京时间 02:00 至次日 02:00。</text>
                 <text>当日多次练习累计计算；未设置每日目标时不判断达标。</text>
                 <text wx:if="{{isCreator}}">修改规则后，历史统计也会按新规则重新计算。</text>
+              </view>
+            </view>
+                </view>
               </view>
             </view>
           </view>
