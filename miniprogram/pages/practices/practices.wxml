@@ -14,7 +14,9 @@
       <view class="home-title-row"><text class="page-title">今日功课</text><text class="home-date">{{todayLabel}}</text></view>
       <text wx:if="{{enabled && homeCards.length}}" class="home-grid-hint">点击功课卡片，记录今日练习</text>
     </view>
-    <button size="mini" class="add-button {{!enabled ? 'add-button-disabled' : ''}}" bindtap="choosePractice" disabled="{{!enabled}}" aria-label="记录一份功课">＋ 记录</button>
+    <button class="weui-btn meditation-btn primary home-record-button" bindtap="choosePractice" disabled="{{!enabled}}" hover-class="weui-btn_active" aria-label="记录功课">
+      <text class="meditation-btn-text">记录功课</text>
+    </button>
   </view>
 
   <view wx:if="{{!enabled}}" class="state-card">
@@ -42,13 +44,13 @@
     </view>
 
     <view class="home-recent">
-      <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="home-records-link" bindtap="openRecords" data-view="detail" hover-class="card-hover"><text>查看全部</text><view class="home-entry-arrow" aria-hidden="true"></view></button></view>
+      <view class="home-section-heading"><text class="home-section-title">最近三天记录</text><button size="mini" class="section-records-entry" bindtap="openRecords" data-view="detail" hover-class="section-records-entry-hover" aria-label="查看功课明细与统计"><text>明细与统计</text><view class="section-records-arrow" aria-hidden="true"></view></button></view>
       <block wx:if="{{homeCards.length}}">
         <view wx:if="{{homeLoading && !homeLoaded && !homeError}}" class="empty-state home-loading">正在读取最近记录…</view>
         <template wx:if="{{homeError}}" is="read-failure" data="{{failure: homeFailure, scope: 'home'}}" />
         <block wx:if="{{homeLoaded}}">
           <text wx:if="{{homeError}}" class="caption">刷新失败，以下为上次读取的记录</text>
-          <text wx:if="{{recentRecords.length}}" class="caption home-records-hint">点击查看详情，长按管理功课记录</text>
+          <text wx:if="{{recentRecords.length}}" class="caption home-records-hint">点击记录查看详情，长按可编辑或删除</text>
           <view class="home-day-group" wx:for="{{recentGroups}}" wx:for-item="group" wx:key="date">
             <view class="home-day-heading"><text class="home-day-label">{{group.label}}</text><text class="home-day-date">{{group.dateLabel}}</text></view>
             <view wx:if="{{!group.records.length}}" class="home-today-empty"><text>今天还没有已上传的记录</text></view>

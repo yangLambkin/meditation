@@ -152,6 +152,17 @@ function cancel(taskId) {
   store.tasks = store.tasks.filter(item => item.id !== taskId && item.dependsOn !== taskId);
   write(store);
 }
+// Only a first, definite validation rejection proves this task never wrote remotely.
+// An earlier timeout or crash must keep the original request frozen for safe confirmation.
+function releaseRejected(taskId) {
+  const store = read(), task = store.tasks.find(item => item.id === taskId);
+  if (!task || !api.sameOwner(task.owner, auth.getOwner()) || task.kind !== 'practice' ||
+      !['create', 'update'].includes(task.operation) || task.status !== 'blocked' || task.attempts !== 1 ||
+      !task.lastError || task.lastError.status !== 400 || store.tasks.some(item => item.dependsOn === taskId)) return false;
+  store.tasks = store.tasks.filter(item => item.id !== taskId);
+  write(store);
+  return true;
+}
 function enabled(task) { return task.kind === 'mirror' ? config.sittingMirrorEnabled === true : config.practicesEnabled === true; }
 function paused(error) {
   return ['AUTH_REQUIRED', 'AUTH_UNAVAILABLE', 'API_UNAVAILABLE', 'BINDING_INVALID', 'ACCOUNT_CHANGED', 'IDENTITY_MISMATCH', 'FEATURE_DISABLED'].includes(error && error.code) ||
@@ -228,7 +239,8 @@ async function run({ manual = false, taskIds, onlyUnattempted = false } = {}) {
           const retryable = reason.retryable === true;
           mutate(taskId, current => {
             current.status = paused(reason) ? 'paused' : retryable ? 'pending' : 'blocked';
-            current.lastError = { code: reason.code || 'REQUEST_FAILED', message: reason.message || '功课上传失败' };
+            current.lastError = { code: reason.code || 'REQUEST_FAILED', message: reason.message || '功课上传失败',
+              ...(Number.isInteger(reason.status) ? { status: reason.status } : {}) };
             if (reason.retryAfterMs) current.nextRetryAt = Date.now() + reason.retryAfterMs;
           });
           if (!retryable || reason.retryAfterMs || attempt === 2) { blocked.add(task.entityKey); break; }
@@ -250,4 +262,4 @@ function flush(options) {
 }
 function subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }
 module.exports = { enqueuePractice, enqueueSourceIntent, confirmSource, markSourceError, discardSource, discardLocalSourceDeletion,
-  annotateSource, getPending, flush, cancel, subscribe, newRequestId: id };
+  annotateSource, getPending, flush, cancel, releaseRejected, subscribe, newRequestId: id };

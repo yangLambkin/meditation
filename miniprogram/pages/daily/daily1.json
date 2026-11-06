@@ -1,3 +1,6 @@
 {
+  "navigationBarTitleText": "静心卡",
+  "navigationBarBackgroundColor": "#f7f5ef",
+  "backgroundColor": "#f7f5ef",
   "usingComponents": {}
 }

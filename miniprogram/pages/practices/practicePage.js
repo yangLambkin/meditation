@@ -96,7 +96,7 @@ function metricCards(stats) {
   return TYPES.slice(1).map(meta => {
     const item = Array.isArray(byType) ? byType.find(row => row.type === meta.type) || {} : byType[meta.type] || {};
     const value = typeof item === 'number' ? item : item.totalValue ?? item.quantity ?? item.total ?? (meta.type === 'instant' ? item.count : meta.type === 'kindness' ? item.deedCount ?? item.totalCount : item.durationMinutes ?? item.totalDurationMinutes) ?? 0;
-    return { ...meta, unit: meta.type === 'kindness' ? '次' : meta.unit,
+    return { ...meta,
       value: Number(value) || 0, records: Number(item.recordCount || item.records || 0) };
   });
 }
@@ -149,6 +149,17 @@ function makeTrend(month, daily, type) {
   return { trend: trend.map(item => ({ ...item, height: item.value && trendMax ? Math.max(4, Math.round(item.value / trendMax * 130)) : 2 })),
     trendMax, trendWidth: length * 54 };
 }
+function makeYearMonths(year, daily, type) {
+  const today = practiceDay.getPracticeDate();
+  const months = Array.from({ length: 12 }, (_, index) => {
+    const month = `${year}-${String(index + 1).padStart(2, '0')}`;
+    const days = (Array.isArray(daily) ? daily : []).filter(item => (item.date || item.recordDate || '').startsWith(`${month}-`));
+    const value = days.reduce((sum, day) => sum + (type === 'all' ? Number(day.recordCount) || 0 : metricCards(day).find(card => card.type === type).value), 0);
+    return { month, label: `${index + 1}月`, value, valueLabel: quantityLabel(value), future: month > today.slice(0, 7) };
+  });
+  const max = Math.max(0, ...months.filter(item => !item.future).map(item => item.value));
+  return months.map(item => ({ ...item, percent: item.value > 0 && max ? Math.max(2, Math.round(item.value / max * 100)) : 0 }));
+}
 function uniqueId() { return `practice_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`; }
 
 module.exports = function createPracticePage(screen = 'home') { return {
@@ -162,6 +173,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     recordCount: 0, practiceDays: 0, selectedMonthTotal: 0, selectedMonthUnit: '条',
     overviewTotal: 0, overviewUnit: '', overviewLabel: '',
     allTimeRecordCount: 0, allTimePracticeDays: 0,
+    statsPeriod: 'month', year: '', periodLabel: '', periodCards: [], periodRecordCount: 0, periodPracticeDays: 0, yearMonths: [],
     dayStatsDate: '', dayStatsLoading: false, dayStatsCards: [], dayStatsRecordCount: 0,
     dayStatsPracticeCount: 0, dayStatsError: '', dayStatsFailure: null,
     pending: [], pendingCount: 0, retrying: false, showPending: false, pendingActionId: '',
@@ -175,7 +187,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     this.options = options;
     const displayToday = practiceDay.getPracticeDate();
     const month = displayToday.slice(0, 7);
-    this.setData({ month, monthLabel: monthLabel(month), monthEnd: displayToday, displayToday, ...formDateBounds(),
+    this.setData({ month, year: month.slice(0, 4), monthLabel: monthLabel(month), monthEnd: displayToday, displayToday, ...formDateBounds(),
       todayLabel: `${Number(displayToday.slice(5, 7))}月${Number(displayToday.slice(8, 10))}日`,
       view: screen === 'history' && options.view === 'stats' ? 'stats' : 'detail',
       enabled: practiceConfig.practicesEnabled === true });
@@ -283,7 +295,8 @@ module.exports = function createPracticePage(screen = 'home') { return {
     // 跟随当前月份跨月；主动查看的历史月份保持不变。
     const followMonth = this.data.month === previousToday.slice(0, 7);
     const month = followMonth ? displayToday.slice(0, 7) : this.data.month;
-    this.setData({ displayToday, month, monthLabel: monthLabel(month), monthEnd: monthEnd(month),
+    const followYear = this.data.year === previousToday.slice(0, 4);
+    this.setData({ displayToday, month, ...(followYear ? { year: displayToday.slice(0, 4) } : {}), monthLabel: monthLabel(month), monthEnd: monthEnd(month),
       ...(followMonth && month !== this.data.month ? { selectedDate: '' } : {}),
       ...formDateBounds(this.data.formEditing) });
   },
@@ -438,27 +451,38 @@ module.exports = function createPracticePage(screen = 'home') { return {
   },
   async loadSummary(generation) {
     const account = ownerKey();
+    const { statsPeriod, year, month: selectedMonth, type } = this.data;
     this.setData({ summaryLoading: true });
     try {
-      const summary = unpack(await practiceApi.summary({ month: this.data.month, type: this.data.type, dayStartHour: 2 }));
+      const range = statsPeriod === 'year'
+        ? { startDate: `${year}-01-01`, endDate: year === practiceDay.getPracticeDate().slice(0, 4) ? practiceDay.getPracticeDate() : `${year}-12-31` }
+        : { month: selectedMonth };
+      // 累计使用接口独立的 allTime，不为读取累计拉取全部历史逐日数据。
+      const summary = unpack(await practiceApi.summary({ ...range, type, dayStartHour: 2 }));
       if (generation !== this._generation || account !== ownerKey()) return;
       const month = Array.isArray(summary.totals) ? summary : summary.totals || summary.month || {};
       const allTime = summary.allTime || summary.cumulative || {};
       const monthCards = metricCards(month);
       const allTimeCards = metricCards(allTime).map(card => ({ ...card,
         monthValue: monthCards.find(item => item.type === card.type).value }));
-      const selectedCard = monthCards.find(item => item.type === this.data.type);
+      const selectedCard = monthCards.find(item => item.type === type);
       const recordCount = Number(month.recordCount || month.records || 0);
       const overviewUnit = selectedCard && selectedCard.unit || '';
+      const period = statsPeriod === 'allTime' ? allTime : month;
+      const periodCards = metricCards(period).filter(card => type === 'all' || card.type === type);
       this.setData({ summary, monthCards, allTimeCards,
         recordCount, practiceDays: Number(month.practiceDays || month.days || 0),
         overviewTotal: selectedCard && selectedCard.value || 0,
-        overviewUnit, overviewLabel: overviewUnit === '次' ? '累计次数' : overviewUnit === '分钟' ? '累计时间' : '',
-        selectedMonthTotal: this.data.type === 'all' ? recordCount : selectedCard && selectedCard.value || 0,
-        selectedMonthUnit: this.data.type === 'all' ? '条' : overviewUnit,
+        overviewUnit, overviewLabel: overviewUnit === '次' ? '累计次数' : overviewUnit === '件' ? '累计件数' : overviewUnit === '分钟' ? '累计时间' : '',
+        selectedMonthTotal: type === 'all' ? recordCount : selectedCard && selectedCard.value || 0,
+        selectedMonthUnit: type === 'all' ? '条' : overviewUnit,
         allTimeRecordCount: Number(allTime.recordCount || allTime.records || 0), allTimePracticeDays: Number(allTime.practiceDays || allTime.days || 0),
-        calendar: makeCalendar(this.data.month, summary.daily, this.data.type, this.data.selectedDate),
-        ...makeTrend(this.data.month, summary.daily, this.data.type), summaryError: '', summaryFailure: null });
+        periodLabel: statsPeriod === 'allTime' ? '全部已上传记录' : statsPeriod === 'year' ? `${year}年` : monthLabel(selectedMonth),
+        periodCards, periodRecordCount: Number(period.recordCount || period.records || 0),
+        periodPracticeDays: Number(period.practiceDays || period.days || 0),
+        yearMonths: statsPeriod === 'year' ? makeYearMonths(year, summary.daily, type) : [],
+        calendar: statsPeriod === 'month' ? makeCalendar(selectedMonth, summary.daily, type, this.data.selectedDate) : [],
+        ...(statsPeriod === 'month' ? makeTrend(selectedMonth, summary.daily, type) : { trend: [], trendMax: 0, trendWidth: 0 }), summaryError: '', summaryFailure: null });
     } catch (error) {
       if (generation === this._generation && account === ownerKey()) this.setData({
         summaryError: message(error, '统计暂时无法读取，请重试'), summaryFailure: readFailure(error, '功课统计暂时无法读取，请稍后重试。') });
@@ -531,8 +555,26 @@ module.exports = function createPracticePage(screen = 'home') { return {
   onMonthChange(event) {
     const month = event.detail.value.slice(0, 7);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month > practiceDay.getPracticeDate().slice(0, 7)) return;
-    this.setData({ month, monthLabel: monthLabel(month), monthEnd: monthEnd(month), selectedDate: '' });
-    this.refresh();
+    this.setData({ month, year: month.slice(0, 4), monthLabel: monthLabel(month), monthEnd: monthEnd(month), selectedDate: '' });
+    return this.refresh();
+  },
+  changeStatsPeriod(event) {
+    const statsPeriod = event.currentTarget.dataset.period;
+    if (!['month', 'year', 'allTime'].includes(statsPeriod) || statsPeriod === this.data.statsPeriod) return;
+    this.setData({ statsPeriod });
+    return this.refresh();
+  },
+  onYearChange(event) {
+    const year = String(event.detail.value).slice(0, 4);
+    if (!/^[1-9]\d{3}$/.test(year) || year > practiceDay.getPracticeDate().slice(0, 4) || year === this.data.year) return;
+    this.setData({ year });
+    return this.refresh();
+  },
+  selectYearMonth(event) {
+    const month = event.currentTarget.dataset.month;
+    if (typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !month.startsWith(`${this.data.year}-`) || month > practiceDay.getPracticeDate().slice(0, 7)) return;
+    this.setData({ statsPeriod: 'month', month, monthLabel: monthLabel(month), monthEnd: monthEnd(month), selectedDate: '' });
+    return this.refresh();
   },
   onDateChange(event) { this.selectDay(event.detail.value); },
   selectCalendarDay(event) { this.selectDay(event.currentTarget.dataset.date); },
@@ -686,7 +728,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     this.setData({ showForm: true, detail: null, formType: type, formTypeName: TYPE_MAP[type].name,
       formUnit: TYPE_MAP[type].unit, formDate: record ? record.recordDate : now.date,
       formTime: record && record.occurredAt ? record.occurredAt.slice(11, 16) : record ? '' : now.time,
-      formValue: record ? String(quantity(record)) : '', formContent: record && record.content || '',
+      formValue: record ? String(quantity(record)) : type === 'kindness' ? '1' : '', formContent: record && record.content || '',
       formReflection: record && record.reflection || '', formRecordId: record && record.id || '',
       formEditing: !!record, formPending: false, formError: '', formMaxReflection: type === 'kindness' ? 1000 : 5000,
       ...formDateBounds(!!record, timestamp) });
@@ -728,19 +770,26 @@ module.exports = function createPracticePage(screen = 'home') { return {
     const reflection = this.data.formReflection.trim();
     if (reflection.length > this.data.formMaxReflection) throw new Error(`感悟不能超过 ${this.data.formMaxReflection} 字`);
     const payload = { recordDate, ...(occurredAt ? { occurredAt } : {}), reflection };
+    const value = this.data.formValue.trim();
+    const maximum = type === 'instant' ? 1000000 : type === 'kindness' ? 100000 : 1440;
+    const unit = type === 'instant' ? '次' : type === 'kindness' ? '件' : '分钟';
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > maximum) {
+      throw new Error(`请输入 1 至 ${maximum} ${unit}的整数，单条记录最多 ${maximum} ${unit}`);
+    }
     if (type === 'kindness') {
       const content = this.data.formContent.trim();
       if (!content || content.length > 1000) throw new Error('请填写 1 至 1000 字的善事内容');
       payload.content = content;
+      payload.quantity = Number(value);
     } else {
-      const value = this.data.formValue.trim();
-      const maximum = type === 'instant' ? 1000000 : 1440;
-      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > maximum) {
-        throw new Error(`请输入 1 至 ${maximum} ${type === 'instant' ? '次' : '分钟'}的整数`);
-      }
       payload[type === 'instant' ? 'count' : 'durationMinutes'] = Number(value);
     }
     return payload;
+  },
+  showFormFailure(error, fallback) {
+    const formError = typeof error === 'string' ? error : message(error, fallback);
+    this.setData({ formError });
+    wx.showToast({ title: '保存未完成，请查看提示', icon: 'none', duration: 3000 });
   },
   async saveForm() {
     if (!this.data.showForm || this.data.formBusy) return;
@@ -751,7 +800,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
     let payload;
     // 已入队内容已冻结；跨日重试继续上传原任务，不能重新按新建日期范围校验。
     try { if (!this._formTaskId) payload = this.formPayload(); }
-    catch (error) { this.setData({ formError: message(error, '请核对填写内容') }); return; }
+    catch (error) { this.showFormFailure(error, '请核对填写内容'); return; }
     this.setData({ formBusy: true, formError: '' });
     const formRequestId = this._formRequestId;
     const formOwner = this._formOwner;
@@ -769,13 +818,19 @@ module.exports = function createPracticePage(screen = 'home') { return {
       if (!currentForm()) return;
       const task = practiceQueue.getPending().find(item => item.id === this._formTaskId);
       if (task) {
-        this.setData({ formPending: true, formError: task.lastError && (task.lastError.message || task.lastError) || '已保留在本机，尚未上传。重试会继续提交同一条记录。' });
+        const rejected = practiceQueue.releaseRejected && practiceQueue.releaseRejected(task.id);
+        if (rejected) {
+          this._formTaskId = null;
+          this._formRequestId = uniqueId();
+        }
+        this.setData({ formPending: !rejected, ...(rejected ? { formBusy: false } : {}) });
+        this.showFormFailure(task.lastError, '已保留在本机，尚未上传。重试会继续提交同一条记录。');
         return;
       }
       this.setData({ showForm: false, formPending: false });
       wx.showToast({ title: this.data.formEditing ? '已更新' : '已记录', icon: 'success' });
       await this.refresh();
-    } catch (error) { if (currentForm()) this.setData({ formError: message(error, '暂未上传，填写内容已保留，请重试') }); }
+    } catch (error) { if (currentForm()) this.showFormFailure(error, '暂未上传，填写内容已保留，请重试'); }
     finally { if (this._formRequestId === formRequestId) this.setData({ formBusy: false }); this.refreshPending(); }
   },
   openDetail(event) {

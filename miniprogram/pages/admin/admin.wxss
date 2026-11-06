@@ -77,3 +77,13 @@ page { background: #f8fafc; color: #354152; }
 .feedback-message { margin: 0 8rpx 24rpx; }
 .feedback-delete-button { color: #b85b4f; background: #fff3f0; border-color: #f2d9d3; }
 .feedback-delete-button[disabled] { color: #cba9a3; background: #faf4f2; border-color: #f0e5e2; }
+.wisdom-actions { display: flex; gap: 18rpx; }
+.wisdom-actions > button { flex: 1; min-width: 0; }
+.wisdom-search-state { align-items: flex-start; margin-top: 14rpx; }
+.wisdom-search-state .small-note { min-width: 0; }
+.wisdom-search-state .text-button { flex-shrink: 0; }
+.wisdom-textarea { min-height: 250rpx; }
+.wisdom-card-selected { border-color: #c3ad83; background: #fffdf8; }
+.wisdom-quote { display: block; color: #526171; font-size: 28rpx; line-height: 1.85; white-space: pre-wrap; word-break: break-all; }
+.wisdom-row-actions { margin-top: 18rpx; }
+.wisdom-edit-button { flex-shrink: 0; min-width: 116rpx; margin: 0; }

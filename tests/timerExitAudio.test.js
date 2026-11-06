@@ -40,6 +40,7 @@ function harness({ profiles = [], vibration, settings } = {}) {
         stop() { calls.push({ type: 'stop', player: this }); this.currentTime = 0; },
         destroy() { this.destroyed = true; calls.push({ type: 'destroy', player: this }); },
         emit(type, value) { [...callbacks[type]].forEach(callback => callback(value)); },
+        finish() { this.currentTime = Math.max(this.currentTime, this.startTime, 1); this.emit('TimeUpdate'); this.emit('Ended'); },
         queued(type) { const pending = [...callbacks[type]]; return value => pending.forEach(callback => callback(value)); }
       };
       for (const type of ['Play', 'Ended', 'Error', 'TimeUpdate']) {
@@ -52,7 +53,7 @@ function harness({ profiles = [], vibration, settings } = {}) {
     }
   };
   const audio = createTimerExitAudio({
-    api, canPlay: () => available,
+    api, canPlay: () => available, now: () => now,
     diagnose: (type, details) => diagnostics.push({ type, details }),
     setTimeout(callback, delay) {
       const id = ++nextTimer;
@@ -95,7 +96,7 @@ test('exit playback only claims a pending matching reminder and never recreates 
   assert.equal(player.src, '/audio/收坐.mp3');
   h.audio.play({ sessionId: 'two' }); h.audio.resume(); h.audio.resume();
   assert.equal(h.plays().length, 1, 'repeated lifecycle calls cannot restart a ringing bell');
-  player.emit('Ended');
+  player.finish();
   assert.equal(h.pending(), null);
   assert.equal(h.audio.owns('two'), false);
   assert.equal(player.destroyed, true, 'the app player is released after ringing');
@@ -111,9 +112,13 @@ test('the app-owned bell continues from the page handoff position', () => {
   assert.equal(h.players[0].currentTime, 3.25);
   h.players[0].currentTime = 4;
   h.players[0].emit('TimeUpdate');
-  h.advance(10000);
+  for (let second = 1; second <= 10; second += 1) {
+    h.players[0].currentTime = 4 + second;
+    h.players[0].emit('TimeUpdate');
+    h.advance(1000);
+  }
   assert.equal(h.plays().length, 1, 'no page timer is needed to keep the cue alive');
-  h.players[0].emit('Ended');
+  h.players[0].finish();
   assert.equal(h.pending(), null);
 });
 
@@ -132,7 +137,7 @@ test('a late page handoff updates a deferred claim without overwriting live or p
   h.audio.play({ sessionId: 'handoff', position: 100 });
   h.available(true); h.audio.resume();
   assert.equal(player.currentTime, 4, 'the existing cue owns its confirmed position after playback begins');
-  player.emit('Ended');
+  player.finish();
 });
 
 test('hidden exits defer audio until foreground and audio interruptions resume trusted progress', () => {
@@ -150,7 +155,7 @@ test('hidden exits defer audio until foreground and audio interruptions resume t
   assert.equal(h.plays().length, 2);
   assert.equal(h.players.length, 1, 'an ordinary interruption can reuse the trusted audio context');
   assert.equal(player.currentTime, 2.5);
-  player.emit('Ended');
+  player.finish();
   assert.equal(h.pending(), null);
 });
 
@@ -161,6 +166,11 @@ test('a deferred exit follows the saved vibration preference without creating an
   h.available(true); h.audio.resume(); h.audio.resume();
   assert.equal(h.vibrations.length, 1);
   assert.equal(h.players.length, 0);
+  assert.equal(h.pending().sessionId, 'vibration');
+  h.advance(2999);
+  assert.ok(h.vibrations.length > 1);
+  assert.equal(h.pending().sessionId, 'vibration');
+  h.advance(1);
   assert.equal(h.pending(), null);
   assert.equal(h.audio.owns('vibration'), false);
 });
@@ -179,7 +189,7 @@ test('exhausted native playback preserves the reminder, falls back once and retr
   h.audio.play({ sessionId: 'failed', position: 5 });
   assert.equal(h.plays().length, 3);
   assert.equal(h.players[2].currentTime, 5, 'failed claims can also accept a late trusted page handoff');
-  h.players[2].emit('Ended');
+  h.players[2].finish();
   assert.equal(h.pending(), null);
   assert.equal(h.players[2].destroyed, true);
 });
@@ -203,12 +213,15 @@ test('newer reminders replace the app cue and stale native completion cannot cle
   assert.equal(h.audio.owns('new'), true);
   queuedEnded();
   assert.equal(h.pending().sessionId, 'new');
-  h.players[1].emit('Ended');
+  h.players[1].finish();
   assert.equal(h.pending(), null);
 });
 
 test('stale asynchronous vibration callbacks cannot acknowledge the replacement session', () => {
-  const h = harness({ settings: { end: 'vibrate' }, vibration() {} });
+  let confirmFollowingPulses = false;
+  const h = harness({ settings: { end: 'vibrate' }, vibration(callbacks) {
+    if (confirmFollowingPulses) callbacks.success();
+  } });
   h.queue('old'); h.audio.play();
   const old = h.vibrations[0];
   h.queue('new'); h.audio.play();
@@ -217,7 +230,56 @@ test('stale asynchronous vibration callbacks cannot acknowledge the replacement 
   assert.equal(h.audio.owns('new'), true);
   assert.equal(h.toasts.length, 0);
   h.vibrations[1].success();
+  assert.equal(h.pending().sessionId, 'new', 'native success does not finish the full vibration cue');
+  confirmFollowingPulses = true;
+  h.advance(3000);
   assert.equal(h.pending(), null);
+});
+
+test('an interrupted closing vibration resumes only the remaining time', () => {
+  const h = harness({ settings: { end: 'vibrate' } });
+  h.queue('paused'); h.audio.play(); h.advance(1000);
+  const pulsesBeforePause = h.vibrations.length;
+  h.available(false); h.audio.pause(); h.advance(10000); h.audio.resume();
+  assert.equal(h.vibrations.length, pulsesBeforePause);
+  assert.equal(h.pending().sessionId, 'paused');
+  h.available(true); h.audio.resume(); h.audio.resume();
+  assert.equal(h.vibrations.length, pulsesBeforePause + 1, 'duplicate resumes cannot restart an active cue');
+  h.advance(1999);
+  assert.equal(h.pending().sessionId, 'paused');
+  h.advance(1);
+  assert.equal(h.pending(), null);
+  assert.equal(h.timers.size, 0);
+});
+
+test('stopping a closing vibration cancels the remaining pulses and ignores late failures', () => {
+  const h = harness({ settings: { end: 'vibrate' }, vibration() {} });
+  h.queue('stopped'); h.audio.play(); h.advance(500);
+  const pulses = h.vibrations.length;
+  h.audio.stop();
+  h.vibrations[0].success(); h.vibrations[0].fail(); h.advance(10000);
+  assert.equal(h.vibrations.length, pulses);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.pending().sessionId, 'stopped');
+  assert.equal(h.toasts.length, 0);
+  assert.equal(h.audio.owns('stopped'), false);
+});
+
+test('closing vibration failures preserve the reminder without retrying vibration as fallback', () => {
+  for (const failure of ['callback', 'throw']) {
+    const h = harness({ settings: { end: 'vibrate' }, vibration(options) {
+      if (failure === 'callback') options.fail({ errMsg: 'unavailable' });
+      else throw new Error('unavailable');
+    } });
+    h.queue('failed-vibration'); h.audio.play(); h.advance(10000);
+    assert.equal(h.vibrations.length, 1);
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.pending().sessionId, 'failed-vibration');
+    assert.equal(h.players.length, 0);
+    assert.equal(h.toasts.length, 1);
+    assert.match(h.toasts[0].title, /震动提醒失败/);
+    assert.equal(h.diagnostics[0].type, 'exit_end_vibration_failed');
+  }
 });
 
 test('stopping playback releases all work without acknowledging an unfinished reminder', () => {

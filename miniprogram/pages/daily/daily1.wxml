@@ -1,117 +1,76 @@
-<!--pages/daily/daily1.wxml-->
-<view class="flex-col page">
-  <!-- 主要内容区域 - 白色底板 -->
-  <view class="content-overlay">
-    
-    <!-- 日期信息区域 -->
-    <view class="flex-col">
-      <view class="flex-row justify-between items-center">
-        <!-- 月份显示（英文） -->
-        <text class="self-start text">{{month}}</text>
-        <!-- 农历年份 -->
-        <text class="self-end year-text">{{year}}年</text>
-      </view>
-      <view class="flex-row justify-between group mt-7">
-        <!-- 日期 -->
-        <text class="text_3">{{day}}</text>
-        <!-- 农历日期和星期 -->
-        <view class="flex-col items-end">
-          <text class="self-end font text_4">{{lunarDate}}</text>
-          <text class="self-end font text_4 mt-2">{{weekDay}}</text>
-        </view>
-      </view>
-    </view>
-    
-    <!-- 卡牌区域 - 多层叠加效果，居中显示 -->
-    <view class="card-section">
-      <view class="card-stack-container">
-        <!-- 底层背景 -->
-        <image class="card-layer card-base" src="/images/right_card.png" />
-        <!-- 装饰层 -->
-        <image class="card-layer card-decor" src="/images/left_card.png" />
-        <!-- 主卡牌 - 移除倾斜效果，使用官方长按识别 -->
-        <view class="card-layer card-main">
-          <image 
-            class="main-image" 
-            src="{{displayImage}}" 
-            binderror="fallbackToDefaultImage"
-            show-menu-by-longpress="{{true}}"
-          />
-        </view>
-      </view>
-    </view>
+<view class="daily-page">
+  <view class="daily-intro">
+    <view class="daily-intro-title"><view class="daily-intro-dot"></view><text>今日 · 静心卡</text></view>
+    <text class="daily-intro-note">{{isSharedView ? '一张静心卡，一份安静' : '静坐之后 · 留一刻给自己'}}</text>
+  </view>
 
-    <!-- 金句区域 - 在卡牌下方居中显示 -->
-    <view class="wisdom-section">
-      <text class="wisdom-text">
-        {{wisdomQuote || '静坐觉察，每日修行。保持内心的平静与专注。'}}
-      </text>
+  <view class="daily-card">
+    <view class="daily-date">
+      <view class="daily-date-main">
+        <text class="daily-date-day">{{day}}</text>
+        <view class="daily-date-month"><text class="daily-month-name">{{month}}</text><text class="daily-date-year">{{year}}</text></view>
+      </view>
+      <view class="daily-date-detail"><text>{{weekDay}}</text><text class="daily-lunar-date">{{lunarDate}}</text></view>
     </view>
-    
-    <!-- 用户信息和统计区域 -->
-    <view class="flex-col group_3">
-      <view class="flex-row justify-end items-center group_4">
-        <!-- 用户头像和等级 -->
-        <view class="flex-col justify-start items-center relative group_7">
-          <nickname-avatar
-            avatar-class="image_2"
-            src="{{userAvatar}}"
-            nickname="{{userName}}"
-            size="{{123.53}}"
-          />
-          <!-- 最高等级文字 -->
-          <view class="flex-col justify-start items-center shrink-0 text-wrapper_2 ml-5" wx:if="{{highestLevelBadge}}">
-            <text class="font_2 text_8">{{highestLevelBadge.name}}</text>
-          </view>
+    <view wx:if="{{session}}" class="daily-session">
+      <view class="daily-session-copy">
+        <text class="daily-session-name">{{session.name}}</text>
+        <text class="daily-session-time">{{session.dateLabel}} {{session.timeLabel}} 收坐</text>
+      </view>
+      <view class="daily-session-duration"><text class="daily-session-minutes">{{session.minutes}}</text><text>分钟静坐</text></view>
+    </view>
+    <view class="daily-art">
+      <view wx:if="{{isImageLoading || imageLoadFailed}}" class="daily-art-placeholder">
+        <text>{{isImageLoading ? '正在打开静心卡…' : '卡片暂未加载'}}</text>
+        <button wx:if="{{imageLoadFailed}}" class="daily-art-retry" bindtap="retryDailyImage">重新加载</button>
+      </view>
+      <image wx:else class="daily-art-image" src="{{displayImage}}" mode="aspectFit" bindtap="previewDailyCard" binderror="fallbackToDefaultImage" show-menu-by-longpress="{{true}}" aria-label="查看静心卡大图" />
+    </view>
+    <view class="daily-wisdom">
+      <view class="daily-wisdom-line"></view>
+      <text class="daily-wisdom-text">{{wisdomQuote || '静心即是修心，心安即是归处。'}}</text>
+    </view>
+    <view wx:if="{{!isSharedView}}" class="daily-personal">
+      <view class="daily-profile">
+        <nickname-avatar src="{{userAvatar}}" nickname="{{userName}}" size="{{64}}" />
+        <view class="daily-profile-copy">
+          <text class="daily-profile-name">{{userName || '静心者'}}</text>
+          <text class="daily-profile-note">每一次静坐，都是与自己的相遇</text>
         </view>
-        
-        <!-- 用户信息区域 -->
-        <view class="flex-col group_5">
-          <!-- 用户信息和等级 -->
-          <view class="flex-row items-center group_6">
-            <text class="user-nickname">{{userName || '静心者'}}</text>
-            <!-- 等级显示和最高等级勋章 -->
-            <view class="highest-level-badge" wx:if="{{highestLevelBadge}}">
-              <image 
-                class="level-badge-icon" 
-                src="{{highestLevelBadge.imageUrl}}" 
-                mode="aspectFit"
-              />
-            </view>
-          </view>
-          
-          <!-- 打卡统计 -->
-          <view class="mt-15 flex-row group_6">
-            <view class="flex-col items-start equal-division-item">
-              <text class="font_4">{{totalCount || 0}}次</text>
-              <text class="mt-8 font_3">今日打卡</text>
-            </view>
-            <view class="flex-col items-start equal-division-item ml-102">
-              <text class="font_4">{{totalMinutes || 0}}分钟</text>
-              <text class="mt-8 font_3">本次觉察时长</text>
-            </view>
-          </view>
+        <view wx:if="{{highestLevelBadge}}" class="daily-profile-badge"><text>{{highestLevelBadge.name}}</text></view>
+      </view>
+      <view class="daily-stats">
+        <view class="daily-stat">
+          <view class="daily-stat-value"><text>{{totalMinutes || 0}}</text><text class="daily-stat-unit">分钟</text></view>
+          <text class="daily-stat-label">本次静坐</text>
         </view>
-        
-        <!-- 觉察计时器 -->
-        <view class="flex-col items-start equal-division-item">
-          <image class="image_6" src="/images/miniP.jpg"/>
-          <text class="mt-8 font_3">觉察计时器</text>
+        <view class="daily-stat-divider"></view>
+        <view class="daily-stat">
+          <view class="daily-stat-value"><text>{{totalCount || 0}}</text><text class="daily-stat-unit">次</text></view>
+          <text class="daily-stat-label">今日打卡</text>
         </view>
       </view>
-      
-        <!-- 分享按钮 -->
-        <view class="mt-12 flex-row justify-center items-center section" bindtap="shareToWechat">
-          <image
-            class="image_3"
-            src="/images/icons/share.svg"
-            mode="aspectFit"
-          />
-          <text class="share-text ml-9">立即分享</text>
-        </view>
+    </view>
+    <view class="daily-card-footer"><text>静坐觉察</text><text class="daily-card-footer-dot">·</text><text>把心安放在当下</text></view>
+  </view>
+
+  <text class="daily-sharing-note">将这一刻的安静，分享给在意的人</text>
+  <button wx:if="{{isSharedView}}" class="daily-start-button" bindtap="onBack" hover-class="daily-text-pressed">开启我的静坐 <text class="daily-start-arrow">→</text></button>
+
+  <view class="daily-action-bar">
+    <view class="daily-actions">
+      <button class="daily-action daily-action-save" bindtap="saveDailyImage" loading="{{isSavingImage}}" disabled="{{isSavingImage}}" hover-class="daily-action-pressed">
+        <view wx:if="{{!isSavingImage}}" class="daily-save-icon"><view></view></view>
+        <text>{{isSavingImage ? '正在保存' : '保存图片'}}</text>
+      </button>
+      <button class="daily-action daily-action-share" open-type="share" hover-class="daily-action-pressed">
+        <view class="daily-share-icon"><view></view></view><text>分享给朋友</text>
+      </button>
     </view>
   </view>
-  
-  <!-- 隐藏的Canvas用于图片生成 -->
-  <canvas canvas-id="dailyCanvas" style="position: fixed; left: -1000px; top: -1000px; width: 750px; height: 1334px;"></canvas>
+
+  <view class="daily-export-host" aria-hidden="true">
+    <canvas type="2d" id="dailyCanvas" class="daily-export-canvas" style="position: fixed; left: -10000px; top: 0; width: 750px; height: 1334px; opacity: 0; pointer-events: none;"></canvas>
+    <canvas type="2d" id="dailyShareCanvas" class="daily-export-canvas" style="position: fixed; left: -10000px; top: 0; width: 500px; height: 400px; opacity: 0; pointer-events: none;"></canvas>
+  </view>
 </view>

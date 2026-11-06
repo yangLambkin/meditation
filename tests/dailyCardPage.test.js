@@ -18,6 +18,7 @@ function createPage({ readyPath = null, profileHint = false } = {}) {
     ? Promise.resolve(readyPath)
     : new Promise(resolve => { resolveImage = resolve; });
   const modules = {
+    'dailyShareSession.js': require('../miniprogram/utils/dailyShareSession.js'),
     'avatar.js': require('../miniprogram/utils/avatar.js'),
     'lunar.js': { getLunarDate: () => '农历' },
     'checkin.js': {},
@@ -87,30 +88,38 @@ test('daily card uses the prepared local image synchronously on first load', () 
 });
 
 test('daily card export draws the nickname initial in place of a persisted default avatar', () => {
-  const { page } = createPage();
+  const { drawDailyPoster } = require('../miniprogram/utils/dailyPoster.js');
   const text = [];
   const images = [];
-  const ctx = new Proxy({ fillText: (value, x, y) => text.push({ value, x, y }), drawImage: source => images.push(source) }, {
+  const ctx = new Proxy({
+    fillText: (value, x, y) => text.push({ value, x, y }),
+    drawImage: source => images.push(source),
+    measureText: value => ({ width: Array.from(value).length * 20 })
+  }, {
     get: (target, property) => target[property] || (() => {})
   });
-  page.setData({ userName: 'ripples', userAvatar: '/images/userLogin.png' });
-  page.drawSimpleLayout(ctx, 1500, 2000);
-  assert.ok(text.some(item => item.value === 'R' && item.x === 300 && item.y === 700));
-  assert.equal(images.length, 0);
+  drawDailyPoster(ctx, { userName: 'ripples', userAvatar: '/images/userLogin.png' });
+  assert.ok(text.some(item => item.value === 'R'));
+  assert.equal(images.some(source => source === '/images/userLogin.png'), false);
+  assert.ok(images.includes('/images/p1.png'), 'the fallback avatar does not remove the daily card itself');
 });
 
-test('daily card keeps its local fallback until an in-flight prepared image is downloaded', async () => {
+test('daily card shows a loading placeholder until its prepared image is downloaded', async () => {
   const { page, calls, resolveImage } = createPage();
   page.onLoad({});
   page.onShow();
   assert.equal(page.data.displayImage, DEFAULT_IMAGE);
+  assert.equal(page.data.isImageLoading, true, 'hide the fallback poker while loading the selected card');
   assert.equal(page.data.day, 21, 'the date is available without waiting for the image');
   resolveImage('wxfile://downloaded.png');
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(page.data.displayImage, 'wxfile://downloaded.png');
+  assert.equal(page.data.isImageLoading, false);
+  assert.equal(page.data.imageLoadFailed, false);
   assert.equal(calls.image, 1);
   page.fallbackToDefaultImage();
   assert.equal(page.data.displayImage, DEFAULT_IMAGE, 'a missing temporary image falls back locally');
+  assert.equal(page.data.imageLoadFailed, true, 'hide the fallback poker and offer a retry');
   const updates = calls.updates.length;
   page.fallbackToDefaultImage();
   assert.equal(calls.updates.length, updates, 'a fallback image error cannot trigger a setData loop');

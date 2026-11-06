@@ -24,6 +24,7 @@ function createPage(kind, { now = '2026-01-01T01:59:59+08:00', dailyRecords = {}
     clearInterval(id) { intervals.delete(id); }
   };
   const modules = {
+    'dailyShareSession.js': require('../miniprogram/utils/dailyShareSession.js'),
     'practiceEntry.js': { recordsVisible: () => false },
     'checkin.js': {
       getUserCheckinData: () => ({ dailyRecords }),
@@ -149,6 +150,11 @@ test('daily card picks the latest actual record in the business day across old c
   } });
   assert.equal(page.getCurrentMeditationMinutes('2025-12-31'), 30);
   assert.equal(page.getCurrentMeditationMinutes('2026-01-01'), 0);
+  page.setCurrentDateInfo();
+  page.captureCardSession({});
+  assert.equal(page.data.session.minutes, 30);
+  assert.equal(page.data.session.dateLabel, '2026.01.01');
+  assert.equal(page.data.session.timeLabel, '01:30');
 });
 
 test('personal page expires an open sync selection and updates stats at 02:00', () => {

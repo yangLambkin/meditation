@@ -3014,6 +3014,94 @@ test('homework row links preserve the explicit type for member and historical de
   assert.equal(new URL('https://local' + calls.navigation[1].url).searchParams.get('practiceType'), 'walking');
 });
 
+test('history homework tabs select independent statistics and record links without reloading today', async () => {
+  const { page, calls } = await combinedPage();
+  page.switchRecordTab(event('tab', 'history'));
+  assert.equal(page.data.historyPracticeType, 'sitting');
+  const original = { report: page.data.report, todayMembers: page.data.todayMembers,
+    todaySummary: page.data.todaySummary, selectedPracticeType: page.data.selectedPracticeType };
+  const requestCount = calls.cloud.length;
+  for (const [practiceType, unit, hasGoal] of [['kindness', '件', true], ['walking', '分钟', false]]) {
+    page.switchHistoryPractice(event('practiceType', practiceType));
+    assert.equal(page.data.historyPracticeType, practiceType);
+    const view = page.data.practiceReports.find(item => item.practiceType === page.data.historyPracticeType);
+    assert.equal(view.unit, unit);
+    assert.equal(view.hasGoal, hasGoal);
+    assert.equal(view.report.practiceType, practiceType);
+    assert.equal(view.historySummary.rateLabel, hasGoal ? '75.9%' : '87%');
+    const context = { practiceType: page.data.historyPracticeType };
+    page.openHistoryDetails({ currentTarget: { dataset: { ...context, filter: 'unmet', memberOpenid: 'member' } } });
+    page.openMemberRecords({ currentTarget: { dataset: { ...context, memberOpenid: 'owner', view: 'month', recordScope: 'history' } } });
+    const [details, records] = calls.navigation.slice(-2).map(item => new URL('https://local' + item.url));
+    assert.equal(details.searchParams.get('practiceType'), practiceType);
+    assert.equal(details.searchParams.get('memberOpenid'), 'member');
+    assert.equal(details.searchParams.get('filter'), hasGoal ? 'unmet' : 'not_practiced');
+    assert.equal(records.searchParams.get('practiceType'), practiceType);
+    assert.equal(records.searchParams.get('month'), '2026-09');
+  }
+  assert.equal(calls.cloud.length, requestCount);
+  for (const [key, value] of Object.entries(original)) assert.equal(page.data[key], value, key);
+});
+
+test('history homework selection survives record tabs, member tabs, return navigation, and refresh', async () => {
+  const { page, calls } = await combinedPage();
+  page.switchRecordTab(event('tab', 'history'));
+  page.switchHistoryPractice(event('practiceType', 'kindness'));
+  const requestCount = calls.cloud.length;
+  page.switchRecordTab(event('tab', 'today'));
+  page.switchRecordTab(event('tab', 'history'));
+  await page.switchTab(event('tab', 'members'));
+  await page.switchTab(event('tab', 'records'));
+  page.onHide();
+  await page.onShow();
+  assert.equal(page.data.historyPracticeType, 'kindness');
+  assert.equal(page.data.recordTab, 'history');
+  assert.equal(calls.cloud.length, requestCount);
+  await page.onPullDownRefresh();
+  assert.equal(page.data.historyPracticeType, 'kindness');
+  assert.equal(page.data.recordTab, 'history');
+  assert.equal(calls.refreshStopped, 1);
+  assert.equal(calls.cloud.length, requestCount + 4);
+});
+
+test('history homework selection rejects unavailable tabs and falls back when a refreshed team removes one', async () => {
+  let currentTeam = dataTeamWithPractices();
+  const { page, calls } = await combinedPage({ cloud: (type, request) => success(type === 'getTeamInfo'
+    ? currentTeam : combinedReportFor(request.practiceType)) });
+  page.switchHistoryPractice(event('practiceType', 'kindness'));
+  const requestCount = calls.cloud.length;
+  const updates = page.dataUpdates.length;
+  for (const value of ['', undefined, null, 'instant', 'unknown']) page.switchHistoryPractice(event('practiceType', value));
+  page.switchHistoryPractice();
+  page.switchHistoryPractice(event('practiceType', 'kindness'));
+  assert.equal(page.data.historyPracticeType, 'kindness');
+  assert.equal(calls.cloud.length, requestCount);
+  assert.equal(page.dataUpdates.length, updates);
+  currentTeam = { ...currentTeam, practices: currentTeam.practices.filter(item => item.practiceType !== 'kindness') };
+  await page.onPullDownRefresh();
+  assert.equal(page.data.historyPracticeType, 'sitting');
+  assert.deepEqual(Array.from(page.data.practiceReports, item => item.practiceType), ['sitting', 'walking']);
+  const single = createPage();
+  await single.page.onShow();
+  assert.equal(single.page.data.hasMultiplePractices, false);
+  assert.equal(single.page.data.historyPracticeType, 'sitting');
+  assert.equal(single.page.data.historySummary.unmetCount, 13);
+});
+
+test('changing viewer account or binding resets the historical homework selection', async () => {
+  for (const [key, value] of [['userOpenId', 'member'], ['bijingBindingVersion', 'v2']]) {
+    const { page, storage } = await combinedPage();
+    page.switchRecordTab(event('tab', 'history'));
+    page.switchHistoryPractice(event('practiceType', 'walking'));
+    page.onHide();
+    storage.set(key, value);
+    await page.onShow();
+    assert.equal(page.data.reportError, '', key);
+    assert.equal(page.data.historyPracticeType, 'sitting', key);
+    assert.equal(page.data.practiceReports.length, 3, key);
+  }
+});
+
 test('editing and adding homework retain all rules and work when the selected homework has no target', async () => {
   let updated;
   const h = createPage({ cloud(type, request) {

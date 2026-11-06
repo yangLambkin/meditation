@@ -589,7 +589,7 @@ test('home template shows interactive daily cards, a three-day records heading a
   assert.match(home, /<text class="home-section-title">最近三天记录<\/text>/);
   assert.doesNotMatch(home, /今天的记录/);
   assert.match(home, /data-view="detail"[^>]*bindtap="openRecords"|bindtap="openRecords"[^>]*data-view="detail"/);
-  assert.match(home, /查看全部/);
+  assert.match(home, /明细与统计/);
   assert.match(home, /<include\s+src="[^"]*practiceDialogs\.wxml"\s*\/>/);
   assert.doesNotMatch(home, /bindchange="onMonthChange"|class="calendar|每日完成量趋势|已上传功课累计/);
 });

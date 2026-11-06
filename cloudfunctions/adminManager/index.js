@@ -26,7 +26,7 @@ async function alertExists(read) {
 }
 
 exports.main = async (event = {}) => {
-  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings', 'adminListFeedback', 'adminUpdateFeedback', 'adminDeleteFeedback', 'adminListBackfillRequests', 'adminReviewBackfillRequest', 'adminGetBackfillAlert'].includes(event.type)) {
+  if (!event || !['getAccess', 'getSyncAlert', 'adminSearchUsers', 'adminGetDayRecords', 'adminMigrateBindings', 'adminListFeedback', 'adminUpdateFeedback', 'adminDeleteFeedback', 'adminListBackfillRequests', 'adminReviewBackfillRequest', 'adminGetBackfillAlert', 'adminListWisdom', 'adminCreateWisdom', 'adminUpdateWisdom', 'adminDeleteWisdom'].includes(event.type)) {
     return { success: false, error: '未知的操作类型' };
   }
   const wxContext = cloud.getWXContext() || {};
@@ -45,6 +45,10 @@ exports.main = async (event = {}) => {
   }
   if (event.type === 'getAccess') {
     return { success: true, data: { isAdmin } };
+  }
+  if (['adminListWisdom', 'adminCreateWisdom', 'adminUpdateWisdom', 'adminDeleteWisdom'].includes(event.type)) {
+    if (!isAdmin) return panelForbidden();
+    return require('./wisdom').handleWisdom(event, { db: getDatabase(), openid: wxContext.OPENID });
   }
   if (['adminListBackfillRequests', 'adminReviewBackfillRequest', 'adminGetBackfillAlert'].includes(event.type)) {
     if (!isAdmin) return event.type === 'adminGetBackfillAlert' ? { success: true, data: { hasPendingBackfill: false } } : panelForbidden();

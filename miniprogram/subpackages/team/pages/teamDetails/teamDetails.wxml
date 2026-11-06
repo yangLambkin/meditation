@@ -177,9 +177,20 @@
       </view>
 
       <view wx:else class="history-view">
-        <view class="practice-history-section" wx:for="{{practiceReports}}" wx:for-item="practiceReport" wx:key="practiceType">
-          <template is="practiceHistory" data="{{...practiceReport, practiceUnit: practiceReport.unit, hasMultiplePractices: hasMultiplePractices}}" />
-        </view>
+        <scroll-view wx:if="{{hasMultiplePractices}}" class="history-practice-tabs" scroll-x="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}"
+          scroll-into-view="history-practice-{{historyPracticeType}}" scroll-with-animation="{{true}}" aria-label="切换历史统计功课">
+          <view class="history-practice-tab-list">
+            <view wx:for="{{practiceReports}}" wx:key="practiceType" id="history-practice-{{item.practiceType}}"
+              class="history-practice-tab {{historyPracticeType === item.practiceType ? 'active' : ''}}"
+              data-practice-type="{{item.practiceType}}" bindtap="switchHistoryPractice" hover-class="history-practice-tab-pressed"
+              aria-role="button" aria-label="查看{{item.name}}历史统计" aria-selected="{{historyPracticeType === item.practiceType}}">{{item.name}}</view>
+          </view>
+        </scroll-view>
+        <block wx:for="{{practiceReports}}" wx:for-item="practiceReport" wx:key="practiceType">
+          <view wx:if="{{historyPracticeType === practiceReport.practiceType}}" class="practice-history-section">
+            <template is="practiceHistory" data="{{...practiceReport, practiceUnit: practiceReport.unit, hasMultiplePractices: hasMultiplePractices}}" />
+          </view>
+        </block>
       </view>
     </block>
     </block>
@@ -334,7 +345,7 @@
                     cursor-spacing="24" maxlength="7" disabled="{{isSaving || isDeleting}}" />
                   <text class="team-form-unit">{{draftUnit || practiceUnit}} / 天</text>
                 </view>
-                <view wx:else class="team-form-readonly">{{draftGoalMinutes ? draftGoalMinutes + ' ' + practiceUnit + ' / 天' : '未设置'}}</view>
+                <view wx:else class="team-form-readonly">{{draftGoalMinutes ? draftGoalMinutes + ' ' + (draftUnit || practiceUnit) + ' / 天' : '未设置'}}</view>
                 <block wx:if="{{isCreator}}">
                   <text class="team-form-help">可选推荐值，也可输入 1–{{draftGoalMax || goalMax}} 的整数；留空则不设置。</text>
                   <view class="team-form-presets">

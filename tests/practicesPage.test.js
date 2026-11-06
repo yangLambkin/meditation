@@ -575,7 +575,7 @@ test('monthly and cumulative statistics use each practice quantity while the all
   ];
   const expectations = [
     [0, 'all', 33, '条'], [1, 'sitting', 91, '分钟'], [2, 'walking', 42, '分钟'],
-    [3, 'instant', 17, '次'], [4, 'learning', 63, '分钟'], [5, 'kindness', 8, '次'], [6, 'clapping', 29, '分钟']
+    [3, 'instant', 17, '次'], [4, 'learning', 63, '分钟'], [5, 'kindness', 8, '件'], [6, 'clapping', 29, '分钟']
   ];
   const allTimeTotals = expectations.slice(1).map(([, type, value]) => ({ type, totalValue: value * 10, recordCount: 40 }));
   const h = createPage({ summary: () => ({ recordCount: 33, totals,
@@ -592,7 +592,7 @@ test('monthly and cumulative statistics use each practice quantity while the all
     if (type !== 'all') {
       assert.equal(h.page.data.selectedMonthTotal, h.page.data.monthCards.find(item => item.type === type).value, type);
       assert.equal(h.page.data.overviewUnit, unit, type);
-      assert.equal(h.page.data.overviewLabel, unit === '次' ? '累计次数' : '累计时间', type);
+      assert.equal(h.page.data.overviewLabel, unit === '次' ? '累计次数' : unit === '件' ? '累计件数' : '累计时间', type);
     }
     for (const [, practiceType, monthValue, practiceUnit] of expectations.slice(1)) {
       const card = h.page.data.allTimeCards.find(item => item.type === practiceType);
@@ -972,11 +972,14 @@ test('calendar quantity labels retain small values and compact large daily total
   }
 });
 
-test('statistics show monthly and cumulative quantities below the calendar and label calendar records as entries', () => {
+test('statistics expose monthly, yearly and cumulative totals and label calendar records as entries', () => {
   const page = historyTemplate();
   assert.doesNotMatch(page, /更多统计|showMoreStats|toggleMoreStats|more-stats-toggle|calendar-marker|calendar-title|calendar-total/);
   assert.match(page, /每日完成量趋势/);
-  assert.match(page, /已上传功课累计/);
+  assert.match(page, /总记录数 · 条/);
+  assert.match(page, /periodRecordCount/);
+  assert.match(page, /data-period="month"[\s\S]*?data-period="year"[\s\S]*?data-period="allTime"/);
+  assert.match(page, /每月完成量/);
   assert.match(page, /calendar-day[\s\S]*?day\.day[\s\S]*?day\.valueLabel/);
   const amount = page.match(/<text\b[^>]*class="calendar-amount"[^>]*>[\s\S]*?<\/text>/);
   assert.ok(amount, 'calendar quantity is rendered below each date');
@@ -987,11 +990,10 @@ test('statistics show monthly and cumulative quantities below the calendar and l
   assert.match(amount[0], /type === 'all' \? '条' : ''/);
   assert.doesNotMatch(amount[0], /selectedMonthUnit|分钟|次|件|—/);
   assert.doesNotMatch(page, /practice-overview-card|本月记录件数|记录件数|item\.records/);
-  assert.match(page, /wx:if="{{type !== 'all'}}" class="month-overview"/);
-  const cumulative = page.slice(page.indexOf('已上传功课累计'));
-  assert.match(cumulative, /class="metric-value">{{item\.value}}/);
-  assert.match(cumulative, /class="metric-unit">{{item\.unit}}/);
-  assert.match(cumulative, /wx:if="{{type === 'all'}}" class="metric-month">本月 {{item\.monthValue}} {{item\.unit}}/);
+  assert.match(page, /periodCards/);
+  assert.match(page, /class="metric-value">{{item\.value}}/);
+  assert.match(page, /class="metric-unit">{{item\.unit}}/);
+  assert.match(page, /wx:if="{{statsPeriod === 'month'}}" class="stats-card calendar-card"/);
   assert.match(page, /本月最高 {{trendMax}} {{overviewUnit}}/);
   assert.match(page, /aria-label="{{[^"\n]*day\.value\s*\+\s*selectedMonthUnit/);
   assert.match(page, /day\.level/);
@@ -1091,7 +1093,7 @@ test('all five manual practices default to today and accept the earliest of the 
     assert.equal(h.calls.enqueue[0].operation, 'create', type);
     assert.deepEqual(h.calls.enqueue[0].payload, {
       recordDate: '2026-10-18', occurredAt: '2026-10-18 23:59:00', reflection: '两周内补录功课',
-      ...(type === 'kindness' ? { content: '帮助他人' } : type === 'instant' ? { count: 7 } : { durationMinutes: 7 })
+      ...(type === 'kindness' ? { content: '帮助他人', quantity: 1 } : type === 'instant' ? { count: 7 } : { durationMinutes: 7 })
     }, type);
     assert.equal(h.page.data.showForm, false, type);
   }
@@ -1162,7 +1164,7 @@ test('unqueued drafts expire at the next Beijing midnight while keeping every fi
     assert.equal(h.page.data.today, '2026-11-01', type);
     assert.equal(h.page.data.formDate, '2026-10-18', type);
     assert.equal(h.page.data.formTime, '12:45', type);
-    assert.equal(h.page.data.formValue, type === 'kindness' ? '' : '7', type);
+    assert.equal(h.page.data.formValue, type === 'kindness' ? '1' : '7', type);
     assert.equal(h.page.data.formContent, type === 'kindness' ? '帮助他人' : '', type);
     assert.equal(h.page.data.formReflection, '保留草稿感悟', type);
     assert.equal(h.page.data.showForm, true, type);
@@ -1256,16 +1258,17 @@ test('manual quantity and future or impossible Beijing times never enter the que
   assert.equal(h.calls.enqueue.length, 0);
 });
 
-test('editing kindness preserves its original deed quantity by excluding quantity from PATCH payload', async () => {
+test('editing kindness loads its original deed quantity and lets the member update it', async () => {
   const h = createPage();
   h.page.openForm('kindness', { id: 7, type: 'kindness', recordDate: '2026-10-30', occurredAt: '2026-10-30 20:15:24', quantity: 5, content: '原善行', reflection: '' });
   assert.equal(h.page.data.formValue, '5');
+  h.page.onFormValue({ detail: { value: '8' } });
   h.page.onFormContent({ detail: { value: '更新善行内容' } });
   await h.page.saveForm();
   const submitted = h.calls.enqueue[0];
   assert.equal(submitted.operation, 'update');
   assert.equal(submitted.recordId, 7);
-  assert.deepEqual(submitted.payload, { recordDate: '2026-10-30', occurredAt: '2026-10-30 20:15:24', reflection: '', content: '更新善行内容' });
+  assert.deepEqual(submitted.payload, { recordDate: '2026-10-30', occurredAt: '2026-10-30 20:15:24', reflection: '', content: '更新善行内容', quantity: 8 });
 });
 
 test('editing older history has no lower date bound and preserves the original occurrence time', async () => {

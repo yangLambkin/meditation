@@ -37,6 +37,7 @@ function createPage(name, dailyWisdom) {
   let definition;
   let nextTimer = 0;
   const modules = {
+    'dailyShareSession.js': require('../miniprogram/utils/dailyShareSession.js'),
     'practiceEntry.js': { recordsVisible: () => false },
     'bijingRecordSync.js': { getDayState: () => null, subscribe: () => () => {} },
     'homeBackfill.js': { data: {}, methods: { initHomeBackfill() {}, stopHomeBackfill() {}, refreshBackfillSelection() {} } },
@@ -162,7 +163,7 @@ for (const name of ['home', 'card']) {
     assert.equal(wisdom.subscribers.size, 0);
     assert.equal(page._stopWisdomWatch, null);
     assert.equal(intervals.size, 0);
-    assert.deepEqual(navigation, name === 'card' ? ['/pages/index/index'] : []);
+    assert.deepEqual(navigation, [], 'unloading a page must not interrupt the incoming share route');
     wisdom.publish('这条更新不应再进入已卸载页面。');
     assert.equal(page.data.wisdomQuote, displayedQuote(name, '凌晨四点后，开启新的觉察。'));
   });

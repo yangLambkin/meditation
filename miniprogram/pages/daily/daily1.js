@@ -5,29 +5,81 @@ const badgeManager = require('../../utils/badgeManager.js');
 const dateUtil = require('../../utils/dateUtil.js');
 const homeCheckin = require('../../utils/homeCheckin.js');
 const dailyWisdom = require('../../utils/dailyWisdom.js');
-const { getAvatarInitial, getAvatarSource } = require('../../utils/avatar.js');
+const dailyShareSession = require('../../utils/dailyShareSession.js');
+const SHARE_COVER_FALLBACK = '/images/daily-share.png';
+
+function sharedDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+  const date = new Date(`${value}T12:00:00+08:00`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : '';
+}
+
+function shareQuote(value) {
+  if (typeof value !== 'string') return '';
+  // Keep the native share path short, including when the quote contains Chinese.
+  const text = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  const characters = Array.from(text);
+  return characters.length > 96 ? `${characters.slice(0, 95).join('')}…` : text;
+}
+
+function readSharedQuote(value) {
+  if (typeof value !== 'string') return '';
+  // Native launch channels can hand over a decoded query or its encoded value.
+  // The encoded colon marks which form arrived, so literal "%25"/"%E5" text
+  // survives either channel without being decoded a second time.
+  if (value.startsWith('q1:')) return shareQuote(value.slice(3));
+  if (/^q1%3a/i.test(value)) {
+    try { return shareQuote(decodeURIComponent(value).slice(3)); }
+    catch (_) { return ''; }
+  }
+  // Preserve links created before the explicit quote format was introduced.
+  try { return shareQuote(decodeURIComponent(value)); }
+  catch (_) { return shareQuote(value); }
+}
 
 Page({
   data: {
     wisdomQuote: dailyWisdom.DEFAULT_QUOTE,
-    // 未预热时先显示本地卡片，云图片下载完成后再替换。
-    displayImage: dailyCardImage.DEFAULT_IMAGE
+    displayImage: dailyCardImage.DEFAULT_IMAGE,
+    isImageLoading: true,
+    imageLoadFailed: false,
+    isSharedView: false,
+    session: null,
+    isSavingImage: false
   },
 
-  onLoad(options) {
+  onLoad(options = {}) {
     this._isUnloaded = false;
+    this._isShareCanvasReady = false;
     this._initialShowPending = true;
+    const isSharedView = options.shared === '1' || Object.prototype.hasOwnProperty.call(options, 'card');
+    this._sharedDate = isSharedView ? sharedDate(options.date) : '';
+    this.setData({ isSharedView });
+    if (this.data.isSharedView) {
+      this._sharedQuote = readSharedQuote(options.quote);
+      this._sharedImageKey = dailyCardImage.normalizeImageKey(options.card);
+      this.setData({ session: dailyShareSession.readSession(options) });
+      if (this._sharedQuote) this.setData({ wisdomQuote: this._sharedQuote });
+    }
+    if (typeof wx.showShareMenu === 'function') {
+      wx.showShareMenu({ menus: ['shareAppMessage', 'shareTimeline'], fail() {} });
+    }
     // 1. 立即同步设置当前日期，避免首屏闪现默认日期 23（日期设置不应依赖异步图片预加载）
     this.setCurrentDateInfo();
+    if (!isSharedView) this.captureCardSession(options);
 
-    // 2. 预加载随机图片（仅影响 displayImage，不阻塞日期）
+    // 2. 自己的新卡片仅抽取一次，分享入口始终读取原牌面。
     this.preloadRandomImage().catch(error => {
-      // 如果预加载失败，降级到默认图片
-      console.warn('图片预加载失败，使用默认图片:', error);
+      console.warn('静心卡图片预加载失败，保留原牌等待重试:', error);
       this.fallbackToDefaultImage();
     });
 
     console.log('开始预加载图片，避免闪烁');
+  },
+
+  onReady() {
+    this._isShareCanvasReady = true;
+    this.prepareShareCover();
   },
 
   /**
@@ -37,17 +89,20 @@ Page({
     this._isPageVisible = true;
     console.log('=== daily1页面onShow函数开始 ===');
     if (this._stopWisdomWatch) this._stopWisdomWatch();
-    this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
-      this.setData({ wisdomQuote: content });
-    });
+    if (!this.data.isSharedView) {
+      this._stopWisdomWatch = dailyWisdom.watchDailyWisdom(({ content }) => {
+        this.setData({ wisdomQuote: content });
+        this.prepareShareCover();
+      });
+    }
     
     // 首次 onLoad 已同步刷新日期、用户和统计；返回页面时再刷新。
-    if (!this._initialShowPending || this._displayedBusinessDate !== dateUtil.getBusinessDate()) {
+    if (!this._initialShowPending || (!this._sharedDate && this._displayedBusinessDate !== dateUtil.getBusinessDate())) {
       this.setCurrentDateInfo();
     }
     this._initialShowPending = false;
     if (this._stopBusinessDayWatch) this._stopBusinessDayWatch();
-    this._stopBusinessDayWatch = dateUtil.watchBusinessDate(() => this.setCurrentDateInfo());
+    this._stopBusinessDayWatch = this._sharedDate ? null : dateUtil.watchBusinessDate(() => this.setCurrentDateInfo());
     
     console.log('=== daily1页面onShow函数结束 ===');
   },
@@ -56,7 +111,7 @@ Page({
    * 设置当前日期信息
    */
   setCurrentDateInfo: function() {
-    this._displayedBusinessDate = dateUtil.getBusinessDate();
+    this._displayedBusinessDate = this._sharedDate || dateUtil.getBusinessDate();
     const [year, month, day] = this._displayedBusinessDate.split('-').map(Number);
     const today = new Date(year, month - 1, day, 12);
     
@@ -73,7 +128,7 @@ Page({
     const lunarDate = lunarUtil.getLunarDate(today);
     
     // 获取用户数据
-    this.getUserData();
+    if (!this.data.isSharedView) this.getUserData();
     
     // 更新页面显示
     this.setData({
@@ -83,6 +138,7 @@ Page({
       weekDay: weekDay,
       lunarDate: lunarDate
     });
+    this.prepareShareCover();
     
     console.log(`打卡日期: ${year}.${englishMonth} ${weekDay} ${lunarDate}`);
   },
@@ -94,19 +150,53 @@ Page({
     return `${minutes}分钟`;
   },
 
+  captureCardSession(options) {
+    let session = dailyShareSession.createSession(this.data.userName, options.completedAt, options.minutes);
+    if (!session) {
+      // Compatibility for older timer entries without an explicit completion.
+      // Capture once so a later record or a day rollover cannot replace it.
+      try {
+        const records = homeCheckin.buildCheckinRecords(checkinManager.getUserCheckinData());
+        const record = records.find(item => item.dayDate === this._displayedBusinessDate);
+        if (record) session = dailyShareSession.createSession(this.data.userName, record.sortTimestamp, record.duration);
+      } catch (_) {}
+    }
+    this.setData({ session, ...(session ? { totalMinutes: session.minutes } : {}) });
+    this.prepareShareCover();
+  },
+
   /**
-   * 消费计时完成时预热的图片，直接进入日签时也复用相同的下载流程。
+   * 消费计时完成时预热的图片，直接进入静心卡时也复用相同的下载流程。
    */
   preloadRandomImage: function() {
-    const image = dailyCardImage.takeNextImage();
+    if (this._dailyImageEntry) return this._dailyImageEntry.promise;
+    const image = this.data.isSharedView
+      ? dailyCardImage.takeSharedImage(this._sharedImageKey)
+      : dailyCardImage.takeNextImage();
+    return this.loadDailyImage(image);
+  },
+
+  loadDailyImage(image) {
+    this._dailyImageEntry = image;
+    const applyImage = path => {
+      if (!this._isUnloaded && this._dailyImageEntry === image) {
+        this.setData({ displayImage: path, isImageLoading: false,
+          imageLoadFailed: path === dailyCardImage.DEFAULT_IMAGE && !!image.key && image.key !== 'local' });
+      }
+      return path;
+    };
     if (image.path) {
-      if (!this._isUnloaded) this.setData({ displayImage: image.path });
+      applyImage(image.path);
       return image.promise;
     }
-    return image.promise.then(path => {
-      if (!this._isUnloaded) this.setData({ displayImage: path });
-      return path;
-    });
+    if (!this._isUnloaded) this.setData({ isImageLoading: true, imageLoadFailed: false });
+    return image.promise.then(applyImage);
+  },
+
+  retryDailyImage() {
+    if (this._isUnloaded || this.data.isImageLoading || !this.data.imageLoadFailed) return;
+    const key = this.data.isSharedView ? this._sharedImageKey : this._dailyImageEntry && this._dailyImageEntry.key;
+    return this.loadDailyImage(dailyCardImage.takeSharedImage(key));
   },
 
   getRandomImage: function() {
@@ -114,11 +204,13 @@ Page({
   },
 
   /**
-   * 图片读取失败时使用本地卡片，避免临时文件失效造成裂图。
+   * 图片读取失败只影响显示；保留原牌编号，重试和转发都不会换牌。
    */
   fallbackToDefaultImage: function() {
-    if (!this._isUnloaded && this.data.displayImage !== dailyCardImage.DEFAULT_IMAGE) {
-      this.setData({ displayImage: dailyCardImage.DEFAULT_IMAGE });
+    const key = this.data.isSharedView ? this._sharedImageKey : this._dailyImageEntry && this._dailyImageEntry.key || 'local';
+    this._dailyImageEntry = { key, path: dailyCardImage.DEFAULT_IMAGE, promise: Promise.resolve(dailyCardImage.DEFAULT_IMAGE) };
+    if (!this._isUnloaded && (!this.data.imageLoadFailed || this.data.isImageLoading || this.data.displayImage !== dailyCardImage.DEFAULT_IMAGE)) {
+      this.setData({ displayImage: dailyCardImage.DEFAULT_IMAGE, isImageLoading: false, imageLoadFailed: true });
     }
   },
 
@@ -181,8 +273,7 @@ Page({
       
       console.log('未找到用户信息，使用默认值 - 昵称:', userName, '头像:', userAvatar, '登录状态:', isLoggedIn);
       
-      // 提示用户设置个人信息
-      this.showProfileHint();
+      // 收坐后保持安静，个人资料可在「我」中自行完善。
     }
     
     // 获取用户打卡统计数据（使用本地缓存优先的架构）
@@ -277,7 +368,7 @@ Page({
       console.log('本地获取今日打卡次数:', todayCheckinCount);
       
       // 2. 获取本次觉察时长（当天最后一次打卡的时长）
-      const currentMinutes = this.getCurrentMeditationMinutes(todayStr);
+      const currentMinutes = this.data.session ? this.data.session.minutes : this.getCurrentMeditationMinutes(todayStr);
       console.log('本地获取本次觉察时长:', currentMinutes, '分钟');
       
       // 3. 获取用户累计统计信息（从本地）
@@ -401,7 +492,7 @@ Page({
     this._stopWisdomWatch = null;
   },
 
-  // 重写页面返回逻辑
+  // 卸载只清理资源，避免旧卡片抢占微信新分享的目标路由。
   onUnload() {
     this._isUnloaded = true;
     this._isPageVisible = false;
@@ -411,10 +502,6 @@ Page({
     this._stopBusinessDayWatch = null;
     if (this._stopWisdomWatch) this._stopWisdomWatch();
     this._stopWisdomWatch = null;
-    // 页面返回时跳转到首页
-    wx.switchTab({
-      url: '/pages/index/index'
-    });
   },
 
   // 自定义返回按钮点击事件
@@ -425,233 +512,170 @@ Page({
     });
   },
 
-  /**
-   * 分享到微信朋友圈
-   */
-  shareToWechat: function() {
-    console.log('点击分享朋友圈');
-    
-    // 显示分享菜单
-    wx.showShareMenu({
-      withShareTicket: true,
-      menus: ['shareAppMessage', 'shareTimeline']
-    });
-    
-    // 对于朋友圈分享，显示提示信息
-    wx.showModal({
-      title: '分享朋友圈',
-      content: '请点击右上角菜单，选择"分享到朋友圈"',
-      showCancel: false,
-      confirmText: '知道了'
-    });
+  noop() {},
+
+  getShareQuery() {
+    const imageKey = this.data.isSharedView ? this._sharedImageKey : this._dailyImageEntry && this._dailyImageEntry.key || 'local';
+    const base = `shared=1&date=${encodeURIComponent(this._displayedBusinessDate || dateUtil.getBusinessDate())}` +
+      `&card=${encodeURIComponent(dailyCardImage.normalizeImageKey(imageKey))}` +
+      dailyShareSession.sessionQuery(this.data.session);
+    const characters = Array.from(shareQuote(this.data.wisdomQuote));
+    const query = () => `${base}&quote=${encodeURIComponent(`q1:${characters.join('')}`)}`;
+    // Stay inside WeChat's launch-path budget even with emoji in both fields.
+    while (characters.length && `/pages/daily/daily1?${query()}`.length > 1000) characters.pop();
+    return query();
   },
 
-  /**
-   * 保存图片到相册
-   */
-  saveImage: function() {
-    console.log('点击保存图片');
-    
-    // 首先获取用户授权
-    wx.authorize({
-      scope: 'scope.writePhotosAlbum',
-      success: () => {
-        // 授权成功，开始保存图片
-        this.saveDailyImage();
-      },
-      fail: (err) => {
-        console.log('用户未授权保存图片权限:', err);
-        // 引导用户授权
-        wx.showModal({
-          title: '保存图片需要授权',
-          content: '请授权访问相册以保存图片',
-          success: (res) => {
-            if (res.confirm) {
-              // 用户确认，重新请求授权
-              wx.authorize({
-                scope: 'scope.writePhotosAlbum',
-                success: () => {
-                  this.saveDailyImage();
-                },
-                fail: () => {
-                  wx.showToast({
-                    title: '授权失败',
-                    icon: 'none'
-                  });
-                }
-              });
-            }
-          }
-        });
-      }
-    });
-  },
-
-  /**
-   * 保存打卡图片 - 简化版Canvas绘制
-   */
-  saveDailyImage: function() {
-    const that = this;
-    
-    // 创建Canvas上下文
-    const ctx = wx.createCanvasContext('dailyCanvas');
-    
-    // 设置Canvas尺寸（使用简单尺寸）
-    const width = 750;
-    const height = 1334;
-    
-    // 1. 绘制白色背景（全屏）
-    ctx.setFillStyle('#ffffff');
-    ctx.fillRect(0, 0, width, height);
-    
-    // 2. 绘制简单布局（避免复杂的布局计算）
-    this.drawSimpleLayout(ctx, width, height);
-    
-    // 绘制完成，生成图片
-    ctx.draw(false, () => {
-      setTimeout(() => {
-        wx.canvasToTempFilePath({
-          canvasId: 'dailyCanvas',
-          success: (res) => {
-            // 保存图片到相册
-            wx.saveImageToPhotosAlbum({
-              filePath: res.tempFilePath,
-              success: () => {
-                wx.showToast({
-                  title: '打卡图片保存成功',
-                  icon: 'success'
-                });
-              },
-              fail: (err) => {
-                console.error('保存图片失败:', err);
-                wx.showToast({
-                  title: '保存失败',
-                  icon: 'none'
-                });
-              }
-            });
-          },
-          fail: (err) => {
-            console.error('生成图片失败:', err);
-            that.saveDefaultImage();
-          }
-        });
-      }, 500);
-    });
-  },
-
-  /**
-   * 绘制简单布局 - 使用更接近实际页面的比例
-   */
-  drawSimpleLayout: function(ctx, width, height) {
-    // 使用更接近实际页面比例的尺寸（基于rpx到px的转换，通常1rpx=0.5px）
-    
-    // 1. 绘制顶部金句（左上角）
-    ctx.setFillStyle('#ffffff');
-    ctx.setFontSize(60); // 相当于30rpx -> 60px
-    ctx.setTextAlign('left');
-    ctx.fillText(this.data.wisdomQuote, 100, 240); // 相当于50rpx -> 100px, 120rpx -> 240px
-    
-    // 2. 绘制日期信息（右上角）
-    ctx.setTextAlign('right');
-    ctx.setFontSize(50); // 相当于25rpx -> 50px
-    ctx.fillText(`${this.data.year}.${this.data.month} ${this.data.weekDay}`, width - 100, 160);
-    ctx.fillText(this.data.lunarDate, width - 100, 240);
-    
-    // 3. 绘制用户信息区域（中间）
-    const userY = 600; // 相当于300rpx -> 600px
-    
-    // 绘制头像（使用更大的尺寸）
-    const avatar = getAvatarSource(this.data.userAvatar);
-    if (avatar) {
-      ctx.drawImage(avatar, 200, userY, 200, 200); // 相当于100rpx -> 200px
-    } else {
-      ctx.save();
-      ctx.setFillStyle('#b29764');
-      ctx.beginPath();
-      ctx.arc(300, userY + 100, 100, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.setFillStyle('#ffffff');
-      ctx.setFontSize(80);
-      ctx.setTextAlign('center');
-      ctx.setTextBaseline('middle');
-      ctx.fillText(getAvatarInitial(this.data.userName), 300, userY + 100);
-      ctx.restore();
-    }
-    
-    // 绘制用户等级
-    ctx.setFontSize(50); // 相当于25rpx -> 50px
-    ctx.setTextAlign('center');
-    ctx.fillText(this.data.userLevel, 300, userY + 280);
-    
-    // 绘制用户名
-    ctx.setTextAlign('left');
-    ctx.setFontSize(80); // 相当于40rpx -> 80px
-    ctx.fillText(this.data.userName, 440, userY + 100);
-    
-    // 4. 绘制打卡数据（中间下方）
-    const statsY = 900; // 相当于450rpx -> 900px
-    const centerX = width / 2;
-    
-    ctx.setFontSize(70); // 相当于35rpx -> 70px
-    ctx.setTextAlign('center');
-    ctx.fillText(`${this.data.totalCount} 次`, centerX - 200, statsY);
-    
-    ctx.setFontSize(50); // 相当于25rpx -> 50px
-    ctx.fillText('累计打卡', centerX - 200, statsY + 80);
-    
-    // 绘制分割线
-    ctx.setStrokeStyle('#b29764');
-    ctx.setLineWidth(6); // 相当于3rpx -> 6px
-    ctx.beginPath();
-    ctx.moveTo(centerX, statsY - 40);
-    ctx.lineTo(centerX, statsY + 40);
-    ctx.stroke();
-    
-    // 绘制静坐时长
-    ctx.setFontSize(70); // 相当于35rpx -> 70px
-    ctx.fillText(`${this.data.totalMinutes}分钟`, centerX + 200, statsY);
-    
-    ctx.setFontSize(50); // 相当于25rpx -> 50px
-    ctx.fillText('静坐时长', centerX + 200, statsY + 80);
-    
-    // 5. 绘制底部信息
-    const bottomY = height - 160; // 相当于80rpx -> 160px
-    ctx.setFontSize(40); // 相当于20rpx -> 40px
-    ctx.fillText('静坐觉察 · 每日打卡', centerX, bottomY);
-  },
-
-  /**
-   * 保存默认图片
-   */
-  saveDefaultImage: function() {
-    // 使用项目中的默认图片
-    const imagePath = '/images/bg1.jpeg';
-    
-    wx.saveImageToPhotosAlbum({
-      filePath: imagePath,
-      success: () => {
-        wx.showToast({
-          title: '图片保存成功',
-          icon: 'success'
-        });
-      },
-      fail: (err) => {
-        console.error('保存默认图片失败:', err);
-        wx.showToast({
-          title: '保存失败',
-          icon: 'none'
-        });
-      }
-    });
-  },
-
-
-  onShareAppMessage() {
+  getShareCoverSnapshot() {
     return {
-      title: '静坐觉察 - 每日打卡',
-      path: '/pages/index/index',
-      imageUrl: '/images/logo.png'
+      quote: shareQuote(this.data.wisdomQuote) || dailyWisdom.DEFAULT_QUOTE,
+      date: this._displayedBusinessDate || dateUtil.getBusinessDate(),
+      weekDay: this.data.weekDay || '',
+      session: this.data.session ? { ...this.data.session } : null
     };
   },
+
+  prepareShareCover(snapshot = this.getShareCoverSnapshot()) {
+    if (this._isUnloaded || !this._isShareCanvasReady) return Promise.resolve(SHARE_COVER_FALLBACK);
+    const key = JSON.stringify(snapshot);
+    if (this._shareCoverKey === key && this._shareCoverPath) return Promise.resolve(this._shareCoverPath);
+    if (this._shareCoverTask && this._shareCoverTask.key === key) return this._shareCoverTask.promise;
+    // Serialize this dedicated canvas so a late quote/date update cannot mix
+    // two drawings, or interfere with the separate full-image save canvas.
+    const previous = this._shareCoverTask ? this._shareCoverTask.promise : Promise.resolve();
+    const task = { key, promise: null };
+    task.promise = previous.then(async () => {
+      if (this._isUnloaded) return SHARE_COVER_FALLBACK;
+      const { generateDailyShareCover } = require('../../utils/dailyShareCover.js');
+      return generateDailyShareCover(this, snapshot);
+    }).then(path => {
+      if (!this._isUnloaded && key === JSON.stringify(this.getShareCoverSnapshot())) {
+        this._shareCoverKey = key;
+        this._shareCoverPath = path;
+      }
+      return path;
+    }).catch(error => {
+      console.warn('静心卡分享封面准备失败:', error);
+      return SHARE_COVER_FALLBACK;
+    }).finally(() => {
+      if (this._shareCoverTask === task) this._shareCoverTask = null;
+    });
+    this._shareCoverTask = task;
+    return task.promise;
+  },
+
+  resolveShareCover(snapshot) {
+    // WeChat allows asynchronous share data for three seconds. Always settle
+    // before that limit and keep a bundled, correctly sized cover available.
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = imageUrl => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ imageUrl });
+      };
+      const timer = setTimeout(() => finish(SHARE_COVER_FALLBACK), 2500);
+      this.prepareShareCover(snapshot).then(finish, () => finish(SHARE_COVER_FALLBACK));
+    });
+  },
+
+  onShareAppMessage() {
+    const snapshot = this.getShareCoverSnapshot();
+    const key = JSON.stringify(snapshot);
+    const imageUrl = this._shareCoverKey === key && this._shareCoverPath || SHARE_COVER_FALLBACK;
+    const share = {
+      title: dailyShareSession.shareTitle(snapshot.session),
+      path: `/pages/daily/daily1?${this.getShareQuery()}`,
+      imageUrl
+    };
+    // Keep the direct route and record attached to the asynchronous result too;
+    // preparing a cover must not fall back to the app's default entry page.
+    return { ...share, promise: this.resolveShareCover(snapshot).then(cover => ({ ...share, ...cover })) };
+  },
+
+  onShareTimeline() {
+    const snapshot = this.getShareCoverSnapshot();
+    const key = JSON.stringify(snapshot);
+    return {
+      title: dailyShareSession.shareTitle(snapshot.session),
+      query: this.getShareQuery(),
+      imageUrl: this._shareCoverKey === key && this._shareCoverPath || SHARE_COVER_FALLBACK
+    };
+  },
+
+  getDailyImageSnapshot() {
+    const fields = ['year', 'month', 'day', 'weekDay', 'lunarDate', 'displayImage', 'wisdomQuote',
+      'userName', 'userAvatar', 'highestLevelBadge', 'totalCount', 'totalMinutes', 'isSharedView', 'session'];
+    const snapshot = {};
+    for (const field of fields) snapshot[field] = this.data[field];
+    return JSON.parse(JSON.stringify(snapshot));
+  },
+
+  async prepareDailyImage() {
+    if (this._dailyImageEntry) await this._dailyImageEntry.promise;
+    if (this._isUnloaded || this._isPageVisible === false) return '';
+    if (this.data.imageLoadFailed) throw new Error('原卡片尚未加载，请重试');
+    const snapshot = this.getDailyImageSnapshot();
+    const key = JSON.stringify(snapshot);
+    if (key === this._savedImageKey && this._savedImagePath) return this._savedImagePath;
+    const { generateDailyPoster } = require('../../utils/dailyPoster.js');
+    const path = await generateDailyPoster(this, snapshot);
+    if (this._isUnloaded || this._isPageVisible === false) return '';
+    this._savedImageKey = key;
+    this._savedImagePath = path;
+    return path;
+  },
+
+  previewDailyCard() {
+    if (this._isUnloaded || this.data.isImageLoading || this.data.imageLoadFailed) return;
+    const path = this.data.displayImage || dailyCardImage.DEFAULT_IMAGE;
+    wx.previewImage({ current: path, urls: [path], fail() {} });
+  },
+
+  saveDailyImage() {
+    if (this._isUnloaded || this._isPageVisible === false) return Promise.resolve(false);
+    if (this._saveImagePromise) return this._saveImagePromise;
+    this.setData({ isSavingImage: true });
+    this._saveImagePromise = (async () => {
+      try {
+        const path = await this.prepareDailyImage();
+        if (!path || this._isUnloaded || this._isPageVisible === false) return false;
+        await new Promise((resolve, reject) => {
+          const pending = wx.saveImageToPhotosAlbum({ filePath: path, success: resolve, fail: reject });
+          if (pending && typeof pending.then === 'function') pending.then(resolve, reject);
+        });
+        if (!this._isUnloaded && this._isPageVisible !== false) {
+          wx.showToast({ title: '图片已保存到相册', icon: 'success' });
+        }
+        return true;
+      } catch (error) {
+        console.warn('静心卡图片保存失败:', error);
+        if (this._isUnloaded || this._isPageVisible === false || /cancel/i.test(error && error.errMsg || '')) return false;
+        if (/auth|deny|denied|permission/i.test(error && error.errMsg || '')) {
+          wx.showModal({
+            title: '允许保存到相册',
+            content: '请在设置中开启相册权限，返回后再次点击「保存图片」。',
+            confirmText: '去设置',
+            cancelText: '暂不开启',
+            success: result => {
+              if (result.confirm && !this._isUnloaded && this._isPageVisible !== false && typeof wx.openSetting === 'function') {
+                wx.openSetting({ fail() {} });
+              }
+            }
+          });
+        } else {
+          // The temporary image may have expired; the next tap draws it again.
+          this._savedImageKey = '';
+          this._savedImagePath = '';
+          wx.showToast({ title: '图片保存失败，请重试', icon: 'none' });
+        }
+        return false;
+      } finally {
+        this._saveImagePromise = null;
+        if (!this._isUnloaded) this.setData({ isSavingImage: false });
+      }
+    })();
+    return this._saveImagePromise;
+  }
 });

@@ -83,8 +83,24 @@ function presentFeedback(feedback) {
   return { ...feedback, statusText: FEEDBACK_LABELS[feedback.status] || '待处理',
     createdText: timeText(feedback.createdAt), updatedText: timeText(feedback.updatedAt), handledText: timeText(feedback.handledAt) };
 }
+function clearedWisdomEditor() {
+  return { wisdomEditorOpen: false, selectedWisdom: null, wisdomContent: '', wisdomSaveError: '', wisdomConflict: false };
+}
+function clearedWisdom() {
+  return { ...clearedWisdomEditor(), wisdomKeyword: '', wisdomSearch: '', wisdomQuotes: [], wisdomCursor: '', wisdomTotal: 0,
+    wisdomLoading: false, wisdomError: '', wisdomMessage: '', wisdomSaveBusy: false, wisdomDeleteBusy: false };
+}
+function wisdomListData(result) {
+  if (!Array.isArray(result.quotes) || !Number.isSafeInteger(result.total) || result.total < 0 ||
+      typeof result.nextCursor !== 'string' || result.quotes.some(row => !row || typeof row._id !== 'string' || !row._id)) {
+    throw new Error('金句列表返回异常，请重新加载。');
+  }
+  return { wisdomQuotes: result.quotes.map(row => ({ ...row,
+    displayContent: row.content === null || row.content === undefined || row.content === '' ? '（正文为空）' : String(row.content) })),
+    wisdomTotal: result.total, wisdomCursor: result.nextCursor };
+}
 function clearedPrivateData() {
-  return { ...clearedRecordQuery(), ...clearedFeedback(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
+  return { ...clearedRecordQuery(), ...clearedFeedback(), ...clearedWisdom(), authorized: false, dates: [], dateIndex: 0, recordDate: '', timerEnabled: false, apiConfigured: false,
     runs: [], runsLoading: false, runsCursor: '', runsPageCount: 1, showAllRuns: true, syncError: '', syncMessage: '', runningRunId: '', runningRecordDate: '',
     selectedRunId: '', items: [], itemsLoading: false, itemsError: '', itemsCursor: '',
     syncErrors: [], syncErrorsLoading: false, syncErrorsError: '', syncErrorsCursor: '',
@@ -95,7 +111,7 @@ function clearedPrivateData() {
 
 Page({
   data: {
-    ...clearedRecordQuery(), ...clearedFeedback(),
+    ...clearedRecordQuery(), ...clearedFeedback(), ...clearedWisdom(),
     feedbackStatusOptions: FEEDBACK_STATUSES.map(status => FEEDBACK_LABELS[status]),
     entryVerifying: true, entryAuthorized: false, entryError: '',
     verifying: true, authorized: false, accessError: '', tab: 'sync',
@@ -114,7 +130,8 @@ Page({
     this.clearPoll();
     this.setData({ ...clearedPrivateData(), entryVerifying: true, entryAuthorized: false, entryError: '',
       verifying: false, accessError: '', syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy,
-      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy });
+      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy,
+      wisdomSaveBusy: !!this._wisdomSaveBusy, wisdomDeleteBusy: !!this._wisdomDeleteBusy });
     try {
       const access = await this.callAdmin('adminManager', 'getAccess');
       if (!this.isCurrent(generation)) return;
@@ -137,7 +154,8 @@ Page({
     this._workerBusy = false;
     this.setData({ ...clearedPrivateData(), tab, verifying: true, accessError: '',
       syncBusy: !!this._syncBusy, transferBusy: !!this._transferBusy,
-      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy });
+      feedbackSaveBusy: !!this._feedbackSaveBusy, feedbackDeleteBusy: !!this._feedbackDeleteBusy,
+      wisdomSaveBusy: !!this._wisdomSaveBusy, wisdomDeleteBusy: !!this._wisdomDeleteBusy });
     try {
       if (tab === 'sync') {
         const status = await this.callAdmin('bijingSync', 'adminStatus');
@@ -159,6 +177,11 @@ Page({
         if (!this.isCurrent(generation)) return;
         this.setData({ authorized: true, verifying: false,
           feedbacks: (result.feedbacks || []).map(presentFeedback), feedbackCursor: result.nextCursor || '' });
+      } else if (tab === 'wisdom') {
+        const account = feedbackAccount();
+        const result = await this.callAdmin('adminManager', 'adminListWisdom', { keyword: '', limit: 20 }, () => account === feedbackAccount());
+        if (!this.isCurrent(generation) || account !== feedbackAccount()) return;
+        this.setData({ authorized: true, verifying: false, ...wisdomListData(result) });
       } else if (tab === 'team') {
         const result = await this.callAdmin('teamManager', 'adminListTeams');
         if (!this.isCurrent(generation)) return;
@@ -188,7 +211,7 @@ Page({
     this._pollTimer = null;
   },
 
-  async callAdmin(functionName, type, data = {}) {
+  async callAdmin(functionName, type, data = {}, currentRequest) {
     const generation = this._generation;
     const payload = functionName === 'teamManager' ? { type, data } : { type, ...data };
     const response = await cloudApi.callCloudFunction(functionName, payload);
@@ -199,7 +222,7 @@ Page({
       const outdated = (unknown && unknown[1] === type) || (['teamManager', 'adminManager'].includes(functionName) && message === '未知的操作类型');
       const error = new Error(outdated ? `管控服务尚未更新，请先部署 ${functionName} 云函数` : message);
       error.code = result && result.code;
-      if (error.code === 'FORBIDDEN' && this.isCurrent(generation)) {
+      if (error.code === 'FORBIDDEN' && this.isCurrent(generation) && (!currentRequest || currentRequest())) {
         this.clearPoll();
         this.setData({ ...clearedPrivateData(), verifying: false, accessError: error.message });
         clearSyncAlert();
@@ -211,7 +234,7 @@ Page({
 
   async onTabChange(event) {
     const tab = event.currentTarget.dataset.tab;
-    if (!this.data.entryAuthorized || !['sync', 'query', 'feedback', 'team', 'audit'].includes(tab) || tab === this.data.tab) return;
+    if (!this.data.entryAuthorized || !['sync', 'query', 'feedback', 'wisdom', 'team', 'audit'].includes(tab) || tab === this.data.tab) return;
     await this.activateTab(tab);
   },
   async refreshTab() {
@@ -226,6 +249,7 @@ Page({
       else if (this.data.queryNickname.trim()) await this.searchRecordUsers();
     }
     else if (this.data.tab === 'feedback') await this.loadFeedback();
+    else if (this.data.tab === 'wisdom') await this.loadWisdom();
     else if (this.data.tab === 'team') {
       await this.loadTeams();
       if (this.data.selectedTeam) await this.loadMembers();
@@ -236,6 +260,167 @@ Page({
     try { await this.refreshTab(); } finally { wx.stopPullDownRefresh(); }
   },
   retryAccess() { return this.data.entryAuthorized ? this.activateTab(this.data.tab) : this.onShow(); },
+
+  canManageWisdom() { return this._visible && this.data.entryAuthorized && this.data.authorized && this.data.tab === 'wisdom'; },
+  isWisdomMutationBusy() { return !!(this._wisdomSaveBusy || this._wisdomDeleteBusy); },
+  isCurrentWisdom(generation, account) {
+    return this.isCurrent(generation) && this.canManageWisdom() && account === feedbackAccount();
+  },
+  onWisdomKeywordInput(event) {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy()) return;
+    this.setData({ wisdomKeyword: event.detail.value });
+  },
+  async searchWisdom() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy()) return;
+    const keyword = this.data.wisdomKeyword.trim();
+    if (keyword.length > 100) {
+      this.setData({ wisdomError: '查询关键词不能超过 100 字。' });
+      return;
+    }
+    await this.loadWisdom(false, keyword);
+  },
+  async clearWisdomSearch() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy()) return;
+    this.setData({ wisdomKeyword: '' });
+    await this.loadWisdom(false, '');
+  },
+  loadMoreWisdom() { return this.loadWisdom(true); },
+  async loadWisdom(append = false, keyword = this.data.wisdomSearch) {
+    append = append === true;
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || (append && (this.data.wisdomLoading || !this.data.wisdomCursor))) return;
+    const generation = this._generation;
+    const account = feedbackAccount();
+    const request = this._wisdomListRequest = (this._wisdomListRequest || 0) + 1;
+    this.setData({ wisdomLoading: true, wisdomError: '' });
+    try {
+      const result = await this.callAdmin('adminManager', 'adminListWisdom', { keyword, limit: 20,
+        ...(append ? { cursor: this.data.wisdomCursor } : {}) },
+      () => request === this._wisdomListRequest && account === feedbackAccount());
+      if (!this.isCurrentWisdom(generation, account) || request !== this._wisdomListRequest) return;
+      const data = wisdomListData(result);
+      if (append) data.wisdomQuotes = this.data.wisdomQuotes.concat(data.wisdomQuotes)
+        .filter((row, index, all) => all.findIndex(other => other._id === row._id) === index);
+      this.setData({ ...data, wisdomSearch: keyword, ...(!append ? { ...clearedWisdomEditor(), wisdomMessage: '' } : {}) });
+    } catch (error) {
+      if (this.isCurrentWisdom(generation, account) && request === this._wisdomListRequest) this.setData({ wisdomError: errorText(error) });
+    } finally {
+      if (this.isCurrentWisdom(generation, account) && request === this._wisdomListRequest) this.setData({ wisdomLoading: false });
+    }
+  },
+  showWisdomEditor() {
+    if (typeof wx.pageScrollTo === 'function') wx.pageScrollTo({ selector: '#wisdom-editor', duration: 200 });
+  },
+  newWisdom() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading) return;
+    this._wisdomCreateRequest = null;
+    this.setData({ ...clearedWisdomEditor(), wisdomEditorOpen: true, wisdomMessage: '' }, () => this.showWisdomEditor());
+  },
+  editWisdom(event) {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading) return;
+    const quote = this.data.wisdomQuotes.find(row => row._id === event.currentTarget.dataset.id);
+    if (!quote) return;
+    this.setData({ ...clearedWisdomEditor(), wisdomEditorOpen: true, selectedWisdom: quote,
+      wisdomContent: quote.content === null || quote.content === undefined ? '' : String(quote.content), wisdomMessage: '' }, () => this.showWisdomEditor());
+  },
+  cancelWisdomEdit() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading) return;
+    this._wisdomCreateRequest = null;
+    this.setData(clearedWisdomEditor());
+  },
+  onWisdomContentInput(event) {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading || !this.data.wisdomEditorOpen) return;
+    this.setData({ wisdomContent: event.detail.value });
+  },
+  async saveWisdom() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading || !this.data.wisdomEditorOpen || this.data.wisdomConflict) return;
+    const content = this.data.wisdomContent.trim();
+    if (!content || content.length > 500) {
+      this.setData({ wisdomSaveError: '请输入金句正文，最多 500 字。' });
+      return;
+    }
+    const quote = this.data.selectedWisdom;
+    const generation = this._generation;
+    const account = feedbackAccount();
+    this._wisdomSaveBusy = true;
+    this.setData({ wisdomSaveBusy: true, wisdomSaveError: '', wisdomMessage: '' });
+    let refreshAfterCreate = false;
+    try {
+      let type = 'adminUpdateWisdom';
+      let payload = quote ? { quoteId: quote._id, expectedContent: quote.content, content } : null;
+      if (!quote) {
+        type = 'adminCreateWisdom';
+        const previous = this._wisdomCreateRequest;
+        if (!previous || previous.account !== account || previous.content !== content) {
+          this._wisdomCreateRequest = { account, content,
+            requestId: `wisdom_${Date.now()}_${Math.random().toString(36).slice(2)}` };
+        }
+        payload = { content, requestId: this._wisdomCreateRequest.requestId };
+      }
+      const result = await this.callAdmin('adminManager', type, payload, () => account === feedbackAccount());
+      if (!result.quote || typeof result.quote._id !== 'string' || !result.quote._id || result.quote.content !== content ||
+          (quote && result.quote._id !== quote._id)) throw new Error('服务未返回有效结果，请刷新确认保存状态。');
+      if (!this.isCurrentWisdom(generation, account)) return;
+      this._wisdomCreateRequest = null;
+      const updated = { ...result.quote, displayContent: result.quote.content };
+      const matches = !this.data.wisdomSearch || updated.content.toLowerCase().includes(this.data.wisdomSearch.toLowerCase());
+      let quotes = this.data.wisdomQuotes;
+      let total = this.data.wisdomTotal;
+      if (quote) {
+        quotes = quotes.map(row => row._id === quote._id ? updated : row);
+        if (!matches) { quotes = quotes.filter(row => row._id !== quote._id); total = Math.max(0, total - 1); }
+      }
+      this.setData({ ...clearedWisdomEditor(), wisdomQuotes: quotes, wisdomTotal: total,
+        wisdomMessage: quote ? '金句已保存。' : '金句已新增。' });
+      wx.showToast({ title: quote ? '金句已保存' : '金句已新增', icon: 'success' });
+      refreshAfterCreate = !quote;
+    } catch (error) {
+      if (this.isCurrentWisdom(generation, account)) this.setData({ wisdomConflict: ['CONFLICT', 'NOT_FOUND'].includes(error.code),
+        wisdomSaveError: ['CONFLICT', 'NOT_FOUND'].includes(error.code)
+          ? '这条金句已被修改或删除。请先保留草稿，再点击「重新加载金句」查看最新内容。' : errorText(error) });
+    } finally {
+      this._wisdomSaveBusy = false;
+      if (this._visible) this.setData({ wisdomSaveBusy: false });
+    }
+    // Finish the mutation before refreshing: a stale refresh must never unlock a later save.
+    if (refreshAfterCreate && this.isCurrentWisdom(generation, account)) {
+      this.setData({ wisdomKeyword: '' });
+      const refreshing = this.loadWisdom(false, '');
+      const request = this._wisdomListRequest;
+      await refreshing;
+      if (this.isCurrentWisdom(generation, account) && request === this._wisdomListRequest && !this.data.wisdomEditorOpen) {
+        this.setData({ wisdomMessage: '金句已新增。' });
+      }
+    }
+  },
+  async deleteWisdom() {
+    if (!this.canManageWisdom() || this.isWisdomMutationBusy() || this.data.wisdomLoading || !this.data.selectedWisdom || this.data.wisdomConflict) return;
+    const quote = this.data.selectedWisdom;
+    const generation = this._generation;
+    const account = feedbackAccount();
+    this._wisdomDeleteBusy = true;
+    this.setData({ wisdomDeleteBusy: true });
+    try {
+      const confirmed = await new Promise((resolve, reject) => wx.showModal({ title: '确认删除金句',
+        content: `删除后无法恢复，确定删除这条金句吗？\n${quote.displayContent.slice(0, 100)}`,
+        confirmText: '删除金句', confirmColor: '#b85b4f', success: result => resolve(result.confirm === true), fail: reject }));
+      if (!confirmed || !this.isCurrentWisdom(generation, account) || !this.data.selectedWisdom || this.data.selectedWisdom._id !== quote._id) return;
+      this.setData({ wisdomSaveError: '', wisdomMessage: '' });
+      const result = await this.callAdmin('adminManager', 'adminDeleteWisdom', { quoteId: quote._id, expectedContent: quote.content },
+        () => account === feedbackAccount());
+      if (result.quoteId !== quote._id || result.deleted !== true) throw new Error('服务未返回有效结果，请刷新确认删除状态。');
+      if (!this.isCurrentWisdom(generation, account)) return;
+      this.setData({ ...clearedWisdomEditor(), wisdomQuotes: this.data.wisdomQuotes.filter(row => row._id !== quote._id),
+        wisdomTotal: Math.max(0, this.data.wisdomTotal - 1), wisdomMessage: '金句已删除。' });
+      wx.showToast({ title: '金句已删除', icon: 'success' });
+    } catch (error) {
+      if (this.isCurrentWisdom(generation, account)) this.setData({ wisdomConflict: ['CONFLICT', 'NOT_FOUND'].includes(error.code),
+        wisdomSaveError: ['CONFLICT', 'NOT_FOUND'].includes(error.code)
+          ? '这条金句已被修改或删除。请先保留草稿，再点击「重新加载金句」确认最新内容。' : errorText(error) });
+    } finally {
+      this._wisdomDeleteBusy = false;
+      if (this._visible) this.setData({ wisdomDeleteBusy: false });
+    }
+  },
 
   canManageFeedback() { return this._visible && this.data.authorized && this.data.tab === 'feedback'; },
   isFeedbackMutationBusy() { return !!(this._feedbackSaveBusy || this._feedbackDeleteBusy); },

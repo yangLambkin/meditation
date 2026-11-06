@@ -1,10 +1,25 @@
-const { getRandomDailyPokerImage, DEFAULT_IMAGE } = require('../config/images.js');
+const { getRandomDailyPokerImage, getImageInfo, DAILY_POKER_CONFIG, DEFAULT_IMAGE } = require('../config/images.js');
 
 const PRELOAD_TIMEOUT = 5000;
 let nextImage = null;
 
-function createImageEntry() {
-  const entry = { path: null, promise: null };
+function normalizeImageKey(key) {
+  return typeof key === 'string' && DAILY_POKER_CONFIG &&
+    DAILY_POKER_CONFIG.images.includes(key) ? key : 'local';
+}
+
+function localImageEntry() {
+  return { key: 'local', path: DEFAULT_IMAGE, promise: Promise.resolve(DEFAULT_IMAGE) };
+}
+
+function createImageEntry(sharedKey) {
+  // Choose once, before a caller can share. Downloads may fail or finish later,
+  // but neither a temporary URL nor a fallback image changes this identity.
+  let selected;
+  try { selected = sharedKey ? getImageInfo(sharedKey) : getRandomDailyPokerImage(); }
+  catch (_) { return localImageEntry(); }
+  if (!selected || selected.isDefault || !selected.fileID) return localImageEntry();
+  const entry = { key: normalizeImageKey(selected.filename), path: null, promise: null };
   let resolveImage;
   let settled = false;
   const deadline = Date.now() + PRELOAD_TIMEOUT;
@@ -56,11 +71,6 @@ function createImageEntry() {
   // Always return the entry before starting SDK work, even with synchronous mocks.
   Promise.resolve().then(() => {
     if (expired()) return;
-    const selected = getRandomDailyPokerImage();
-    if (!selected || selected.isDefault || !selected.fileID) {
-      finish(DEFAULT_IMAGE);
-      return;
-    }
     request(callbacks => wx.cloud.getTempFileURL({
       fileList: [selected.fileID],
       ...callbacks
@@ -91,4 +101,11 @@ function takeNextImage() {
   return entry;
 }
 
-module.exports = { DEFAULT_IMAGE, prepareNextImage, takeNextImage };
+// Shared cards never consume the next card prepared by a running timer. Only
+// configured filenames are accepted; incoming URLs and cloud IDs are ignored.
+function takeSharedImage(key) {
+  const normalized = normalizeImageKey(key);
+  return normalized === 'local' ? localImageEntry() : createImageEntry(normalized);
+}
+
+module.exports = { DEFAULT_IMAGE, normalizeImageKey, prepareNextImage, takeNextImage, takeSharedImage };

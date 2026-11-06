@@ -1,5 +1,7 @@
 @import "../../styles/practiceForm.wxss";
 @import "../../styles/recordList.wxss";
+@import "../../styles/meditationButton.wxss";
+@import "../../styles/sectionRecordsEntry.wxss";
 
 page { background: #f8fafc; color: #354152; }
 button::after { border: none; }
@@ -14,7 +16,7 @@ button { font-weight: 500; }
 .practice-home .home-title-row { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 16rpx; row-gap: 4rpx; }
 .practice-home .home-heading .page-title { white-space: nowrap; }
 .practice-home .home-date { color: #99a1ae; font-size: 24rpx; line-height: 1.5; white-space: nowrap; }
-.practice-home .home-heading .add-button { display: flex; align-items: center; justify-content: center; width: 152rpx; height: 80rpx; min-height: 44px; border-radius: 14rpx; font-size: 26rpx; line-height: 1.4; white-space: nowrap; }
+.practice-home .home-heading .home-record-button { flex: none; width: 208rpx; }
 .practice-home .home-grid-hint { display: block; margin: 0; color: #99a1ae; font-size: 23rpx; line-height: 1.4; }
 .home-practice-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
 button.home-practice-card { display: flex; flex-direction: column; justify-content: space-between; width: calc((100% - 24rpx) / 3); min-width: 0; height: 174rpx; margin: 0; padding: 24rpx 18rpx; box-sizing: border-box; border: 2rpx solid #edf0f3; border-radius: 20rpx; background: #fff; color: #354152; text-align: left; line-height: 1.4; }
@@ -33,10 +35,9 @@ button.home-practice-hover { background: #f3eddf; }
 .home-stats-error .inline-button { flex-shrink: 0; padding-right: 2rpx; }
 .home-no-practices { margin-top: 0; }
 .home-recent { margin-top: 32rpx; }
-button.home-records-link, button.day-stats-button { display: flex; align-items: center; flex-shrink: 0; gap: 12rpx; width: auto; min-height: 64rpx; margin: 0; border-radius: 12rpx; color: #9c8050; background: transparent; font-size: 24rpx; font-weight: 500; line-height: 1.5; white-space: nowrap; }
-button.home-records-link { padding: 0 4rpx 0 12rpx; }
-.home-records-link > text, .day-stats-button > text { display: block; }
-.home-entry-arrow, .day-stats-arrow { display: block; flex-shrink: 0; width: 12rpx; height: 12rpx; box-sizing: border-box; border-top: 2rpx solid #b29764; border-right: 2rpx solid #b29764; transform: rotate(45deg); }
+button.day-stats-button { display: flex; align-items: center; flex-shrink: 0; gap: 12rpx; width: auto; min-height: 64rpx; margin: 0; border-radius: 12rpx; color: #9c8050; background: transparent; font-size: 24rpx; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+.day-stats-button > text { display: block; }
+.day-stats-arrow { display: block; flex-shrink: 0; width: 12rpx; height: 12rpx; box-sizing: border-box; border-top: 2rpx solid #b29764; border-right: 2rpx solid #b29764; transform: rotate(45deg); }
 .home-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 16rpx; }
 .home-records-hint { margin: 0 4rpx 20rpx; }
 .home-day-group + .home-day-group { margin-top: 28rpx; }
@@ -57,8 +58,6 @@ button.home-records-link { padding: 0 4rpx 0 12rpx; }
 .home-loading { padding-top: 48rpx; }
 .practice-home .pending-card { padding: 20rpx 24rpx; }
 .practice-home .pending-heading { margin-bottom: 0; }
-button.add-button { flex: none; width: 208rpx; min-width: 0; height: 76rpx; margin: 0; padding: 0; line-height: 76rpx; background: #b29764; border-radius: 16rpx; color: #fff; font-size: 27rpx; }
-button.add-button-disabled { color: #fff; background: #cbbda3; }
 .history-notice { display: flex; align-items: center; gap: 20rpx; margin-top: 28rpx; padding: 24rpx 4rpx; border-top: 1rpx solid #e9ecf0; }
 .history-copy { flex: 1; min-width: 0; }
 .history-title { display: block; font-size: 25rpx; color: #7a8493; line-height: 1.5; }

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400" viewBox="0 0 500 400" role="img" aria-labelledby="title description">
+  <title id="title">静坐觉察 · 静心卡</title>
+  <desc id="description">一刻静坐，一份安静。</desc>
+  <g font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif">
+    <rect x="0" y="0" width="500" height="400" fill="#f7f5ef"/>
+    <path d="M40 20L460 20Q480 20 480 40L480 360Q480 380 460 380L40 380Q20 380 20 360L20 40Q20 20 40 20Z" fill="#ffffff"/>
+    <path d="M40 20L460 20Q480 20 480 40L480 360Q480 380 460 380L40 380Q20 380 20 360L20 40Q20 20 40 20Z" fill="none" stroke="#eae4d8" stroke-width="1"/>
+    <text x="46" y="72.92" font-size="34" fill="#343c37">一份安静，送给你</text>
+    <text x="46" y="120.12" font-size="24" fill="#697364">每天，留一点时间给自己</text>
+    <text x="46" y="198.88" font-size="26" fill="#8f7648">与自己相处</text>
+    <text x="46" y="256.44" font-size="38" fill="#343c37">一刻静坐</text>
+    <rect x="46" y="144" width="408" height="1" fill="#eae4d8"/>
+    <rect x="244" y="176" width="1" height="120" fill="#eae4d8"/>
+    <text x="260" y="197.12" font-size="24" fill="#566252">把心安放在当下。</text>
+    <rect x="46" y="323" width="408" height="1" fill="#eae4d8"/>
+    <text x="46" y="358.36" font-size="22" fill="#697364">静坐觉察</text>
+    <text x="308" y="358.36" font-size="22" fill="#8f7648">查看静心卡 →</text>
+  </g>
+</svg>

@@ -1,0 +1,35 @@
+/* 首页与记录页的历史记录入口共用样式。 */
+button.section-records-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 10rpx;
+  width: auto;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0 20rpx;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 12rpx;
+  background: #f5f1e8;
+  color: #9c8050;
+  font-size: 24rpx;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.section-records-entry::after { border: none; }
+.section-records-entry > text { display: block; }
+button.section-records-entry-hover { background: #e8decd; }
+.section-records-arrow {
+  display: block;
+  flex-shrink: 0;
+  width: 12rpx;
+  height: 12rpx;
+  box-sizing: border-box;
+  border-top: 2rpx solid currentColor;
+  border-right: 2rpx solid currentColor;
+  transform: rotate(45deg);
+}

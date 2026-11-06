@@ -1737,12 +1737,40 @@ Page({
     syncTabBar(this);
   },
 
+  showTimerCompletionNotice() {
+    if (this._timerCompletionNoticeShowing) return;
+    try {
+      const notice = wx.getStorageSync('timerCompletionNotice');
+      // 中断后的继续计时提示仍由计时页展示；首页只领取退出结算结果。
+      if (typeof notice !== 'string' || !/^(倒计时|正计时)已结束/.test(notice)) return;
+      this._timerCompletionNoticeShowing = true;
+      wx.showModal({
+        title: '静坐已结束',
+        content: notice,
+        showCancel: false,
+        confirmText: '知道了',
+        success: () => {
+          // 弹窗期间若产生了新的结算提示，不能一并清除。
+          try {
+            if (wx.getStorageSync('timerCompletionNotice') === notice) {
+              wx.setStorageSync('timerCompletionNotice', '');
+            }
+          } catch (_) { /* 保留提示，稍后返回首页仍可再次查看。 */ }
+        },
+        complete: () => { this._timerCompletionNoticeShowing = false; }
+      });
+    } catch (_) {
+      this._timerCompletionNoticeShowing = false;
+    }
+  },
+
   /**
    * 生命周期函数--监听页面显示
    */
   onShow() {
     syncTabBar(this);
     this._checkinPageHidden = false;
+    this.showTimerCompletionNotice();
     if (this.data.showForm && this._checkinEditAccount !== this.getCheckinActionAccount()) {
       this._checkinEditToken = null;
       this.setData({ showForm: false, formBusy: false, formReflection: '', formError: '' });

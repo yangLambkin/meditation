@@ -23,9 +23,11 @@ function harness({ cloud, download, pick } = {}) {
       assert.equal(name, '../config/images.js');
       return {
         DEFAULT_IMAGE,
+        DAILY_POKER_CONFIG: { images: ['m1.png', 'm2.png', 'p1.png', 'SJoker.png'] },
+        getImageInfo(filename) { return { filename, fileID: `cloud://configured/${filename}` }; },
         getRandomDailyPokerImage() {
           selections++;
-          return pick ? pick() : { fileID: `cloud://image-${selections}.png`, isDefault: false };
+          return pick ? pick() : { filename: 'm1.png', fileID: `cloud://image-${selections}.png`, isDefault: false };
         }
       };
     },
@@ -67,6 +69,7 @@ test('preparing reuses the same entry and downloads the selected image only once
   const h = harness();
   const first = h.api.prepareNextImage();
   assert.equal(first.path, null);
+  assert.equal(first.key, 'm1.png', 'the selected identity is available before any asynchronous work');
   assert.strictEqual(h.api.prepareNextImage(), first);
   await flush();
   assert.equal(h.selections, 1);
@@ -79,6 +82,7 @@ test('preparing reuses the same entry and downloads the selected image only once
   h.downloads[0].success({ path: 'wxfile://tmp/image-1.png' });
   assert.equal(await first.promise, 'wxfile://tmp/image-1.png');
   assert.equal(first.path, 'wxfile://tmp/image-1.png');
+  assert.equal(first.key, 'm1.png', 'sharing retains the identity of the downloaded artwork');
   assert.equal(h.timers.size, 0);
   assert.strictEqual(h.api.prepareNextImage(), first);
   assert.equal(h.selections, 1);
@@ -236,4 +240,70 @@ test('a late downloaded path cannot win while its timeout callback is suspended'
   h.downloads[0].success({ path: 'wxfile://tmp/too-late.png' });
   assert.equal(await image.promise, DEFAULT_IMAGE);
   assert.equal(h.timers.size, 0);
+});
+
+test('opening a shared card downloads its configured artwork and preserves its share key', async () => {
+  const h = harness({
+    cloud: () => Promise.resolve(cloudImage('shared')),
+    download: () => Promise.resolve({ path: 'wxfile://tmp/shared-m2.png' })
+  });
+  const shared = h.api.takeSharedImage('m2.png');
+  assert.equal(shared.key, 'm2.png', 'the stable key is ready before networking');
+  assert.equal(await shared.promise, 'wxfile://tmp/shared-m2.png');
+  assert.equal(shared.key, 'm2.png');
+  assert.deepEqual(Array.from(h.cloudCalls[0].fileList), ['cloud://configured/m2.png']);
+  assert.equal(h.selections, 0, 'a shared card never selects random artwork');
+  assert.equal(h.downloads.length, 1);
+});
+
+test('untrusted and local share keys immediately use the bundled artwork without network access', async () => {
+  const h = harness();
+  for (const key of ['local', '', undefined, null, {}, ['m1.png'], '/images/p1.png', '../m1.png',
+    'https://example.com/m1.png', 'cloud://configured/m1.png', 'M1.png', 'm1.png?token=secret', 'm99.png']) {
+    const shared = h.api.takeSharedImage(key);
+    assert.equal(shared.path, DEFAULT_IMAGE);
+    assert.equal(shared.key, 'local');
+    assert.equal(await shared.promise, DEFAULT_IMAGE);
+  }
+  assert.equal(h.cloudCalls.length, 0);
+  assert.equal(h.downloads.length, 0);
+  assert.equal(h.selections, 0);
+  assert.equal(h.timers.size, 0);
+});
+
+test('reading a shared card leaves a warmed timer card available for its owner', async () => {
+  const h = harness({
+    cloud: () => Promise.resolve(cloudImage(1)),
+    download: () => Promise.resolve({ path: 'wxfile://tmp/card.png' })
+  });
+  const warm = h.api.prepareNextImage();
+  await warm.promise;
+  const shared = h.api.takeSharedImage('SJoker.png');
+  await shared.promise;
+  assert.notStrictEqual(shared, warm);
+  assert.strictEqual(h.api.takeNextImage(), warm);
+  assert.equal(warm.key, 'm1.png');
+  assert.equal(shared.key, 'SJoker.png');
+  assert.equal(h.selections, 1);
+});
+
+test('failed shared artwork preserves its original identity and ignores late downloads', async () => {
+  const h = harness();
+  const shared = h.api.takeSharedImage('m2.png');
+  await flush();
+  h.cloudCalls[0].success(cloudImage('shared'));
+  await h.advance(5000);
+  assert.equal(await shared.promise, DEFAULT_IMAGE);
+  assert.equal(shared.key, 'm2.png');
+  h.downloads[0].success({ path: 'wxfile://tmp/too-late.png' });
+  assert.equal(shared.key, 'm2.png');
+  assert.equal(shared.path, DEFAULT_IMAGE);
+  assert.equal(h.timers.size, 0);
+});
+
+test('random artwork network failures preserve its original share key for retry and sharing', async () => {
+  const h = harness({ cloud: options => options.fail(new Error('offline')) });
+  const random = h.api.takeNextImage();
+  assert.equal(await random.promise, DEFAULT_IMAGE);
+  assert.equal(random.key, 'm1.png');
 });

@@ -1,5 +1,5 @@
 const { isExplicitTimerExit } = require('./timerInterruption');
-const { queueEndReminder } = require('./timerEndReminder');
+const { queueEndReminder, dismissEndReminder } = require('./timerEndReminder');
 
 const SCHEMA_VERSION = 2;
 const MAX_SECONDS = 24 * 60 * 60;
@@ -41,13 +41,14 @@ function validState(value) {
 
 /** Owns a countdown independently of any Page instance. No UI API is called here. */
 function createCountdownSessionController({
-  api, recordCheckin, now = () => Date.now(),
+  api, recordCheckin, getRecoveryState, isCompletionRecorded, now = () => Date.now(),
   setInterval: scheduleInterval = setInterval,
   clearInterval: cancelInterval = clearInterval
 }) {
   const runtimeId = `countdown_${now()}_${Math.random().toString(36).slice(2)}`;
   const listeners = new Set();
   const recentFaults = new Map();
+  const savedCompletionIds = new Set();
   let foreground = true;
   let foregroundEpoch = 1;
   let revision = 0;
@@ -55,6 +56,7 @@ function createCountdownSessionController({
   let pendingCompletion = null;
   let completionNotice = '';
   let restored = false;
+  let pendingExitAt = null;
   let disposed = false;
   let recoveryEnabled = read('timerRecoveryEnabled') !== false;
   let recoveryAttempts = 0;
@@ -63,9 +65,18 @@ function createCountdownSessionController({
   let watchdog = null;
   let lastTickAt = 0;
   let lastCheckpointAt = 0;
+  let lastObservedAt = now();
   function read(key) {
     try { return api.getStorageSync(key); }
     catch (_) { return undefined; }
+  }
+
+  function readRecovery(key) {
+    try { return { ok: true, value: api.getStorageSync(key) }; }
+    catch (error) {
+      diagnose('restore_read_error', { key, message: error && error.message || String(error) });
+      return { ok: false };
+    }
   }
 
   function diagnose(type, details = {}) {
@@ -99,15 +110,48 @@ function createCountdownSessionController({
   function active() { return !!(state && ACTIVE.has(state.status)); }
   function running() { return !!(state && state.status === 'running'); }
 
+  function rememberSavedCompletion(sessionId) {
+    savedCompletionIds.add(sessionId);
+    if (savedCompletionIds.size > MAX_DIAGNOSTICS) savedCompletionIds.delete(savedCompletionIds.values().next().value);
+  }
+
+  function completionIsRecorded(completion) {
+    if (!validCompletion(completion)) return false;
+    if (savedCompletionIds.has(completion.sessionId)) return true;
+    if (typeof isCompletionRecorded !== 'function') return false;
+    try {
+      if (isCompletionRecorded(completion.sessionId) !== true) return false;
+      rememberSavedCompletion(completion.sessionId);
+      return true;
+    } catch (error) {
+      diagnose('completion_lookup_error', { message: error && error.message || String(error) });
+      return false;
+    }
+  }
+
+  function reconcileClock(at) {
+    const adjustment = at - lastObservedAt;
+    lastObservedAt = at;
+    if (adjustment >= 0 || !active()) return;
+    // A wall-clock rollback changes timestamps, not confirmed sitting progress.
+    // Shift the live anchors together so subsequent checkpoints remain valid.
+    state.startTimestamp += adjustment;
+    if (state.status === 'paused') state.pauseTimestamp += adjustment;
+    lastTickAt += adjustment;
+    lastCheckpointAt += adjustment;
+    diagnose('clock_rollback', { adjustmentMs: adjustment });
+  }
+
   function elapsed(at = now()) {
+    reconcileClock(at);
     if (!state) return 0;
     if (!running()) return state.elapsedTime;
     return Math.min(state.totalTime, Math.max(state.elapsedTime,
       Math.floor((at - state.startTimestamp - state.totalPausedTime) / 1000), 0));
   }
 
-  function getSnapshot() {
-    const seconds = elapsed();
+  function getSnapshot(at = now()) {
+    const seconds = elapsed(at);
     return {
       isCountdown: true, isRunning: running(), isPaused: !!(state && state.status === 'paused'),
       sessionId: state && state.sessionId || null, totalTime: state && state.totalTime || 0,
@@ -116,7 +160,7 @@ function createCountdownSessionController({
       totalPausedTime: state && state.totalPausedTime || 0,
       elapsedTime: seconds, remainingTime: Math.max(0, (state && state.totalTime || 0) - seconds),
       status: state && state.status || 'idle', terminalReason: state && state.terminalReason || null,
-      runtimeId, foregroundEpoch, revision, foreground, recoveryEnabled,
+      runtimeId, foregroundEpoch, revision, foreground, recoveryEnabled, restorePending: !restored,
       interrupted: !foreground && active(),
       pendingCompletion: pendingCompletion ? { ...pendingCompletion } : null, completionNotice
     };
@@ -126,9 +170,10 @@ function createCountdownSessionController({
     if (!state) return;
     const current = read('timerState');
     if (!active() && current && current.isCountdown === false) return;
-    const snapshot = getSnapshot();
-    write('timerState', { ...snapshot, schemaVersion: SCHEMA_VERSION, saveTime: now() });
-    lastCheckpointAt = now();
+    const savedAt = now();
+    const snapshot = getSnapshot(savedAt);
+    write('timerState', { ...snapshot, schemaVersion: SCHEMA_VERSION, saveTime: savedAt });
+    lastCheckpointAt = savedAt;
   }
 
   function notifyOne(listener, event) {
@@ -191,7 +236,9 @@ function createCountdownSessionController({
         watchdog = scheduleInterval(() => {
           if (token !== revision || epoch !== foregroundEpoch || !foreground || disposed || !running()) return;
           invokeSafely(() => {
-            if (now() - lastTickAt < 5000) return;
+            const at = now();
+            reconcileClock(at);
+            if (at - lastTickAt < 5000) return;
             if (recoveryAttempts >= 3) {
               if (!recoveryExhausted) {
                 recoveryExhausted = true;
@@ -232,9 +279,9 @@ function createCountdownSessionController({
     state.terminalReason = reason;
     state.elapsedTime = finalSeconds;
     pendingCompletion = completion;
-    if (!cancelled) {
-      // Persist the cue independently of a page or completion draft. Even a
-      // sub-minute sit must announce its end after navigation or reconstruction.
+    if (!cancelled && !automatic) {
+      // Visible-page natural/manual completion owns a bell; automatic exits only
+      // settle elapsed minutes and never queue audio for another page.
       try { queueEndReminder(api, state.sessionId); }
       catch (error) { diagnose('end_reminder_error', { message: error && error.message || String(error) }); }
     }
@@ -281,15 +328,59 @@ function createCountdownSessionController({
 
   function restore() {
     if (restored || disposed) return getSnapshot();
+    const savedRead = readRecovery('timerState');
+    const pendingRead = readRecovery('timerPendingCompletion');
+    // An unreadable key is not an empty key. Keep recovery retryable and leave
+    // both persisted intents untouched until their precedence can be decided.
+    if (!savedRead.ok || !pendingRead.ok) return getSnapshot();
+    let saved = savedRead.value;
+    let pending = pendingRead.value;
+    // A confirmed exit can outlive failed disk writes in the current App. Use
+    // its terminal state only after both reads succeed and no newer identity
+    // exists. Keep the original wx API so reminder memory remains shared.
+    if (typeof getRecoveryState === 'function') {
+      let recovered;
+      try { recovered = getRecoveryState(); }
+      catch (error) {
+        diagnose('restore_memory_error', { message: error && error.message || String(error) });
+        return getSnapshot();
+      }
+      if (validState(recovered) && TERMINAL.has(recovered.status)
+        && (!saved || saved.sessionId === recovered.sessionId)
+        && (!pending || pending.sessionId === recovered.sessionId)) {
+        saved = recovered;
+        if (!recovered.pendingCompletion) pending = null;
+      }
+    }
     restored = true;
-    const saved = read('timerState');
-    const pending = read('timerPendingCompletion');
+    const explicitExitAt = pendingExitAt;
+    pendingExitAt = null;
     completionNotice = read('timerCompletionNotice') || '';
+    const matchingTerminal = validCompletion(pending) && validState(saved)
+      && TERMINAL.has(saved.status) && saved.sessionId === pending.sessionId;
+    // A saved terminal checkpoint is the acknowledgment when clearing the
+    // separate draft failed. Do not present an already recorded sit again.
+    if (validCompletion(pending)
+      && (matchingTerminal && saved.pendingCompletion === null || completionIsRecorded(pending))) {
+      rememberSavedCompletion(pending.sessionId);
+      if (saved && saved.isCountdown === true && saved.sessionId === pending.sessionId) {
+        // The record itself also confirms a successful save when both timer
+        // acknowledgment writes failed. Never resume its stale active snapshot.
+        saved = matchingTerminal ? { ...saved, pendingCompletion: null } : null;
+        write('timerState', saved);
+      }
+      write('timerPendingCompletion', null);
+      pending = null;
+    }
     if (validCompletion(pending)) {
       pendingCompletion = { ...pending };
-      if (saved && saved.isCountdown === true) write('timerState', null);
       diagnose('restore_pending');
-      return getSnapshot();
+      // Preserve a matching terminal backup so saving this recovered draft can
+      // durably acknowledge it even if its separate-key cleanup fails.
+      if (!matchingTerminal) {
+        if (saved && saved.isCountdown === true) write('timerState', null);
+        return getSnapshot();
+      }
     }
     if (!saved || saved.isCountdown !== true) return getSnapshot();
     if (!validState(saved)) {
@@ -303,27 +394,36 @@ function createCountdownSessionController({
       status: saved.status || (saved.isPaused ? 'paused' : saved.isRunning ? 'running' : 'cancelled'),
       terminalReason: saved.terminalReason || null };
     if (TERMINAL.has(state.status)) {
-      if (validCompletion(saved.pendingCompletion) && saved.pendingCompletion.sessionId === state.sessionId) {
+      if (!pendingCompletion && validCompletion(saved.pendingCompletion) && saved.pendingCompletion.sessionId === state.sessionId) {
         pendingCompletion = { ...saved.pendingCompletion };
-        write('timerPendingCompletion', pendingCompletion);
+        if (completionIsRecorded(pendingCompletion)) markCompletionSaved(state.sessionId);
+        else write('timerPendingCompletion', pendingCompletion);
       }
       return getSnapshot();
     }
     diagnose('cold_start_checkpoint', { elapsedTime: saved.elapsedTime, savedRuntimeId: saved.runtimeId || 'legacy' });
-    if (saved.elapsedTime >= saved.totalTime) {
-      terminate('deadline', { seconds: saved.totalTime, endedAt: saved.saveTime });
+    // The persisted start and manual pauses define the same deadline across
+    // runtimes. Process suspension or reclamation is not a user pause. If the
+    // wall clock moved backwards while away, shift both anchors together so we
+    // retain confirmed progress without making the next checkpoint invalid.
+    lastObservedAt = saved.saveTime;
+    if (explicitExitAt !== null) {
+      state.elapsedTime = elapsed(explicitExitAt);
+      terminate('app_hide', { automatic: true, seconds: state.elapsedTime, endedAt: explicitExitAt });
       return getSnapshot();
     }
-    // A killed runtime cannot prove how much time passed outside it. Preserve
-    // confirmed progress and require an explicit resume instead of ending early
-    // or counting offline time toward the configured duration.
-    state.status = 'paused';
-    state.pauseTimestamp = saved.isPaused ? saved.pauseTimestamp : saved.saveTime;
-    state.pauseTimestamp = Math.min(state.pauseTimestamp, now());
-    state.startTimestamp = state.pauseTimestamp - state.totalPausedTime - state.elapsedTime * 1000;
-    state.terminalReason = null;
+    const restoredAt = now();
+    state.elapsedTime = elapsed(restoredAt);
+    if (state.elapsedTime >= saved.totalTime) {
+      terminate('deadline', { seconds: saved.totalTime,
+        endedAt: state.startTimestamp + state.totalPausedTime + state.totalTime * 1000 });
+      return getSnapshot();
+    }
+    lastTickAt = restoredAt;
+    completionNotice = '';
+    write('timerCompletionNotice', '');
     persist();
-    notice('上次计时中断，已保留剩余时间，点击继续');
+    ensureTimers();
     return getSnapshot();
   }
 
@@ -338,14 +438,23 @@ function createCountdownSessionController({
 
   function start({ sessionId, totalTime, startTimestamp = now() } = {}) {
     restore();
-    const externalPending = read('timerPendingCompletion');
-    if (validCompletion(externalPending)) pendingCompletion = { ...externalPending };
+    if (!restored) return false;
+    const externalRead = readRecovery('timerPendingCompletion');
+    if (!externalRead.ok) return false;
+    const externalPending = externalRead.value;
+    if (validCompletion(externalPending)) {
+      if (savedCompletionIds.has(externalPending.sessionId)) {
+        // Resolve stale disk intent before replacing its terminal checkpoint.
+        if (!write('timerPendingCompletion', null)) return false;
+      } else pendingCompletion = { ...externalPending };
+    }
     if (disposed || !foreground || active() || pendingCompletion) return false;
     if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256
       || !Number.isInteger(totalTime) || totalTime < 1 || totalTime > MAX_SECONDS
       || !Number.isFinite(startTimestamp) || startTimestamp <= 0) return false;
     if (state && state.sessionId === sessionId && TERMINAL.has(state.status)) return false;
     revision += 1;
+    lastObservedAt = now();
     state = { sessionId, totalTime, startTimestamp, pauseTimestamp: 0, totalPausedTime: 0,
       elapsedTime: 0, status: 'running', terminalReason: null };
     completionNotice = '';
@@ -381,6 +490,7 @@ function createCountdownSessionController({
     if (!state || state.status !== 'paused' || !foreground || disposed) return getSnapshot();
     revision += 1;
     const resumedAt = now();
+    reconcileClock(resumedAt);
     if (resumedAt < state.pauseTimestamp) {
       state.startTimestamp = resumedAt - state.totalPausedTime - state.elapsedTime * 1000;
     } else {
@@ -398,6 +508,8 @@ function createCountdownSessionController({
 
   function appShow() {
     if (disposed) return getSnapshot();
+    const neededRestore = !restored;
+    restore();
     if (!foreground) {
       foreground = true;
       foregroundEpoch += 1;
@@ -407,6 +519,7 @@ function createCountdownSessionController({
       advance('restore');
       ensureTimers();
     }
+    if (neededRestore && restored) emit({ type: 'restore', reason: 'recovery' });
     return getSnapshot();
   }
 
@@ -420,7 +533,14 @@ function createCountdownSessionController({
     }
     // A later explicit exit still ends a sit after a call or native screen has
     // already backgrounded the app. Only repeated interruption callbacks are inert.
-    if (isExplicitTimerExit(options)) return terminate('app_hide', { automatic: true });
+    if (isExplicitTimerExit(options)) {
+      dismissEndReminder(api);
+      if (!restored) {
+        if (pendingExitAt === null) pendingExitAt = now();
+        restore();
+      }
+      return terminate('app_hide', { automatic: true });
+    }
     if (!wasForeground) return null;
     // System interruptions retain the recovery boundary because background
     // timers and later lifecycle callbacks may not run.
@@ -434,6 +554,7 @@ function createCountdownSessionController({
 
   function markCompletionSaved(sessionId) {
     if (!pendingCompletion || pendingCompletion.sessionId !== sessionId) return false;
+    rememberSavedCompletion(sessionId);
     pendingCompletion = null;
     const stored = read('timerPendingCompletion');
     if (stored && stored.sessionId === sessionId) write('timerPendingCompletion', null);

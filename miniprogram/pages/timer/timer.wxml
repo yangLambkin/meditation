@@ -202,16 +202,16 @@
       </view>
     </view>
   </view>
-  <!-- 感受可留空，完成后留页，也可主动选择查看日签。 -->
+  <!-- 感受可留空，完成后留页，也可主动选择查看静心卡。 -->
   <view wx:if="{{showCompletionDialog}}" class="completion-modal">
     <view class="completion-overlay"></view>
     <view class="completion-content">
       <text class="completion-title">静坐结束</text>
       <text class="completion-summary">这一刻，已静坐 {{completionDuration}} 分钟</text>
       <textarea class="completion-input" placeholder="此刻有什么感受？可以写下来，也可以留白。" value="{{completionText}}" bindinput="onCompletionInput" maxlength="2000" disabled="{{isSavingCompletion || isCompletionSaved}}" show-confirm-bar="{{false}}" />
-      <text class="completion-hint">{{completionDailyFailed ? '记录已保存，可以重试查看日签，或直接完成' : isCompletionSaved ? '本次静坐已保存，可直接完成或查看日签' : '感受选填，完成后保存本次静坐与感受'}}</text>
+      <text class="completion-hint">{{completionDailyFailed ? '记录已保存，可以重试查看静心卡，或直接完成' : isCompletionSaved ? '本次静坐已保存，可直接完成或查看静心卡' : '感受选填，完成后保存本次静坐与感受'}}</text>
       <button class="completion-confirm {{isSavingCompletion ? 'completion-confirm-disabled' : ''}}" bindtap="confirmCompletion" loading="{{isSavingCompletion && completionAction === 'stay'}}" disabled="{{isSavingCompletion}}">完成</button>
-      <button class="completion-daily {{isSavingCompletion ? 'completion-daily-disabled' : ''}}" bindtap="confirmCompletionAndViewDaily" loading="{{isSavingCompletion && completionAction === 'daily'}}" disabled="{{isSavingCompletion}}">{{completionDailyFailed ? '重试查看日签' : isCompletionSaved ? '查看日签' : '完成并看日签'}}</button>
+      <button class="completion-daily {{isSavingCompletion ? 'completion-daily-disabled' : ''}}" bindtap="confirmCompletionAndViewDaily" loading="{{isSavingCompletion && completionAction === 'daily'}}" disabled="{{isSavingCompletion}}">{{completionDailyFailed ? '重试查看静心卡' : isCompletionSaved ? '查看静心卡' : '完成并看静心卡'}}</button>
     </view>
   </view>
 </view>

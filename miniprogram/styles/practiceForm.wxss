@@ -32,6 +32,7 @@ button.close-button[disabled] { color: #b5bbc3; background: #f8fafc; }
 .required { color: #a08450; font-size: 23rpx; margin-left: 10rpx; }
 .word-count { display: block; text-align: right; margin-top: 8rpx; color: #a7afbb; font-size: 21rpx; }
 .form-error { display: block; margin: 22rpx 0 14rpx; color: #a76b3c; background: #fff7eb; padding: 18rpx; border-radius: 12rpx; font-size: 24rpx; line-height: 1.6; word-break: break-all; }
+.form-error-visible { flex-shrink: 0; margin: 0 32rpx 12rpx; max-height: 150rpx; overflow-y: auto; }
 .dialog-footer { display: flex; gap: 20rpx; padding: 24rpx 32rpx 32rpx; border-top: 1rpx solid #f0ede8; }
 .primary-button, .secondary-button, .danger-button { flex: 1; margin: 0; border-radius: 14rpx; padding: 0 24rpx; font-size: 30rpx; font-weight: 600; line-height: 84rpx; }
 .primary-button { color: #fff; background: #b29764; }

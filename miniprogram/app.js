@@ -40,16 +40,13 @@ App({
   onShow() {
     this._timerForeground = true;
     this._timerHideOptions = null;
-    this.refreshTabBars();
+    this.flushPersistedTimerExit();
+    // 先同步恢复计时与截止状态；缓存页面渲染失败不能冻结核心计时。
     if (this._countdownSession) this._countdownSession.appShow();
-    if (this._timerExitAudio) this._timerExitAudio.resume();
-    else if (!this._timerPage && wx.getStorageSync) {
-      try {
-        const reminder = wx.getStorageSync('timerPendingEndReminder');
-        const state = wx.getStorageSync('timerState');
-        if (reminder && (!state || (!state.isRunning && !state.isPaused))) this.playTimerExitReminder();
-      } catch (_) { /* A failed read keeps the reminder available for a later visit. */ }
-    }
+    this.flushDetachedCountupExit();
+    try { this.refreshTabBars(); }
+    catch (error) { console.warn('底部导航刷新失败:', error && error.message); }
+    // 结束提醒只由可见的计时页播放；首页保留待提醒状态而不接续声音。
     if (!wx.cloud) return;
     this.resumePracticeRecords();
     this.startSyncAlertRefresh();
@@ -68,12 +65,15 @@ App({
   onHide(options = {}) {
     this._timerForeground = false;
     this._timerHideOptions = options || {};
-    if (this._timerExitAudio) this._timerExitAudio.pause();
-    // 明确退出立即结算；锁屏、来电等系统中断保留会话。
+    if (this._timerExitAudio) this._timerExitAudio.stop();
+    // 明确用户退出按实际用时结算；原生页、来电和未知原因保留会话。
     if (this._countdownSession) this._countdownSession.appHide(this._timerHideOptions);
     this.finishDetachedCountup(this._timerHideOptions);
-    if (options && (options.reason === 0 || options.reason === 1)
-      && (this._countdownSession || this._timerExitAudio)) this.playTimerExitReminder();
+    if (this._timerHideOptions.reason === 0 || this._timerHideOptions.reason === 1) {
+      this.finishPersistedTimerOnExit();
+      const { dismissEndReminder } = require('./utils/timerEndReminder');
+      dismissEndReminder(wx);
+    }
     this._syncAlertVisible = false;
     this.clearSyncAlert();
   },
@@ -91,22 +91,44 @@ App({
     if (typeof wx.onAudioInterruptionEnd === 'function') {
       wx.onAudioInterruptionEnd(() => {
         this._timerAudioInterrupted = false;
-        if (this._timerExitAudio) this._timerExitAudio.resume();
       });
     }
   },
 
   getCountdownSession() {
     if (!this._countdownSession) {
+      this.flushPersistedTimerExit();
       // 只在使用倒计时时加载；控制器由 App 持有，不随计时页重建。
       const { createCountdownSessionController } = require('./utils/countdownSession');
       this._countdownSession = createCountdownSessionController({
         api: wx,
+        getRecoveryState: () => {
+          const exit = this.getPersistedTimerExit();
+          return exit && exit.state.isCountdown ? exit.state : null;
+        },
+        isCompletionRecorded: sessionId => this.hasRecordedTimerCompletion(sessionId),
         recordCheckin: (...args) => checkinManager.recordCheckin(...args)
       });
       if (this._timerForeground === false) this._countdownSession.appHide(this._timerHideOptions || {});
     }
     return this._countdownSession;
+  },
+
+  // 入账账本是完成确认的最终依据；只读核对，不创建身份或触发上传/迁移。
+  hasRecordedTimerCompletion(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) return false;
+    try {
+      const userId = wx.getStorageSync('localUserId');
+      if (typeof userId !== 'string' || !userId) return false;
+      const stored = checkinManager.getUserCheckinDataByUserId(userId);
+      const records = stored && (stored.checkinRecords || stored);
+      return Object.values(records && records.dailyRecords || {}).some(day =>
+        day && Array.isArray(day.records) && day.records.some(record => record
+          && (record.localId === sessionId || record.idempotencyKey === sessionId)));
+    } catch (error) {
+      console.warn('静坐入账确认暂不可读，保留恢复草稿:', error && error.message);
+      return false;
+    }
   },
 
   getTimerExitAudio() {
@@ -123,6 +145,123 @@ App({
     return this._timerExitAudio;
   },
 
+  // 冷启动只打开首页时没有计时页或控制器，但明确退出仍须结束上个进程的会话。
+  // 普通启动和被动后台不加载计时控制器，也不改写这个检查点。
+  finishPersistedTimerOnExit() {
+    if (this._countdownSession || this._detachedCountupSessionId || this._detachedCountupExit
+      || this._timerPage && !this._timerPage.isUnloaded || this._persistedTimerExit) return;
+    let state;
+    let pending;
+    try {
+      state = wx.getStorageSync('timerState');
+      pending = wx.getStorageSync('timerPendingCompletion');
+    } catch (error) {
+      console.warn('冷启动退出检查点读取失败，保留原状态:', error && error.message);
+      return;
+    }
+    // 已完成草稿和终态先于任何旧活动快照；不重新结算或覆盖它们。
+    if (pending || !state || state.pendingCompletion || (!state.isRunning && !state.isPaused)) return;
+    const limit = state.isCountdown === true ? state.totalTime : 24 * 60 * 60;
+    const totalPausedTime = state.totalPausedTime === undefined ? 0 : state.totalPausedTime;
+    const effectiveEnd = state.isPaused ? state.pauseTimestamp : state.saveTime;
+    if (typeof state.isCountdown !== 'boolean' || typeof state.sessionId !== 'string'
+      || !state.sessionId || state.sessionId.length > 256
+      || typeof state.isRunning !== 'boolean' || typeof state.isPaused !== 'boolean'
+      || state.isRunning === state.isPaused
+      || state.status !== undefined && state.status !== (state.isRunning ? 'running' : 'paused')
+      || state.isCountdown && state.schemaVersion !== undefined && state.schemaVersion !== 2
+      || state.isCountdown && state.schemaVersion === 2 && (typeof state.runtimeId !== 'string' || !state.runtimeId)
+      || !Number.isInteger(state.totalTime) || state.totalTime < 1 || state.totalTime > 86400
+      || !Number.isFinite(state.startTimestamp) || state.startTimestamp <= 0
+      || !Number.isFinite(state.saveTime) || state.saveTime < state.startTimestamp
+      || !Number.isFinite(totalPausedTime) || totalPausedTime < 0
+      || !Number.isFinite(state.elapsedTime) || state.elapsedTime < 0 || state.elapsedTime > limit
+      || !Number.isFinite(effectiveEnd) || effectiveEnd < state.startTimestamp || effectiveEnd > state.saveTime
+      || state.elapsedTime > Math.max(0, Math.floor((effectiveEnd - state.startTimestamp - totalPausedTime) / 1000))) return;
+    const exitAt = Date.now();
+    const adjustment = Math.min(0, exitAt - state.saveTime);
+    const startedAt = state.startTimestamp + adjustment;
+    const finalSeconds = Math.min(limit, Math.max(state.elapsedTime, Math.floor(
+      ((state.isPaused ? state.pauseTimestamp + adjustment : exitAt) - startedAt - totalPausedTime) / 1000)));
+    const endedAt = finalSeconds >= limit ? Math.min(exitAt, startedAt + totalPausedTime + limit * 1000) : exitAt;
+    const duration = Math.floor(finalSeconds / 60);
+    const completion = duration >= 1 ? { sessionId: state.sessionId, duration, endedAt, text: '' } : null;
+    // 终态含草稿副本；即使单独草稿写失败，也不能在下一进程重新累计或补响旧铃。
+    const terminal = { ...state, startTimestamp: startedAt, pauseTimestamp: 0, totalPausedTime,
+      status: 'exited', terminalReason: 'app_hide', isRunning: false, isPaused: false,
+      elapsedTime: finalSeconds, remainingTime: Math.max(0, state.totalTime - finalSeconds),
+      saveTime: exitAt, pendingCompletion: completion };
+    this._persistedTimerExit = terminal;
+    const write = (key, value) => {
+      try { wx.setStorageSync(key, value); }
+      catch (error) { console.warn('冷启动退出状态待重试:', key, error && error.message); }
+    };
+    write('timerState', { ...terminal });
+    if (completion) write('timerPendingCompletion', { ...completion });
+    let saved = !completion;
+    if (completion) {
+      try {
+        const result = checkinManager.recordCheckin(duration, [], [], endedAt, state.sessionId);
+        saved = !!(result && result.success);
+      } catch (error) { console.warn('冷启动退出保存失败，保留完成草稿:', error && error.message); }
+    }
+    if (saved) {
+      const savedIds = this._timerSavedCompletionIds || (this._timerSavedCompletionIds = new Set());
+      savedIds.add(state.sessionId);
+      if (savedIds.size > 200) savedIds.delete(savedIds.values().next().value);
+      terminal.pendingCompletion = null;
+      try {
+        const current = wx.getStorageSync('timerState');
+        if (current && current.sessionId === state.sessionId) write('timerState', { ...terminal });
+      } catch (error) { console.warn('冷启动退出终态清理待重试:', error && error.message); }
+      try {
+        const draft = wx.getStorageSync('timerPendingCompletion');
+        if (draft && draft.sessionId === state.sessionId) write('timerPendingCompletion', null);
+      } catch (error) { console.warn('冷启动退出草稿清理待重试:', error && error.message); }
+    }
+    const name = state.isCountdown ? '倒计时' : '正计时';
+    this._persistedTimerExitNotice = !completion ? `${name}已结束，不足1分钟未记录`
+      : saved ? `${name}已结束，${duration}分钟已存本机` : `${name}已结束，请确认保存记录`;
+    write('timerCompletionNotice', this._persistedTimerExitNotice);
+  },
+
+  getPersistedTimerExit() {
+    const state = this._persistedTimerExit;
+    if (!state) return null;
+    if (this._timerSavedCompletionIds && this._timerSavedCompletionIds.has(state.sessionId)
+      || state.pendingCompletion && this.hasRecordedTimerCompletion(state.sessionId)) {
+      state.pendingCompletion = null;
+      const name = state.isCountdown ? '倒计时' : '正计时';
+      this._persistedTimerExitNotice = state.elapsedTime >= 60
+        ? `${name}已结束，${Math.floor(state.elapsedTime / 60)}分钟已存本机` : `${name}已结束，不足1分钟未记录`;
+    } else if (state.pendingCompletion) {
+      try {
+        const pending = wx.getStorageSync('timerPendingCompletion');
+        if (pending && pending.sessionId === state.sessionId && pending.duration === state.pendingCompletion.duration
+          && pending.endedAt === state.pendingCompletion.endedAt) {
+          state.pendingCompletion = { ...state.pendingCompletion, text: String(pending.text || '').slice(0, 2000) };
+        }
+      } catch (_) { /* The confirmed in-memory completion survives an unreadable draft. */ }
+    }
+    return { sessionId: state.sessionId, state: { ...state }, saved: !state.pendingCompletion,
+      completion: state.pendingCompletion ? { ...state.pendingCompletion } : null,
+      notice: this._persistedTimerExitNoticeConsumed ? '' : this._persistedTimerExitNotice || '' };
+  },
+
+  // 只补写原退出的终态和草稿，不重试入账；任何更新的会话/草稿或读取失败都保持原样。
+  flushPersistedTimerExit() {
+    const exit = this.getPersistedTimerExit();
+    if (!exit) return;
+    try {
+      const state = wx.getStorageSync('timerState');
+      const pending = wx.getStorageSync('timerPendingCompletion');
+      if (state && state.sessionId !== exit.sessionId || pending && pending.sessionId !== exit.sessionId) return;
+      wx.setStorageSync('timerState', exit.state);
+      if (exit.completion && !pending) wx.setStorageSync('timerPendingCompletion', exit.completion);
+      else if (exit.saved && pending) wx.setStorageSync('timerPendingCompletion', null);
+    } catch (error) { console.warn('冷启动退出终态待补写:', error && error.message); }
+  },
+
   playTimerExitReminder(options = {}) {
     this.getTimerExitAudio().play(options);
   },
@@ -133,39 +272,141 @@ App({
     if (!sessionId) return;
     const { isExplicitTimerExit } = require('./utils/timerInterruption');
     if (!isExplicitTimerExit(options)) return;
-    const state = wx.getStorageSync('timerState');
+    if (this._detachedCountupExit && this._detachedCountupExit.sessionId === sessionId) {
+      this._detachedCountupSessionId = null;
+      this.flushDetachedCountupExit();
+      return;
+    }
+    // 页面交接的检查点比可能写失败的磁盘快照更新，优先核对并使用。
+    const handed = this._detachedCountupState;
+    let state = handed && handed.sessionId === sessionId && handed.runtimeId === this._timerRuntimeId ? handed : null;
+    let readFailed = false;
+    if (!state) {
+      try { state = wx.getStorageSync('timerState'); }
+      catch (error) {
+        readFailed = true;
+        console.warn('正计时退出检查点读取失败:', error && error.message);
+      }
+    }
     if (!state || state.sessionId !== sessionId || state.runtimeId !== this._timerRuntimeId
       || state.isCountdown !== false || state.interrupted !== true || (!state.isRunning && !state.isPaused)) {
-      this._detachedCountupSessionId = null;
+      if (!readFailed) this._detachedCountupSessionId = null;
       return;
     }
     const exitAt = Date.now();
-    const pausedTime = state.isPaused ? Math.max(0, exitAt - state.pauseTimestamp) : 0;
-    const elapsed = Math.max(0, Math.floor((exitAt - state.startTimestamp - state.totalPausedTime - pausedTime) / 1000));
+    const adjustment = Number.isFinite(state.saveTime) ? Math.min(0, exitAt - state.saveTime) : 0;
+    const startedAt = state.startTimestamp + adjustment;
+    const effectiveEnd = state.isPaused ? state.pauseTimestamp + adjustment : exitAt;
+    const elapsed = Math.max(0, Number(state.elapsedTime) || 0,
+      Math.floor((effectiveEnd - startedAt - state.totalPausedTime) / 1000));
     const duration = Math.floor(Math.min(elapsed, 24 * 60 * 60) / 60);
     const endedAt = elapsed >= 24 * 60 * 60
-      ? Math.min(exitAt, state.startTimestamp + state.totalPausedTime + 24 * 60 * 60 * 1000) : exitAt;
+      ? Math.min(exitAt, startedAt + state.totalPausedTime + 24 * 60 * 60 * 1000) : exitAt;
     const completion = duration >= 1 ? { sessionId, duration, endedAt, text: '' } : null;
-    // 页面已卸载时仍须登记提醒，返回计时页后补播收坐。
-    const { queueEndReminder } = require('./utils/timerEndReminder');
-    queueEndReminder(wx, sessionId);
-    // 先保存可重试草稿，再撤销运行状态；保存失败也不能恢复成继续累计的会话。
-    if (completion) wx.setStorageSync('timerPendingCompletion', completion);
-    wx.setStorageSync('timerState', null);
+    // 先提交内存终态再写盘/入账；清理失败不能让旧检查点或重入回调复活会话。
+    const terminal = { ...state, startTimestamp: startedAt, pauseTimestamp: 0,
+      status: 'exited', terminalReason: 'app_hide', isRunning: false, isPaused: false,
+      elapsedTime: Math.min(elapsed, 86400), saveTime: exitAt, pendingCompletion: completion };
+    const exit = this._detachedCountupExit = { sessionId, completion, state: terminal, saved: !completion, notice: '' };
     this._detachedCountupSessionId = null;
+    this._detachedCountupState = null;
     if (this._timerSessionAudio && this._timerSessionAudio.sessionId === sessionId) this._timerSessionAudio = null;
-    let saved = false;
+    const write = (key, value) => {
+      try { wx.setStorageSync(key, value); }
+      catch (error) { console.warn('正计时退出状态待重试:', key, error && error.message); }
+    };
+    const persistDraft = value => {
+      try {
+        const pending = wx.getStorageSync('timerPendingCompletion');
+        if (value ? !pending || pending.sessionId === sessionId : pending && pending.sessionId === sessionId) {
+          write('timerPendingCompletion', value);
+        }
+      } catch (error) { console.warn('正计时退出草稿身份待核对:', error && error.message); }
+    };
+    // 草稿和终态分别保留恢复依据；单项写失败不能清掉另一份唯一备份。
+    try {
+      const stored = wx.getStorageSync('timerState');
+      if (!stored || stored.sessionId === sessionId) write('timerState', { ...terminal });
+    } catch (error) { console.warn('正计时退出检查点身份待核对:', error && error.message); }
+    if (completion) persistDraft({ ...completion });
     if (completion) {
       try {
-        const result = checkinManager.recordCheckin(duration, [], [], endedAt, sessionId);
-        saved = !!(result && result.success);
-        if (saved) wx.setStorageSync('timerPendingCompletion', null);
+        const savedIds = this._timerSavedCompletionIds || (this._timerSavedCompletionIds = new Set());
+        const result = savedIds.has(sessionId) ? { success: true }
+          : checkinManager.recordCheckin(duration, [], [], endedAt, sessionId);
+        if (result && result.success) {
+          exit.saved = true;
+          savedIds.add(sessionId);
+          if (savedIds.size > 200) savedIds.delete(savedIds.values().next().value);
+          persistDraft(null);
+        }
       } catch (error) {
         console.warn('正计时退出保存失败，保留完成草稿:', error && error.message);
       }
     }
-    wx.setStorageSync('timerCompletionNotice', !completion ? '正计时已结束，不足1分钟未记录'
-      : saved ? `正计时已结束，${duration}分钟已存本机` : '正计时已结束，请确认保存记录');
+    this.flushDetachedCountupExit();
+    exit.notice = !completion ? '正计时已结束，不足1分钟未记录'
+      : exit.saved ? `正计时已结束，${duration}分钟已存本机` : '正计时已结束，请确认保存记录';
+    write('timerCompletionNotice', exit.notice);
+  },
+
+  getDetachedCountupExit(sessionId) {
+    const exit = this._detachedCountupExit || this.getPersistedTimerExit();
+    if (!exit || (sessionId && exit.sessionId !== sessionId)) return null;
+    if (this._timerSavedCompletionIds && this._timerSavedCompletionIds.has(exit.sessionId)
+      || !exit.saved && exit.completion && this.hasRecordedTimerCompletion(exit.sessionId)) {
+      exit.saved = true;
+      if (exit.completion) exit.notice = `正计时已结束，${exit.completion.duration}分钟已存本机`;
+    } else if (exit.completion && !exit.saved) {
+      try {
+        const pending = wx.getStorageSync('timerPendingCompletion');
+        if (pending && pending.sessionId === exit.sessionId && pending.duration === exit.completion.duration
+          && pending.endedAt === exit.completion.endedAt) {
+          exit.completion = { ...exit.completion, text: String(pending.text || '').slice(0, 2000) };
+        }
+      } catch (_) { /* Keep the confirmed in-memory draft until storage recovers. */ }
+    }
+    return { ...exit, notice: exit.noticeConsumed ? '' : exit.notice,
+      state: exit.state ? { ...exit.state, pendingCompletion: exit.saved ? null : { ...exit.completion } } : undefined,
+      completion: exit.completion ? { ...exit.completion } : null };
+  },
+
+  consumeDetachedCountupExitNotice(sessionId) {
+    const exit = this._detachedCountupExit;
+    if (exit && exit.sessionId === sessionId) exit.noticeConsumed = true;
+    if (this._persistedTimerExit && this._persistedTimerExit.sessionId === sessionId) {
+      this._persistedTimerExitNoticeConsumed = true;
+    }
+  },
+
+  // 只重试草稿/检查点清理，不重试入账，也不覆盖新会话或另一份草稿。
+  flushDetachedCountupExit() {
+    const current = this._detachedCountupExit;
+    if (!current) return;
+    const exit = this.getDetachedCountupExit(current.sessionId);
+    let durable = exit.saved;
+    let draftCleared = false;
+    try {
+      const pending = wx.getStorageSync('timerPendingCompletion');
+      if (exit.saved) {
+        if (pending && pending.sessionId === exit.sessionId) wx.setStorageSync('timerPendingCompletion', null);
+        draftCleared = true;
+      } else if (exit.completion && !pending) {
+        wx.setStorageSync('timerPendingCompletion', exit.completion);
+        durable = true;
+      } else if (exit.completion && pending.sessionId === exit.sessionId
+        && pending.duration === exit.completion.duration && pending.endedAt === exit.completion.endedAt) {
+        // 已存在的草稿可能刚写入感受；补写终态不能回滚用户的新文本。
+        durable = true;
+      }
+    } catch (error) { console.warn('正计时退出草稿待重试:', error && error.message); }
+    try {
+      const state = wx.getStorageSync('timerState');
+      if (!state || state.sessionId === exit.sessionId) {
+        // 清理失败时保留已保存确认，让冷启动识别旧独立草稿已经入账。
+        wx.setStorageSync('timerState', durable && (!exit.saved || draftCleared) ? null : exit.state);
+      }
+    } catch (error) { console.warn('正计时退出检查点清理待重试:', error && error.message); }
   },
 
   syncAlertIdentity() {

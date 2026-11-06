@@ -1,398 +1,99 @@
-.mt-6 {
-  margin-top: 20rpx;
-}
-.mt-7 {
-  margin-top: 15.44rpx;
-}
-.mt-8 {
-  margin-top: 8.82rpx;
-}
-.mt-12 {
-  margin-top: 26.47rpx;
-}
-.mt-15 {
-  margin-top: 40rpx;
-}
-.ml-5 {
-  margin-left: 11.03rpx;
-}
-.ml-9 {
-  margin-left: 19.85rpx;
-}
-.ml-16 {
-  margin-left: 48rpx;
-}
-.ml-102 {
-  margin-left: 100rpx;
-}
+page { background: #f7f5ef; color: #343a35; }
 
-/* 白色底板 - 主要内容区域 */
-.content-overlay {
-  position: relative;
-  padding: 110.29rpx 39.71rpx 52.94rpx 44.12rpx;
-  background: #FAF9F6;
+.daily-page {
   min-height: 100vh;
-  width: 100%;
+  padding: 30rpx 30rpx 174rpx;
+  padding-bottom: calc(174rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(174rpx + env(safe-area-inset-bottom));
 }
-
-.page {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  background: #FAF9F6;
-}
-.text {
-  color: #6a7282;
-  font-size: 40rpx;
-  font-family: Tinos;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 4.41rpx;
-}
-.font {
-  font-size: 30rpx;
-  font-family: Inter;
-  line-height: 37.48rpx;
-}
-.text_2 {
-  color: #364153;
-  font-weight: 700;
-}
-
-/* 年份显示样式 */
-.year-text {
-  font-size: 40rpx;
-  font-family: Tinos;
-  font-weight: 700;
-  color: #364153;
-  line-height: 1;
-}
-.group {
-  padding-left: 8.82rpx;
-}
-.text_3 {
-  color: #101828;
-  font-size: 80rpx;
-  font-family: Inter;
-  font-weight: 700;
-  line-height: 117.09rpx;
-  letter-spacing: -7.68rpx;
-}
-.text_4 {
-  margin-top: 22.06rpx;
-  color: #6a7282;
-  line-height: 36.68rpx;
-}
-.group_2 {
-  margin-right: 4.41rpx;
-  margin-top: 44.12rpx;
-}
-.text_5 {
-  flex: 1;
-  color: #364153;
-  font-size: 28rpx;
-  font-family: Times;
-  line-height: 43.01rpx;
-  min-width: 33%;
-  align-self: flex-start;
-}
-.image {
-  width: auto;
-  height: auto;
-  max-width: 200;
-  max-height: 400rpx;
-  border-radius: 22rpx;
-  object-fit: contain;
-}
-.group_3 {
-  margin-top: 30rpx;
-}
-.group_4 {
-  margin-right: 0px;
-  padding-bottom: 60rpx;
-  border-bottom: solid 2.21rpx #e5e7eb99;
-}
-.group_5 {
-  flex: 1;
-  margin-right: 40rpx;
-}
-.font_2 {
-  font-size: 22.06rpx;
-  font-family: Inter;
-  line-height: 20.38rpx;
-  color: #6a7282;
-}
-.text_6 {
-  color: #1e2939;
-}
-
-/* 微信昵称样式 - 单独设置字体大小和加粗 */
-.user-nickname {
-  font-size: 35rpx;
-  font-family: Inter;
-  font-weight: 700;
-  line-height: 28.72rpx;
-  color: #1e2939;
-}
-.text-wrapper {
-  padding: 8.82rpx 0;
-  background-color: #b297641a;
-  border-radius: 37008529.41rpx;
-  width: 150.86rpx;
-  height: 41.91rpx;
-}
-.group_6 {
-  padding: 0 25rpx;
-  display: flex;
-  align-items: flex-end; /* 底部对齐 */
-}
-.equal-division-item {
-  padding: 8.82rpx 0;
-}
-.font_4 {
-  font-size: 30rpx;
-  font-family: Inter;
-  line-height: 32.51rpx;
-  font-weight: 700;
-  color: #101828;
-}
-.font_3 {
-  font-size: 22.06rpx;
-  font-family: Inter;
-  line-height: 20.23rpx;
-  color: #6a7282;
-}
-.text_7 {
-  color: #b29764;
-  line-height: 20.54rpx;
-}
-.group_7 {
-  margin-right: 10rpx;
-  flex-shrink: 0;
-}
-.image_2 {
-  border-radius: 50%;
-  filter: drop-shadow(0rpx 0rpx 0rpx #b2976433);
-  width: 123.53rpx;
-  height: 123.53rpx;
-  object-fit: cover;
-}
-.text-wrapper_2 {
-  padding: 8.82rpx 0;
-  background-color: #b297641a;
-  border-radius: 37rpx;
-  width: 130.86rpx;
-  height: 40rpx;
-}
-.pos {
-  position: absolute;
-  right: 0;
-  top: 83.82rpx;
-}
-.text_8 {
-  color: #b29764;
-  line-height: 20.54rpx;
-}
-/* 立即分享按钮 */
-.section {
-  background-image: linear-gradient(180deg, #b29764 0%, #c9a870 100%);
+.daily-intro { display: flex; align-items: center; justify-content: space-between; margin: 0 5rpx 26rpx; }
+.daily-intro-title { display: flex; align-items: center; color: #807354; font-size: 24rpx; font-weight: 500; letter-spacing: 3rpx; }
+.daily-intro-dot { width: 9rpx; height: 9rpx; margin-right: 12rpx; border-radius: 50%; background: #b29764; }
+.daily-intro-note { color: #818577; font-size: 21rpx; line-height: 1.6; }
+.daily-card {
+  overflow: hidden;
+  padding: 32rpx 34rpx 24rpx;
+  border: 1rpx solid #e9e5d9;
   border-radius: 20rpx;
-  padding: 20rpx 0 20rpx;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  border: solid 2rpx #b29764;
-  transition: all 0.3s ease;
-  width: 100%;
-  margin-top: 50rpx;
+  background: #fffefa;
+  box-shadow: 0 12rpx 44rpx rgba(76, 67, 40, 0.045);
 }
-
-.section:active {
-  background-color: #f8f8f8;
-  transform: scale(0.98);
+.daily-date, .daily-date-main { display: flex; align-items: center; }
+.daily-date { justify-content: space-between; }
+.daily-date-main { min-width: 0; }
+.daily-date-day { font-family: Georgia, 'Times New Roman', serif; font-size: 86rpx; line-height: 1; letter-spacing: -4rpx; color: #3a4037; }
+.daily-date-month { display: flex; flex-direction: column; margin-left: 23rpx; }
+.daily-month-name { color: #6f725f; font-family: Georgia, 'Times New Roman', serif; font-size: 27rpx; line-height: 1.5; }
+.daily-date-year { margin-top: 2rpx; color: #a2a18f; font-size: 22rpx; letter-spacing: 3rpx; line-height: 1.5; }
+.daily-date-detail { display: flex; flex-direction: column; align-items: flex-end; padding-left: 16rpx; color: #75796d; font-size: 24rpx; line-height: 1.7; }
+.daily-lunar-date { color: #a09e8e; font-size: 22rpx; }
+.daily-session { display: flex; align-items: center; justify-content: space-between; margin-top: 28rpx; padding: 22rpx; border-radius: 12rpx; background: #f8f6f0; }
+.daily-session-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; margin-right: 20rpx; }
+.daily-session-name { overflow: hidden; color: #4b5145; font-size: 28rpx; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.daily-session-time { margin-top: 7rpx; color: #8e927f; font-size: 20rpx; line-height: 1.5; }
+.daily-session-duration { display: flex; flex-shrink: 0; flex-direction: column; align-items: flex-end; color: #8e927f; font-size: 20rpx; line-height: 1.5; }
+.daily-session-minutes { color: #555c49; font-size: 42rpx; font-weight: 500; line-height: 1.2; }
+.daily-art { display: flex; align-items: center; justify-content: center; margin: 32rpx 0 0; }
+.daily-art-image { display: block; width: 320rpx; height: 454rpx; overflow: hidden; border-radius: 12rpx; background: #f6f3eb; box-shadow: 0 10rpx 26rpx rgba(61, 53, 33, 0.09); }
+.daily-art-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 320rpx; height: 454rpx; border-radius: 12rpx; color: #929280; background: #f6f3eb; font-size: 24rpx; }
+button.daily-art-retry { margin: 22rpx 0 0; padding: 4rpx 24rpx; color: #8c7950; background: transparent; font-size: 24rpx; line-height: 1.8; }
+button.daily-art-retry::after { border: 1rpx solid #dbcfb7; border-radius: 8rpx; }
+.daily-wisdom { display: flex; flex-direction: column; align-items: center; padding: 28rpx 18rpx 30rpx; }
+.daily-wisdom-line { width: 32rpx; height: 2rpx; margin-bottom: 18rpx; background: #c4b18c; }
+.daily-wisdom-text { width: 100%; color: #555b4c; font-family: 'Songti SC', 'STSong', 'SimSun', serif; font-size: 29rpx; line-height: 1.85; text-align: center; word-break: break-all; }
+.daily-personal { border-top: 1rpx solid #eeece3; }
+.daily-profile { display: flex; align-items: center; padding: 24rpx 0 22rpx; }
+.daily-profile-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; margin-left: 16rpx; }
+.daily-profile-name { overflow: hidden; color: #4b5145; font-size: 26rpx; font-weight: 500; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+.daily-profile-note { overflow: hidden; margin-top: 2rpx; color: #8e927f; font-size: 20rpx; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+.daily-profile-badge { max-width: 140rpx; margin-left: 12rpx; padding: 7rpx 14rpx; border: 1rpx solid #e7dfcb; border-radius: 8rpx; color: #9a8252; background: #faf6ed; font-size: 20rpx; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-stats { display: flex; align-items: center; padding: 21rpx 0; border-radius: 12rpx; background: #f8f7f1; }
+.daily-stat { display: flex; flex: 1; flex-direction: column; align-items: center; min-width: 0; }
+.daily-stat-value { display: flex; align-items: baseline; justify-content: center; color: #555c49; font-size: 40rpx; font-weight: 500; line-height: 1.25; }
+.daily-stat-unit { margin-left: 9rpx; color: #8d907e; font-size: 21rpx; font-weight: 400; }
+.daily-stat-label { margin-top: 10rpx; color: #929582; font-size: 21rpx; line-height: 1.5; }
+.daily-stat-divider { width: 1rpx; height: 49rpx; background: #e2e3d5; }
+.daily-card-footer { display: flex; align-items: center; justify-content: center; margin-top: 25rpx; color: #929280; font-size: 19rpx; line-height: 1.6; letter-spacing: 2rpx; }
+.daily-card-footer-dot { margin: 0 12rpx; }
+.daily-sharing-note { display: block; margin-top: 28rpx; color: #929280; font-size: 21rpx; line-height: 1.6; text-align: center; }
+button.daily-start-button { margin: 20rpx auto 0; padding: 8rpx 24rpx; color: #8c7950; background: transparent; font-size: 25rpx; line-height: 1.8; }
+button.daily-start-button::after, button.daily-action::after { border: none; }
+.daily-start-arrow { margin-left: 8rpx; }
+.daily-action-bar {
+  position: fixed;
+  z-index: 10;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 22rpx 30rpx 24rpx;
+  padding-bottom: calc(24rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(24rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid #eae6db;
+  background: #fdfcf8;
 }
-.image_3 {
-  width: 35.29rpx;
-  height: 35.29rpx;
-}
-.text_9 {
-  color: #ffffff;
-  font-weight: 700;
-}
-
-/* 立即分享文字样式 - 单独设置字体大小 */
-.share-text {
-  font-size: 35rpx;
-  font-family: Inter;
-  font-weight: 700;
-  color: #ffffff;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 卡牌区域 - 居中显示 */
-.card-section {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 40rpx 0;
-  padding: 0 44.12rpx;
-}
-
-.card-stack-container {
-  position: relative;
-  width: 320rpx;
-  height: 400rpx;
-}
-
-/* 通用卡牌层样式 */
-.card-layer {
-  position: absolute;
-  border-radius: 22.06rpx;
-  filter: drop-shadow(0rpx 8.82rpx 13.24rpx rgba(0, 0, 0, 0.08));
-}
-
-/* 底层背景 - 使用right_card.png */
-.card-base {
-  width: 400rpx;
-  height: 500rpx;
-  left: 70%;
-  transform: translateX(-50%);
-  z-index: 1;
-}
-
-/* 装饰层 - 使用left_card.png */
-.card-decor {
-  width: 380rpx;
-  height: 500rpx;
-  right: 10.48rpx;
-  bottom: 1.84rpx;
-  z-index: 2;
-}
-
-/* 主卡牌 - 移除倾斜效果 */
-.card-main {
-  width: 330rpx;
-  height: 480rpx;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%); /* 仅保留水平居中 */
-  z-index: 3;
-  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  overflow: hidden;
-  border: 1rpx solid rgba(178, 151, 100, 0.1);
-  border-radius: 15rpx;
-}
-
-
-
-.main-image {
-  width: 100%;
-  height: 100%;
-  border-radius: 22.06rpx;
-  object-fit: cover;
-}
-
-/* 金句区域 - 在卡牌下方居中 */
-.wisdom-section {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 120rpx 0 80rpx;
-  padding: 0 44.12rpx;
-}
-
-.wisdom-text {
-  color: #364153;
-  font-size: 30rpx;
-  font-family: Times;
-  line-height: 43.01rpx;
-  text-align: center;
-  max-width: 600rpx;
-}
-
-.mt-19 {
-  margin-top: 80rpx;
-}
-.ml-37 {
-  margin-left: 62rpx;
-  border: solid 2rpx #b29764;
-}
-.group_4 {
-  margin-right: 0rpx;
-}
-.text_5 {
-  margin-top: 0rpx;
-  color: #364153;
-  font-size: 30rpx;
-  font-family: Times;
-  line-height: 43.01rpx;
-  width: 211.76rpx;
-}
-.image {
-  border-radius: 11rpx;
-  height: 600rpx;
-}
-
-.image_6 {
-  width: 100rpx;
-  height: 100rpx;
-  align-self: center;
-}
-
-/* 最高等级勋章样式 - 与用户昵称高度协调 */
-.highest-level-badge {
-  display: flex;
-  align-items: flex-end; /* 底部对齐 */
-  margin-left: 10rpx; /* 增加与昵称的间距 */
-  padding: 0rpx 20rpx;
-  background: #f8f9fa;
-  height: 36rpx; /* 与昵称文字高度一致 */
-  max-width: 140rpx;
-}
-
-.level-badge-icon {
-  width: 35rpx;
-  height: 35rpx;
-  border-radius: 50%;
-  margin-right: 6rpx;
-}
-
-.badge-level-text {
-  font-size: 22rpx;
-  font-family: Inter;
-  font-weight: 400; /* 正常字体，不加粗 */
-  color: #b29764;
-  line-height: 1;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-left: 10rpx; /* 增加与图标的间距 */
-}
-
-/* 最高等级文字样式 - 头像下方（参照原有样式） */
-.highest-level-text {
-  padding: 8.82rpx 0;
-  background-color: #b297641a;
-  border-radius: 30rpx;
-  width: 140rpx;
-  height: 41.91rpx;
-  margin-top: 15rpx;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.level-text {
-  font-size: 22.06rpx;
-  font-family: Inter;
-  line-height: 20.54rpx;
-  color: #b29764;
-  text-align: center;
+.daily-actions { display: flex; align-items: center; }
+button.daily-action { display: flex; flex: 1; align-items: center; justify-content: center; min-width: 0; min-height: 90rpx; margin: 0; padding: 20rpx 14rpx; border-radius: 14rpx; font-size: 28rpx; font-weight: 500; line-height: 1.6; }
+button.daily-action + button.daily-action { margin-left: 20rpx; }
+button.daily-action-save { color: #90794d; border: 1rpx solid #dbcfb7; background: #fdfbf6; }
+button.daily-action-share { color: #fffefa; border: 1rpx solid #ad9160; background: #ad9160; }
+button.daily-action[disabled] { color: #b1ac9d; border-color: #e2dfd4; background: #ece9e0; }
+.daily-action-pressed { opacity: 0.8; }
+.daily-text-pressed { opacity: 0.6; }
+/* A downward arrow keeps the save action distinct from native sharing. */
+.daily-save-icon { position: relative; width: 28rpx; height: 24rpx; margin: 4rpx 15rpx 0 0; border: 2rpx solid currentColor; border-top: 0; border-radius: 3rpx; }
+.daily-save-icon view { position: absolute; top: -8rpx; left: 11rpx; width: 2rpx; height: 22rpx; background: currentColor; }
+.daily-save-icon view::before { position: absolute; bottom: 0; left: -5rpx; width: 10rpx; height: 10rpx; border-right: 2rpx solid currentColor; border-bottom: 2rpx solid currentColor; content: ''; transform: rotate(45deg); }
+.daily-share-icon { position: relative; width: 28rpx; height: 24rpx; margin: 4rpx 15rpx 0 0; border: 2rpx solid currentColor; border-top: 0; border-radius: 3rpx; }
+.daily-share-icon view { position: absolute; top: -8rpx; left: 11rpx; width: 2rpx; height: 22rpx; background: currentColor; }
+.daily-share-icon view::before { position: absolute; top: 0; left: -5rpx; width: 10rpx; height: 10rpx; border-top: 2rpx solid currentColor; border-left: 2rpx solid currentColor; content: ''; transform: rotate(45deg); }
+/* Native canvas layers may ignore a parent's opacity and clipping. Keep the
+   actual canvas nodes offscreen while retaining their full export dimensions. */
+.daily-export-host { position: fixed; top: 0; left: 0; z-index: -1; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.daily-export-canvas { position: fixed; top: 0; left: -10000px; opacity: 0; pointer-events: none; }
+@media (max-width: 340px) {
+  .daily-page { padding-right: 24rpx; padding-left: 24rpx; }
+  .daily-card { padding-right: 28rpx; padding-left: 28rpx; }
+  .daily-intro-note { font-size: 20rpx; }
+  .daily-profile-note { font-size: 19rpx; }
+  .daily-profile-badge { max-width: 124rpx; padding-right: 10rpx; padding-left: 10rpx; }
 }

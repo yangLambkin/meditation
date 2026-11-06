@@ -31,7 +31,7 @@ Page({
     loadError: '', reportError: '',
     currentTab: 'records', recordTab: 'today', todayFilter: 'attention',
     teamMembers: [], todayMembers: [], historyMembers: [], attentionCount: 0,
-    overview: null, historySummary: null, hasGoal: false, practiceReports: [],
+    overview: null, historySummary: null, hasGoal: false, practiceReports: [], historyPracticeType: '',
     hasMultiplePractices: false, todayHasGoal: false, todaySummary: null, todayBelowGoalLabel: '时长不足', todayPracticeRuleLabel: '',
     practiceTypeName: '静坐觉察', practiceUnit: '分钟', goalMax: 1440, belowGoalLabel: '时长不足',
     dayLabel: '', nextDayLabel: '', historyRangeLabel: '',
@@ -159,7 +159,7 @@ Page({
     if (this._viewerOpenid !== openid || this._viewerKey !== viewerKey || this._viewerTeamId !== teamId) {
       this.resetInvitation();
       this._reportMembers = [];
-      this.setData({ teamInfo: null, report: null, practiceReports: [], todaySummary: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
+      this.setData({ teamInfo: null, report: null, practiceReports: [], historyPracticeType: '', todaySummary: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
     if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId || this.data.roleChangingMemberId) return;
     if (this.data.isLoading && this._loadingOpenid === openid && this._loadingViewerKey === viewerKey && this._loadingTeamId === teamId) return;
@@ -342,7 +342,9 @@ Page({
     const date = new Date(`${first.businessDate}T00:00:00Z`);
     const nextDay = new Date(date.getTime() + DAY_MS);
     this._reportMembers = members;
-    this.setPracticeData({ ...roleData, report: first, practiceReports: views, hasMultiplePractices, todayHasGoal, todaySummary,
+    this.setPracticeData({ ...roleData, report: first, practiceReports: views,
+      historyPracticeType: views.some(view => view.practiceType === this.data.historyPracticeType) ? this.data.historyPracticeType : defaultView.practiceType,
+      hasMultiplePractices, todayHasGoal, todaySummary,
       todayBelowGoalLabel: hasMultiplePractices ? '未完成' : defaultView.belowGoalLabel,
       todayPracticeRuleLabel: hasMultiplePractices ? `共 ${views.length} 项功课 · 查看规则` : defaultView.hasGoal ? `每日目标 ${first.settings.dailyGoalMinutes} ${defaultView.unit}` : '未设置每日目标',
       hasGoal: defaultView.hasGoal,
@@ -467,6 +469,14 @@ Page({
   switchRecordTab(event) {
     const tab = event.currentTarget.dataset.tab;
     if (tab === 'today' || tab === 'history') this.setData({ recordTab: tab });
+  },
+
+  switchHistoryPractice(event) {
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    const practiceType = dataset.practiceType;
+    if (practiceType === this.data.historyPracticeType ||
+        !this.data.practiceReports.some(view => view.practiceType === practiceType)) return;
+    this.setData({ historyPracticeType: practiceType });
   },
 
   changeTodayFilter(event) {

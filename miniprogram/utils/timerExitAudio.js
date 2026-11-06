@@ -1,11 +1,12 @@
 const { createCuePlayer } = require('./cuePlayer');
+const { createVibrationCue } = require('./vibrationCue');
 const { getReminderSettings } = require('./timerReminderSettings');
 const { getEndReminder, clearEndReminder } = require('./timerEndReminder');
 
 // An exit cue belongs to the app so returning home cannot destroy its player.
 // The durable reminder remains independent of both the page and record saving.
 function createTimerExitAudio({
-  api, canPlay = () => true, diagnose = () => {},
+  api, canPlay = () => true, diagnose = () => {}, now = Date.now,
   setTimeout: schedule = setTimeout, clearTimeout: cancel = clearTimeout
 }) {
   let current = null;
@@ -24,6 +25,10 @@ function createTimerExitAudio({
   }
 
   function release(claim) {
+    if (claim && claim.vibration) {
+      claim.vibration.stop();
+      claim.vibration = null;
+    }
     const cue = claim && claim.cue;
     if (!cue) return;
     claim.position = Math.max(claim.position, cue.position);
@@ -48,13 +53,16 @@ function createTimerExitAudio({
     if (current !== claim) return;
     claim.status = 'failed';
     release(claim);
-    report('exit_end_cue_failed', { sessionId: claim.sessionId });
+    report(claim.vibrationMode ? 'exit_end_vibration_failed' : 'exit_end_cue_failed', { sessionId: claim.sessionId });
     // Keep the bell pending for the next explicit resume, with one fallback per
     // bounded playback attempt rather than a timer-driven retry loop.
     if (!available()) return;
-    try { api.vibrateLong({}); } catch (_) { /* The durable reminder can retry later. */ }
+    if (!claim.vibrationMode) {
+      try { api.vibrateLong({}); } catch (_) { /* The durable reminder can retry later. */ }
+    }
     try {
-      api.showToast({ title: '静坐已结束，铃声播放失败，已尝试震动提醒', icon: 'none', duration: 3500 });
+      api.showToast({ title: claim.vibrationMode ? '静坐已结束，震动提醒失败，可返回计时页重试'
+        : '静坐已结束，铃声播放失败，已尝试震动提醒', icon: 'none', duration: 3500 });
     } catch (_) { /* Toast failure cannot discard the reminder. */ }
   }
 
@@ -62,13 +70,16 @@ function createTimerExitAudio({
     if (current !== claim || !matches(claim)) { stop(); return false; }
     if (!available()) { claim.status = 'deferred'; return true; }
     claim.status = 'playing';
-    if (getReminderSettings(api).end === 'vibrate') {
-      try {
-        api.vibrateLong({
-          success: () => completed(claim),
-          fail: () => failed(claim)
-        });
-      } catch (_) { failed(claim); }
+    claim.vibrationMode = getReminderSettings(api).end === 'vibrate';
+    if (claim.vibrationMode) {
+      const vibration = createVibrationCue({
+        api, now,
+        canPlay: () => current === claim && matches(claim) && available(),
+        setTimeout: schedule, clearTimeout: cancel,
+        onEnded: ({ failed: didFail }) => didFail ? failed(claim) : completed(claim)
+      });
+      claim.vibration = vibration;
+      vibration.play();
       return true;
     }
     const cue = createCuePlayer({
@@ -94,6 +105,11 @@ function createTimerExitAudio({
     if (!claim) return false;
     if (!matches(claim)) { stop(); return false; }
     if (!available()) return true;
+    if (claim.vibration && (claim.status === 'playing' || claim.status === 'paused')) {
+      claim.status = 'playing';
+      claim.vibration.resume();
+      return true;
+    }
     if (claim.status === 'playing') return true;
     if (claim.status === 'paused' && claim.cue) {
       claim.status = 'playing';
@@ -119,7 +135,7 @@ function createTimerExitAudio({
     current = {
       sessionId: pending.sessionId,
       position: Number.isFinite(position) ? Math.max(0, position) : 0,
-      status: 'deferred', cue: null
+      status: 'deferred', cue: null, vibration: null, vibrationMode: false
     };
     return begin(current);
   }
@@ -130,6 +146,10 @@ function createTimerExitAudio({
       const claim = current;
       if (!claim) return;
       if (!matches(claim)) { stop(); return; }
+      if (claim.vibration) {
+        claim.vibration.pause();
+        claim.status = 'paused';
+      }
       if (claim.cue) {
         claim.cue.pause();
         claim.position = Math.max(claim.position, claim.cue.position);

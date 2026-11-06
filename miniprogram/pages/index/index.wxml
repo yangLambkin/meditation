@@ -90,9 +90,9 @@
     <view class="checkin-history">
       <view class="checkin-history-heading">
         <text class="checkin-title">最近三天静坐</text>
-        <button class="checkin-scope-toggle" bindtap="openAllCheckins" aria-label="查看全部打卡记录" hover-class="checkin-record-active">
-          <text>全部</text>
-          <view class="checkin-scope-arrow" aria-hidden="true"></view>
+        <button class="section-records-entry" bindtap="openAllCheckins" aria-label="查看静坐历史记录" hover-class="section-records-entry-hover">
+          <text>静坐记录</text>
+          <view class="section-records-arrow" aria-hidden="true"></view>
         </button>
       </view>
       <view wx:if="{{pendingCheckinCount > 0}}" class="checkin-pending-banner">

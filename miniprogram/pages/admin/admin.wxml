@@ -9,19 +9,20 @@
     <view class="page-heading">
       <text class="eyebrow">静坐觉察</text>
       <text class="page-title">管控中心</text>
-      <text class="description">查看同步进度，查询个人记录，处理反馈，维护团队。</text>
+      <text class="description">查看同步进度，查询个人记录，处理反馈，维护金句和团队。</text>
     </view>
     <view class="tabs">
       <view class="tab {{tab === 'sync' ? 'active' : ''}}" data-tab="sync" bindtap="onTabChange">必经同步</view>
       <view class="tab {{tab === 'query' ? 'active' : ''}}" data-tab="query" bindtap="onTabChange">记录查询</view>
       <view class="tab {{tab === 'feedback' ? 'active' : ''}}" data-tab="feedback" bindtap="onTabChange">用户反馈</view>
+      <view class="tab {{tab === 'wisdom' ? 'active' : ''}}" data-tab="wisdom" bindtap="onTabChange">每日金句</view>
       <view class="tab {{tab === 'team' ? 'active' : ''}}" data-tab="team" bindtap="onTabChange">团队团长</view>
       <view class="tab {{tab === 'audit' ? 'active' : ''}}" data-tab="audit" bindtap="onTabChange">操作记录</view>
     </view>
 
     <view wx:if="{{verifying}}" class="empty-state">正在加载并校验操作权限…</view>
     <view wx:elif="{{!authorized}}" class="card">
-      <text class="card-title">{{tab === 'sync' ? '必经同步暂不可用' : tab === 'query' ? '记录查询暂不可用' : tab === 'feedback' ? '用户反馈暂不可用' : tab === 'team' ? '团队管控暂不可用' : '操作记录暂不可用'}}</text>
+      <text class="card-title">{{tab === 'sync' ? '必经同步暂不可用' : tab === 'query' ? '记录查询暂不可用' : tab === 'feedback' ? '用户反馈暂不可用' : tab === 'wisdom' ? '金句管理暂不可用' : tab === 'team' ? '团队管控暂不可用' : '操作记录暂不可用'}}</text>
       <text class="description">{{accessError || '请稍后重试。'}}</text>
       <button class="secondary-button" bindtap="retryAccess">重新加载</button>
     </view>
@@ -205,6 +206,55 @@
       <view wx:if="{{feedbackLoading}}" class="small-empty">正在读取反馈…</view>
       <button wx:if="{{feedbackCursor}}" class="secondary-button" loading="{{feedbackLoading}}" disabled="{{feedbackLoading || feedbackSaveBusy || feedbackDeleteBusy}}" bindtap="loadMoreFeedback">加载更多反馈</button>
       <text class="footer-note">反馈按提交时间由近到远排列，时间均为北京时间。</text>
+    </view>
+
+    <view wx:if="{{authorized && tab === 'wisdom'}}">
+      <view class="card">
+        <view class="row spread"><text class="card-title">金句管理</text><view class="text-button" bindtap="refreshTab">刷新</view></view>
+        <text class="description">维护首页与静心卡使用的每日金句，输入关键词可查询正文。</text>
+        <text class="field-label">查询金句</text>
+        <input class="query-input" value="{{wisdomKeyword}}" maxlength="100" placeholder="请输入正文关键词，留空查询全部" confirm-type="search" disabled="{{wisdomSaveBusy || wisdomDeleteBusy}}" bindinput="onWisdomKeywordInput" bindconfirm="searchWisdom" />
+        <view class="wisdom-actions">
+          <button class="primary-button" loading="{{wisdomLoading}}" disabled="{{wisdomSaveBusy || wisdomDeleteBusy}}" bindtap="searchWisdom">查询</button>
+          <button class="secondary-button" disabled="{{wisdomLoading || wisdomSaveBusy || wisdomDeleteBusy}}" bindtap="newWisdom">新增金句</button>
+        </view>
+        <view wx:if="{{wisdomSearch}}" class="row spread wisdom-search-state">
+          <text class="small-note">当前关键词：{{wisdomSearch}}</text>
+          <view class="text-button" bindtap="clearWisdomSearch">查看全部</view>
+        </view>
+      </view>
+
+      <view wx:if="{{wisdomEditorOpen}}" id="wisdom-editor" class="card wisdom-editor">
+        <text class="card-title">{{selectedWisdom ? '编辑金句' : '新增金句'}}</text>
+        <text class="field-label">金句正文</text>
+        <textarea class="feedback-textarea wisdom-textarea" value="{{wisdomContent}}" maxlength="500" placeholder="写下一句让人保持觉察的话" disabled="{{wisdomSaveBusy || wisdomDeleteBusy || wisdomLoading}}" bindinput="onWisdomContentInput" />
+        <text class="small-note feedback-counter">{{wisdomContent.length}} / 500</text>
+        <text wx:if="{{wisdomSaveError}}" class="error-message" selectable>{{wisdomSaveError}}</text>
+        <button wx:if="{{wisdomConflict}}" class="secondary-button compact" disabled="{{wisdomLoading || wisdomSaveBusy || wisdomDeleteBusy}}" bindtap="loadWisdom">重新加载金句</button>
+        <view class="wisdom-actions">
+          <button class="primary-button" loading="{{wisdomSaveBusy}}" disabled="{{wisdomSaveBusy || wisdomDeleteBusy || wisdomLoading || wisdomConflict}}" bindtap="saveWisdom">{{wisdomSaveBusy ? '正在保存…' : selectedWisdom ? '保存修改' : '确认新增'}}</button>
+          <button class="secondary-button" disabled="{{wisdomSaveBusy || wisdomDeleteBusy || wisdomLoading}}" bindtap="cancelWisdomEdit">取消</button>
+        </view>
+        <button wx:if="{{selectedWisdom}}" class="secondary-button feedback-delete-button" loading="{{wisdomDeleteBusy}}" disabled="{{wisdomSaveBusy || wisdomDeleteBusy || wisdomLoading || wisdomConflict}}" bindtap="deleteWisdom">{{wisdomDeleteBusy ? '正在删除…' : '删除这条金句'}}</button>
+      </view>
+
+      <text wx:if="{{wisdomMessage}}" class="notice feedback-message">{{wisdomMessage}}</text>
+      <text wx:if="{{wisdomError}}" class="error-message" selectable>{{wisdomError}}</text>
+      <view class="section-heading">
+        <text class="card-title">{{wisdomSearch ? '查询结果' : '全部金句'}}</text>
+        <text class="small-label">共 {{wisdomTotal}} 条 · 已显示 {{wisdomQuotes.length}} 条</text>
+      </view>
+      <view wx:if="{{!wisdomQuotes.length && !wisdomLoading && !wisdomError}}" class="empty-state">{{wisdomSearch ? '没有找到匹配的金句，试试其他关键词。' : '暂无金句，点击「新增金句」添加。'}}</view>
+      <view wx:for="{{wisdomQuotes}}" wx:key="_id" class="card wisdom-card {{selectedWisdom && selectedWisdom._id === item._id ? 'wisdom-card-selected' : ''}}">
+        <text class="wisdom-quote" selectable>{{item.displayContent}}</text>
+        <view class="row spread wisdom-row-actions">
+          <text class="small-label">{{selectedWisdom && selectedWisdom._id === item._id ? '正在编辑' : ''}}</text>
+          <button class="secondary-button compact wisdom-edit-button" data-id="{{item._id}}" disabled="{{wisdomLoading || wisdomSaveBusy || wisdomDeleteBusy}}" bindtap="editWisdom">编辑</button>
+        </view>
+      </view>
+      <view wx:if="{{wisdomLoading}}" class="small-empty">正在读取金句…</view>
+      <button wx:if="{{wisdomCursor}}" class="secondary-button" loading="{{wisdomLoading}}" disabled="{{wisdomLoading || wisdomSaveBusy || wisdomDeleteBusy}}" bindtap="loadMoreWisdom">加载更多金句</button>
+      <text class="footer-note">首页与静心卡按设备每天抽取并缓存金句，已显示的内容会在次日北京时间凌晨 2 点刷新。</text>
     </view>
 
     <view wx:if="{{authorized && tab === 'team'}}">

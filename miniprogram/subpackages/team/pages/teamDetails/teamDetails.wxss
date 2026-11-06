@@ -186,4 +186,10 @@ button::after { border: none; }
 .member-practice .session-count { margin-left: auto; padding-left: 16rpx; font-size: 21rpx; }
 .member-practice-note { display: block; margin-top: 10rpx; color: #99a1ae; font-size: 20rpx; line-height: 1.6; }
 .member-practice-pressed { background: #f8f5ef; }
-.practice-history-section + .practice-history-section { margin-top: 38rpx; padding-top: 2rpx; border-top: 2rpx solid #e8ecf0; }
+
+/* 历史每次展示一项功课，功课较多时可横向滑动切换。 */
+.history-practice-tabs { width: 100%; margin-top: 28rpx; white-space: nowrap; }
+.history-practice-tab-list { display: inline-flex; gap: 12rpx; padding: 2rpx 0; }
+.history-practice-tab { flex: none; padding: 16rpx 24rpx; border: 2rpx solid transparent; border-radius: 12rpx; font-size: 24rpx; line-height: 1.5; color: #7a8493; background: #ffffff; }
+.history-practice-tab.active { color: #a68a57; border-color: #b2976433; background: #f3ecdf; font-weight: 500; }
+.history-practice-tab-pressed { background: #f6f3ed; }
