@@ -15,7 +15,7 @@
                 <text class="summary-number gold-number">{{hasGoal ? historySummary.unmetCount : historySummary.missedCount}}<text class="history-summary-unit"> 人次</text></text>
                 <text class="summary-label">{{hasGoal ? '累计未达标' : '累计未练习'}} ›</text>
               </view>
-              <view class="summary-item" data-filter="all" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看全部成员每日练习情况">
+              <view class="summary-item" data-practice-type="{{practiceType}}" bindtap="showHistoryRanking" hover-class="member-card-pressed" aria-role="button" aria-label="查看成员{{hasGoal ? '达标率' : '参与率'}}排序">
                 <text class="summary-number green-number">{{historySummary.rateLabel}}</text>
                 <text class="summary-label">{{hasGoal ? '总体达标率' : '练习参与率'}} ›</text>
               </view>
@@ -26,13 +26,20 @@
             </view>
             <view class="history-summary-footer"><text>共 {{historySummary.memberCount}} 位成员</text><text>{{hasGoal ? '全程达标' : '每天都练习'}} {{historySummary.fullAttendanceCount}} 人</text></view>
           </view>
-          <text wx:if="{{historySummary}}" class="history-summary-note">人数为整个统计期间曾{{hasGoal ? '未达标' : '未练习'}}的成员数；每人每天计 1 人次。点击统计可按月查看明细。{{hasGoal ? '两类未达标人数可能重叠。' : ''}}</text>
-          <view class="history-list-caption"><text>成员练习记录</text><text>{{hasGoal ? '按未达标天数排序' : '按练习天数排序'}}</text></view>
+          <text wx:if="{{historySummary}}" class="history-summary-note">人数为整个统计期间曾{{hasGoal ? '未达标' : '未练习'}}的成员数；每人每天计 1 人次。点击人数、人次可按月查看明细，点击{{hasGoal ? '总体达标率' : '练习参与率'}}可查看成员排序。{{hasGoal ? '两类未达标人数可能重叠。' : ''}}</text>
+          <view id="history-members-{{practiceType}}" class="history-list-caption"><text>成员练习记录</text><text class="history-details-link" data-filter="all" data-practice-type="{{practiceType}}" bindtap="openHistoryDetails" hover-class="member-card-pressed" aria-role="button" aria-label="查看全部成员每日练习明细">查看每日明细 ›</text></view>
+          <view wx:if="{{historySummary}}" class="history-sort-row">
+            <text class="history-sort-label">按{{hasGoal ? '达标率' : '参与率'}}排序</text>
+            <view class="history-sort-options">
+              <view class="filter-chip {{historySortOrder === 'desc' ? 'active' : ''}}" data-practice-type="{{practiceType}}" data-order="desc" bindtap="changeHistorySort" aria-role="button" aria-label="{{hasGoal ? '达标率' : '参与率'}}从高到低" aria-pressed="{{historySortOrder === 'desc'}}">高到低 ↓</view>
+              <view class="filter-chip {{historySortOrder === 'asc' ? 'active' : ''}}" data-practice-type="{{practiceType}}" data-order="asc" bindtap="changeHistorySort" aria-role="button" aria-label="{{hasGoal ? '达标率' : '参与率'}}从低到高" aria-pressed="{{historySortOrder === 'asc'}}">低到高 ↑</view>
+            </view>
+          </view>
           <view class="history-card" wx:for="{{historyMembers}}" wx:key="openid" data-member-openid="{{item.openid}}" data-view="month" data-record-scope="history" data-practice-type="{{practiceType}}" bindtap="openMemberRecords" hover-class="member-card-pressed" aria-role="button" aria-label="查看{{item.nickname}}的历史练习记录">
             <view class="member-row">
               <nickname-avatar avatar-class="member-avatar history-avatar" src="{{item.avatar}}" nickname="{{item.nickname}}" size="{{62}}" />
-              <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view></view>
-              <view class="member-card-trailing"><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text><text class="member-card-chevron" aria-hidden="true">›</text></view>
+              <view class="member-identity"><view class="member-name-row"><text class="member-name">{{item.nickname}}</text><text wx:if="{{item.isCreator}}" class="creator-tag">团长</text><text wx:elif="{{item.isDeputy}}" class="creator-tag deputy-tag">副团长</text></view><text wx:if="{{hasGoal}}" class="history-qualified">已达标 {{item.qualifiedDays}} 天</text></view>
+              <view class="member-card-trailing"><view class="history-rate"><text class="history-rate-value">{{item.historyRateLabel}}</text><text class="history-rate-label">{{hasGoal ? '达标率' : '参与率'}}</text></view><text class="member-card-chevron" aria-hidden="true">›</text></view>
             </view>
             <view class="history-metrics">
               <view class="history-metric"><text class="metric-label">练习天数</text><text class="metric-value">{{item.practiceDays}}<text class="metric-unit"> 天</text></text></view>

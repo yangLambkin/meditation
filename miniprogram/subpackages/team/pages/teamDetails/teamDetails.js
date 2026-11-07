@@ -22,6 +22,13 @@ function validDate(value) {
     Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 }
 
+function formatHistoryRate(completedDays, totalDays) {
+  if (!totalDays) return '—';
+  const rate = Math.round(completedDays / totalDays * 1000) / 10;
+  // 有未完成的练习日时，不能因为四舍五入而显示为全部完成。
+  return `${completedDays < totalDays ? Math.min(99.9, rate) : 100}%`;
+}
+
 Page({
   data: {
     teamId: '', teamInfo: null, report: null, selectedPracticeType: '', practiceOptions: [], selectedPractice: null,
@@ -159,6 +166,7 @@ Page({
     if (this._viewerOpenid !== openid || this._viewerKey !== viewerKey || this._viewerTeamId !== teamId) {
       this.resetInvitation();
       this._reportMembers = [];
+      this._historySortOrders = {};
       this.setData({ teamInfo: null, report: null, practiceReports: [], historyPracticeType: '', todaySummary: null, overview: null, historySummary: null, teamMembers: [], todayMembers: [], historyMembers: [], isMember: false, isCreator: false, isDeputy: false, deputyCount: 0, settingsOpen: false, settingsError: '', isChoosingIcon: false });
     }
     if (this.data.isDeleting || this.data.isSaving || this.data.removingMemberId || this.data.roleChangingMemberId) return;
@@ -273,15 +281,17 @@ Page({
       statusLabel: member.todayStatus === 'below_goal' && config.unit !== '分钟' ? '数量不足' : statusLabels[member.todayStatus],
       todayMinutesLabel: this.formatMinutes(member.todayMinutes),
       totalMinutesLabel: this.formatMinutes(member.totalMinutes),
+      historyRateLabel: formatHistoryRate(hasGoal ? member.qualifiedDays : member.practiceDays, report.history.totalDays),
       cumulativeMinutesLabel: this.formatMinutes(member.cumulativeMinutes === undefined ? member.totalMinutes + member.todayMinutes : member.cumulativeMinutes),
       lastPracticeLabel: this.formatLastPractice(member),
       remainingMinutesLabel: hasGoal ? this.formatMinutes(Math.max(0, goal - member.todayMinutes)) : '',
       progress: !hasGoal ? 0 : member.todayStatus === 'qualified' ? 100 : Math.min(99, Math.floor(member.todayMinutes / goal * 100))
     }));
+    const historySortOrder = this._historySortOrders && this._historySortOrders[practice.practiceType] || 'desc';
     return { practiceType: practice.practiceType, name: config.name, unit: config.unit,
       belowGoalLabel: config.unit === '分钟' ? '时长不足' : '数量不足', hasGoal, report, members,
       historySummary: this.buildHistorySummary(report),
-      historyMembers: [...members].sort((a, b) => (hasGoal ? b.unmetDays - a.unmetDays || b.missedDays - a.missedDays : b.practiceDays - a.practiceDays || b.totalMinutes - a.totalMinutes) || a.nickname.localeCompare(b.nickname)),
+      historySortOrder, historyMembers: this.sortHistoryMembers(members, hasGoal, historySortOrder),
       historyRangeLabel: `${report.history.startDate.replace(/-/g, '.')} — ${report.history.endDate.replace(/-/g, '.')}` };
   },
 
@@ -391,10 +401,15 @@ Page({
     });
     // 历史按每人每天计一次，与当日练习次数、今日状态无关。
     const totalCount = members.length * history.totalDays;
-    const rate = Math.round(completedCount / totalCount * 1000) / 10;
-    // 有未完成的练习日时，不能因为四舍五入而显示为全部完成。
-    summary.rateLabel = `${completedCount < totalCount ? Math.min(99.9, rate) : 100}%`;
+    summary.rateLabel = formatHistoryRate(completedCount, totalCount);
     return summary;
+  },
+
+  sortHistoryMembers(members, hasGoal, order) {
+    const field = hasGoal ? 'qualifiedDays' : 'practiceDays';
+    // 同一功课全体成员使用相同历史天数，直接比较天数可避免百分比舍入影响排名。
+    return [...members].sort((a, b) => (order === 'asc' ? a[field] - b[field] : b[field] - a[field]) ||
+      a.nickname.localeCompare(b.nickname) || a.openid.localeCompare(b.openid));
   },
 
   teamRoleData(team) {
@@ -477,6 +492,41 @@ Page({
     if (practiceType === this.data.historyPracticeType ||
         !this.data.practiceReports.some(view => view.practiceType === practiceType)) return;
     this.setData({ historyPracticeType: practiceType });
+  },
+
+  historyRankingView(event) {
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    const practiceType = dataset.practiceType || this.data.historyPracticeType;
+    const view = this.data.practiceReports.find(item => item.practiceType === practiceType);
+    if (this._unloaded || !this._isVisible || this.data.isLoading || this.data.isSaving || this.data.isDeleting ||
+        !this.data.isMember || !this.data.teamInfo || this.data.teamInfo._id !== this.data.teamId ||
+        !this._viewerOpenid || wx.getStorageSync('userOpenId') !== this._viewerOpenid ||
+        this._viewerKey !== getViewerKey(this.data.teamId) || !view || view.report.teamId !== this.data.teamId ||
+        !view.historySummary) return null;
+    return view;
+  },
+
+  changeHistorySort(event) {
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    if (!['desc', 'asc'].includes(dataset.order)) return;
+    const view = this.historyRankingView(event);
+    if (!view || view.historySortOrder === dataset.order) return;
+    this._historySortOrders = { ...this._historySortOrders, [view.practiceType]: dataset.order };
+    const index = this.data.practiceReports.indexOf(view);
+    const historyMembers = this.sortHistoryMembers(view.members, view.hasGoal, dataset.order);
+    this.setPracticeData({
+      [`practiceReports[${index}].historySortOrder`]: dataset.order,
+      [`practiceReports[${index}].historyMembers`]: historyMembers,
+      ...(index === 0 ? { historyMembers } : {})
+    });
+  },
+
+  showHistoryRanking(event) {
+    const view = this.historyRankingView(event);
+    if (!view) return;
+    this.setData({ currentTab: 'records', recordTab: 'history', historyPracticeType: view.practiceType }, () => {
+      wx.pageScrollTo({ selector: `#history-members-${view.practiceType}`, duration: 300 });
+    });
   },
 
   changeTodayFilter(event) {

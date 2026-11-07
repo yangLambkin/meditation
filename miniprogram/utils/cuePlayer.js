@@ -1,6 +1,7 @@
 const START_TIMEOUT_MS = 2500;
 const LOAD_TIMEOUT_MS = 10000;
 const RETRY_DELAY_MS = 150;
+const READY_REPLAY_DELAY_MS = 150;
 
 // 提示音与静坐计时分开：播放器失效只重建音频，不改变会话或完成记录。
 function createCuePlayer({
@@ -13,6 +14,7 @@ function createCuePlayer({
   let bindings = null;
   let watchdog = null;
   let retryTimer = null;
+  let readyReplayTimer = null;
   let capturePosition = null;
   let configured = false;
   let ready = false;
@@ -41,7 +43,8 @@ function createCuePlayer({
   function clearTimers() {
     if (watchdog !== null) cancel(watchdog);
     if (retryTimer !== null) cancel(retryTimer);
-    watchdog = retryTimer = null;
+    if (readyReplayTimer !== null) cancel(readyReplayTimer);
+    watchdog = retryTimer = readyReplayTimer = null;
   }
 
   function unbind() {
@@ -137,14 +140,16 @@ function createCuePlayer({
 
   function complete(current, failed = false) {
     if (request !== current) return;
-    report('cue_completed', { src: current.src, failed, position: current.position, retries: current.retries });
+    const replaySuppressed = failed && current.started && !current.replayAfterStart;
+    report('cue_completed', { src: current.src, failed, position: current.position,
+      duration: current.duration, retries: current.retries, replaySuppressed });
     generation += 1;
     clearTimers();
     unbind();
     request = null;
     capturePosition = null;
     if (failed) discard();
-    onEnded({ src: current.src, failed });
+    onEnded({ src: current.src, failed, ...(replaySuppressed ? { replaySuppressed: true } : {}) });
   }
 
   function attempt(current, resumeExisting = false) {
@@ -159,10 +164,14 @@ function createCuePlayer({
     const fail = (reason, error) => {
       if (!valid()) return;
       observeProgress();
-      report(reason, { code: error && error.errCode, src: current.src, retry: current.retries });
+      report(reason, { code: error && error.errCode, src: current.src, retry: current.retries,
+        position: current.position, duration: current.duration });
       generation += 1;
       clearTimers();
       discard();
+      // 起坐已收到 Play 后，进度停报或原生异常都不能让钟击自动从头再响。
+      // 保留失败结果，不把 Play 当成实际出声的证明。
+      if (current.started && !current.replayAfterStart) { complete(current, true); return; }
       if (!allowed()) { current.status = 'paused'; return; }
       if (current.retries >= 1) { complete(current, true); return; }
       current.retries += 1;
@@ -185,12 +194,26 @@ function createCuePlayer({
       const supportsProgress = typeof context.onTimeUpdate === 'function';
       const supportsReady = typeof context.onCanplay === 'function';
       let announcedPlay = false;
+      let playRequested = false;
+      let readyReplayUsed = false;
       let progressed = false;
       let progressRevision = 0;
       let checkedProgressRevision = 0;
       let initialNativeTime = context.currentTime;
+      const observeDuration = () => {
+        if (!valid() || !configured) return;
+        try {
+          const seconds = context.duration;
+          // 只读已配置为本请求音源的时长，缓存后不受 Ended 前归零影响。
+          if (Number.isFinite(seconds) && seconds > 0 && seconds <= 86400) {
+            current.duration = Math.max(current.duration || 0, seconds);
+          }
+        } catch (_) { /* Keep the last known duration if native state is unavailable. */ }
+      };
       observeProgress = () => {
-        if (!valid() || !announcedPlay) return false;
+        if (!valid()) return false;
+        observeDuration();
+        if (!announcedPlay) return false;
         let seconds;
         try { seconds = context.currentTime; }
         catch (_) { return false; }
@@ -206,18 +229,31 @@ function createCuePlayer({
         return false;
       };
       capturePosition = observeProgress;
-      const markReady = () => {
-        if (!valid() || ready) return;
-        ready = true;
+      const armWatchdog = () => {
         if (watchdog !== null) cancel(watchdog);
-        watchdog = schedule(checkProgress, START_TIMEOUT_MS);
+        watchdog = schedule(checkProgress, announcedPlay && !current.replayAfterStart
+          ? current.playbackTimeoutMs
+          : !ready && supportsReady ? LOAD_TIMEOUT_MS : START_TIMEOUT_MS);
+      };
+      const markReady = () => {
+        if (!valid()) return;
+        observeDuration();
+        if (ready) return;
+        ready = true;
+        armWatchdog();
       };
       const events = {
         Play: () => {
-          if (!valid()) return;
+          if (!valid() || announcedPlay) return;
           announcedPlay = true;
+          if (readyReplayTimer !== null) cancel(readyReplayTimer);
+          readyReplayTimer = null;
+          current.started = true;
           // Play 也可能在解码/缓冲之前到达；支持 Canplay 时仍等就绪或真实进度。
           if (!supportsReady) markReady();
+          // 部分手机有进度 API 却不持续回报；起坐等待自然结束或整段时长上限。
+          // Canplay 若稍后到达可重新计预算，重复 Play/Canplay 不会无限延长。
+          if (!current.replayAfterStart) armWatchdog();
         },
         Ended: () => {
           if (!valid()) return;
@@ -226,11 +262,35 @@ function createCuePlayer({
           observeProgress();
           // 支持进度的客户端必须至少播放过一部分；位置保留跨暂停/重建的可信进度。
           if (supportsProgress && current.position <= 0) { fail('cue_ended_without_progress'); return; }
+          // 少量正进度也可能来自异常提前结束；只有接近资源末尾才确认已播完。
+          // 没有进度能力且从未观察到时间的旧客户端仍保留 Play/Ended 兼容。
+          if (current.duration && (supportsProgress || current.position > 0)
+            && current.position < current.duration - Math.min(1, current.duration * 0.1)) {
+            fail('cue_ended_early'); return;
+          }
           complete(current);
         },
         Error: error => fail('cue_error', error)
       };
-      if (supportsReady) events.Canplay = markReady;
+      if (supportsReady) events.Canplay = () => {
+        markReady();
+        if (!valid() || !playRequested || announcedPlay || readyReplayUsed
+          || current.started && !current.replayAfterStart) return;
+        readyReplayUsed = true;
+        // 部分冷解码器会丢弃就绪前的 play。给迟到的 Play 留出时间后，
+        // 只补发一次，不重新设置 src/startTime，也不延长原有故障检测期限。
+        readyReplayTimer = schedule(() => {
+          readyReplayTimer = null;
+          if (!valid() || announcedPlay) return;
+          if (!allowed()) { pause(); return; }
+          try {
+            const seconds = context.currentTime;
+            if (Number.isFinite(seconds) && seconds > current.position && seconds !== initialNativeTime) return;
+            report('cue_ready_replay', { src: current.src, retry: current.retries });
+            context.play();
+          } catch (error) { fail('cue_play_error', error); }
+        }, READY_REPLAY_DELAY_MS);
+      };
       // Some native decoders stop/pause without Error (e.g. after switching
       // from the opening cue or guidance). Our own stop/pause unbind first,
       // so a notification reaching this request is an unexpected interruption.
@@ -247,6 +307,10 @@ function createCuePlayer({
         if (!valid()) return;
         if (!allowed()) { pause(); return; }
         observeProgress();
+        if (announcedPlay && !current.replayAfterStart) {
+          fail('cue_completion_timeout');
+          return;
+        }
         if (progressRevision !== checkedProgressRevision) {
           checkedProgressRevision = progressRevision;
           watchdog = schedule(checkProgress, START_TIMEOUT_MS);
@@ -261,7 +325,7 @@ function createCuePlayer({
       bindings = { player: context, events };
       for (const [event, callback] of Object.entries(events)) context[`on${event}`](callback);
       if (!valid()) return;
-      watchdog = schedule(checkProgress, !ready && supportsReady ? LOAD_TIMEOUT_MS : START_TIMEOUT_MS);
+      armWatchdog();
       if (!resumeExisting) {
         context.startTime = current.position;
         // 预加载实例直接播放，不重新赋 src 触发第二次冷加载。
@@ -272,6 +336,8 @@ function createCuePlayer({
         }
         initialNativeTime = context.currentTime;
       }
+      observeDuration();
+      playRequested = true;
       context.play();
     } catch (error) {
       // 创建播放器也可能抛错，此时 context 和 player 均为空，仍使用同一恢复上限。
@@ -304,6 +370,12 @@ function createCuePlayer({
     }
   }
 
+  function createRequest(src, { position = 0, replayAfterStart = true, playbackTimeoutMs = 15000 } = {}) {
+    const startPosition = Math.max(0, Number(position) || 0);
+    return { src, position: startPosition, duration: null, retries: 0, status: 'paused',
+      replayAfterStart, playbackTimeoutMs, started: startPosition > 0 };
+  }
+
   return {
     get player() { return player; },
     get position() {
@@ -316,11 +388,11 @@ function createCuePlayer({
     },
     ensurePlayer,
     preload,
-    prepare(src, { position: startPosition = 0 } = {}) {
+    prepare(src, options) {
       stop();
       if (configured) discard();
       takePreload(src);
-      const current = { src, position: Math.max(0, Number(startPosition) || 0), retries: 0, status: 'paused' };
+      const current = createRequest(src, options);
       request = current;
       try {
         const context = ensurePlayer();
@@ -331,14 +403,14 @@ function createCuePlayer({
         discard();
       }
     },
-    play(src, { position: startPosition = 0 } = {}) {
+    play(src, options) {
       stop();
       // 每段新提示音都有独立 native 身份，上一段迟到的事件不能命中新监听。
       // 只有同一提示音的暂停/继续才复用实例。
       if (configured) discard();
       takePreload(src);
       report('cue_requested', { src, preloaded: configured, ready });
-      const current = { src, position: Math.max(0, Number(startPosition) || 0), retries: 0, status: 'paused' };
+      const current = createRequest(src, options);
       request = current;
       attempt(current);
     },

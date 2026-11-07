@@ -5,6 +5,8 @@ const practiceConfig = require('../../utils/practiceConfig.js');
 const practiceEntry = require('../../utils/practiceEntry.js');
 const practicePreferences = require('../../utils/practicePreferences.js');
 const practiceDay = require('../../utils/practiceDay.js');
+const practiceSitting = require('../../utils/practiceSitting.js');
+const dateUtil = require('../../utils/dateUtil.js');
 
 const TYPES = [
   { type: 'all', name: '全部功课', unit: '' },
@@ -71,6 +73,8 @@ function decorate(record) {
   const meta = TYPE_MAP[record.type] || TYPE_MAP.sitting;
   const source = record.source;
   const mirrored = !!(record.sourceRecordId || source === 'meditation' || source && (source.system === 'meditation' || source.sourceSystem === 'meditation'));
+  // 镜像的 API 权限只允许读取；这里通过来源 ID 管理原静坐，再由原流程同步。
+  const canManageSitting = record.type === 'sitting' && !!practiceSitting.sourceId(record);
   const occurredAt = typeof record.occurredAt === 'string' ? record.occurredAt.replace('T', ' ') : '';
   const displayDate = practiceDay.getRecordDisplayDate(record);
   const clockTimeLabel = occurredAt ? occurredAt.slice(11, 16) : '未记录时间';
@@ -79,8 +83,8 @@ function decorate(record) {
     key: `${record.type}:${record.id}`, typeName: meta.name, unit: meta.unit,
     quantity: quantity(record), clockTimeLabel,
     timeLabel: isNextDay ? `次日${Number(clockTimeLabel.slice(0, 2))}${clockTimeLabel.slice(2)}` : clockTimeLabel,
-    occurredAt, mirrored, canEdit: record.type !== 'sitting' && record.canEdit !== false,
-    canDelete: record.type !== 'sitting' && record.canDelete !== false,
+    occurredAt, mirrored, canEdit: canManageSitting || record.type !== 'sitting' && record.canEdit !== false,
+    canDelete: canManageSitting || record.type !== 'sitting' && record.canDelete !== false,
     preview: recordPreview(record) };
 }
 function groupsFor(records) {
@@ -239,6 +243,9 @@ module.exports = function createPracticePage(screen = 'home') { return {
     this._stopPracticeDayWatch = null;
     this._generation = (this._generation || 0) + 1;
     this._recordActionsRequest = null;
+    this._sittingEditorRequest = null;
+    this._sittingActionVersion = (this._sittingActionVersion || 0) + 1;
+    this._deleteConfirmationRequest = null;
     this.closeDayStats();
     // A shared entry may temporarily open a hidden tab; cached visits use the saved preference again.
     if (this.options && this.options.from === 'share') delete this.options.from;
@@ -716,8 +723,9 @@ module.exports = function createPracticePage(screen = 'home') { return {
     wx.switchTab({ url: '/pages/index/index' });
   },
   openForm(type, record) {
-    if (!TYPE_MAP[type] || type === 'all' || type === 'sitting' || this.data.formBusy) return;
+    if (!TYPE_MAP[type] || type === 'all' || this.data.formBusy || this.data.deleting) return;
     if (!this.data.enabled) { wx.showToast({ title: '功课录入暂未启用', icon: 'none' }); return; }
+    if (type === 'sitting') return this.openSittingEditor(record);
     const timestamp = Date.now();
     const now = nowParts(timestamp);
     this._formOwner = ownerKey();
@@ -732,6 +740,39 @@ module.exports = function createPracticePage(screen = 'home') { return {
       formReflection: record && record.reflection || '', formRecordId: record && record.id || '',
       formEditing: !!record, formPending: false, formError: '', formMaxReflection: type === 'kindness' ? 1000 : 5000,
       ...formDateBounds(!!record, timestamp) });
+  },
+  async openSittingEditor(record) {
+    if (!record || !record.canEdit || !practiceSitting.sourceId(record) || this.data.formBusy || this.data.deleting) return;
+    const owner = ownerKey();
+    const request = this._sittingEditorRequest = {};
+    const current = () => this._sittingEditorRequest === request && owner === ownerKey() && this._visible !== false;
+    this.setData({ formBusy: true });
+    if (wx.showLoading) wx.showLoading({ title: '读取静坐记录', mask: true });
+    try {
+      const source = await practiceSitting.resolve(record, current);
+      if (!current()) return;
+      const reflection = await require('../../utils/checkin.js').getEditableCheckinReflection(source.date, practiceSitting.identity(source));
+      if (!current()) return;
+      const timestamp = dateUtil.getRecordTimestamp(source.timestamp);
+      const original = Number.isFinite(timestamp) ? nowParts(timestamp) : { date: source.dayDate, time: '', occurredAt: '' };
+      this._formOwner = owner;
+      this._formRequestId = uniqueId();
+      this._formTaskId = null;
+      this._formOccurredAt = original.occurredAt;
+      this._formTimeEdited = false;
+      this._formOriginalTimestamp = timestamp;
+      this._formSittingRecord = source;
+      this._sittingEditPayload = null;
+      this.setData({ showForm: true, detail: null, formType: 'sitting', formTypeName: TYPE_MAP.sitting.name,
+        formUnit: TYPE_MAP.sitting.unit, formDate: original.date, formTime: original.time,
+        formValue: String(source.duration), formContent: '', formReflection: reflection, formRecordId: record.id,
+        formEditing: true, formPending: false, formError: '', formMaxReflection: 5000, ...formDateBounds(true) });
+    } catch (error) {
+      if (current()) wx.showToast({ title: message(error, '原静坐记录读取失败，请重试'), icon: 'none', duration: 3500 });
+    } finally {
+      this.setData({ formBusy: false });
+      if (wx.hideLoading) wx.hideLoading();
+    }
   },
   closeForm() { if (!this.data.formBusy) this.setData({ showForm: false }); },
   noop() {},
@@ -797,6 +838,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
       this.setData({ formError: '账号或学号绑定已变化，请关闭后重新录入' });
       return;
     }
+    if (this.data.formType === 'sitting') return this.saveSittingForm();
     let payload;
     // 已入队内容已冻结；跨日重试继续上传原任务，不能重新按新建日期范围校验。
     try { if (!this._formTaskId) payload = this.formPayload(); }
@@ -833,7 +875,64 @@ module.exports = function createPracticePage(screen = 'home') { return {
     } catch (error) { if (currentForm()) this.showFormFailure(error, '暂未上传，填写内容已保留，请重试'); }
     finally { if (this._formRequestId === formRequestId) this.setData({ formBusy: false }); this.refreshPending(); }
   },
+  async saveSittingForm() {
+    let updates;
+    try {
+      const payload = this.formPayload();
+      const source = this._formSittingRecord;
+      if (!source) throw new Error('请关闭后重新打开静坐记录');
+      // 单改时长或感悟保留原时间的秒、毫秒和手动归属日期。
+      const timestamp = !this._formTimeEdited && Number.isFinite(this._formOriginalTimestamp)
+        ? this._formOriginalTimestamp : Date.parse(`${payload.occurredAt.replace(' ', 'T')}+08:00`);
+      const day = dateUtil.getBusinessDate(timestamp);
+      if (timestamp !== this._formOriginalTimestamp && day !== source.dayDate &&
+          (source.isBackfill || !dateUtil.isRecentBusinessDate(day))) {
+        throw new Error(source.isBackfill ? '补录记录只能在原归属日期内修改时间' : '请选择原归属日期、今天或昨天的时间');
+      }
+      updates = { duration: payload.durationMinutes, timestamp, reflection: payload.reflection };
+    } catch (error) { this.showFormFailure(error, '请核对填写内容'); return; }
+    const payloadKey = JSON.stringify(updates);
+    if (this._sittingEditPayload !== payloadKey) {
+      this._sittingEditPayload = payloadKey;
+      this._formRequestId = uniqueId();
+    }
+    const requestId = this._formRequestId;
+    const owner = this._formOwner;
+    const current = () => this._formRequestId === requestId && owner === ownerKey();
+    this.setData({ formBusy: true, formError: '' });
+    try {
+      if (updates.reflection && !await require('../../utils/contentSec.js').checkText(updates.reflection, 2, { allowOffline: true, timeoutMs: 1500 })) {
+        if (current()) this.showFormFailure('感悟内容未通过检查，请修改后重试');
+        return;
+      }
+      if (!current()) return;
+      const source = this._formSittingRecord;
+      const result = await require('../../utils/checkin.js').updateCheckin(source.date, practiceSitting.identity(source), updates, { requestId });
+      if (!current()) return;
+      if (!result || !result.success) throw new Error(result && result.error || '保存失败，请重试');
+      this.setData({ showForm: false, formBusy: false });
+      if (this._visible !== false) wx.showToast({ title: '已更新，正在同步功课', icon: 'none' });
+      const pending = await this.syncSittingChange(source._id, owner);
+      if (current() && this._visible !== false) wx.showToast({ title: pending ? '已更新，功课同步待上传' : '已更新', icon: pending ? 'none' : 'success' });
+    } catch (error) { if (current()) this.showFormFailure(error, '保存失败，填写内容已保留，请重试'); }
+    finally { if (this._formRequestId === requestId) this.setData({ formBusy: false }); this.refreshPending(); }
+  },
+  async syncSittingChange(sourceId, owner) {
+    let failed = false;
+    try {
+      await require('../../utils/practiceMirror.js').resume();
+    } catch (error) {
+      failed = true;
+      console.warn('原静坐已保存，功课同步待重试:', error);
+    }
+    if (owner !== ownerKey()) return true;
+    this.refreshPending();
+    await this.refresh();
+    return failed || this.data.pending.some(task => task.kind === 'mirror' &&
+      (task.sourceId === sourceId || task.identity && task.identity.recordId === sourceId));
+  },
   openDetail(event) {
+    if (this.data.deleting || this.data.formBusy || this.data.showForm) return;
     const record = this.data.records.find(item => item.key === event.currentTarget.dataset.key);
     if (record) { this._detailOwner = ownerKey(); this.setData({ detail: record }); }
   },
@@ -857,32 +956,54 @@ module.exports = function createPracticePage(screen = 'home') { return {
         const current = this.data.records.find(item => item.key === key);
         const action = actions[result.tapIndex];
         if (!current || !action || this.data.deleting || this.data.formBusy) return;
-        if (action.type === 'edit' && current.canEdit) this.openForm(current.type, current);
-        if (action.type === 'delete' && current.canDelete) this.deleteRecord(current, owner);
+        if (action.type === 'edit' && current.canEdit) return this.openForm(current.type, current);
+        if (action.type === 'delete' && current.canDelete) return this.deleteRecord(current, owner);
       },
       complete: () => { if (this._recordActionsRequest === request) this._recordActionsRequest = null; }
     });
   },
-  closeDetail() { if (!this.data.deleting) this.setData({ detail: null }); },
+  closeDetail() { if (!this.data.deleting && !this.data.formBusy) this.setData({ detail: null }); },
   editDetail() {
     if (this._detailOwner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
     const record = this.data.detail;
-    if (record && record.canEdit) this.openForm(record.type, record);
+    if (record && record.canEdit) return this.openForm(record.type, record);
   },
   deleteDetail() {
     this.deleteRecord(this.data.detail, this._detailOwner);
   },
   deleteRecord(record, owner) {
-    if (!record || !record.canDelete || this.data.deleting) return;
+    if (!record || !record.canDelete || this.data.deleting || this.data.formBusy) return;
     if (owner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
-    wx.showModal({ title: '删除这条功课？', content: record.type === 'kindness' ? '删除后也会更新「做善事」，该操作不可恢复。' : '删除后无法恢复，请确认。',
-      confirmText: '删除', confirmColor: '#b45f4e', success: result => { if (result.confirm) this.confirmDelete(record, owner); } });
+    const request = this._deleteConfirmationRequest = {};
+    wx.showModal({ title: record.type === 'sitting' ? '删除这条静坐记录？' : '删除这条功课？',
+      content: record.type === 'sitting' ? '原静坐记录也会删除，并更新相关统计。删除后无法恢复，请确认。' :
+        record.type === 'kindness' ? '删除后也会更新「做善事」，该操作不可恢复。' : '删除后无法恢复，请确认。',
+      confirmText: '删除', confirmColor: '#b45f4e', success: result => {
+        if (this._deleteConfirmationRequest !== request) return;
+        this._deleteConfirmationRequest = null;
+        if (result.confirm) return this.confirmDelete(record, owner);
+      } });
   },
   async confirmDelete(record, owner = this._detailOwner) {
-    if (this.data.deleting) return;
+    if (this.data.deleting || this.data.formBusy || this._visible === false) return;
     if (owner !== ownerKey()) { wx.showToast({ title: '账号或学号已变化，请重新打开记录', icon: 'none' }); return; }
+    const request = this._deleteRequest = {};
     this.setData({ deleting: true });
     try {
+      if (record.type === 'sitting') {
+        const version = this._sittingActionVersion || 0;
+        const current = () => owner === ownerKey() && this._visible !== false && version === (this._sittingActionVersion || 0);
+        const source = await practiceSitting.resolve(record, current);
+        if (!current()) return;
+        const result = await require('../../utils/checkin.js').deleteCheckin(source.date, practiceSitting.identity(source));
+        if (owner !== ownerKey()) return;
+        if (!result || !result.success) throw new Error(result && result.error || '删除失败，请重试');
+        this.setData({ detail: null, deleting: false });
+        if (current()) wx.showToast({ title: '已删除，正在同步功课', icon: 'none' });
+        const pending = await this.syncSittingChange(source._id, owner);
+        if (current() && this._deleteRequest === request) wx.showToast({ title: pending ? '已删除，功课同步待上传' : '已删除', icon: pending ? 'none' : 'success' });
+        return;
+      }
       const task = await practiceQueue.enqueuePractice({ type: record.type, operation: 'delete', recordId: record.id, payload: {}, requestId: uniqueId() });
       await practiceQueue.flush({ manual: true });
       if (owner !== ownerKey()) return;
@@ -890,7 +1011,7 @@ module.exports = function createPracticePage(screen = 'home') { return {
       this.setData({ detail: null });
       wx.showToast({ title: pending ? '删除待上传，已保留本机' : '已删除', icon: pending ? 'none' : 'success' });
       await this.refresh();
-    } catch (error) { wx.showToast({ title: message(error, '删除尚未完成，请重试'), icon: 'none' }); }
-    finally { this.setData({ deleting: false }); this.refreshPending(); }
+    } catch (error) { if (owner === ownerKey() && this._visible !== false) wx.showToast({ title: message(error, '删除尚未完成，请重试'), icon: 'none' }); }
+    finally { if (this._deleteRequest === request) this.setData({ deleting: false }); this.refreshPending(); }
   }
 }; };

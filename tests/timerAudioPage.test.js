@@ -21,7 +21,7 @@ function createPage({
   recordCheckin, backgroundUpload = async () => ({ success: true }), networkType,
   contentSecRequest = () => new Promise(() => {}), navigateTo,
   initialTime = Date.parse('2026-09-18T08:00:00+08:00'), withAppLifecycle = false,
-  audioBehavior = () => 'play', vibrationBehavior = options => options.success?.({}),
+  audioBehavior = () => 'play', modernAudio = false, vibrationBehavior = options => options.success?.({}),
   storageFailure = () => false, storageReadFailure = () => false, showToast, hasRecordedTimerCompletion
 } = {}) {
   let definition;
@@ -43,7 +43,7 @@ function createPage({
   function createAudioPlayer() {
     let src = '';
     let firstPlay = true;
-    const callbacks = { play: new Set(), ended: new Set(), error: new Set(), stop: new Set(), pause: new Set(), canplay: new Set() };
+    const callbacks = { play: new Set(), ended: new Set(), error: new Set(), stop: new Set(), pause: new Set(), canplay: new Set(), timeupdate: new Set() };
     const player = {
       paused: true,
       currentTime: 0,
@@ -109,14 +109,28 @@ function createPage({
       onCanplay(callback) { callbacks.canplay.add(callback); },
       offCanplay(callback) { callbacks.canplay.delete(callback); },
       emitEnded() {
+        if (modernAudio) this.emitProgress(this.duration);
+        this.emitNativeEnded();
+      },
+      emitNativeEnded(seconds) {
+        if (seconds !== undefined) this.currentTime = seconds;
         this.paused = true;
         // Dispatch current listeners; cuePlayer tests also exercise captured, queued callbacks.
-        for (const callback of callbacks.ended) callback();
+        for (const callback of [...callbacks.ended]) callback();
       },
       emitError() {
         for (const callback of callbacks.error) callback({ errCode: 10001, errMsg: 'queued audio error' });
       }
     };
+    if (modernAudio) {
+      Object.defineProperty(player, 'duration', { get: () => src === END_AUDIO ? 19.083356 : src === START_AUDIO ? 10.157256 : 60 });
+      player.onTimeUpdate = callback => callbacks.timeupdate.add(callback);
+      player.offTimeUpdate = callback => callbacks.timeupdate.delete(callback);
+      player.emitProgress = seconds => {
+        player.currentTime = seconds;
+        for (const callback of [...callbacks.timeupdate]) callback();
+      };
+    }
     players.push(player);
     return player;
   }
@@ -2374,7 +2388,7 @@ test('page recreation during system interruptions retains an unfinished countdow
   const h = createPage();
   h.page.startTimer();
   const sessionId = h.page.sessionId;
-  h.advance(90000); h.page.audioPlayer.emitEnded();
+  h.advance(5000); h.page.audioPlayer.emitEnded(); h.advance(85000);
   h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
   h.page.setData = () => { throw new Error('unloaded page cannot render'); };
   assert.equal(h.countdown.getSnapshot().isRunning, true);
@@ -3753,6 +3767,82 @@ test('silent native playback is repaired without altering the deadline or starti
   }
 });
 
+test('Huawei opening progress that freezes near zero cannot replay the bell five seconds later', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withGuide: true, modernAudio: true });
+    h.page.startTimer();
+    const sessionId = h.page.sessionId;
+    const startedAt = h.page.data.startTimestamp;
+    h.advance(4999);
+    assert.deepEqual(h.plays(), [], 'the opening still waits for five seconds of preparation');
+    h.advance(1);
+    const opening = h.page.audioPlayer;
+    assert.deepEqual(h.plays(), [START_AUDIO]);
+    opening.emitProgress(0.01);
+
+    h.advance(5150);
+    assert.deepEqual(h.plays(), [START_AUDIO], 'stale native progress must not replay an already-started bell');
+    assert.equal(h.page.audioPlayer, opening, 'the active opening decoder remains owned until it ends');
+    assert.equal(opening.destroyed, false);
+    assert.equal(h.page.backgroundMusicPlayer, null, 'uncertain progress must not start guidance over the bell');
+    assert.equal(h.page.sessionId, sessionId);
+    assert.equal(h.page.data.startTimestamp, startedAt);
+    assert.equal(h.page.data.elapsedTime, 10);
+
+    h.advance(5000);
+    opening.emitProgress(10.157);
+    opening.emitNativeEnded();
+    opening.emitNativeEnded();
+    assert.deepEqual(h.plays(), [START_AUDIO, GUIDE_AUDIO], 'natural completion starts guidance exactly once');
+    const completions = h.storage.get('timerDiagnostics')
+      .filter(event => event.type === 'cue_completed' && event.src === START_AUDIO);
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0].failed, false, 'normal Ended must succeed rather than consume a failed opening');
+    assert.equal(h.page.openingReminderCompleted, true);
+    assert.equal(h.storage.get('timerSessionAudio').openingReminderCompleted, true);
+    assert.equal(h.records.length, 0, 'opening playback never completes or saves the sitting');
+    h.page.onUnload();
+  }
+});
+
+test('Huawei opening with no progress or Ended expires once without owing another opening bell', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withGuide: true, modernAudio: true });
+    h.page.startTimer();
+    h.advance(5000);
+    const opening = h.page.audioPlayer;
+    opening.emitProgress(0);
+
+    h.advance(12999);
+    assert.deepEqual(h.plays(), [START_AUDIO], 'missing progress cannot trigger a second audible opening');
+    assert.equal(opening.destroyed, false);
+    assert.equal(h.page.backgroundMusicPlayer, null, 'guidance waits for the bounded opening playback window');
+    h.advance(1);
+    assert.equal(opening.destroyed, true, 'a missing Ended must not keep the native decoder alive indefinitely');
+    assert.deepEqual(h.plays(), [START_AUDIO, GUIDE_AUDIO]);
+    assert.equal(h.page.currentSessionSound, null);
+    assert.equal(h.page.openingReminderCompleted, true);
+    assert.equal(h.storage.get('timerSessionAudio').openingReminderCompleted, true,
+      'recovery must remember that this already-started opening must not be replayed');
+    opening.emitNativeEnded();
+    h.page.onShow();
+    assert.deepEqual(h.plays(), [START_AUDIO, GUIDE_AUDIO], 'late completion and foreground callbacks cannot replay either sound');
+
+    h.emitApp('hide', { reason: 3 });
+    h.page.onHide();
+    h.page.onUnload();
+    const fresh = createPage({ isCountdown, withGuide: true, modernAudio: true,
+      initialStorage: structuredClone(Object.fromEntries(h.storage)), initialTime: h.now() + 1000 });
+    assert.equal(fresh.page.sessionId, h.page.sessionId);
+    assert.equal(fresh.page.openingReminderCompleted, true);
+    fresh.advance(15000);
+    assert.equal(fresh.plays().filter(src => src === START_AUDIO).length, 0,
+      'a restored sitting must not owe the opening whose replay was suppressed');
+    assert.equal(fresh.records.length, 0);
+    fresh.page.onUnload();
+  }
+});
+
 test('an exhausted closing bell retries on the next visit without losing the reminder or duplicating records', () => {
   for (const isCountdown of [true, false]) {
     let audioAvailable = false;
@@ -3811,6 +3901,104 @@ test('manual and natural completion repair an unexpected native stop or pause wi
       assert.equal(h.storage.get('timerPendingEndReminder'), null);
     }
   }
+});
+
+test('foreground natural and manual completion recover a Play-only closing bell and save the original completion once', async () => {
+  for (const ending of ['natural', 'manual']) {
+    for (const withGuide of [false, true]) {
+      const h = createPage({ modernAudio: true, withGuide });
+      h.page.applyDuration(ending === 'natural' ? 1 : 2);
+      h.page.startTimer(); h.advance(5000); h.page.audioPlayer.emitEnded();
+      h.advance(ending === 'natural' ? 55000 : 60000);
+      if (ending === 'manual') h.page.handleStop();
+      const original = h.page.audioPlayer;
+      const completion = { ...h.page.pendingCompletion };
+      assert.equal(original.src, END_AUDIO);
+      assert.equal(original.paused, false, 'Play has fired although native playback never advances');
+      assert.equal(original.currentTime, 0);
+      assert.equal(h.page.isPageVisible, true);
+      assert.equal(h.application._timerForeground, true);
+      assert.equal(h.records.length, 0);
+      if (withGuide) assert.equal(h.page.backgroundMusicPlayer, null, 'guidance stops before closing playback');
+      h.advance(2650);
+      const recovered = h.page.audioPlayer;
+      assert.equal(original.destroyed, true);
+      assert.notEqual(recovered, original);
+      assert.equal(recovered.src, END_AUDIO);
+      assert.equal(recovered.startTime, 0);
+      assert.equal(recovered.paused, false);
+      assert.equal(h.storage.get('timerPendingEndReminder').sessionId, completion.sessionId);
+      assert.deepEqual({ ...h.page.pendingCompletion }, completion, 'audio repair preserves the original deadline and draft');
+      h.page.handleTimerFinished(); h.page.handleStop(); h.page.onShow();
+      assert.equal(h.plays().filter(src => src === END_AUDIO).length, 2);
+      recovered.emitEnded();
+      recovered.emitNativeEnded(); h.page.onShow();
+      assert.equal(h.storage.get('timerPendingEndReminder'), null);
+      assert.equal(h.plays().filter(src => src === END_AUDIO).length, 2);
+      assert.equal(h.vibrations.length, 0);
+      await h.page.confirmCompletion(); await h.page.confirmCompletion();
+      assert.equal(h.records.length, 1);
+      assert.equal(h.records[0][0], completion.duration);
+      assert.equal(h.records[0][3], completion.endedAt);
+      assert.equal(h.records[0][4], completion.sessionId);
+    }
+  }
+});
+
+test('a long foreground countdown replaces an expired preloaded closing context and retains its exact deadline', async () => {
+  let stale;
+  const h = createPage({ modernAudio: true,
+    audioBehavior: player => player === stale ? 'error' : 'play' });
+  h.page.applyDuration(20); h.page.startTimer();
+  stale = h.players.find(player => player.src === END_AUDIO);
+  assert.ok(stale, 'closing audio was preloaded when the sit began');
+  const sessionId = h.page.sessionId;
+  const deadline = h.page.data.startTimestamp + 20 * 60000;
+  h.advance(5000); h.page.audioPlayer.emitEnded(); h.advance(20 * 60000 - 5000);
+  h.advance(150);
+  const recovered = h.page.audioPlayer;
+  assert.equal(stale.destroyed, true);
+  assert.notEqual(recovered, stale);
+  assert.equal(recovered.src, END_AUDIO);
+  assert.equal(recovered.paused, false);
+  assert.equal(h.page.isPageVisible, true);
+  assert.equal(h.application._timerForeground, true);
+  assert.equal(h.page.pendingCompletion.sessionId, sessionId);
+  assert.equal(h.page.pendingCompletion.endedAt, deadline);
+  assert.equal(h.page.pendingCompletion.duration, 20);
+  assert.equal(h.records.length, 0);
+  recovered.emitEnded(); h.page.onShow();
+  assert.equal(h.storage.get('timerPendingEndReminder'), null);
+  await h.page.confirmCompletion(); await h.page.confirmCompletion();
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][3], deadline);
+  assert.equal(h.records[0][4], sessionId);
+});
+
+test('a premature native Ended after 0.02 seconds cannot acknowledge the foreground closing reminder', async () => {
+  const h = createPage({ modernAudio: true });
+  h.page.applyDuration(1); h.page.startTimer();
+  h.advance(5000); h.page.audioPlayer.emitEnded(); h.advance(55000);
+  const original = h.page.audioPlayer;
+  const completion = { ...h.page.pendingCompletion };
+  original.emitProgress(0.02);
+  original.emitNativeEnded();
+  assert.equal(h.storage.get('timerPendingEndReminder')?.sessionId, completion.sessionId);
+  assert.equal(original.destroyed, true, 'a tiny native progress value cannot confirm the full 19-second bell');
+  h.advance(150);
+  const recovered = h.page.audioPlayer;
+  assert.notEqual(recovered, original);
+  assert.equal(recovered.src, END_AUDIO);
+  assert.equal(recovered.paused, false);
+  assert.deepEqual({ ...h.page.pendingCompletion }, completion);
+  assert.equal(h.records.length, 0);
+  recovered.emitEnded(); original.emitNativeEnded(19.083); h.page.onShow();
+  assert.equal(h.storage.get('timerPendingEndReminder'), null);
+  assert.equal(h.plays().filter(src => src === END_AUDIO).length, 2);
+  await h.page.confirmCompletion(); await h.page.confirmCompletion();
+  assert.equal(h.records.length, 1);
+  assert.equal(h.records[0][3], completion.endedAt);
+  assert.equal(h.records[0][4], completion.sessionId);
 });
 
 test('a failed count-up draft write cannot leave the timer running while its closing bell plays', () => {
@@ -3924,36 +4112,72 @@ test('a broken optional guide cannot prevent the next opening or closing cue', (
   }
 });
 
-test('rebuilding during a cue repair preserves opening progress even after its native context is gone', () => {
+test('page recovery preserves opening progress when intentional native pause fails', () => {
   for (const isCountdown of [true, false]) {
-    for (const fault of ['error', 'pause']) {
-      const h = createPage({ isCountdown, withGuide: true });
-      h.page.startTimer(); h.advance(5000);
-      const sessionId = h.page.sessionId;
-      const original = h.page.audioPlayer;
-      original.currentTime = 7;
-      if (fault === 'error') original.emitError();
-      else original.pause = () => { throw new Error('native pause failed'); };
-      h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide();
-      assert.equal(h.page.audioPlayer, null, 'the failed native context has already been released');
-      h.page.onUnload();
-      assert.equal(h.application._timerSessionAudio.cuePosition, 7,
-        'same-runtime reconstruction must keep trusted progress outside the native context');
-      h.advance(10000);
-      const fresh = h.recreatePage({ visible: false });
-      const before = h.plays().length;
-      h.emitApp('show'); fresh.onShow();
-      assert.equal(h.plays().length, before, 'the reconstructed cue waits for the audio interruption end');
-      h.emitAudio('end');
-      assert.equal(fresh.sessionId, sessionId);
-      assert.equal(fresh.audioPlayer.src, START_AUDIO);
-      assert.equal(fresh.audioPlayer.currentTime, 7);
-      assert.equal(fresh.audioPlayer.paused, false);
-      assert.equal(fresh.backgroundMusicPlayer, null);
-      fresh.audioPlayer.emitEnded();
-      assert.equal(h.plays().filter(src => src === GUIDE_AUDIO).length, 1);
-      assert.equal(h.records.length, 0);
-    }
+    const h = createPage({ isCountdown, withGuide: true });
+    h.page.startTimer(); h.advance(5000);
+    const sessionId = h.page.sessionId;
+    const original = h.page.audioPlayer;
+    original.currentTime = 7;
+    original.pause = () => { throw new Error('native pause failed'); };
+    h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide();
+    assert.equal(h.page.audioPlayer, null, 'the failed native context has already been released');
+    h.page.onUnload();
+    assert.equal(h.application._timerSessionAudio.cuePosition, 7,
+      'same-runtime reconstruction must keep trusted progress outside the native context');
+    h.advance(10000);
+    const fresh = h.recreatePage({ visible: false });
+    const before = h.plays().length;
+    h.emitApp('show'); fresh.onShow();
+    assert.equal(h.plays().length, before, 'the reconstructed cue waits for the audio interruption end');
+    h.emitAudio('end');
+    assert.equal(fresh.sessionId, sessionId);
+    assert.equal(fresh.audioPlayer.src, START_AUDIO);
+    assert.equal(fresh.audioPlayer.currentTime, 7);
+    assert.equal(fresh.audioPlayer.paused, false);
+    assert.equal(fresh.backgroundMusicPlayer, null);
+    fresh.audioPlayer.emitEnded();
+    assert.equal(h.plays().filter(src => src === GUIDE_AUDIO).length, 1);
+    assert.equal(h.records.length, 0);
+  }
+});
+
+test('an opening error after Play consumes its checkpoint and page recovery cannot replay it', () => {
+  for (const isCountdown of [true, false]) {
+    const h = createPage({ isCountdown, withGuide: true });
+    h.page.startTimer(); h.advance(5000);
+    const sessionId = h.page.sessionId;
+    const original = h.page.audioPlayer;
+    original.currentTime = 7;
+    original.emitError();
+    assert.equal(original.destroyed, true);
+    assert.equal(h.page.audioPlayer, null);
+    assert.equal(h.page.currentSessionSound, null);
+    assert.equal(h.page.openingReminderCompleted, true);
+    assert.equal(h.storage.get('timerSessionAudio').openingReminderCompleted, true);
+    assert.equal(h.storage.get('timerSessionAudio').currentSessionSound, null);
+    h.advance(150);
+    assert.deepEqual(h.plays(), [START_AUDIO, GUIDE_AUDIO], 'a started opening is not retried after its error');
+
+    h.emitAudio('begin'); h.emitApp('hide', { reason: 3 }); h.page.onHide(); h.page.onUnload();
+    assert.equal(h.application._timerSessionAudio.openingReminderCompleted, true);
+    assert.equal(h.application._timerSessionAudio.currentSessionSound, null);
+    h.advance(10000);
+    const fresh = h.recreatePage({ visible: false });
+    const before = h.plays().length;
+    h.emitApp('show'); fresh.onShow();
+    assert.equal(h.plays().length, before, 'guide recovery still waits for the real interruption end');
+    h.emitAudio('end');
+    assert.equal(fresh.sessionId, sessionId);
+    assert.equal(fresh.currentSessionSound, null);
+    assert.equal(fresh.openingReminderCompleted, true);
+    assert.equal(fresh.backgroundMusicPlayer.src, GUIDE_AUDIO);
+    assert.equal(fresh.backgroundMusicPlayer.paused, false);
+    h.advance(15000);
+    assert.equal(h.plays().filter(src => src === START_AUDIO).length, 1,
+      'the consumed opening cannot return through a restored page or delayed retry');
+    assert.equal(h.records.length, 0);
+    fresh.onUnload();
   }
 });
 

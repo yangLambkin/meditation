@@ -4,6 +4,8 @@ const { getReminderSettings } = require('./timerReminderSettings');
 const { queueEndReminder, getEndReminder, clearEndReminder, dismissEndReminder } = require('./timerEndReminder');
 const SESSION_AUDIO_KEY = 'timerSessionAudio';
 const AUDIO_CHECKPOINT_INTERVAL = 10000;
+// 起坐资源长约 10.16 秒，留出尾音/结束回调余量；进度停报也不能重敲一次。
+const OPENING_CUE_OPTIONS = { replayAfterStart: false, playbackTimeoutMs: 13000 };
 
 function validAudioCheckpoint(value) {
   const position = number => Number.isFinite(number) && number >= 0 && number <= 86400;
@@ -220,7 +222,7 @@ const timerAudioMethods = {
       if (Number.isFinite(saved.vibrationRemainingMs)) {
         this.restoredVibrationRemaining = saved.vibrationRemainingMs;
       } else {
-        this.cuePlayer.prepare('/audio/起坐.mp3', { position: saved.cuePosition });
+        this.cuePlayer.prepare('/audio/起坐.mp3', { ...OPENING_CUE_OPTIONS, position: saved.cuePosition });
       }
     }
   },
@@ -364,7 +366,8 @@ const timerAudioMethods = {
       this.playSessionVibration(type);
       return;
     }
-    this.cuePlayer.play(type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3');
+    this.cuePlayer.play(type === 'start' ? '/audio/起坐.mp3' : '/audio/收坐.mp3',
+      type === 'start' ? OPENING_CUE_OPTIONS : undefined);
   },
 
   playSessionVibration(type, remainingMs = 3000) {
@@ -423,14 +426,15 @@ const timerAudioMethods = {
     this.cuePlayer.stop();
   },
 
-  handleSessionSoundEnded({ failed = false, vibration = false } = {}) {
+  handleSessionSoundEnded({ failed = false, vibration = false, replaySuppressed = false } = {}) {
     const wasStartSound = this.currentSessionSound === 'start';
     const wasEndSound = this.currentSessionSound === 'end';
     const endSessionId = this.endReminderSessionId;
     this.currentSessionSound = null;
     this.endReminderSessionId = null;
     if (wasStartSound) {
-      this.openingReminderCompleted = !failed;
+      // 已开始但回调异常的起坐也已消费，页面恢复时不能再补播一次。
+      this.openingReminderCompleted = !failed || replaySuppressed;
       this.saveSessionAudio();
     }
     if (wasEndSound) {

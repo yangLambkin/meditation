@@ -54,7 +54,7 @@ function createPage({ initialTab = null, cloud, generateInvite, deleteTeam, remo
   let timerId = 0;
   const timers = new Map();
   const storage = new Map([['userOpenId', openid], ['userNickname', '邀请人']]);
-  const calls = { uploads: [], cloud: [], deletes: [], removals: [], deputyChanges: [], transfers: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
+  const calls = { uploads: [], cloud: [], deletes: [], removals: [], deputyChanges: [], transfers: [], text: [], image: [], media: [], actionSheets: [], modals: [], toasts: [], redirects: [], navigation: [], scrolls: [], shareMenus: [], clipboard: [], reminderImages: [], canvasQueries: [], albums: [], previews: [], settings: [], back: 0, refreshStopped: 0, keyboardHidden: 0 };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [currentTime])); }
     static now() { return currentTime; }
@@ -160,6 +160,7 @@ function createPage({ initialTab = null, cloud, generateInvite, deleteTeam, remo
       },
       redirectTo: options => calls.redirects.push(options),
       navigateTo: options => calls.navigation.push(options),
+      pageScrollTo: options => calls.scrolls.push(options),
       navigateBack() { calls.back++; },
       switchTab() {}, showLoading() {}, hideLoading() {},
       stopPullDownRefresh() { calls.refreshStopped++; }
@@ -374,7 +375,7 @@ test('a failed initial roster is retried on return instead of being treated as c
   assert.equal(calls.cloud.length, 2);
 });
 
-test('today filters use the same report and history orders by unmet days including missed practice', async () => {
+test('today filters use the same report and history defaults to descending qualification rate', async () => {
   const { page, calls } = createPage();
   await page.onShow();
   page.changeTodayFilter(event('filter', 'qualified'));
@@ -386,11 +387,113 @@ test('today filters use the same report and history orders by unmet days includi
   page.switchRecordTab(event('tab', 'history'));
   assert.equal(page.data.currentTab, 'records');
   assert.equal(page.data.recordTab, 'history');
-  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
-  assert.equal(page.data.historyMembers[0].unmetDays, 7);
-  assert.equal(page.data.historyMembers[0].missedDays, 5);
+  assert.deepEqual(Array.from(page.data.historyMembers, item => [item.openid, item.historyRateLabel]),
+    [['owner', '94.4%'], ['third', '72.2%'], ['member', '61.1%']]);
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'desc');
+  assert.equal(page.data.historyMembers[0].unmetDays, 1);
+  assert.equal(page.data.historyMembers[0].missedDays, 0);
   assert.equal(page.data.historyRangeLabel, '2026.09.01 — 2026.09.18');
   assert.equal(calls.cloud.length, 2);
+});
+
+test('history rate sorting switches directions locally without changing report totals or today filters', async () => {
+  const { page, calls } = createPage();
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  const originalReport = JSON.stringify(page.data.report);
+  const summary = JSON.stringify(page.data.historySummary);
+  const todayFilter = page.data.todayFilter;
+  const requests = calls.cloud.length;
+  const sort = order => page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order } } });
+  sort('asc');
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'asc');
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
+  assert.deepEqual(Array.from(page.data.practiceReports[0].historyMembers, item => item.openid), ['member', 'third', 'owner']);
+  sort('desc');
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'desc');
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['owner', 'third', 'member']);
+  sort('unknown');
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'unknown', order: 'asc' } } });
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'desc');
+  assert.equal(JSON.stringify(page.data.report), originalReport);
+  assert.equal(JSON.stringify(page.data.historySummary), summary);
+  assert.equal(page.data.todayFilter, todayFilter);
+  assert.equal(calls.cloud.length, requests);
+});
+
+test('optional history ranks by participation and supports ascending participation rates', async () => {
+  const { page } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : optionalReport) });
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  assert.deepEqual(Array.from(page.data.historyMembers, item => [item.openid, item.historyRateLabel]),
+    [['owner', '100%'], ['third', '88.9%'], ['member', '72.2%']]);
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order: 'asc' } } });
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
+  assert.equal(page.data.practiceReports[0].hasGoal, false);
+});
+
+test('history rates use exact days to order equal rounded percentages and cap incomplete rates', async () => {
+  const longHistory = structuredClone(report);
+  longHistory.settings.practiceStartDate = '1999-05-04';
+  longHistory.history = { startDate: '1999-05-04', endDate: '2026-09-18', totalDays: 10000 };
+  longHistory.members = [
+    { ...member('member', 'qualified', 20, 9998, 2, 0), nickname: 'A' },
+    { ...member('third', 'qualified', 20, 9999, 1, 0), nickname: 'Z' },
+    { ...member('owner', 'qualified', 20, 10000, 0, 0), nickname: 'Owner' }
+  ];
+  const { page } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : longHistory) });
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  assert.deepEqual(Array.from(page.data.historyMembers, item => [item.openid, item.historyRateLabel]),
+    [['owner', '100%'], ['third', '99.9%'], ['member', '99.9%']]);
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order: 'asc' } } });
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
+});
+
+test('equal history rates keep nickname and member identifier tie breakers in either direction', async () => {
+  const tied = structuredClone(report);
+  tied.members = [
+    { ...member('third', 'qualified', 20, 10, 8, 0), nickname: 'B' },
+    { ...member('owner', 'qualified', 20, 11, 7, 1), nickname: 'A' },
+    { ...member('member', 'qualified', 20, 12, 6, 2), nickname: 'A' }
+  ];
+  const { page } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : tied) });
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'owner', 'third']);
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order: 'asc' } } });
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'owner', 'third']);
+});
+
+test('first-day history has no percentage instead of invalid rates or a ranking scroll', async () => {
+  const firstDay = structuredClone(report);
+  firstDay.settings.practiceStartDate = '2026-09-19';
+  firstDay.history = { startDate: '2026-09-19', endDate: '2026-09-18', totalDays: 0 };
+  firstDay.members = firstDay.members.map(item => ({ ...item, practiceDays: 0, qualifiedDays: 0,
+    belowGoalDays: 0, missedDays: 0, unmetDays: 0, totalMinutes: 0 }));
+  const { page, calls } = createPage({ cloud: type => success(type === 'getTeamInfo' ? team : firstDay) });
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  assert.equal(page.data.historySummary, null);
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.historyRateLabel), ['—', '—', '—']);
+  page.showHistoryRanking(event('practiceType', 'sitting'));
+  assert.equal(calls.scrolls.length, 0);
+});
+
+test('overall history rate scrolls to the member ranking and preserves its selected order', async () => {
+  const { page, calls } = createPage();
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order: 'asc' } } });
+  const requests = calls.cloud.length;
+  page.showHistoryRanking(event('practiceType', 'sitting'));
+  assert.deepEqual(calls.scrolls.map(options => ({ ...options })), [{ selector: '#history-members-sitting', duration: 300 }]);
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'asc');
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
+  assert.equal(calls.navigation.length, 0);
+  assert.equal(calls.cloud.length, requests);
+  page.openHistoryDetails(event('filter', 'all'));
+  assert.equal(new URL(calls.navigation[0].url, 'https://local').searchParams.get('filter'), 'all');
 });
 
 test('historical summary counts distinct affected members and each member-day once', async () => {
@@ -522,7 +625,7 @@ test('history overview requests and summarizes the complete period across months
   assert.equal(page.data.historyRangeLabel, '2026.08.01 — 2026.09.18');
   assert.equal(page.data.report.history.totalDays, 49);
   assert.deepEqual(Array.from(page.data.historyMembers, item => [item.openid, item.practiceDays, item.unmetDays]),
-    [['third', 0, 49], ['member', 40, 11], ['owner', 49, 1]]);
+    [['owner', 49, 1], ['member', 40, 11], ['third', 0, 49]]);
   assert.equal(page.data.historySummary.unmetMemberCount, 3);
   assert.equal(page.data.historySummary.unmetCount, 61);
   assert.equal(page.data.historySummary.missedCount, 58);
@@ -3064,6 +3167,39 @@ test('history homework selection survives record tabs, member tabs, return navig
   assert.equal(calls.cloud.length, requestCount + 4);
 });
 
+test('history sort choices are independent per homework and survive returning and refreshing reports', async () => {
+  let changed = false;
+  const { page } = await combinedPage({ cloud: (type, request) => {
+    if (type === 'getTeamInfo') return success(dataTeamWithPractices());
+    const current = combinedReportFor(request.practiceType);
+    if (changed && request.practiceType === 'sitting') {
+      current.members[0] = { ...current.members[0], practiceDays: 1, qualifiedDays: 1,
+        missedDays: 17, belowGoalDays: 0, unmetDays: 17, totalMinutes: 20 };
+    }
+    return success(current);
+  } });
+  page.switchRecordTab(event('tab', 'history'));
+  const sort = (practiceType, order) => page.changeHistorySort({ currentTarget: { dataset: { practiceType, order } } });
+  sort('sitting', 'asc');
+  page.switchHistoryPractice(event('practiceType', 'walking'));
+  sort('walking', 'asc');
+  const orders = () => Array.from(page.data.practiceReports, view => [view.practiceType, view.historySortOrder]);
+  const expectedOrders = [['sitting', 'asc'], ['kindness', 'desc'], ['walking', 'asc']];
+  assert.deepEqual(orders(), expectedOrders);
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['member', 'third', 'owner']);
+  assert.deepEqual(Array.from(page.data.practiceReports[1].historyMembers, item => item.openid), ['owner', 'third', 'member']);
+  page.onHide();
+  await page.onShow();
+  assert.deepEqual(orders(), expectedOrders);
+  changed = true;
+  await page.onPullDownRefresh();
+  assert.deepEqual(orders(), expectedOrders);
+  assert.equal(page.data.historyPracticeType, 'walking');
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['owner', 'member', 'third']);
+  assert.deepEqual(Array.from(page.data.practiceReports[0].historyMembers, item => item.openid), ['owner', 'member', 'third']);
+  assert.deepEqual(Array.from(page.data.practiceReports[2].historyMembers, item => item.openid), ['member', 'third', 'owner']);
+});
+
 test('history homework selection rejects unavailable tabs and falls back when a refreshed team removes one', async () => {
   let currentTeam = dataTeamWithPractices();
   const { page, calls } = await combinedPage({ cloud: (type, request) => success(type === 'getTeamInfo'
@@ -3088,18 +3224,36 @@ test('history homework selection rejects unavailable tabs and falls back when a 
   assert.equal(single.page.data.historySummary.unmetCount, 13);
 });
 
-test('changing viewer account or binding resets the historical homework selection', async () => {
+test('changing viewer account or binding resets the historical homework selection and sort choices', async () => {
   for (const [key, value] of [['userOpenId', 'member'], ['bijingBindingVersion', 'v2']]) {
     const { page, storage } = await combinedPage();
     page.switchRecordTab(event('tab', 'history'));
     page.switchHistoryPractice(event('practiceType', 'walking'));
+    for (const practiceType of ['sitting', 'walking']) {
+      page.changeHistorySort({ currentTarget: { dataset: { practiceType, order: 'asc' } } });
+    }
     page.onHide();
     storage.set(key, value);
     await page.onShow();
     assert.equal(page.data.reportError, '', key);
     assert.equal(page.data.historyPracticeType, 'sitting', key);
     assert.equal(page.data.practiceReports.length, 3, key);
+    assert.equal(page.data.practiceReports.every(view => view.historySortOrder === 'desc'), true, key);
   }
+});
+
+test('changing teams resets history sorting to descending rates', async () => {
+  const { page } = createPage({ cloud: (type, request) => success(type === 'getTeamInfo'
+    ? { ...team, _id: request.teamId } : { ...report, teamId: request.teamId }) });
+  await page.onShow();
+  page.switchRecordTab(event('tab', 'history'));
+  page.changeHistorySort({ currentTarget: { dataset: { practiceType: 'sitting', order: 'asc' } } });
+  page.onHide();
+  page.setData({ teamId: 'team-b' });
+  await page.onShow();
+  assert.equal(page.data.reportError, '');
+  assert.equal(page.data.practiceReports[0].historySortOrder, 'desc');
+  assert.deepEqual(Array.from(page.data.historyMembers, item => item.openid), ['owner', 'third', 'member']);
 });
 
 test('editing and adding homework retain all rules and work when the selected homework has no target', async () => {

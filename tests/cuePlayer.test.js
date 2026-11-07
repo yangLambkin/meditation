@@ -240,6 +240,93 @@ test('a decoder reporting Play without advancing also rebuilds when progress eve
   assert.equal(h.ended.length, 0);
 });
 
+const OPENING_OPTIONS = { replayAfterStart: false, playbackTimeoutMs: 13000 };
+
+test('an opening cue with missing or frozen progress is not replayed after five seconds', () => {
+  for (const position of [0, 0.01]) {
+    const h = harness({ progressEvents: true });
+    h.controller.play('/start.mp3', OPENING_OPTIONS);
+    const original = h.controller.player;
+    original.currentTime = position;
+    original.emit('TimeUpdate');
+    h.advance(5150);
+    assert.equal(h.plays().length, 1, 'native telemetry can freeze while the bell is still audible');
+    assert.equal(original.destroyed, false);
+    assert.deepEqual(h.ended, [], 'guidance must wait for the opening to finish');
+    original.finish();
+    h.advance(20000);
+    assert.deepEqual(h.ended, [{ src: '/start.mp3', failed: false }]);
+    assert.equal(h.plays().length, 1);
+  }
+});
+
+test('a started opening with no Ended has a finite cleanup deadline even if progress continues', () => {
+  for (const updates of [false, true]) {
+    const h = harness({ progressEvents: true });
+    h.controller.play('/start.mp3', OPENING_OPTIONS);
+    const original = h.controller.player;
+    for (let second = 1; second <= 12; second += 1) {
+      if (updates) { original.currentTime = second; original.emit('TimeUpdate'); }
+      h.advance(1000);
+    }
+    assert.equal(original.destroyed, false);
+    h.advance(1000);
+    assert.equal(original.destroyed, true, 'the old audio must stop before guidance can begin');
+    assert.deepEqual(h.ended, [{ src: '/start.mp3', failed: true, replaySuppressed: true }]);
+    assert.equal(h.plays().length, 1);
+    assert.equal(h.timers.size, 0);
+  }
+});
+
+test('opening failures after Play are consumed without claiming successful playback or retrying', () => {
+  for (const event of ['Error', 'Pause', 'Stop', 'Ended']) {
+    const h = harness({ progressEvents: true, lifecycleEvents: true });
+    h.controller.play('/start.mp3', OPENING_OPTIONS);
+    h.players[0].emit(event);
+    h.advance(30000);
+    assert.deepEqual(h.ended, [{ src: '/start.mp3', failed: true, replaySuppressed: true }], event);
+    assert.equal(h.players[0].destroyed, true);
+    assert.equal(h.plays().length, 1);
+  }
+});
+
+test('an opening that never announces Play still gets one bounded recovery attempt', () => {
+  for (const behavior of ['silent', 'error', 'throw']) {
+    const h = harness({ profiles: [{ play: behavior }, { play: behavior }], progressEvents: true });
+    h.controller.play('/start.mp3', OPENING_OPTIONS);
+    h.advance(30000);
+    assert.equal(h.plays().length, 2, behavior);
+    assert.deepEqual(h.ended, [{ src: '/start.mp3', failed: true }]);
+    assert.equal(h.timers.size, 0);
+  }
+});
+
+test('the opening no-replay policy survives explicit pause/resume and prepared recovery', () => {
+  for (const restored of [false, true]) {
+    const h = harness({ progressEvents: true });
+    if (restored) {
+      h.controller.prepare('/start.mp3', { ...OPENING_OPTIONS, position: 0.01 });
+      h.controller.resume();
+    } else {
+      h.controller.play('/start.mp3', OPENING_OPTIONS);
+      h.players[0].currentTime = 0.01;
+      h.advance(1000);
+      h.controller.pause();
+      h.advance(30000);
+      assert.deepEqual(h.ended, []);
+      h.controller.resume();
+    }
+    const original = h.controller.player;
+    h.advance(5150);
+    assert.equal(h.players.length, 1);
+    assert.equal(original.destroyed, false);
+    original.emit('Error');
+    h.advance(30000);
+    assert.deepEqual(h.ended, [{ src: '/start.mp3', failed: true, replaySuppressed: true }]);
+    assert.equal(h.plays().length, restored ? 1 : 2, 'only the explicit resume may call play again');
+  }
+});
+
 test('actual playback progress prevents unnecessary recovery even if a progress callback is missed', () => {
   const h = harness({ progressEvents: true });
   h.controller.play('/end.mp3');

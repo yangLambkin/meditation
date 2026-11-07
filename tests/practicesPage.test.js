@@ -1473,22 +1473,20 @@ test('opening another record menu invalidates an earlier menu callback', async (
   assert.equal(h.page.data.formValue, '20');
 });
 
-test('meditation mirrors are read only and their original history uses the existing 02:00 business day', async () => {
-  const h = createPage({ feed: () => ({ records: [{ id: 1, type: 'sitting', source: 'meditation', sourceRecordId: 'source-1', recordDate: '2026-10-31', occurredAt: '2026-10-31 00:30:00', durationMinutes: 20, canEdit: true, canDelete: true }] }) });
+test('meditation mirrors offer source actions and retain the original history 02:00 business day', async () => {
+  const h = createPage({ feed: () => ({ records: [{ id: 1, type: 'sitting', source: 'meditation', sourceRecordId: 'source-1', recordDate: '2026-10-31', occurredAt: '2026-10-31 00:30:00', durationMinutes: 20, canEdit: false, canDelete: false }] }) });
   await h.page.refresh();
   h.page.openDetail({ currentTarget: { dataset: { key: 'sitting:1' } } });
   assert.equal(h.page.data.detail.mirrored, true);
-  assert.equal(h.page.data.detail.canEdit, false);
-  assert.equal(h.page.data.detail.canDelete, false);
-  h.page.editDetail(); h.page.deleteDetail();
-  assert.equal(h.page.data.showForm, false);
-  assert.equal(h.calls.modal.length, 0);
-  h.page.closeDetail();
-  h.page.showRecordActions({ type: 'longpress', currentTarget: { dataset: { key: 'sitting:1' } } });
-  assert.equal(h.calls.actionSheet, undefined);
-  assert.equal(h.page.data.detail.id, 1);
+  assert.equal(h.page.data.detail.canEdit, true);
+  assert.equal(h.page.data.detail.canDelete, true);
   h.page.openOriginalRecord();
   assert.equal(h.calls.navigation[0].url, '/pages/history/history?date=2026-10-30');
+  h.page.closeDetail();
+  h.page.showRecordActions({ type: 'longpress', currentTarget: { dataset: { key: 'sitting:1' } } });
+  assert.deepEqual(plain(h.calls.actionSheet.itemList), ['编辑功课', '删除记录']);
+  assert.equal(h.page.data.detail, null);
+  assert.equal(h.calls.enqueue.length, 0);
 });
 
 test('late reads and delayed delete confirmations cannot apply another binding data', async () => {

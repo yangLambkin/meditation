@@ -12,10 +12,12 @@ function deferred() {
 }
 function failure(code, message) { return Object.assign(new Error(message), { code }); }
 function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes = [], queueFactory,
+  sittingSource, resolveSitting, readReflection, updateCheckin, deleteCheckin, checkText, mirrorResume,
   screen = 'history', loadOptions = {}, shareMenuAvailable = true, now: initialNow = '2026-10-31T12:30:37+08:00' } = {}) {
   let now = Date.parse(initialNow);
   let owner = { openid: 'oz-owner', studentNumber: '001', bindingVersion: 'v1' };
-  const tasks = [], calls = { feed: [], summary: [], enqueue: [], flush: [], toast: [], navigation: [], switchTab: [], modal: [], shareMenu: [], mirrorResume: 0 };
+  const tasks = [], calls = { feed: [], summary: [], enqueue: [], flush: [], toast: [], navigation: [], switchTab: [], modal: [], shareMenu: [], mirrorResume: 0,
+    sourceResolve: [], reflection: [], updateCheckin: [], deleteCheckin: [], contentCheck: [] };
   const storage = { userOpenId: owner.openid };
   const subscribers = new Set();
   class Clock extends Date {
@@ -69,7 +71,37 @@ function createPage({ feed, summary, flush, enabled = true, enqueue, hiddenTypes
     'practiceEntry.js': { openSettings: () => wx.navigateTo({ url: '/pages/practiceSettings/practiceSettings' }) },
     'practicePreferences.js': preferences,
     'practiceAuth.js': { getOwner: () => owner, authorize: async () => owner },
-    'practiceMirror.js': { resume: async () => { calls.mirrorResume++; } },
+    'practiceMirror.js': { resume: async () => { calls.mirrorResume++; if (mirrorResume) return mirrorResume(); } },
+    'practiceSitting.js': {
+      sourceId: record => record && record.type === 'sitting' && typeof record.sourceRecordId === 'string'
+        && (!record.source || record.source === 'meditation') ? record.sourceRecordId : '',
+      identity: record => ({ recordId: record._id, localId: record.localId, timestamp: record.timestamp }),
+      resolve: async (record, stillCurrent) => {
+        calls.sourceResolve.push(plain(record));
+        const source = resolveSitting ? await resolveSitting(record, stillCurrent) : sittingSource;
+        if (stillCurrent && !stillCurrent()) throw new Error('账号或页面已变化，请重新打开记录');
+        if (!source) throw new Error('找不到原静坐记录，请刷新后重试');
+        return { ...source };
+      }
+    },
+    'checkin.js': {
+      getEditableCheckinReflection: (date, identity) => {
+        calls.reflection.push(plain({ date, identity }));
+        return readReflection ? readReflection(date, identity) : '原记录完整感悟';
+      },
+      updateCheckin: async (date, identity, updates, options) => {
+        calls.updateCheckin.push(plain({ date, identity, updates, options }));
+        return updateCheckin ? updateCheckin(date, identity, updates, options) : { success: true };
+      },
+      deleteCheckin: async (date, identity) => {
+        calls.deleteCheckin.push(plain({ date, identity }));
+        return deleteCheckin ? deleteCheckin(date, identity) : { success: true };
+      }
+    },
+    'contentSec.js': { checkText: async (...args) => {
+      calls.contentCheck.push(plain(args));
+      return checkText ? checkText(...args) : true;
+    } },
     'practiceConfig.js': { practicesEnabled: enabled } };
   function loadDateModule(name) {
     if (modules[name]) return modules[name];

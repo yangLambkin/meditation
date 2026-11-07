@@ -52,6 +52,7 @@ function harness({ recordsVisible = true } = {}) {
       'checkin.js': {}, 'contentSec.js': {}, 'homeCheckin.js': {}, 'dailyWisdom.js': { DEFAULT_QUOTE: '每日金句' },
       'dateUtil.js': {}, 'bijingRecordSync.js': {}, 'homeBackfill.js': { data: {}, methods: {} },
       'practiceDay.js': require('../miniprogram/utils/practiceDay.js'),
+      'practiceSitting.js': {},
       'practiceApi.js': {}, 'practiceQueue.js': {}, 'practiceAuth.js': { getOwner: () => ({ openid: storage.get('userOpenId') }) },
       'practiceConfig.js': { practicesEnabled: true }
     };
