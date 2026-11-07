@@ -17,16 +17,7 @@ Page({
     
     
     // 页面参数
-    loginCode: '',
-    userType: 'new', // new: 新用户, wechat: 微信用户, local: 本地用户
-    
-    // 默认头像列表（用于跳过选择的备选）
-    defaultAvatars: [
-      '/images/avatar-1.png',
-      '/images/avatar-2.png', 
-      '/images/avatar-3.png',
-      '/images/avatar-4.png'
-    ]
+    userType: 'new' // new: 新用户, wechat: 微信用户, local: 本地用户
   },
 
   /**
@@ -419,21 +410,6 @@ Page({
   },
 
   /**
-   * 获取用户OpenID（兼容原有逻辑）
-   */
-  getUserOpenId(loginCode) {
-    // 尝试获取现有的openid
-    let openid = wx.getStorageSync('userOpenId');
-    
-    if (!openid) {
-      // 生成新的本地标识
-      openid = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    }
-    
-    return openid;
-  },
-
-  /**
    * 保存到本地存储
    */
   saveToLocalStorage(userInfo, openid, expectedAccount = profileCache.currentAccount()) {
@@ -546,80 +522,6 @@ Page({
   },
 
   /**
-   * 跳过信息设置
-   */
-  skipProfile() {
-    wx.showModal({
-      title: '跳过设置',
-      content: '跳过设置将使用默认信息，您可以在个人中心随时修改',
-      confirmText: '确定跳过',
-      cancelText: '继续设置',
-      success: (res) => {
-        if (res.confirm) {
-          this.saveDefaultProfile();
-        }
-      }
-    });
-  },
-
-  /**
-   * 保存默认用户信息
-   */
-  saveDefaultProfile() {
-    this.setData({ isLoading: true });
-    
-    // 生成随机昵称
-    const randomNickname = this.generateRandomNickname();
-    // 选择随机默认头像
-    const randomAvatar = this.data.defaultAvatars[
-      Math.floor(Math.random() * this.data.defaultAvatars.length)
-    ] || '/images/avatar.png';
-    
-    const userInfo = {
-      nickName: randomNickname,
-      avatarUrl: randomAvatar,
-      isCustomAvatar: false, // 标记为系统生成
-      profileComplete: false, // 标记为不完整
-      createTime: new Date().toISOString(),
-      lastUpdateTime: new Date().toISOString(),
-      dataSource: 'system',
-      migrationStatus: 'skipped'
-    };
-    
-    const openid = this.getUserOpenId(this.data.loginCode);
-    
-    // 保存到本地
-    this.saveToLocalStorage(userInfo, openid);
-    
-    this.setData({ isLoading: false });
-    
-    wx.showToast({
-      title: '已保存到本机，云端尚未同步',
-      icon: 'success',
-      duration: 1500
-    });
-    
-    setTimeout(() => {
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
-    }, 1000);
-  },
-
-  /**
-   * 生成随机昵称
-   */
-  generateRandomNickname() {
-    const prefixes = ['静心', '觉察', '冥想', '修行', '禅意', '平和', '安宁'];
-    const suffixes = ['者', '人', '客', '士', '师', '友', '生'];
-    
-    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-    
-    return prefix + suffix + Math.floor(Math.random() * 1000);
-  },
-
-  /**
    * 登录成功后检查勋章解锁条件
    */
   checkBadgeAfterLogin() {
@@ -658,48 +560,6 @@ Page({
     } catch (error) {
       console.warn('勋章检查失败（不影响登录流程）:', error.message);
     }
-  },
-
-  /**
-   * 生命周期函数--监听页面初次渲染完成
-   */
-  onReady() {
-
-  },
-
-  /**
-   * 生命周期函数--监听页面显示
-   */
-  onShow() {
-
-  },
-
-  /**
-   * 生命周期函数--监听页面隐藏
-   */
-  onHide() {
-
-  },
-
-  /**
-   * 生命周期函数--监听页面卸载
-   */
-  onUnload() {
-
-  },
-
-  /**
-   * 页面相关事件处理函数--监听用户下拉动作
-   */
-  onPullDownRefresh() {
-
-  },
-
-  /**
-   * 页面上拉触底事件的处理函数
-   */
-  onReachBottom() {
-
   },
 
   /**

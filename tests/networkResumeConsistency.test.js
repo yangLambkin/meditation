@@ -108,8 +108,7 @@ function harness({ loggedIn = true, online = true, missingLocks = false, uploadD
       require: () => manager
     });
     app.setupCacheStatus = () => {};
-    app.testCloudEnvironment = () => {};
-    app.setAudioOptions = () => {};
+      app.setAudioOptions = () => {};
     app.onLaunch();
     const homeCheckin = load('utils/homeCheckin.js', { require: () => dateUtil });
     const bijingRecordSync = load('utils/bijingRecordSync.js');

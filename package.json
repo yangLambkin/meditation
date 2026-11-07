@@ -1,8 +1,7 @@
 {
   "name": "meditation",
   "version": "1.0.0",
-  "description": "这是云开发的快速启动指引，其中演示了如何上手使用云开发的三大基础能力：",
-  "main": "create_collections_consistent.js",
+  "description": "静坐觉察微信小程序：静坐计时、功课记录、日签与团队共修",
   "scripts": {
     "test": "node --test tests/*.test.js",
     "test:timer": "node --test tests/countdown*.test.js tests/timer*.test.js tests/cuePlayer.test.js tests/vibrationCue.test.js tests/homeTimerCompletionNotice.test.js",
@@ -10,7 +9,7 @@
     "test:backfill": "node --test tests/backfill*.test.js tests/homeBackfillPage.test.js tests/recordIdempotencyCloud.test.js tests/bijingSync.test.js tests/bijingSyncFailures.test.js tests/recordedSyncCloud.test.js tests/bijingRecordVerification.test.js tests/bijingRecordSync.test.js tests/historical*.test.js tests/adminSyncAlerts.test.js tests/feedbackNotificationFlow.test.js",
     "test:team": "node --test tests/teamManagerClient.test.js tests/teamManagerCloud.test.js tests/createTeamPage.test.js tests/joinTeamPage.test.js tests/teamDetailsPage.test.js tests/teamReminderText.test.js tests/teamReminderImage.test.js tests/teamHistoryDetailsPage.test.js tests/memberHistoryPage.test.js tests/teamMemberRecordsPage.test.js tests/teamGateway.test.js tests/dataTeams.test.js tests/teamOwnershipRace.test.js tests/teamInvitationFlow.test.js",
     "test:bijing-sync": "node --test tests/syncCoverage.test.js tests/bijingSync.test.js tests/bijingSyncFailures.test.js tests/bijingBindings.test.js tests/bijingSyncRetries.test.js tests/bijingBatchJobs.test.js tests/bijingBatchDispatch.test.js tests/bijingDailyBatchJobs.test.js tests/bijingDailySchedule.test.js tests/bijingSourceCheck.test.js tests/bijingSyncPage.test.js tests/bijingCheckinIntegration.test.js tests/heatmap.test.js tests/recordedSyncCloud.test.js tests/bijingRecordVerification.test.js tests/bijingRecordSync.test.js tests/historical*.test.js tests/backfillSyncConcurrency.test.js tests/cloudApiTimeout.test.js tests/checkinCloudRefresh.test.js",
-    "test:home-checkin": "node --test tests/checkinTimestamp.test.js tests/homeCheckinGrouping.test.js tests/homeCheckinPage.test.js tests/homeBackfillPage.test.js tests/timePicker.test.js tests/checkinHistoryPage.test.js tests/checkinCloudRefresh.test.js tests/getAllRecordsCloud.test.js",
+    "test:home-checkin": "node --test tests/checkinTimestamp.test.js tests/homeCheckinGrouping.test.js tests/homeCheckinPage.test.js tests/homeBackfillPage.test.js tests/checkinHistoryPage.test.js tests/checkinCloudRefresh.test.js tests/getAllRecordsCloud.test.js",
     "test:checkin-delete": "node --test tests/checkinDelete.test.js tests/deleteMeditationCloud.test.js tests/deletedSyncCloud.test.js tests/bijingRecordSync.test.js tests/historicalBijingIntegration.test.js tests/historicalSyncPages.test.js tests/historyDeletePage.test.js tests/homeDeletePage.test.js tests/checkinRecoveryDelete.test.js",
     "test:daily-wisdom": "node --test tests/dailyWisdom.test.js tests/dailyWisdomPage.test.js",
     "cleanup:stats": "node scripts/runCleanup.js stats",

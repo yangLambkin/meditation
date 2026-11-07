@@ -78,7 +78,7 @@ function harness() {
     // These independent services are unrelated to route selection. Execute
     // the real launch/show handlers while keeping their background work inert.
     for (const name of ['setupTimerAudioInterruption', 'setupRecordRefresh', 'resumePracticeRecords',
-      'setupCacheStatus', 'testCloudEnvironment', 'setAudioOptions', 'flushDetachedCountupExit',
+      'setupCacheStatus', 'setAudioOptions', 'flushDetachedCountupExit',
       'refreshTabBars', 'startSyncAlertRefresh', 'refreshRecordBackups', 'resumeRecordBackups']) {
       app[name] = () => {};
     }

@@ -274,7 +274,7 @@ function createPage({
         return timerInterruption;
       }
     }, { filename: appPath });
-    for (const method of ['setupRecordRefresh', 'setupCacheStatus', 'testCloudEnvironment', 'setAudioOptions',
+    for (const method of ['setupRecordRefresh', 'setupCacheStatus', 'setAudioOptions',
       'resumePracticeRecords', 'startSyncAlertRefresh', 'refreshRecordBackups', 'resumeRecordBackups', 'clearSyncAlert']) {
       application[method] = () => {};
     }

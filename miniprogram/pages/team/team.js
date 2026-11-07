@@ -209,10 +209,6 @@ Page({
     });
   },
 
-  onTeamCreated() {
-    return this.refreshTeamData();
-  },
-
   refreshTeamData() {
     // 来自创建/加入/解散页面的变更通知必须触发新快照。
     this._loadSequence = (this._loadSequence || 0) + 1;
@@ -222,10 +218,6 @@ Page({
 
   async onPullDownRefresh() {
     try { await this.loadTeamData(); } finally { wx.stopPullDownRefresh(); }
-  },
-
-  calculateTotalJoinedTeams(myTeams, joinedTeams) {
-    return this.mergeJoinedTeams(myTeams, joinedTeams).length;
   },
 
   mergeJoinedTeams(myTeams, joinedTeams) {

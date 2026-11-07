@@ -287,12 +287,5 @@ Page({
   enterTeamDetails() {
     if (!this.data.isMember || !this.data.teamId || this._viewerKey !== getViewerKey(this.data.teamId)) return;
     wx.redirectTo({ url: `/subpackages/team/pages/teamDetails/teamDetails?teamId=${encodeURIComponent(this.data.teamId)}` });
-  },
-
-  onAvatarError(event) {
-    const index = Number(event.currentTarget.dataset.index);
-    if (Number.isInteger(index) && this.data.members[index]) {
-      this.setData({ [`members[${index}].avatar`]: '/images/avatar.png' });
-    }
   }
 });

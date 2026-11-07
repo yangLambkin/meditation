@@ -218,10 +218,6 @@ class TeamManager {
       (team.creator === openid || memberIdsOf(team).includes(openid))) : [];
   }
 
-  getTeamCount() {
-    return this.getJoinedTeams().length;
-  }
-
   async loadTeamsFromCloud() {
     const openid = this.ensureCurrentUser();
     if (!openid) return { success: true, data: [] };
@@ -403,14 +399,6 @@ class TeamManager {
     this.cleanupJoinedTeamsFromCloud(this.teams);
   }
 
-  checkIsMember(teamId) {
-    return this.getJoinedTeams().some(team => team._id === teamId || teamIdOf(team) === teamId);
-  }
-
-  getUserJoinedTeams() {
-    return this.loadJoinedTeamsFromStorage();
-  }
-
   removeJoinedTeam(teamId) {
     this.ensureCurrentUser();
     const matches = team => team._id === teamId || teamIdOf(team) === teamId;
@@ -424,15 +412,6 @@ class TeamManager {
     // 删除/退队后，旧的公共列表快照不再可靠。
     try { wx.removeStorageSync('allTeams_cache'); } catch (error) { console.warn(error); }
     return removed;
-  }
-
-  clearLocalTeamCache() {
-    this.ensureCurrentUser();
-    this.teams = [];
-    this.cacheRevision++;
-    this.saveTeamsToStorage();
-    this.saveJoinedTeamsToStorage([]);
-    return true;
   }
 
 }

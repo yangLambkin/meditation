@@ -1,136 +1,49 @@
-# CODEBUDDY.md
+# 开发约定
 
-This file provides guidance to CodeBuddy Code when working with code in this repository.
+本文件供在本仓库工作的编码助手参考。项目入口、命令与功能文档见 [README](README.md)。
 
-## Project Overview
+## 工程边界
 
-WeChat Mini Program for meditation check-in ("静坐觉察" / "Meditation Awareness"), built on WeChat Cloud Development (云开发). The app provides meditation timing, daily check-ins, experience notes, rankings, badges, and team (空间) features with invite flow.
+- 微信原生小程序，CommonJS；沿用各文件的缩进与分号风格，用户文案使用简体中文。
+- `project.config.json` 指定 `miniprogram/` 与 `cloudfunctions/`；私有配置会覆盖公共配置，以开发者工具实际设置为准。
+- 小程序 npm 依赖统一放在根 `package.json`，目前使用 `lunar-javascript`。依赖变更后重新「构建 npm」；云函数各自管理依赖。
+- `cloudfunctions/` 下每个目录独立部署，不能依赖部署目录外文件。`shared/maintenanceAuth.js`、`shared/syncCoverage.js` 与部署副本的一致性由测试检查。
+- `npm test` 运行 `tests/*.test.js`。本地测试通过不代表已部署或完成真机、真实云环境验收。
 
-- AppID: `wx256002217162c2b4`
-- Cloud env: `cloud1-2g2rbxbu2c126d4a` (hard-coded in `miniprogram/app.js`, `miniprogram/config/images.js`, and via `cloud.DYNAMIC_CURRENT_ENV` inside cloud functions)
-- Base library: `3.13.2` (declared in `project.private.config.json`); `2.20.1` in `project.config.json`
-- Module system: CommonJS (`"type": "commonjs"`)
+## 主要入口
 
-## Common Commands
+| 功能 | 入口与模块 |
+| --- | --- |
+| 静坐记录 | `pages/index/`、`pages/recorder/`、`utils/checkin.js`、`utils/homeCheckin.js` |
+| 计时 | `pages/timer/`、`utils/countdownSession.js`、`utils/timerAudio.js`、`utils/cuePlayer.js` |
+| 功课 | `pages/practices/`、`pages/practiceHistory/`、`utils/practiceApi.js`、`utils/practiceQueue.js` |
+| 团队 | `pages/team/`、`subpackages/team/`、`utils/teamGateway.js`、`utils/dataTeams.js` |
+| 静心卡 | `pages/daily/`、`utils/dailyWisdom.js`、`utils/dailyPoster.js`、`config/images.js` |
+| 资料与勋章 | `pages/me/`、`pages/profile/`、`pages/badge/`、`utils/profileCache.js`、`utils/badgeManager.js` |
+| 补录、反馈、管理 | `pages/backfill/`、`pages/feedback/`、`pages/admin/` |
 
-### Install dependencies
-```bash
-npm install
-```
-NOTE: `node_modules/` at the repo root is empty. The runtime dependency `wx-server-sdk` is installed per cloud function (each cloud function has its own `package.json`). The miniprogram has its own `miniprogram/package.json` depending on `lunar`.
+以上路径均相对于 `miniprogram/`。底部四个入口是首页、记录、团队、我；计时通过页面入口打开。
 
-### Test data cleanup (uses WeChat DevTools CLI `cli cloud function invoke`)
-```bash
-npm run cleanup:stats   # show data counts per collection
-npm run cleanup:safe    # delete records within test date range (default 2026-01-01 → today)
-npm run cleanup:full    # delete ALL records (irreversible; prompts for "yes")
-```
-These scripts invoke the `cleanupTestData` cloud function via the WeChat DevTools `cli`. They require WeChat DevTools to be installed, logged in, and the cloud function to be uploaded. Edit `CONFIG.testPeriod` in `scripts/runCleanup.js` to change the safe-cleanup date range.
+## 数据与调用约定
 
-### Tests
-`npm test` runs the Node.js regression suite in `tests/`. Timer checks can be run with `node --test tests/countdownSession.test.js tests/countdownAppLifecycle.test.js tests/timerAudioPage.test.js tests/timerBrightnessPage.test.js tests/cuePlayer.test.js`. `test_redirect_flow.js` and `miniprogram/pages/test/*` are separate manual/ad-hoc checks.
+- 静坐记录先成功保存本机，再异步上传；持久化失败不得报成功或触发上传。待上传、已忽略和仅本机记录不能当作可删除缓存。
+- `localUserId` 是本机存储命名空间，微信 `openid` 是云端身份；登录后仍须保留原记录身份、所属账号和体验正文，避免跨账号回包覆盖。
+- 兼容平面与嵌套历史缓存。更新已知字段时保留其他业务字段，异步结果提交前核对当前 revision 和账号。
+- 同一次提交/计时会话复用稳定身份。云端确认真实 `recordId` 后才标记已上传；超时不代表云端没有写入。
+- `getAllRecords` 的成功结果是完整快照，不能把分页或增量直接替代为旧协议，否则客户端可能误删缓存。
+- 静坐业务日按北京时间 02:00 划分，使用 `utils/dateUtil.js`。功课分日由 `utils/practiceDay.js` 与接口约定处理，不能假设所有功课使用同一边界。
+- `meditation_records.experience` 新写入使用数组，保留历史字符串/引用兼容。集合字段沿用现有命名，勿批量统一 camelCase/snake_case。
+- 冥想云接口优先使用 `utils/cloudApi.js`；团队通过 `teamGateway.js` 按来源路由。功课、data 团队和热力图使用 OpenAPI，不能把所有后端调用视为云函数。
+- 操作成功须检查业务结果，不能把 `wx.cloud.callFunction` 的 success 回调当作业务成功。
+- 当前自动补传涵盖全部日期的明确待上传记录；旧未确认记录须经预览确认。完整规则见[自动恢复说明](docs/2026-10-10-auto-sync-recovery.md)。
 
-### Deploying cloud functions
-Upload via WeChat DevTools (right-click → "上传并部署：云端安装依赖" on each folder under `cloudfunctions/`). `uploadCloudFunction.sh` is a one-line template that calls the DevTools CLI for `quickstartFunctions` only — it is not a general deploy script.
+## 计时与资源
 
-## Repository Layout
+- 倒计时会话由 `app.js` 持有，独立于页面生命周期；正计时由 `pages/timer/timer.js` 管理。根据时间戳计算时长，不按定时回调次数累计。
+- 明确退出与系统临时中断分别处理；冷启动只结算最后保存的检查点。音频恢复不能改写记录或计时身份。
+- 起坐、收坐提示音是 `audio/起坐.mp3`、`audio/收坐.mp3`。播放器失败可有限重建，诊断保存在有容量限制的 `timerDiagnostics` 中。
+- 云存储背景图配置在 `config/images.js`；分享封面和图标源文件由 `scripts/` 中的生成器维护，不能仅因没有运行时引用而删除源 SVG。
 
-```
-miniprogram/                  Mini program source (miniprogramRoot)
-  app.js                      Cloud init, cache status, audio options, version checks
-  app.json                    Pages + subpackages + tabBar (4 tabs: 首页/计时/团队/我)
-  pages/                      Main package pages (see "Pages" below)
-  subpackages/team/pages/     Team subpackage (createTeam, teamDetails, joinTeam, testJoinTeam)
-  utils/                      Front-end business modules (see "Front-end utils" below)
-  config/images.js            Cloud fileID config for daily-poker images
-  audio/风铃声.mp3             Bell sound effect
-  images/                     Static icons and placeholder images
+## 运维
 
-cloudfunctions/               Cloud function source (cloudfunctionRoot)
-  meditationManager/          Main backend: login, records, stats, rankings, badges, profiles
-  teamManager/                Team CRUD, invite, join, member check-in data
-  autoCreateCollections/      One-shot bootstrap: creates DB collections with sample schema
-  cleanupTestData/            Test data cleanup (stats / safe / full modes)
-  getRandomWisdom/            Returns a random row from `wisdom_quotes`
-  recordUploadedImages/       Records uploaded cloud-storage images into `images` collection
-  quickstartFunctions/        Default boilerplate from the cloud-quickstart template
-  */config.json               `meditationManager/config.json` defines a timer trigger `0 0 */6 * * * *` that calls `generateRankingSnapshot`
-
-scripts/                      Node.js helper scripts (run via npm)
-  runCleanup.js               CLI wrapper that calls `cli cloud function invoke`
-  cleanupTestData.js          Alternate cleanup helper
-  create_team_collections.js  Schema definitions for team/invite collections
-  README.md                   Detailed cleanup tool docs
-
-create_collections_consistent.js   Schema definitions mirroring API fields (reference doc)
-file_index.json               Inventory of background image filenames
-project.config.json           WeChat project config (appid, lib version, packNpm settings)
-project.private.config.json   Private overrides; enables skylineRenderEnable, lazyCodeLoading
-test_redirect_flow.js         Manual test script for profile page redirect flow
-```
-
-## Architecture
-
-### Two-tier: Mini program (front) + Cloud functions (back)
-- Front end calls back end exclusively through `wx.cloud.callFunction`. The wrapper `miniprogram/utils/cloudApi.js` centralizes every call to the `meditationManager` cloud function and normalizes the `{success, data, error}` envelope.
-- `meditationManager/index.js` is a single-dispatch cloud function: `event.type` selects a handler (`recordMeditation`, `getUserStats`, `getRankings`, `updateUserBadges`, etc.). Adding a new backend operation = add a `case` + handler function in this file.
-- `teamManager/index.js` follows the same dispatch pattern for team operations (`createTeam`, `joinTeamWithInvite`, `generateInvite`, `getMemberWeekCheckin`, ...).
-- Cloud functions read the env from `cloud.DYNAMIC_CURRENT_ENV`, so the same code works across environments without hard-coding.
-
-### Local-first user identity
-The app uses a "local-first" identity model — see `miniprogram/utils/checkin.js` and `pages/index/index.js`:
-1. On first launch a `local_<timestamp>_<random>` id is generated and stored in `localUserId` and `userOpenId` storage keys.
-2. After WeChat login, the real `openid` (prefixed `oz...`) replaces `userOpenId`. The mapping between `openid` and the old `localUserId` is persisted in the `user_mappings` collection by `meditationManager.createUserMapping` / `migrateLocalData`.
-3. All per-user local cache is keyed by `meditation_checkin_<userId>` (where `userId` is the local id), so data survives login migration.
-
-When adding features that need user identity, call `checkinManager.getUserId()` (returns local id) and read `wx.getStorageSync('userOpenId')` (returns openid after login). Do NOT assume the user is logged in.
-
-### Cache recovery flow
-`app.js#onLaunch` calls `setupCacheStatus()` which sets `cacheStatus='initialized'` and `needsRecovery=true` on first launch or version change. `checkinManager.strictCacheCheck()` then reads these flags plus `checkCriticalDataExists()` / `hasActualUserData()` to decide whether to rebuild local state from the cloud. `appVersion` is currently hard-coded to `1.0.0` — bump it when a data-migration-on-upgrade is needed.
-
-### Data model
-Collections (defined in `cloudfunctions/autoCreateCollections/index.js` and `create_collections_consistent.js`):
-- `users` — profile (nickName, avatarUrl, isCustomAvatar, dataSource: 'wechat'|'custom', migrationStatus)
-- `meditation_records` — one row per check-in (`_openid`, `date` YYYY-MM-DD, `timestamp` ms, `duration` min, `rating`, `experience` array of exp record ids)
-- `experience_records` — standalone notes (`text`, `timestamp` ms, `created_at`, `updated_at`). Detached from `meditation_records` since 2026; the link is by id array only.
-- `user_stats` — aggregate counters (totalDays, totalCount, totalDuration, dailyTotalDuration, monthlyTotalDuration, longestCheckInDays, currentStreak, longestStreak, lastCheckinDate, lastCheckinDuration, lastCheckin, monthlyStats{YYYY-MM:{days,count,totalDuration}}, badges)
-- `rankings` — legacy daily/monthly/total ranking rows (still written by `updateRankings` but `getRankings` now reads live from `user_stats` ordered by `dailyTotalDuration` desc, limit 100)
-- `ranking_snapshots` — generated by `generateRankingSnapshot` (timer trigger every 6 hours)
-- `user_mappings` — `openid` ↔ `local_user_id`
-- `teams`, `team_members`, `invites`, `invite_actions` — team/invite domain (see `scripts/create_team_collections.js` for canonical schema; `teamManager/index.js` is the source of truth for runtime field names)
-- `wisdom_quotes` — daily wisdom content read by `getRandomWisdom`
-- `images` — catalog of uploaded cloud-storage images (written by `recordUploadedImages`)
-
-Field names use a mix of `camelCase` (front-end / `user_stats` / `meditation_records`) and `snake_case` (`experience_records`, `user_mappings`, `team_members`). Match the existing style of the collection you are editing — do not normalize.
-
-### Rankings
-Real-time ranking is computed on read in `getRankings`: query `user_stats` ordered by `dailyTotalDuration` desc, limit 100. The `rankings` collection is still written on every check-in for backward compatibility but is not read. Ranking snapshots (top 1000 by `dailyTotalDuration`) are materialized into `ranking_snapshots` every 6 hours by the timer trigger in `cloudfunctions/meditationManager/config.json`.
-
-### Timer
-`pages/timer/timer.js` projects the meditation timer state and handles user interaction. Countdown sessions are owned by `app.js` through `utils/countdownSession.js`, independently of page lifecycles. Elapsed time comes from wall-clock timestamps (`startTimestamp`, `pauseTimestamp`, `totalPausedTime`); a one-second foreground interval refreshes the state and an independent watchdog repairs a lost interval. Count-up timing remains page-owned and reconciles timestamps on `wx.onAppShow`. An explicit app exit ends the sitting; temporary system/audio interruptions preserve it, while a cold start settles only the last saved checkpoint. There is no Worker or `wx.createBackgroundTimer`. Screen settings use `utils/screenBrightness.js` and `wx.setKeepScreenOn`; opening/closing cues use `audio/起坐.mp3` and `audio/收坐.mp3`, with optional guided audio from `defaultMusicFileID`. Audio orchestration is in `utils/timerAudio.js`; `utils/cuePlayer.js` replaces failed or stalled native cue players with one bounded retry. Automatic interruption recovery waits for the system end callback; an explicit new sitting can clear a stale interruption flag. Timer and audio recovery diagnostics share the bounded `timerDiagnostics` storage log.
-
-### Background images
-`config/images.js` lists the daily-poker image set (`m1.png`–`m13.png`, `t1.png`–`t4.png`, ...) under `cloud://.../bg_image/`, with a 12-hour local cache and a 6-hour image-list cache. `file_index.json` at the repo root tracks which numbered backgrounds have been uploaded.
-
-### Badges
-`utils/badgeManager.js` defines badge configs (continuous-7/14/30/60/100/365, total-50/500/5000-minutes, etc.) with cloud-storage image URLs. Unlocks are evaluated locally and synced via `meditationManager.updateUserBadges` / `getUserBadges`, which store the `badges` object inside `user_stats`.
-
-### Team subpackage
-`subpackages/team/` is a WeChat subpackage declared in `app.json` (root `subpackages/team`, name `team`). It contains `createTeam`, `teamDetails`, `joinTeam`, `testJoinTeam`. The invite flow passes `teamId`, `teamName`, `teamIcon`, `inviterName`, `inviteId` via query string; unauthenticated users are redirected to `pages/profile/profile` with `fromPage` / `fromParams` so the profile page can return them to the original flow after login (see `test_redirect_flow.js` for the manual test of this redirect).
-
-## Conventions
-
-- 2-space indent, no semicolons in mini program code; semicolons in cloud function code. Match the file you are editing.
-- All `wx.cloud.callFunction` calls go through `miniprogram/utils/cloudApi.js`. Add a new method there rather than calling `wx.cloud.callFunction` directly from a page.
-- Cloud function handlers return `{ success: boolean, data?: ..., error?: string }`. Keep this shape.
-- Logging uses emoji prefixes (🔍 🚀 ✅ ⚠️ ❌ 📊) throughout the codebase — follow this style when adding logs.
-- User-facing strings are Simplified Chinese. Default nickname is `觉察者` for unauthenticated users and `静心者` when creating a new profile.
-- Cloud storage fileIDs are long (`cloud://cloud1-2g2rbxbu2c126d4a.636c-cloud1-2g2rbxbu2c126d4a-1394807223/...`). Reuse `CLOUD_PREFIX` from `miniprogram/config/images.js` instead of inlining them.
-- The `meditation_records.experience` field is an **array** of experience record ids (not a string). `updateMeditationRecord` handles back-compat for legacy single-string values; new code should always write arrays.
-- `dailyTotalDuration` resets on new day; `monthlyTotalDuration` accumulates across the month. Both live in `user_stats` and are incremented with `db.command.inc(duration)`.
-
-## Pitfalls
-
-- `project.private.config.json` overrides `project.config.json` (e.g. `libVersion` is `3.13.2` vs `2.20.1`). The private file wins inside WeChat DevTools.
-- `autoCreateCollections` only needs to run once per environment. It is **not** called from `app.js` by default — the call is commented out. Trigger it manually if collections are missing.
-- `packNpmManually: true` with `packNpmRelationList` pointing at `./package.json` → `./miniprogram`. npm packages used by the mini program must be installed at the repo root and will be built into `miniprogram/`.
+运维脚本默认只读或预览，要求显式目标与环境。`MAINTENANCE_INVOKER` 是经过验证的调用适配器，微信开发者工具的 CLI 登录不等于运维授权。配置、部署顺序和权限边界见 [maintenance-access.md](docs/maintenance-access.md)。未授权的清理、迁移、部署或远端写入不属于本地测试。

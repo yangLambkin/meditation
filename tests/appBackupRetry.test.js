@@ -30,7 +30,6 @@ function createApp({
     console: { log() {}, error() {}, warn: (...args) => calls.warnings.push(args) }
   });
   app.setupCacheStatus = () => {};
-  app.testCloudEnvironment = () => {};
   app.setAudioOptions = () => {};
   return { app, calls };
 }

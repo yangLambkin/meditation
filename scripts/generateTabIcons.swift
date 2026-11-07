@@ -1,4 +1,5 @@
-// Rebuild the four tab icons at 3× density. Run: swift scripts/generateTabIcons.swift
+// Rebuild home/team/me tab icons and the timer settings icon at 3× density.
+// Run: swift scripts/generateTabIcons.swift. Record tab icons use renderPracticeRecordIcons.js.
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -7,7 +8,7 @@ import UniformTypeIdentifiers
 let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("miniprogram/images/icons")
 let size = 81
 for name in ["home", "timer", "team", "me"] {
-  for active in [false, true] {
+  for active in (name == "timer" ? [true] : [false, true]) {
     let color: [CGFloat] = active ? [CGFloat(178)/255, CGFloat(151)/255, CGFloat(100)/255, 1] : [CGFloat(153)/255, CGFloat(161)/255, CGFloat(174)/255, 1]
     let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!

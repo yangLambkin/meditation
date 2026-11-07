@@ -112,7 +112,6 @@ function harness({ now: initialTime = INITIAL_TIME, online = true, failures = 0,
   const dateUtil = load('utils/dateUtil.js');
   load('app.js');
   app.setupCacheStatus = () => {};
-  app.testCloudEnvironment = () => {};
   app.setAudioOptions = () => {};
   app.onLaunch();
   function rows() {

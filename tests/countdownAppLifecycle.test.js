@@ -71,7 +71,7 @@ function createApp({ cloud = true, audioEvents = false, recordCheckin: recordBeh
       };
     }
   }, { filename });
-  for (const method of ['setupRecordRefresh', 'setupCacheStatus', 'testCloudEnvironment', 'setAudioOptions']) {
+  for (const method of ['setupRecordRefresh', 'setupCacheStatus', 'setAudioOptions']) {
     app[method] = () => {};
   }
   app.startSyncAlertRefresh = () => calls.events.push({ type: 'alerts-show' });

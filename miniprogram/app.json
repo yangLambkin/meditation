@@ -1,7 +1,6 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/example/index",
     "pages/timer/timer",
     "pages/timerSettings/timerSettings",
     "pages/practices/practices",
@@ -19,9 +18,7 @@
     "pages/checkinHistory/checkinHistory",
     "pages/profile/profile",
     "pages/badge/badge",
-    "pages/team/team",
-    "pages/test/test",
-    "pages/test/inviteTest/inviteTest"
+    "pages/team/team"
   ],
   "subPackages": [
     {
@@ -32,8 +29,7 @@
         "pages/teamDetails/teamDetails",
         "pages/historyDetails/historyDetails",
         "pages/memberRecords/memberRecords",
-        "pages/joinTeam/joinTeam",
-        "pages/testJoinTeam/testJoinTeam"
+        "pages/joinTeam/joinTeam"
       ]
     }
   ],

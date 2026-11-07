@@ -542,13 +542,6 @@ class BadgeManager {
   }
 
   /**
-   * 获取所有勋章列表
-   */
-  getAllBadges() {
-    return Object.values(this.badges);
-  }
-
-  /**
    * 获取已解锁勋章数量
    */
   getUnlockedCount() {

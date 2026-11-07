@@ -1,155 +1,34 @@
-# 测试数据清理工具
+# 项目脚本
 
-这个小程序上线前的一键删除测试数据工具，支持三种清理模式。
+## 运维请求
 
-## 📋 快速开始
+| 脚本 | 用途 |
+| --- | --- |
+| `runCleanup.js` | 统计、按日期范围清理或全量清理请求 |
+| `runRecomputeBadges.js` | 指定用户或全部用户的勋章报告、重算请求 |
+| `runBijingBindingMigration.js` | 历史学号绑定的预览、备份、分批迁移与复核 |
+| `lib/maintenanceRunner.js` | 参数解析及受信任调用适配器 |
+| `create_team_collections.js` | 团队集合 schema 参考，非 npm 自动执行步骤 |
 
-### 安装依赖（如果尚未安装）
-```bash
-npm install
+先使用 `--help` 查看参数。以下命令只打印本地请求，不调用云端：
+
+```sh
+node scripts/runCleanup.js stats --env isolated-test --preview
+node scripts/runCleanup.js safe --env isolated-test --scope user --openid example-user --start-date 2026-09-01 --end-date 2026-09-02 --preview
+node scripts/runRecomputeBadges.js report --env isolated-test --nickname '示例昵称' --preview
 ```
 
-### 查看当前数据统计
-```bash
-npm run cleanup:stats
-```
+`safe/full` 默认生成云端只读预览请求，只有显式 `--apply` 才请求删除；没有默认清理日期。勋章默认 `report`，写入模式为 `apply`，必须指定唯一目标。`--preview` 与云端 `dryRun` 不同：前者完全不发请求。
 
-### 安全清理（推荐）
-删除指定日期范围内的测试数据：
-```bash
-npm run cleanup:safe
-```
+真正调用需要 `MAINTENANCE_INVOKER` 指向已验证的绝对可执行路径，并具备平台运维身份；项目没有提供生产调用适配器。适配器协议、环境核验和权限见 [运维说明](../docs/maintenance-access.md)。绑定迁移的独立参数、备份目录要求和执行步骤见 [绑定迁移说明](../docs/2026-09-23-binding-migration.md)。
 
-### 完整清理（谨慎使用）
-删除所有数据：
-```bash
-npm run cleanup:full
-```
+## 图片生成
 
-## 🔧 清理模式说明
+| 命令 | 产物及依赖 |
+| --- | --- |
+| `swift scripts/generateTabIcons.swift` | 首页、团队、我导航图标及计时选中图标；需要 macOS Swift |
+| `node scripts/renderPracticeRecordIcons.js` | 从 SVG 生成记录导航 PNG；需要 `rsvg-convert` |
+| `node scripts/renderPracticeShareCovers.js` | 功课分享封面；需要 `rsvg-convert` |
+| `node scripts/renderDailyShareCover.js [预览目录绝对路径]` | 静心卡分享封面及可选预览；需要 `rsvg-convert` |
 
-### 1. 查看统计模式 (`stats`)
-- 显示各数据库集合的当前数据量
-- 帮助决定选择合适的清理模式
-
-### 2. 安全清理模式 (`safe`) - **推荐**
-- 删除指定日期范围内的测试数据
-- 默认清理范围：`2026-01-01` 至 `2026-02-07`
-- 保留此日期范围外的数据
-
-### 3. 完整清理模式 (`full`) - **谨慎使用**
-- 删除所有数据库记录
-- **不可逆操作**，会删除所有用户数据
-- 需要确认提示
-
-## 📊 清理的数据范围
-
-清理工具会处理以下数据库集合：
-
-- `meditation_records` - 冥想打卡记录
-- `experience_records` - 体验记录
-- `user_stats` - 用户统计数据
-- `rankings` - 排行榜数据
-
-## ⚠️ 注意事项
-
-1. **备份重要数据**: 清理操作不可逆，请确保已备份重要数据
-2. **推荐使用安全清理**: 安全清理模式更安全，避免误删真实用户数据
-3. **云函数部署**: 需要确保 `cleanupTestData` 云函数已上传到云环境
-4. **权限验证**: 需要微信开发者工具登录并有相应权限
-
-## 🔍 技术实现
-
-### 云函数 (`cloudfunctions/cleanupTestData`)
-- 实现三种清理模式的逻辑
-- 支持批量删除和错误处理
-- 提供详细的操作日志
-
-### 调用脚本 (`scripts/runCleanup.js`)
-- 提供命令行接口
-- 支持用户确认提示
-- 错误处理和备用方案
-
-### 核心功能
-- **分批删除**: 避免一次性删除过多数据
-- **错误恢复**: 单个集合失败不影响其他集合
-- **日志记录**: 详细的操作记录和进度显示
-
-## 🚀 高级用法
-
-### 手动调用云函数
-```javascript
-// 在小程序代码中调用
-wx.cloud.callFunction({
-  name: 'cleanupTestData',
-  data: { 
-    mode: 'safe' // 'stats' | 'safe' | 'full'
-  },
-  success: res => {
-    console.log('清理结果:', res);
-  },
-  fail: err => {
-    console.error('清理失败:', err);
-  }
-});
-```
-
-### 修改清理日期范围
-编辑 `scripts/runCleanup.js` 中的 `CONFIG.testPeriod`：
-```javascript
-const CONFIG = {
-  testPeriod: {
-    startDate: '2026-01-01',  // 修改开始日期
-    endDate: '2026-02-07'     // 修改结束日期
-  }
-};
-```
-
-## 📝 使用流程
-
-### 小程序上线前推荐流程
-
-1. **查看数据统计**
-   ```bash
-   npm run cleanup:stats
-   ```
-
-2. **选择合适的清理模式**
-   - 如果数据量不大且确认都是测试数据 → `npm run cleanup:full`
-   - 如果有真实用户数据 → `npm run cleanup:safe`
-
-3. **验证清理结果**
-   ```bash
-   npm run cleanup:stats
-   ```
-
-4. **上线小程序**
-
-### 生产环境注意事项
-
-- 定期使用安全清理模式清理过期数据
-- 监控数据增长情况
-- 建立数据备份机制
-
-## 🔄 错误处理
-
-常见错误及解决方案：
-
-| 错误 | 原因 | 解决方案 |
-|------|------|----------|
-| 云函数调用失败 | 云函数未上传 | 在微信开发者工具中上传云函数 |
-| 权限错误 | 未登录或权限不足 | 检查微信开发者工具登录状态 |
-| 网络错误 | 网络连接问题 | 检查网络连接后重试 |
-| 数据库错误 | 数据库集合不存在 | 检查数据库集合名称是否正确 |
-
-## 📞 技术支持
-
-如遇问题，请检查：
-1. 微信开发者工具版本
-2. 云环境配置
-3. 网络连接状态
-4. 日志输出信息
-
----
-
-**安全第一，谨慎操作！**
+生成器会覆盖对应的仓库资源。源 SVG 和生成 PNG 各有用途，修改后核对生成结果；额外预览文件存放在 `/Users/ripples/cc/Codex` 等本地目录。
