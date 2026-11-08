@@ -55,8 +55,14 @@ function createPage(name, { account = 'local_guest', appMode = 'available', stor
     }
   };
   if (appMode !== 'missing') context.getApp = () => appMode === 'null' ? null : appMode === 'empty' ? {} : app;
-  const file = path.join(__dirname, `../miniprogram/pages/${name}/${name}.js`);
+  const file = path.join(__dirname, name === 'timer'
+    ? '../miniprogram/modules/timer/definition.js'
+    : `../miniprogram/pages/${name}/${name}.js`);
+  if (name === 'timer') context.module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
+  if (name === 'timer') {
+    definition = context.module.exports.createPage({ api: context.wx, app: context.getApp?.() });
+  }
   const page = { ...definition, data: structuredClone(definition.data),
     setData(values, callback) { Object.assign(this.data, values); if (callback) callback(); } };
   if (name === 'index') {
@@ -103,7 +109,7 @@ for (const name of ['index', 'team']) {
   });
 }
 
-test('the regular timer page shows without synchronizing tab bars or requesting reminders', async () => {
+test('the historical timer reapplies cached reminder dots without syncing tab bars or requesting reminders', async () => {
   for (const appMode of ['available', 'missing', 'null', 'empty']) {
     const { page, calls, ready } = createPage('timer', { appMode });
     await page.onShow();
@@ -114,8 +120,8 @@ test('the regular timer page shows without synchronizing tab bars or requesting 
     assert.equal(calls.timerScreen, 2, 'timer screen handling still runs on each show');
     assert.equal(calls.timerAudio, 2, 'timer audio handling still runs on each show');
     assert.deepEqual(calls.tabSync, []);
-    assert.equal(calls.applied, 0);
-    assert.deepEqual(calls.dots, []);
+    assert.equal(calls.applied, appMode === 'available' ? 3 : 0);
+    assert.deepEqual(calls.dots, appMode === 'available' ? [true, true] : []);
     assert.deepEqual(calls.refresh, []);
   }
 });

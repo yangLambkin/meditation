@@ -89,21 +89,23 @@ function harness({ httpAvailable = true, holdFirstHttp = false, failedSourceId =
     setInterval: (callback, ms) => schedule(callback, ms, true), clearInterval: id => timers.delete(id),
     getApp: () => application, getCurrentPages: () => []
   };
-  function load(request) {
-    const name = path.basename(request).replace(/(?:\.js)?$/, '.js');
+  function load(request, directory = path.join(ROOT, 'utils')) {
+    const filename = require.resolve(path.resolve(directory, request));
+    const name = path.basename(filename);
     if (name === 'practiceConfig.js') return config;
     if (name === 'bijingRecordSync.js') return { acceptSavedRecord() {}, resumePending: async () => {} };
     if (name === 'badgeManager.js') return { checkBadgeUnlock: () => ({ hasNewUnlock: false }) };
-    if (modules.has(name)) return modules.get(name).exports;
+    if (modules.has(filename)) return modules.get(filename).exports;
     const module = { exports: {} };
-    modules.set(name, module);
-    vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'utils', name), 'utf8'), {
-      ...globals, module, exports: module.exports, require: load
-    }, { filename: name });
+    modules.set(filename, module);
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      ...globals, module, exports: module.exports,
+      require: request => load(request, path.dirname(filename))
+    }, { filename });
     return module.exports;
   }
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'), {
-    ...globals, App: value => { application = value; }, require: load
+    ...globals, App: value => { application = value; }, require: request => load(request, ROOT)
   }, { filename: 'app.js' });
   // Reminder queries are unrelated to source and mirror uploads.
   application.startSyncAlertRefresh = () => {};
@@ -111,19 +113,26 @@ function harness({ httpAvailable = true, holdFirstHttp = false, failedSourceId =
   preferences.saveRecordsVisible(false);
   preferences.saveHiddenTypes(['sitting']);
   const manager = load('checkin.js'), queue = load('practiceQueue.js');
+  const timerRuntime = load('../modules/timer/runtime.js')
+    .createRuntime({ api: wx, host: application, recordCheckin: (...args) => manager.recordCheckin(...args) });
+  application.getTimerModule = () => timerRuntime;
+  timerRuntime.onLaunch();
 
   function timerPage(isCountdown) {
     let definition;
     loadedPages.push('timer');
-    vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'pages/timer/timer.js'), 'utf8'), {
-      ...globals, Page: value => { definition = value; },
+    const filename = path.join(ROOT, 'modules/timer/definition.js');
+    const pageModule = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      ...globals, module: pageModule,
       require(request) {
         if (request.endsWith('/screenBrightness')) return { createScreenBrightnessController: () => ({ dim() {}, restore() {} }) };
         if (request.endsWith('/dailyCardImage')) return { prepareNextImage() {} };
         if (request.endsWith('/contentSec')) return { checkText: async () => true };
-        return load(request);
+        return load(request, path.dirname(filename));
       }
-    }, { filename: 'timer.js' });
+    }, { filename });
+    definition = pageModule.exports.createPage({ api: wx, app: timerRuntime });
     const page = { ...definition, data: clone(definition.data),
       setData(value) { Object.assign(this.data, value); } };
     page.onLoad({});

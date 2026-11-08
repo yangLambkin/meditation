@@ -100,7 +100,8 @@ function applicationWorkflow(t, backend, account = 'owner') {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/app.js'), 'utf8'), {
     App(value) { application = value; }, wx, console, setTimeout, clearTimeout,
-    require: () => ({})
+    require: name => name === './modules/timer/index'
+      ? { createTimerModule: () => ({ onLaunch() {}, onShow() {}, onHide() {} }) } : {}
   });
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/pages/feedback/feedback.js'), 'utf8'), {
     Page(value) { definition = value; }, getApp: () => application, wx,

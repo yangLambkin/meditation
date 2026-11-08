@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const pagePath = path.join(__dirname, '../miniprogram/pages/timer/timer.js');
+const pagePath = path.join(__dirname, '../miniprogram/modules/timer/definition.js');
 
 function createPage({ platform, readFails = false, deferRead = false, deferWrite = false } = {}) {
   let definition;
@@ -14,7 +14,7 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
   let activeWrites = 0;
   const timers = new Map();
   const storage = new Map();
-  const listeners = { show: new Set(), hide: new Set(), audioBegin: new Set(), audioEnd: new Set() };
+  const listeners = { show: new Set(), hide: new Set() };
   const calls = { reads: [], writes: [], keepScreenOn: [], maxActiveWrites: 0 };
   const addTimer = (callback, delay, interval = false) => {
     const id = ++timerId;
@@ -30,10 +30,6 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     onAppHide: callback => listeners.hide.add(callback),
     offAppShow: callback => listeners.show.delete(callback),
     offAppHide: callback => listeners.hide.delete(callback),
-    onAudioInterruptionBegin: callback => listeners.audioBegin.add(callback),
-    onAudioInterruptionEnd: callback => listeners.audioEnd.add(callback),
-    offAudioInterruptionBegin: callback => listeners.audioBegin.delete(callback),
-    offAudioInterruptionEnd: callback => listeners.audioEnd.delete(callback),
     getScreenBrightness(options) {
       calls.reads.push(options);
       if (deferRead) return;
@@ -101,12 +97,14 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     }, { filename });
     return module.exports;
   }
-  const countdown = loadModule(path.resolve(__dirname, '../miniprogram/utils/countdownSession.js'))
+  const countdown = loadModule(path.resolve(__dirname, '../miniprogram/modules/timer/countdownSession.js'))
     .createCountdownSessionController({ api: wx, recordCheckin: () => ({ success: true }) });
-  const application = { getCountdownSession: () => countdown, _timerForeground: true, _timerAudioInterrupted: false };
+  const application = { getCountdownSession: () => countdown };
+  const pageModule = { exports: {} };
   vm.runInNewContext(fs.readFileSync(pagePath, 'utf8'), {
+    module: pageModule,
     ...globals,
-    getApp: () => application,
+    getApp: () => ({ getCountdownSession: () => countdown }),
     Page: page => { definition = page; },
     require(request) {
       if (request === '../../utils/checkin') return { recordCheckin: () => ({ success: true }) };
@@ -115,6 +113,7 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
       return loadModule(require.resolve(path.resolve(path.dirname(pagePath), request)));
     }
   }, { filename: pagePath });
+  definition = pageModule.exports.createPage({ api: wx, app: application });
   const page = {
     ...definition,
     data: structuredClone(definition.data),
@@ -145,16 +144,15 @@ function createPage({ platform, readFails = false, deferRead = false, deferWrite
     page, calls, listeners, advance, flush, finishWrite,
     values: () => calls.writes.map(write => write.options.value),
     setBrightness: value => { currentBrightness = value; },
-    emit: (type, options = { reason: 0 }) => {
-      application._timerForeground = type === 'show';
-      if (type === 'hide') countdown.appHide(options); else countdown.appShow();
-      for (const callback of [...listeners[type]]) callback(options);
+    emit: type => {
+      if (type === 'hide') countdown.appHide({ reason: 0 }); else countdown.appShow();
+      for (const callback of [...listeners[type]]) callback(type === 'hide' ? { reason: 0 } : {});
     }
   };
 }
 
 test('visiting the timer and leaving without dimming never writes brightness', async () => {
-  for (const elapsed of [null, 0, 9999]) {
+  for (const elapsed of [null, 0, 59999]) {
     const harness = createPage();
     const { page, advance, emit, flush, values } = harness;
     if (elapsed !== null) page.startTimer();
@@ -168,23 +166,23 @@ test('visiting the timer and leaving without dimming never writes brightness', a
   }
 });
 
-test('pausing and stopping before ten seconds cancel dimming without writing brightness', async () => {
+test('pausing and stopping before one minute cancel dimming without writing brightness', async () => {
   for (const action of ['pauseTimer', 'stopTimer']) {
     const { page, advance, values } = createPage();
     page.startTimer();
-    await advance(9999);
+    await advance(59999);
     page[action]();
-    await advance(10001);
+    await advance(60001);
     page.onHide();
     assert.deepEqual(values(), [], action);
   }
 });
 
-test('10 seconds in the foreground dims and each exit restores the brightness captured just before dimming once', async () => {
+test('60 seconds in the foreground dims and each exit restores the brightness captured just before dimming once', async () => {
   for (const action of ['pauseTimer', 'stopTimer', 'onHide', 'appHide']) {
     const { page, calls, advance, setBrightness, emit, flush, values } = createPage();
     page.startTimer();
-    await advance(9999);
+    await advance(59999);
     assert.deepEqual(values(), []);
     setBrightness(0.73);
     await advance(1);
@@ -203,7 +201,7 @@ test('10 seconds in the foreground dims and each exit restores the brightness ca
 test('Android returns brightness control to the system after dimming', async () => {
   const { page, advance, emit, flush, values } = createPage({ platform: 'android' });
   page.startTimer();
-  await advance(10000);
+  await advance(60000);
   page.onHide();
   emit('hide');
   page.onUnload();
@@ -215,7 +213,7 @@ test('iOS restores the captured brightness after dimming', async () => {
   const { page, advance, setBrightness, flush, values } = createPage({ platform: 'ios' });
   page.startTimer();
   setBrightness(0.62);
-  await advance(10000);
+  await advance(60000);
   page.stopTimer();
   await flush();
   assert.deepEqual(values(), [0.01, 0.62]);
@@ -224,7 +222,7 @@ test('iOS restores the captured brightness after dimming', async () => {
 test('a brightness read failure never dims or restores a fabricated default value', async () => {
   const { page, calls, advance, emit, flush, values } = createPage({ readFails: true });
   page.startTimer();
-  await advance(10000);
+  await advance(60000);
   assert.ok(calls.reads.length > 0);
   page.pauseTimer();
   page.onHide();
@@ -238,7 +236,7 @@ test('a brightness read completing after leaving or pausing cannot dim the scree
   for (const action of ['onHide', 'pauseTimer', 'appHide']) {
     const { page, calls, advance, emit, flush, values } = createPage({ deferRead: true });
     page.startTimer();
-    await advance(10000);
+    await advance(60000);
     assert.equal(calls.reads.length, 1);
     if (action === 'appHide') emit('hide');
     else page[action]();
@@ -251,7 +249,7 @@ test('a brightness read completing after leaving or pausing cannot dim the scree
 test('global AppShow after switching tabs cannot enable keep-awake or dim a hidden page', async () => {
   const { page, calls, advance, emit, values } = createPage();
   page.startTimer();
-  await advance(3000);
+  await advance(30000);
   page.onHide();
   const writesBeforeAppShow = calls.keepScreenOn.length;
   emit('hide');
@@ -261,28 +259,24 @@ test('global AppShow after switching tabs cannot enable keep-awake or dim a hidd
   assert.deepEqual(values(), []);
 });
 
-test('unloading unregisters app lifecycle and audio interruption listeners', async () => {
+test('unloading unregisters both app lifecycle listeners', async () => {
   const { page, calls, listeners, emit, advance } = createPage();
   assert.equal(listeners.show.size, 1);
   assert.equal(listeners.hide.size, 1);
-  assert.equal(listeners.audioBegin.size, 1);
-  assert.equal(listeners.audioEnd.size, 1);
   page.onUnload();
   assert.equal(listeners.show.size, 0);
   assert.equal(listeners.hide.size, 0);
-  assert.equal(listeners.audioBegin.size, 0);
-  assert.equal(listeners.audioEnd.size, 0);
   const before = calls.keepScreenOn.length;
   emit('show');
   emit('hide');
-  await advance(10000);
+  await advance(60000);
   assert.equal(calls.keepScreenOn.length, before);
 });
 
 test('leaving while the dim write is pending waits for it then restores once without concurrent writes', async () => {
   const { page, calls, advance, emit, finishWrite, flush, values } = createPage({ deferWrite: true });
   page.startTimer();
-  await advance(10000);
+  await advance(60000);
   assert.deepEqual(values(), [0.01]);
   page.onHide();
   emit('hide');
@@ -298,10 +292,10 @@ test('leaving while the dim write is pending waits for it then restores once wit
   assert.deepEqual(values(), [0.01, 0.25]);
 });
 
-test('returning to a running timer starts a fresh foreground ten seconds before dimming again', async () => {
+test('returning to a running timer starts a fresh foreground minute before dimming again', async () => {
   const { page, calls, advance, setBrightness, emit, flush, values } = createPage();
   page.startTimer();
-  await advance(10000);
+  await advance(60000);
   page.onHide();
   await flush();
   assert.deepEqual(values(), [0.01, 0.25]);
@@ -311,49 +305,11 @@ test('returning to a running timer starts a fresh foreground ten seconds before 
   setBrightness(0.81);
   page.onShow();
   assert.equal(calls.keepScreenOn.at(-1), true);
-  await advance(9999);
+  await advance(59999);
   assert.deepEqual(values(), [0.01, 0.25]);
   await advance(1);
   assert.deepEqual(values(), [0.01, 0.25, 0.01]);
   page.onHide();
   await flush();
   assert.deepEqual(values(), [0.01, 0.25, 0.01, 0.81]);
-});
-
-test('a call restores brightness and waits a full visible ten seconds before dimming either retained timer', async () => {
-  for (const isCountdown of [true, false]) {
-    const { page, calls, advance, emit, flush, values } = createPage();
-    page.setData({ isCountdown });
-    page.startTimer(); await advance(10000);
-    assert.deepEqual(values(), [0.01]);
-    emit('hide', { reason: 3 }); page.onHide(); await flush();
-    assert.deepEqual(values(), [0.01, 0.25]);
-    assert.equal(page.data.isRunning, true);
-    await advance(45000);
-    assert.deepEqual(values(), [0.01, 0.25], 'the call screen is never dimmed');
-    emit('show');
-    assert.equal(calls.keepScreenOn.at(-1), false, 'AppShow does not reactivate a hidden page');
-    page.onShow();
-    assert.equal(calls.keepScreenOn.at(-1), true);
-    assert.equal(page.data.elapsedTime, 55);
-    await advance(9999);
-    assert.deepEqual(values(), [0.01, 0.25]);
-    await advance(1);
-    assert.deepEqual(values(), [0.01, 0.25, 0.01]);
-    assert.equal(calls.maxActiveWrites, 1);
-  }
-});
-
-test('a pending brightness read cannot dim a call screen and the retained sitting can dim after returning', async () => {
-  const { page, calls, advance, emit, flush, values } = createPage({ deferRead: true });
-  page.startTimer(); await advance(10000);
-  assert.equal(calls.reads.length, 1);
-  emit('hide', { reason: 3 }); page.onHide();
-  calls.reads[0].success({ value: 0.68 }); await flush();
-  assert.deepEqual(values(), []);
-  await advance(30000); emit('show'); page.onShow(); await advance(10000);
-  assert.equal(calls.reads.length, 2);
-  calls.reads[1].success({ value: 0.72 }); await flush();
-  assert.deepEqual(values(), [0.01]);
-  assert.equal(page.data.isRunning, true);
 });

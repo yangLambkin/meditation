@@ -4,7 +4,6 @@
     <view class="dialog-header"><view class="dialog-heading"><text class="dialog-title">{{formEditing ? '编辑' : '记录'}}{{formTypeName}}</text><text class="caption">日期和时间均为北京时间</text></view><button size="mini" class="close-button" hover-class="close-button-hover" bindtap="closeForm" disabled="{{formBusy}}" aria-label="关闭功课表单"><view class="close-icon" aria-hidden="true"></view></button></view>
     <scroll-view class="dialog-scroll" scroll-y="{{true}}">
       <view class="dialog-body">
-        <view wx:if="{{formType === 'kindness'}}" class="privacy-notice"><text>善事内容和感悟对已登录成员可见。</text><text>{{formEditing ? '件数、内容与感悟会同步更新「做善事」，原分类、地点及附件保持不变。' : '可一次记录多件善事，也会展示在「做善事」中。'}}</text></view>
         <view class="field-row"><view class="field field-date"><text class="label">发生日期</text><picker mode="date" value="{{formDate}}" start="{{formMinDate}}" end="{{today}}" bindtap="refreshFormDates" bindchange="onFormDate" disabled="{{formBusy || formPending}}"><view class="field-control">{{formDate}}<text class="picker-arrow">⌄</text></view></picker></view><view class="field field-time"><text class="label">发生时间</text><picker mode="time" value="{{formTime}}" bindchange="onFormTime" disabled="{{formBusy || formPending}}"><view class="field-control">{{formTime || '原记录无时间'}}<text class="picker-arrow">⌄</text></view></picker></view></view>
         <text wx:if="{{!formEditing}}" class="caption field-hint">可补录最近14天（含今天）的功课。</text>
         <text wx:if="{{formEditing && !formTime}}" class="caption field-hint">原记录仅有日期，请补充真实发生时间后保存。</text>

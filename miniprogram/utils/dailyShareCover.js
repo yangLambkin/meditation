@@ -169,34 +169,34 @@ function drawDailyShareCover(ctx, snapshot = {}) {
 
   const session = usableSession(snapshot.session);
   if (session) {
-    fittedLabel(ctx, singleLine(session.name), 46, 43, 34, COLORS.ink, 408);
-    label(ctx, `${session.dateLabel}  ${session.timeLabel} 收坐`, 46, 99, 24, COLORS.muted);
-    label(ctx, '本次静坐', 46, 176, 26, COLORS.gold);
+    fittedLabel(ctx, singleLine(session.name), 46, 48, 26, COLORS.ink, 408);
+    label(ctx, `${session.dateLabel}  ${session.timeLabel} 收坐`, 46, 96, 18, COLORS.muted);
+    label(ctx, '本次静坐', 46, 178, 20, COLORS.gold);
     const duration = `${session.minutes} 分钟`;
-    let size = 38;
+    let size = 30;
     font(ctx, size);
-    while (size > 30 && measure(ctx, duration) > 182) font(ctx, --size);
-    fittedLabel(ctx, duration, 46, 223, size, COLORS.ink, 182);
+    while (size > 26 && measure(ctx, duration) > 182) font(ctx, --size);
+    fittedLabel(ctx, duration, 46, 220, size, COLORS.ink, 182);
   } else {
-    label(ctx, '一份安静，送给你', 46, 43, 34, COLORS.ink);
-    label(ctx, '每天，留一点时间给自己', 46, 99, 24, COLORS.muted);
-    label(ctx, '与自己相处', 46, 176, 26, COLORS.gold);
-    label(ctx, '一刻静坐', 46, 223, 38, COLORS.ink);
+    label(ctx, '一份安静，送给你', 46, 48, 26, COLORS.ink);
+    label(ctx, '每天，留一点时间给自己', 46, 96, 18, COLORS.muted);
+    label(ctx, '与自己相处', 46, 178, 20, COLORS.gold);
+    label(ctx, '一刻静坐', 46, 220, 30, COLORS.ink);
   }
 
-  // Chat thumbnails shrink the 500px cover. Keep the name, timestamp and quote
-  // readable at that size, with only a modest emphasis on the whole duration.
+  // Keep a quiet hierarchy at chat-thumbnail size: modest name/duration
+  // emphasis, smaller metadata and enough space around the supporting quote.
   ctx.fillStyle = COLORS.line;
-  ctx.fillRect(46, 144, 408, 1);
+  ctx.fillRect(46, 138, 408, 1);
   ctx.fillRect(244, 176, 1, 120);
-  font(ctx, 24);
+  font(ctx, 20);
   const lines = wrapQuote(ctx, normalizedQuote(snapshot.quote), 194, 4);
-  lines.forEach((line, index) => label(ctx, line, 260, 176 + index * 32, 24, COLORS.quote));
+  lines.forEach((line, index) => label(ctx, line, 260, 178 + index * 30, 20, COLORS.quote));
 
   ctx.fillStyle = COLORS.line;
   ctx.fillRect(46, 323, 408, 1);
-  label(ctx, '静坐觉察', 46, 339, 22, COLORS.muted);
-  label(ctx, '查看静心卡 →', 308, 339, 22, COLORS.gold);
+  label(ctx, '静坐觉察', 46, 341, 18, COLORS.muted);
+  label(ctx, '查看静心卡 →', 334, 341, 18, COLORS.gold);
 }
 
 function getCanvas(page, wxApi) {

@@ -107,6 +107,7 @@ function harness({ loggedIn = true, online = true, missingLocks = false, uploadD
       App: definition => { app = definition; },
       require: () => manager
     });
+    app.getTimerModule = () => ({ onLaunch() {}, onShow() {}, onHide() {} });
     app.setupCacheStatus = () => {};
       app.setAudioOptions = () => {};
     app.onLaunch();

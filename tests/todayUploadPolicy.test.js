@@ -111,6 +111,9 @@ function harness({ now: initialTime = INITIAL_TIME, online = true, failures = 0,
   const manager = load('utils/checkin.js');
   const dateUtil = load('utils/dateUtil.js');
   load('app.js');
+  const timerRuntime = load('modules/timer/runtime.js')
+    .createRuntime({ api: wx, host: app, recordCheckin: (...args) => manager.recordCheckin(...args) });
+  app.getTimerModule = () => timerRuntime;
   app.setupCacheStatus = () => {};
   app.setAudioOptions = () => {};
   app.onLaunch();
@@ -123,11 +126,17 @@ function harness({ now: initialTime = INITIAL_TIME, online = true, failures = 0,
     rows: () => clone(rows()),
     page(name) {
       const filename = `pages/${name}/${name}.js`;
-      load(filename);
-      const definition = pages.get(path.resolve(root, filename));
+      let definition;
+      if (name === 'timer') {
+        definition = load('modules/timer/definition.js')
+          .createPage({ api: wx, app: timerRuntime });
+      } else {
+        load(filename);
+        definition = pages.get(path.resolve(root, filename));
+      }
       return {
         ...definition,
-        timerApp: app,
+        timerApp: timerRuntime,
         data: clone(definition.data),
         setData(values) { Object.assign(this.data, values); }
       };

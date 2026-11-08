@@ -10,7 +10,7 @@ test('completion uses the actual Beijing calendar date and end time before the b
   assert.deepEqual(session, {
     name: '秋水', minutes: 17, endedAt: ENDED_AT, dateLabel: '2026.11.07', timeLabel: '01:00'
   });
-  assert.equal(shareTitle(session), '秋水｜2026.11.07 01:00 收坐 · 静坐17分钟');
+  assert.equal(shareTitle(session), '秋水 · 静坐17分钟');
   assert.equal(createSession('秋水', Date.parse('2026-11-06T23:59:59+08:00'), 1).dateLabel, '2026.11.06');
   assert.equal(createSession('秋水', Date.parse('2026-11-07T00:00:00+08:00'), 1).dateLabel, '2026.11.07');
 });

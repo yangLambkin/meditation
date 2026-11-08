@@ -75,6 +75,7 @@ function harness() {
       console: { log() {}, warn() {}, error() {} }
     });
     const app = { ...definition };
+    app.getTimerModule = () => ({ onLaunch() {}, onShow() {}, onHide() {} });
     // These independent services are unrelated to route selection. Execute
     // the real launch/show handlers while keeping their background work inert.
     for (const name of ['setupTimerAudioInterruption', 'setupRecordRefresh', 'resumePracticeRecords',

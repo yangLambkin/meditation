@@ -2,7 +2,6 @@
   "pages": [
     "pages/index/index",
     "pages/timer/timer",
-    "pages/timerSettings/timerSettings",
     "pages/practices/practices",
     "pages/practiceHistory/practiceHistory",
     "pages/practiceSettings/practiceSettings",

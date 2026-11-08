@@ -14,6 +14,7 @@ function createApp({
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/app.js'), 'utf8'), {
     App: value => { app = value; },
     require(name) {
+      if (name === './modules/timer/index') return { createTimerModule: () => ({ onLaunch() {}, onShow() {}, onHide() {} }) };
       if (name === './utils/practiceMirror.js') return {
         resume: (...args) => { calls.practices.push(args); return resumePractices(...args); }
       };

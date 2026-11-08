@@ -38,8 +38,10 @@ function sessionQuery(session) {
 }
 
 function shareTitle(session) {
+  // WeChat controls the native title's font size; keep it brief and leave the
+  // completion date and time on the cover.
   return session
-    ? `${session.name}｜${session.dateLabel} ${session.timeLabel} 收坐 · 静坐${session.minutes}分钟`
+    ? `${session.name} · 静坐${session.minutes}分钟`
     : '送你一张静心卡';
 }
 

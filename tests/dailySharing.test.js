@@ -392,7 +392,7 @@ test('both channels and saved shared images retain the completed sitting and use
   await flush();
   const friend = sender.page.onShareAppMessage();
   const timeline = sender.page.onShareTimeline();
-  assert.equal(friend.title, '私人昵称｜2026.11.07 01:15 收坐 · 静坐45分钟');
+  assert.equal(friend.title, '私人昵称 · 静坐45分钟');
   assert.equal(timeline.title, friend.title);
   assert.equal(timeline.imageUrl, friend.imageUrl);
   assert.equal(friend.imageUrl, 'wxfile://share-cover.png');

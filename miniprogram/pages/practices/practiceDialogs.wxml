@@ -33,8 +33,6 @@
     <view class="detail-scroll"><view class="dialog-body">
       <view class="detail-amount"><text>{{detail.quantity}}</text><text class="detail-unit">{{detail.unit}}</text></view>
       <text class="detail-date">{{detail.recordDate}} · {{detail.clockTimeLabel}}（北京时间）</text>
-      <view wx:if="{{detail.mirrored}}" class="privacy-notice"><text>来自静坐记录</text><text>{{detail.canEdit || detail.canDelete ? '可在这里编辑或删除，原静坐记录和相关统计也会同步更新。' : '可前往原静坐记录查看详情。'}}</text></view>
-      <view wx:if="{{detail.type === 'kindness'}}" class="privacy-notice"><text>内容与感悟对已登录成员可见；编辑、删除也会更新「做善事」。记录条数与善事件数分别统计。</text></view>
       <view wx:if="{{detail.content}}" class="detail-section"><text class="label">善事内容</text><text class="detail-text" selectable="{{true}}">{{detail.content}}</text></view>
       <view class="detail-section"><text class="label">感悟</text><text class="detail-text {{!detail.reflection ? 'muted' : ''}}" selectable="{{true}}">{{detail.reflection || '这次练习没有填写感悟'}}</text></view>
     </view></view>

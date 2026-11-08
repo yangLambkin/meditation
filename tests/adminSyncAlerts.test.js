@@ -186,7 +186,10 @@ function appHarness({ manualFeedback = false, tabReady = true } = {}) {
   const timers = new Map();
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/app.js'), 'utf8'), {
     App(value) { definition = value; },
-    require() { return { async syncWithCloud() {}, async retryAutomaticBackups() {} }; },
+    require(name) {
+      if (name === './modules/timer/index') return { createTimerModule: () => ({ onLaunch() {}, onShow() {}, onHide() {} }) };
+      return { async syncWithCloud() {}, async retryAutomaticBackups() {} };
+    },
     wx: {
       cloud: { callFunction(request) {
         if (['getBackfillAlert', 'adminGetBackfillAlert'].includes(request.data.type)) {

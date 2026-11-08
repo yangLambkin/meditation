@@ -67,6 +67,10 @@ writeCover(directory, 'daily-share', { quote: '把心安放在当下。', sessio
 if (process.argv[2]) {
   const previewDirectory = path.resolve(process.argv[2]);
   const session = { name: '小涟', minutes: 30, endedAt: 1793968200000, dateLabel: '2026.11.06', timeLabel: '20:30' };
+  writeCover(previewDirectory, 'session-1-minute', {
+    quote: '造成我们痛苦的，不是事情本身，而是对事情的反应。',
+    session: { ...session, name: '瑞璞', minutes: 1, endedAt: 1794109020000, dateLabel: '2026.11.08', timeLabel: '11:37' }
+  });
   writeCover(previewDirectory, 'session-30-minutes', { quote: '以不紧不慢的心，安住每一个当下。', session });
   writeCover(previewDirectory, 'session-long-name-1440-minutes', {
     quote: '安住当下，温柔觉察每一次呼吸。'.repeat(6),

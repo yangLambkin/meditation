@@ -70,7 +70,7 @@ test('renders a completed session as the focus of a dedicated 5:4 native Canvas2
   assert.equal(Object.hasOwn(h.exports[0], 'width'), false);
   const quote = quoteText(h);
   assert.equal(quote.map(item => item.value).join(''), snapshot.quote);
-  assert.ok(quote.every(item => item.size >= 22), 'supporting text remains readable in a chat thumbnail');
+  assert.ok(quote.every(item => item.size >= 20), 'supporting text remains readable in a chat thumbnail');
   const duration = h.text.find(item => item.value === '30 分钟');
   assert.ok(duration, 'the duration keeps its unit on the same line');
   assert.ok(duration.size > quote[0].size && duration.size <= quote[0].size * 2, 'session emphasis does not overwhelm the supporting text');
@@ -108,7 +108,7 @@ test('long Unicode quotes remain readable in the side column without obscuring t
   await h.generate({ ...snapshot, quote: '🙂安住于当下，温柔觉察每一次呼吸。'.repeat(40) });
   const quote = quoteText(h);
   assert.ok(quote.length >= 3 && quote.length <= 5); assert.ok(quote.at(-1).value.endsWith('…'));
-  assert.ok(quote.every(item => item.size >= 22 && item.x + item.width <= 454 && item.x >= 260 && item.y >= 170 && item.y + item.size < 323));
+  assert.ok(quote.every(item => item.size >= 20 && item.x + item.width <= 454 && item.x >= 260 && item.y >= 170 && item.y + item.size < 323));
   assert.ok(quote.every(item => item.value.isWellFormed()), 'surrogate pairs are kept intact');
   assert.ok(h.text.every(item => item.x >= 20 && item.x + item.width <= 480 && item.y >= 20 && item.y + item.size <= 380));
 });
@@ -132,24 +132,24 @@ test('short sayings wrap at complete phrases instead of leaving one or two chara
     const h = harness(); await h.generate({ ...snapshot, quote });
     const lines = quoteText(h);
     assert.deepEqual(lines.map(item => item.value), expected);
-    assert.ok(lines.every(item => item.size >= 22 && item.x + item.width <= 454), 'semantic wrapping keeps complete phrases in the secondary column');
+    assert.ok(lines.every(item => item.size >= 20 && item.x + item.width <= 454), 'semantic wrapping keeps complete phrases in the secondary column');
   }
 });
 
 test('a short saying without punctuation balances its final lines instead of orphaning one character', async () => {
-  const quote = '把温柔留给当下自己';
+  const quote = '把温柔留给当下的自己';
   const h = harness(); await h.generate({ ...snapshot, quote });
   const lines = quoteText(h);
   assert.equal(lines.length, 2);
   assert.equal(lines.map(item => item.value).join(''), quote);
-  assert.ok(lines.every(item => Array.from(item.value).length >= 4 && item.size >= 22 && item.x + item.width <= 454));
+  assert.ok(lines.every(item => Array.from(item.value).length >= 4 && item.size >= 20 && item.x + item.width <= 454));
   assert.ok(Math.abs(lines[0].width - lines[1].width) <= lines[0].size, 'the two short lines remain visually balanced');
 });
 
 test('explicit newlines remain readable and empty quotes use a calm local fallback', async () => {
   const multiline = harness(); await multiline.generate({ quote: '此时\n此地\n此心\n安住' });
   assert.deepEqual(quoteText(multiline).map(item => item.value), ['此时', '此地', '此心', '安住']);
-  assert.ok(quoteText(multiline).every(item => item.size >= 22));
+  assert.ok(quoteText(multiline).every(item => item.size >= 20));
   const empty = harness(); await empty.generate({ quote: ' \n ' });
   assert.equal(quoteText(empty).map(item => item.value).join(''), '静心即是修心，心安即是归处。');
 });
@@ -163,10 +163,10 @@ test('long names and a 1440-minute session stay within their columns while the d
   assert.ok(name.x + name.width <= 454);
   const duration = h.text.find(item => item.value === '1440 分钟');
   assert.ok(duration, 'even a four-digit duration retains its full number and unit');
-  assert.ok(duration.size >= 30 && duration.x + duration.width < 244);
+  assert.ok(duration.size >= 26 && duration.x + duration.width < 244);
   assert.ok(h.text.every(item => item.x >= 20 && item.x + item.width <= 480 && item.y >= 20 && item.y + item.size <= 380));
   const quote = quoteText(h);
-  assert.ok(quote.every(item => item.size < duration.size && item.size >= 22 && item.x >= 260));
+  assert.ok(quote.every(item => item.size < duration.size && item.size >= 20 && item.x >= 260));
 });
 
 test('legacy or incomplete shares use a neutral card without inventing a name, date, time or zero-minute record', async () => {

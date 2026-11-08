@@ -1678,7 +1678,6 @@ test('four tab navigation retains the home sitting entry and records page', () =
   assert.match(home, /每日金句/);
   assert.match(home, /最近三天静坐/);
   const page = historyTemplate() + dialogsTemplate();
-  assert.match(page, /对已登录成员可见/);
   assert.match(page, /静坐历史尚未全部导入/);
   assert.match(page, /原记录仅有日期/);
 });

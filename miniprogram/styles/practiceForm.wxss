@@ -14,8 +14,6 @@ button.close-button[disabled] { color: #b5bbc3; background: #f8fafc; }
 .close-icon::after { transform: translateY(-50%) rotate(-45deg); }
 .dialog-scroll { height: 680rpx; max-height: calc(88vh - 240rpx); min-height: 0; flex-shrink: 1; }
 .dialog-body { padding: 0 32rpx 28rpx; }
-.privacy-notice { margin: 12rpx 0 20rpx; padding: 18rpx 20rpx; color: #8a7145; background: #f7f2e8; border-radius: 12rpx; font-size: 23rpx; line-height: 1.65; }
-.privacy-notice > text { display: block; }
 .field-row { display: flex; gap: 18rpx; }
 .field-date { flex: 3; }
 .field-time { flex: 2; }

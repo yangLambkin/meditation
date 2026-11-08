@@ -44,6 +44,7 @@ function harness() {
       return {};
     }
   });
+  app.getTimerModule = () => ({ onLaunch() {}, onShow() {}, onHide() {} });
   load('custom-tab-bar/index.js', {
     Component(value) { component = value; },
     require(name) {

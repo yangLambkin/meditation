@@ -33,7 +33,8 @@ function harness(t) {
     clearTimeout(timer) { timers.delete(timer); }
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/app.js'), 'utf8'), {
-    ...context, App(value) { app = value; }, require: () => ({})
+    ...context, App(value) { app = value; }, require: name => name === './modules/timer/index'
+      ? { createTimerModule: () => ({ onLaunch() {}, onShow() {}, onHide() {} }) } : {}
   });
   vm.runInNewContext(fs.readFileSync(require.resolve('../miniprogram/pages/me/me.js'), 'utf8'), {
     ...context, Page(value) { definition = value; }, getApp: () => app,

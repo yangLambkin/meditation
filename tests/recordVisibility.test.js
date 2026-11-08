@@ -191,12 +191,13 @@ test('Me has one unified settings entry that keeps all preferences accessible wh
     me.goToSettings();
   }
   const settings = h.openPage('settings');
-  settings.goToTimerSettings();
+  assert.equal(settings.goToTimerSettings, undefined, 'historical timer has no configurable reminder modes');
+  const settingsTemplate = fs.readFileSync(path.join(miniprogram, 'pages/settings/settings.wxml'), 'utf8');
+  assert.doesNotMatch(settingsTemplate, /goToTimerSettings/);
   settings.goToPracticeSettings();
   assert.deepEqual(h.calls.navigateTo, [
     { url: '/pages/settings/settings' },
     { url: '/pages/settings/settings' },
-    { url: '/pages/timerSettings/timerSettings' },
     { url: '/pages/practiceSettings/practiceSettings' }
   ]);
 });
